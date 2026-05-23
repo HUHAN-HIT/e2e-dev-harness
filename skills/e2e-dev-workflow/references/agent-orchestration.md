@@ -21,6 +21,7 @@ Do not spawn subagents unless the runtime supports them and the user has explici
 - `--service-scope all`: explicit whole-repo mode. Use only when every service is genuinely in scope.
 
 This mirrors AGENT loading: first discover services, then narrow the implementation plan after requirements and use cases identify affected services.
+If `--service` does not match a discovered service path or service directory name, the helper blocks instead of silently planning no service work.
 
 ## Agent Roles
 

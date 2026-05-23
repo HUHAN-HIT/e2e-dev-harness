@@ -138,6 +138,15 @@ def service_for_path(candidates: list[str], requested_path: str) -> str | None:
     return sorted(matches, key=len, reverse=True)[0]
 
 
+def unmatched_requested_services(facts: dict, requested_services: list[str] | None) -> list[str]:
+    candidates = [normalize_path(service) for service in facts.get("service_candidates", [])]
+    return [
+        requested
+        for requested in requested_services or []
+        if not match_requested_service(candidates, requested)
+    ]
+
+
 def select_services(
     facts: dict,
     requested_services: list[str] | None = None,
@@ -379,6 +388,32 @@ def main() -> int:
     facts = detect(repo)
     design_is_template = bool(design_path and "template" in design_path.stem.lower())
     services, resolved_service_scope = select_services(facts, args.service, args.path, args.service_scope)
+    unmatched_services = unmatched_requested_services(facts, args.service)
+    if unmatched_services:
+        result = {
+            "repo": str(repo),
+            "requested_mode": args.mode,
+            "selected_mode": "blocked",
+            "requested_service_scope": args.service_scope,
+            "resolved_service_scope": resolved_service_scope,
+            "requested_services": args.service or [],
+            "requested_paths": args.path or [],
+            "selected_services": services,
+            "unmatched_requested_services": unmatched_services,
+            "blocked": True,
+            "blocked_reasons": [
+                "Requested services were not found in service_candidates: " + ", ".join(unmatched_services)
+            ],
+            "detected": detection_summary(facts),
+            "handoff_artifacts": {},
+            "agents": [],
+        }
+        text = json.dumps(result, indent=2, ensure_ascii=False)
+        print(text)
+        if args.status_file:
+            args.status_file.parent.mkdir(parents=True, exist_ok=True)
+            args.status_file.write_text(text + "\n", encoding="utf-8")
+        return 2
     if resolved_service_scope == "discovery":
         result = discovery_result(repo, args.mode, args.service_scope, args.service, args.path, facts)
         text = json.dumps(result, indent=2, ensure_ascii=False)

@@ -516,6 +516,13 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(["services/payment-service"], selected)
         self.assertEqual("affected", resolved_scope)
 
+    def test_unmatched_requested_services_are_reported(self) -> None:
+        facts = {"service_candidates": ["services/order-service"]}
+
+        unmatched = orchestration_plan.unmatched_requested_services(facts, ["missing-service"])
+
+        self.assertEqual(["missing-service"], unmatched)
+
     def test_select_services_affected_uses_only_path_service(self) -> None:
         facts = {"service_candidates": ["services/order-service", "services/payment-service", "services/catalog-service"]}
 

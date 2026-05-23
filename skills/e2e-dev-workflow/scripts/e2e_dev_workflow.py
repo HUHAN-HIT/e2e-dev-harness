@@ -116,6 +116,27 @@ def orchestration_status(
         paths_requested,
         service_scope,
     )
+    unmatched_services = orchestration_plan.unmatched_requested_services(facts, services_requested)
+    if unmatched_services:
+        return {
+            "repo": str(repo),
+            "requested_mode": mode,
+            "enabled": True,
+            "selected_mode": "blocked",
+            "requested_service_scope": service_scope,
+            "resolved_service_scope": resolved_service_scope,
+            "requested_services": services_requested or [],
+            "requested_paths": paths_requested or [],
+            "selected_services": services,
+            "unmatched_requested_services": unmatched_services,
+            "blocked": True,
+            "blocked_reasons": [
+                "Requested services were not found in service_candidates: " + ", ".join(unmatched_services)
+            ],
+            "detected": orchestration_plan.detection_summary(facts),
+            "handoff_artifacts": {},
+            "agents": [],
+        }
     if resolved_service_scope == "discovery":
         result = orchestration_plan.discovery_result(
             repo,
@@ -211,7 +232,7 @@ def prepare(args) -> tuple[int, dict]:
     }
     blocked = [
         name
-        for name in ("agent_instructions", "superpowers", "memory")
+        for name in ("agent_instructions", "superpowers", "memory", "orchestration")
         if result[name].get("blocked")
     ]
     result["blocked"] = bool(blocked)
