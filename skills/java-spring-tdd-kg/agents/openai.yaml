@@ -1,0 +1,3 @@
+display_name: Java Spring TDD KG
+short_description: Instruction-aware Spring 6 TDD.
+default_prompt: Use this skill to analyze a Java/Spring Framework 6.x/Maven design request, load root and service AGENT instructions before clarification, scan project memory, choose single-agent or multi-agent orchestration, apply Superpowers clarification when available, refresh the repository knowledge graph, then implement with superpowers:test-driven-development plus Java/Spring test guidance.
