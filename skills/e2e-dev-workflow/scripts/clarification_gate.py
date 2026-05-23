@@ -19,6 +19,9 @@ REQUIRED = {
     "open_questions": [r"open questions?", r"questions?", r"待澄清", r"开放问题"],
 }
 
+ACCEPTANCE_ID_RE = re.compile(r"^AC-?(\d+)\b", re.IGNORECASE)
+ACCEPTANCE_LINE_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(.*\S)")
+
 UNRESOLVED_MARKERS = (
     "todo",
     "tbd",
@@ -78,6 +81,13 @@ def section_text(markdown: str, matching_patterns: list[str]) -> str | None:
     return None
 
 
+def normalize_acceptance_id(value: str) -> str:
+    match = ACCEPTANCE_ID_RE.match(value.strip())
+    if match:
+        return f"AC-{int(match.group(1))}"
+    return value.strip().upper()
+
+
 def normalize_lines(text: str) -> list[str]:
     lines: list[str] = []
     for raw in text.splitlines():
@@ -106,6 +116,40 @@ def open_questions_clear(text: str | None) -> tuple[bool, list[str]]:
     if all(any(marker in line.lower() for marker in RESOLVED_MARKERS) for line in lines):
         return True, []
     return False, lines
+
+
+def extract_acceptance_criteria(path: Path) -> list[str]:
+    markdown = path.read_text(encoding="utf-8")
+    text = section_text(markdown, REQUIRED["acceptance"])
+    if text is None:
+        return []
+    results: list[str] = []
+    used: set[str] = set()
+    next_index = 1
+    for line in text.splitlines():
+        stripped = line.strip()
+        match = ACCEPTANCE_ID_RE.match(stripped)
+        if match:
+            ac_id = normalize_acceptance_id(stripped)
+            if ac_id not in used:
+                results.append(ac_id)
+                used.add(ac_id)
+            continue
+        content = ACCEPTANCE_LINE_RE.match(line)
+        if content:
+            body = content.group(1).strip()
+            id_match = ACCEPTANCE_ID_RE.match(body)
+            if id_match:
+                ac_id = normalize_acceptance_id(body)
+            else:
+                while f"AC-{next_index}" in used:
+                    next_index += 1
+                ac_id = f"AC-{next_index}"
+                next_index += 1
+            if ac_id not in used:
+                results.append(ac_id)
+                used.add(ac_id)
+    return results
 
 
 def validate(path: Path) -> dict:

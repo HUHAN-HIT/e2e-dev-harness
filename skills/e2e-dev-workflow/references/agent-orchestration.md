@@ -119,7 +119,7 @@ Outputs:
 
 Gate:
 
-- Every acceptance criterion maps to a use case, service plan, tests, code refs, and business review evidence before completion.
+- Every acceptance criterion extracted from the design document maps to a use case, service plan, tests, code refs, and business review evidence before completion.
 
 ## Handoff Rules
 

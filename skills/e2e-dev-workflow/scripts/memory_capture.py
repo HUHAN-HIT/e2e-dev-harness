@@ -38,6 +38,15 @@ SECRET_RE = re.compile(r"\b(api[_-]?key|secret|token|password|credential)\b\s*[:
 ENTRY_LINE_RE = re.compile(r"^\s*-\s*([A-Za-z_-]+):\s*(.*)\s*$")
 ENTRY_HEADING_RE = re.compile(r"^\s*###\s+(.+?)\s*$")
 
+# Override legacy patterns with ASCII-source regexes that also catch common
+# Chinese unresolved markers and arbitrary Windows drive-letter paths.
+TODO_RE = re.compile(
+    r"\b(todo|tbd|fixme|unresolved|pending)\b|"
+    r"\u5f85\u786e\u8ba4|\u672a\u786e\u8ba4|\u672a\u5b8c\u6210",
+    re.IGNORECASE,
+)
+LOCAL_PATH_RE = re.compile(r"\b[A-Za-z]:\\|(?:^|\s)(?:/Users/|/home/|/tmp/|~/)", re.IGNORECASE)
+
 TEMPLATES = {
     "project.md": """# Project Memory
 
@@ -174,6 +183,68 @@ def parse_entries(text: str, path: str | None = None) -> list[dict[str, str]]:
     return entries
 
 
+def _normalized_text(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def _word_set(text: str) -> set[str]:
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    cjk_chars = re.findall(r"[\u4e00-\u9fff]", text)
+    return set(words + cjk_chars)
+
+
+def _memory_text_index(repo: Path) -> dict[str, str]:
+    index: dict[str, str] = {}
+    for filename in TEMPLATES:
+        path = memory_dir(repo) / filename
+        if not path.exists():
+            continue
+        relative = str(path.relative_to(repo)).replace("\\", "/")
+        entries = parse_entries(path.read_text(encoding="utf-8", errors="replace"), relative)
+        for entry in entries:
+            normalized = _normalized_text(entry.get("text", ""))
+            if normalized and normalized not in index:
+                index[normalized] = f"{relative} entry {entry.get('id', '<unknown>')}"
+    return index
+
+
+def _check_text_safety(
+    text: str,
+    label: str,
+    *,
+    blocked: list[str],
+    warnings: list[str] | None = None,
+    check_empty: bool = True,
+) -> None:
+    if TODO_RE.search(text):
+        blocked.append(f"{label} contains unresolved TODO/TBD marker.")
+    if LOCAL_PATH_RE.search(text):
+        blocked.append(f"{label} contains local path.")
+    if SECRET_RE.search(text):
+        blocked.append(f"{label} may contain a secret or credential.")
+    if check_empty and not text.strip():
+        blocked.append(f"{label} has empty text.")
+
+
+def _check_fuzzy_duplicate(text: str, label: str, seen_text: dict[str, str], *, warnings: list[str]) -> None:
+    normalized = _normalized_text(text)
+    if not normalized:
+        return
+    if normalized in seen_text:
+        return  # exact duplicate is handled by caller as blocked
+    words = _word_set(normalized)
+    if len(words) < 3:
+        return
+    for existing_normalized, existing_label in seen_text.items():
+        existing_words = _word_set(existing_normalized)
+        if len(existing_words) < 3:
+            continue
+        intersection = words & existing_words
+        union = words | existing_words
+        if union and len(intersection) / len(union) >= 0.8:
+            warnings.append(f"{label} is semantically similar to {existing_label} (Jaccard >= 0.8).")
+
+
 def validate_entry(entry: dict[str, str], blocked: list[str], label: str, require_status: bool = False) -> None:
     for key in ("type", "source", "confidence", "text"):
         if not entry.get(key, "").strip():
@@ -206,22 +277,26 @@ def validate_memory(repo: Path) -> dict:
             continue
         relative = str(path.relative_to(repo)).replace("\\", "/")
         text = path.read_text(encoding="utf-8", errors="replace")
-        if TODO_RE.search(text):
-            blocked.append(f"Memory file contains unresolved marker: {relative}")
-        if LOCAL_PATH_RE.search(text):
-            blocked.append(f"Memory file contains local path: {relative}")
-        if SECRET_RE.search(text):
-            blocked.append(f"Memory file may contain a secret or credential: {relative}")
+        _check_text_safety(
+            text,
+            f"Memory file {relative}",
+            blocked=blocked,
+            warnings=warnings,
+            check_empty=False,
+        )
         entries = parse_entries(text, relative)
         entries_count += len(entries)
         for entry in entries:
             label = f"{relative} entry {entry.get('id', '<unknown>')}"
             validate_entry(entry, blocked, label)
-            normalized = " ".join(entry.get("text", "").lower().split())
+            entry_text = entry.get("text", "")
+            _check_text_safety(entry_text, label, blocked=blocked, warnings=warnings)
+            normalized = _normalized_text(entry_text)
             if normalized:
                 if normalized in seen_text:
                     blocked.append(f"Duplicate memory text in {label}; first seen in {seen_text[normalized]}.")
                 else:
+                    _check_fuzzy_duplicate(entry_text, label, seen_text, warnings=warnings)
                     seen_text[normalized] = label
 
     return {
@@ -275,7 +350,7 @@ def select_memory(repo: Path, phase: str, service: str | None = None, max_chars:
     }
 
 
-def validate_proposed_updates(path: Path | None) -> dict:
+def validate_proposed_updates(path: Path | None, repo: Path | None = None) -> dict:
     blocked: list[str] = []
     warnings: list[str] = []
     if not path:
@@ -285,7 +360,11 @@ def validate_proposed_updates(path: Path | None) -> dict:
         return {"ready": False, "entries_count": 0, "blocked_reasons": blocked, "warnings": warnings}
 
     text = path.read_text(encoding="utf-8", errors="replace")
+    _check_text_safety(text, f"proposed file {path}", blocked=blocked, warnings=warnings)
     entries = parse_entries(text, str(path))
+    repo = repo.resolve() if repo else None
+    existing_text = _memory_text_index(repo) if repo else {}
+    seen_text: dict[str, str] = {}
     for entry in entries:
         label = f"memory update {entry.get('id', '<unknown>')}"
         validate_entry(entry, blocked, label, require_status=True)
@@ -294,6 +373,17 @@ def validate_proposed_updates(path: Path | None) -> dict:
             blocked.append(f"{label} has unhandled status: {entry.get('status')}")
         if not status:
             blocked.append(f"{label} is unhandled; set status to accepted, rejected, deferred, or skipped.")
+        entry_text = entry.get("text", "")
+        _check_text_safety(entry_text, label, blocked=blocked, warnings=warnings)
+        normalized = _normalized_text(entry_text)
+        if normalized:
+            if normalized in seen_text:
+                blocked.append(f"{label} has duplicate text; first seen in {seen_text[normalized]}.")
+            elif normalized in existing_text:
+                blocked.append(f"{label} text already exists in {existing_text[normalized]}.")
+            else:
+                _check_fuzzy_duplicate(entry_text, label, {**existing_text, **seen_text}, warnings=warnings)
+                seen_text[normalized] = label
     return {
         "ready": not blocked,
         "entries_count": len(entries),
@@ -320,7 +410,7 @@ def promote_memory_updates(repo: Path, proposed_path: Path, dry_run: bool = Fals
         path = memory_dir(repo) / filename
         if path.exists():
             for entry in parse_entries(path.read_text(encoding="utf-8", errors="replace")):
-                normalized = " ".join(entry.get("text", "").lower().split())
+                normalized = _normalized_text(entry.get("text", ""))
                 if normalized:
                     existing_texts.add(normalized)
 
@@ -332,7 +422,7 @@ def promote_memory_updates(repo: Path, proposed_path: Path, dry_run: bool = Fals
         if status not in PROMOTE_STATUSES:
             skipped.append({"id": entry.get("id", ""), "reason": f"status {status or '<missing>'} is not promotable"})
             continue
-        normalized = " ".join(entry.get("text", "").lower().split())
+        normalized = _normalized_text(entry.get("text", ""))
         if normalized in existing_texts:
             skipped.append({"id": entry.get("id", ""), "reason": "duplicate text already exists"})
             continue
@@ -354,6 +444,24 @@ def entry_type_to_file(entry_type: str) -> str:
 
 
 def append_memory(repo: Path, entry_type: str, source: str, confidence: str, text: str) -> dict:
+    repo = repo.resolve()
+    pre_blocked: list[str] = []
+    pre_warnings: list[str] = []
+    _check_text_safety(text, "new memory entry", blocked=pre_blocked, warnings=pre_warnings)
+    normalized = _normalized_text(text)
+    existing_text = _memory_text_index(repo)
+    if normalized and normalized in existing_text:
+        pre_blocked.append(f"new memory entry is duplicate; first seen in {existing_text[normalized]}.")
+    elif normalized:
+        _check_fuzzy_duplicate(text, "new memory entry", existing_text, warnings=pre_warnings)
+    if pre_blocked:
+        return {
+            "path": None,
+            "entry": None,
+            "blocked_reasons": pre_blocked,
+            "warnings": pre_warnings,
+        }
+
     mem = memory_dir(repo)
     mem.mkdir(parents=True, exist_ok=True)
     filename = entry_type_to_file(entry_type)
@@ -439,8 +547,9 @@ def main() -> int:
             exit_code = 2 if args.mode == "strict" and result["missing"] else 0
     elif args.command == "add":
         result = append_memory(repo, args.type, args.source, args.confidence, args.text)
-        message = "Memory entry appended."
-        exit_code = 0
+        blocked = result.get("blocked_reasons", [])
+        message = "Memory append blocked." if blocked else "Memory entry appended."
+        exit_code = 2 if blocked else 0
     elif args.command == "validate":
         result = validate_memory(repo)
         message = "Memory validation " + ("passed." if result["ready"] else "blocked.")

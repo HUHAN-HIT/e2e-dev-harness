@@ -9,6 +9,12 @@ import re
 import sys
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import clarification_gate  # noqa: E402
+
 REQUIRED_COLUMNS = {
     "id",
     "acceptance",
@@ -88,6 +94,7 @@ def validate(
     coverage_matrix: Path | None,
     unit_test_evidence: Path | None,
     business_review: Path | None,
+    design_doc: Path | None = None,
 ) -> dict:
     repo = repo.resolve()
     blocked: list[str] = []
@@ -95,6 +102,8 @@ def validate(
 
     matrix_path = coverage_matrix if coverage_matrix and coverage_matrix.is_absolute() else (repo / coverage_matrix if coverage_matrix else None)
     rows: list[dict[str, str]] = []
+    expected_acs: list[str] = []
+    missing_acs: list[str] = []
     if not matrix_path:
         blocked.append("Coverage matrix is required.")
     elif not matrix_path.exists():
@@ -122,6 +131,24 @@ def validate(
                     if TODO_RE.search(value):
                         blocked.append(f"Coverage matrix {row_id} has unresolved marker in {column}.")
 
+    if design_doc:
+        design_path = design_doc if design_doc.is_absolute() else repo / design_doc
+        if not design_path.exists():
+            blocked.append(f"Design document not found for acceptance coverage check: {design_path}")
+        else:
+            expected_acs = clarification_gate.extract_acceptance_criteria(design_path)
+            if expected_acs:
+                matrix_acs = {
+                    clarification_gate.normalize_acceptance_id(row.get("id", ""))
+                    for row in rows
+                    if row.get("id", "").strip()
+                }
+                missing_acs = [ac for ac in expected_acs if ac not in matrix_acs]
+                if missing_acs:
+                    blocked.append(
+                        "Coverage matrix missing acceptance criteria from design: " + ", ".join(missing_acs)
+                    )
+
     unit_test_path, unit_text = file_ok(unit_test_evidence, repo, "Unit test", blocked)
     if unit_test_path:
         if not UNIT_RE.search(unit_text):
@@ -138,6 +165,8 @@ def validate(
         "warnings": warnings,
         "coverage_matrix": str(matrix_path) if matrix_path else None,
         "coverage_rows": len(rows),
+        "expected_acceptance_ids": expected_acs,
+        "missing_acceptance_ids": missing_acs,
         "unit_test_evidence": unit_test_path,
         "business_review": business_review_path,
     }
@@ -149,10 +178,11 @@ def main() -> int:
     parser.add_argument("--coverage-matrix", type=Path)
     parser.add_argument("--unit-test-evidence", type=Path)
     parser.add_argument("--business-review", type=Path)
+    parser.add_argument("--design-doc", type=Path)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    result = validate(args.repo, args.coverage_matrix, args.unit_test_evidence, args.business_review)
+    result = validate(args.repo, args.coverage_matrix, args.unit_test_evidence, args.business_review, args.design_doc)
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:

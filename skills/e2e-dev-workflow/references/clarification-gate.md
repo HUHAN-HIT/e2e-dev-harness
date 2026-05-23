@@ -14,6 +14,8 @@ The gate prevents coding before the problem is testable.
 - Test design
 - Open questions
 
+Acceptance criteria may be written as explicit IDs (`AC-1`, `AC2`) or as plain bullets. The gate canonicalizes explicit IDs to `AC-n`; plain bullets are assigned `AC-1`, `AC-2`, and so on for coverage-matrix checking.
+
 ## Stop Conditions
 
 Stop before production-code edits if any question changes:

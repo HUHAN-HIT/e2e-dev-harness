@@ -70,11 +70,19 @@ def superpowers_status(mode: str, phase: str) -> dict:
 def memory_status(repo: Path, mode: str) -> dict:
     if mode == "off":
         return {"mode": mode, "enabled": False, "blocked": False, "message": "Memory adapter disabled by policy."}
+    if mode == "strict":
+        result = memory_capture.validate_memory(repo)
+        result.update({
+            "mode": mode,
+            "enabled": True,
+            "blocked": not result["ready"],
+        })
+        return result
     result = memory_capture.scan_memory(repo)
     result.update({
         "mode": mode,
         "enabled": True,
-        "blocked": mode == "strict" and bool(result["missing"]),
+        "blocked": False,
     })
     return result
 

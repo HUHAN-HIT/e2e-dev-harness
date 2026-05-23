@@ -129,6 +129,8 @@ Memory has two layers:
 
 Only write verified or user-approved facts. Never let memory override current code, tests, or freshly refreshed knowledge graphs. Read `references/memory-integration.md` for capture rules.
 
+Memory validation is a hard hygiene gate: it blocks unresolved TODO/TBD markers, local absolute paths, likely secrets, empty entry text, exact duplicate memory facts, and proposed updates that duplicate existing durable memory. Fuzzy duplicates are returned as warnings so the agent can merge or reject them before promotion.
+
 At completion, process proposed memory updates from the agent run. Accepted, approved, or verified entries can be promoted; rejected, deferred, or skipped entries are treated as handled but not written:
 
 ```bash
@@ -190,7 +192,7 @@ python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . --phase implem
 python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . --phase completion --design-doc docs/design/<feature>.md --red-test-evidence docs/agent-runs/<run>/evidence/red-test.txt --coverage-matrix docs/agent-runs/<run>/evidence/coverage-matrix.md --unit-test-evidence docs/agent-runs/<run>/evidence/green-test.txt --business-review docs/agent-runs/<run>/evidence/business-review.md --memory-updates docs/agent-runs/<run>/proposed-memory-updates.md
 ```
 
-Planning gate checks clarification readiness and knowledge graph status. Implementation gate additionally requires red-test evidence. Completion gate requires non-empty red-test evidence, unit-test evidence, business review evidence, and a coverage matrix that maps every acceptance criterion to use cases, service/module ownership, tests, code refs, and covered/verified status. When `--memory-updates` is supplied, completion also blocks unhandled proposed memory updates; mark each one accepted, rejected, deferred, or skipped.
+Planning gate checks clarification readiness and knowledge graph status. Implementation gate additionally requires red-test evidence. Completion gate requires `--design-doc`, non-empty red-test evidence, unit-test evidence, business review evidence, and a coverage matrix that maps every acceptance criterion to use cases, service/module ownership, tests, code refs, and covered/verified status. The coverage gate extracts acceptance IDs from the design doc; unnumbered acceptance bullets are treated as `AC-1`, `AC-2`, and so on, and every extracted AC must appear in the matrix `id` column. When `--memory-updates` is supplied, completion also blocks unhandled proposed memory updates; mark each one accepted, rejected, deferred, or skipped.
 
 ## TDD Rules
 
@@ -224,7 +226,7 @@ python skills/e2e-dev-workflow/scripts/memory_capture.py select . --phase code -
 python skills/e2e-dev-workflow/scripts/memory_capture.py promote . --from-file docs/agent-runs/<run>/proposed-memory-updates.md --dry-run
 python skills/e2e-dev-workflow/scripts/kg_refresh.py .
 python skills/e2e-dev-workflow/scripts/clarification_gate.py docs/design/<feature>.md
-python skills/e2e-dev-workflow/scripts/coverage_gate.py . --coverage-matrix docs/agent-runs/<run>/evidence/coverage-matrix.md --unit-test-evidence docs/agent-runs/<run>/evidence/green-test.txt --business-review docs/agent-runs/<run>/evidence/business-review.md
+python skills/e2e-dev-workflow/scripts/coverage_gate.py . --design-doc docs/design/<feature>.md --coverage-matrix docs/agent-runs/<run>/evidence/coverage-matrix.md --unit-test-evidence docs/agent-runs/<run>/evidence/green-test.txt --business-review docs/agent-runs/<run>/evidence/business-review.md
 python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py verify . --design-doc docs/design/<feature>.md --skip-maven
 mvn -pl services/<service> -am test
 mvn test

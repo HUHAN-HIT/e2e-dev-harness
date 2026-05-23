@@ -316,6 +316,34 @@ class ImplementationGateTests(unittest.TestCase):
         self.assertTrue(result["ready"])
         self.assertEqual(1, result["coverage"]["coverage_rows"])
 
+    def test_completion_gate_requires_design_doc_for_acceptance_coverage(self) -> None:
+        coverage = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Quote is returned | Create quote | services/sample-service | QuoteTest | QuoteService | reviewed | covered |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            red = repo / "docs" / "agent-runs" / "red.txt"
+            matrix = repo / "docs" / "agent-runs" / "coverage.md"
+            unit = repo / "docs" / "agent-runs" / "unit.txt"
+            review = repo / "docs" / "agent-runs" / "business.md"
+            kg.parent.mkdir(parents=True)
+            matrix.parent.mkdir(parents=True)
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            matrix.write_text(coverage, encoding="utf-8")
+            unit.write_text("mvn -pl services/sample-service -am test: PASS\n", encoding="utf-8")
+            review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
+
+            result = implementation_gate.validate_gate(repo, None, kg, "completion", red, matrix, unit, review)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("design document" in reason.lower() for reason in result["blocked_reasons"]))
+
     def test_completion_gate_blocks_unhandled_memory_updates_when_supplied(self) -> None:
         markdown = textwrap.dedent(
             """
@@ -400,22 +428,64 @@ class MemoryCaptureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             memory_capture.init_memory(repo)
-            memory_capture.append_memory(
-                repo,
-                "decision",
-                "user-approved",
-                "approved",
-                r"Use local tool at C:\Users\person\secret.",
+            (repo / "memory" / "graph-findings.md").write_text(
+                textwrap.dedent(
+                    """
+                    # Graph Findings Memory
+
+                    ## Entries
+
+                    ### M-1
+
+                    - Type: graph-finding
+                    - Source: graphify
+                    - Confidence: verified
+                    - Text: Duplicate fact.
+
+                    ### M-2
+
+                    - Type: graph-finding
+                    - Source: graphify
+                    - Confidence: verified
+                    - Text: Duplicate fact.
+                    """
+                ).strip(),
+                encoding="utf-8",
             )
-            memory_capture.append_memory(repo, "graph-finding", "graphify", "verified", "Duplicate fact.")
-            memory_capture.append_memory(repo, "graph-finding", "graphify", "verified", "Duplicate fact.")
 
             result = memory_capture.validate_memory(repo)
 
         self.assertFalse(result["ready"])
         joined = "\n".join(result["blocked_reasons"]).lower()
-        self.assertIn("local path", joined)
         self.assertIn("duplicate", joined)
+
+    def test_validate_blocks_dirty_memory_text_outside_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            memory_capture.init_memory(repo)
+            project = repo / "memory" / "project.md"
+            project.write_text(
+                "# Project Memory\n\n## Notes\n\nUse local tool at D:\\tools\\secret with api_key=abc123.\n",
+                encoding="utf-8",
+            )
+
+            result = memory_capture.validate_memory(repo)
+
+        joined = "\n".join(result["blocked_reasons"]).lower()
+        self.assertFalse(result["ready"])
+        self.assertIn("local path", joined)
+        self.assertIn("secret", joined)
+
+    def test_append_memory_blocks_existing_duplicate_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            memory_capture.init_memory(repo)
+            first = memory_capture.append_memory(repo, "decision", "design", "verified", "Quote timeout is 3 seconds.")
+            second = memory_capture.append_memory(repo, "decision", "design", "verified", "Quote timeout is 3 seconds.")
+
+        self.assertIsNotNone(first["path"])
+        self.assertIsNone(second["path"])
+        self.assertTrue(any("duplicate" in reason.lower() for reason in second["blocked_reasons"]))
 
     def test_select_filters_by_phase_and_service(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -664,6 +734,362 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertEqual(1, len(calls))
         self.assertEqual("discovery", result["orchestration"]["selected_mode"])
         self.assertEqual([], result["orchestration"]["agents"])
+
+
+class MemorySafetyTests(unittest.TestCase):
+    def test_validate_proposed_updates_blocks_local_path(self) -> None:
+        proposed = textwrap.dedent(
+            """
+            ### M-1
+
+            - Type: decision
+            - Source: design
+            - Confidence: verified
+            - Status: accepted
+            - Text: Use tool at C:\\Users\\person\\secret.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "proposed.md"
+            path.write_text(proposed, encoding="utf-8")
+
+            result = memory_capture.validate_proposed_updates(path)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("local path" in r.lower() for r in result["blocked_reasons"]))
+
+    def test_validate_proposed_updates_blocks_secret(self) -> None:
+        proposed = textwrap.dedent(
+            """
+            ### M-1
+
+            - Type: decision
+            - Source: design
+            - Confidence: verified
+            - Status: accepted
+            - Text: Use api_key=sk-123456 for external service.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "proposed.md"
+            path.write_text(proposed, encoding="utf-8")
+
+            result = memory_capture.validate_proposed_updates(path)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("secret" in r.lower() for r in result["blocked_reasons"]))
+
+    def test_validate_proposed_updates_blocks_todo(self) -> None:
+        proposed = textwrap.dedent(
+            """
+            ### M-1
+
+            - Type: decision
+            - Source: design
+            - Confidence: verified
+            - Status: accepted
+            - Text: TODO confirm timeout value.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "proposed.md"
+            path.write_text(proposed, encoding="utf-8")
+
+            result = memory_capture.validate_proposed_updates(path)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("todo" in r.lower() or "tbd" in r.lower() for r in result["blocked_reasons"]))
+
+    def test_validate_proposed_updates_blocks_exact_duplicate(self) -> None:
+        proposed = textwrap.dedent(
+            """
+            ### M-1
+
+            - Type: decision
+            - Source: design
+            - Confidence: verified
+            - Status: accepted
+            - Text: Quote timeout is 3 seconds.
+
+            ### M-2
+
+            - Type: decision
+            - Source: design
+            - Confidence: verified
+            - Status: accepted
+            - Text: Quote timeout is 3 seconds.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "proposed.md"
+            path.write_text(proposed, encoding="utf-8")
+
+            result = memory_capture.validate_proposed_updates(path)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("duplicate" in r.lower() for r in result["blocked_reasons"]))
+
+    def test_validate_proposed_updates_blocks_existing_memory_duplicate(self) -> None:
+        proposed = textwrap.dedent(
+            """
+            ### M-1
+
+            - Type: decision
+            - Source: design
+            - Confidence: verified
+            - Status: accepted
+            - Text: Quote timeout is 3 seconds.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            memory_capture.init_memory(repo)
+            memory_capture.append_memory(repo, "decision", "user-approved", "approved", "Quote timeout is 3 seconds.")
+            path = repo / "proposed.md"
+            path.write_text(proposed, encoding="utf-8")
+
+            result = memory_capture.validate_proposed_updates(path, repo)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("already exists" in r.lower() for r in result["blocked_reasons"]))
+
+    def test_validate_proposed_updates_warns_on_fuzzy_duplicate(self) -> None:
+        proposed = textwrap.dedent(
+            """
+            ### M-1
+
+            - Type: decision
+            - Source: design
+            - Confidence: verified
+            - Status: accepted
+            - Text: Quote timeout remains three seconds for all services.
+
+            ### M-2
+
+            - Type: decision
+            - Source: design
+            - Confidence: verified
+            - Status: accepted
+            - Text: Quote timeout remains three seconds for all the services.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "proposed.md"
+            path.write_text(proposed, encoding="utf-8")
+
+            result = memory_capture.validate_proposed_updates(path)
+
+        self.assertTrue(any("similar" in w.lower() for w in result["warnings"]))
+
+    def test_append_memory_blocks_dirty_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            memory_capture.init_memory(repo)
+
+            result = memory_capture.append_memory(
+                repo, "decision", "user-approved", "approved",
+                "Use secret at C:\\Users\\admin\\config with api_key=abc123",
+            )
+
+        self.assertIsNone(result["path"])
+        self.assertTrue(len(result["blocked_reasons"]) > 0)
+
+    def test_memory_status_strict_calls_validate_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            memory_capture.init_memory(repo)
+
+            result = e2e_dev_workflow.memory_status(repo, "strict")
+
+        self.assertTrue(result["enabled"])
+        self.assertIn("blocked_reasons", result)
+        self.assertEqual("strict", result["mode"])
+
+
+class AcceptanceCriteriaExtractionTests(unittest.TestCase):
+    def test_extracts_ac_ids_from_design(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Acceptance Criteria
+
+            - AC-1 Quote is returned within 3 seconds.
+            - AC-2 Error response includes code and message.
+            - AC3 Service health check returns 200.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            ids = clarification_gate.extract_acceptance_criteria(path)
+
+        self.assertEqual(["AC-1", "AC-2", "AC-3"], ids)
+
+    def test_generates_ids_for_unnumbered_acceptance_bullets(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Acceptance Criteria
+
+            - Quote is returned within 3 seconds.
+            - Error response includes code and message.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            ids = clarification_gate.extract_acceptance_criteria(path)
+
+        self.assertEqual(["AC-1", "AC-2"], ids)
+
+    def test_returns_empty_when_no_acceptance_section(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+
+            - Return a quote.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            ids = clarification_gate.extract_acceptance_criteria(path)
+
+        self.assertEqual([], ids)
+
+
+class CoverageGateAcCheckTests(unittest.TestCase):
+    def test_blocks_missing_design_doc_when_ac_check_requested(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Quote returned | Create quote | services/a | QuoteTest | QuoteService | reviewed | covered |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            matrix = repo / "coverage.md"
+            unit = repo / "unit.txt"
+            review = repo / "business.md"
+            matrix.write_text(markdown, encoding="utf-8")
+            unit.write_text("PASS\n", encoding="utf-8")
+            review.write_text("Reviewed.\n", encoding="utf-8")
+
+            result = coverage_gate.validate(repo, matrix, unit, review, repo / "missing-design.md")
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("design document not found" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_blocks_missing_generated_acs_from_design(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Quote returned | Create quote | services/a | QuoteTest | QuoteService | reviewed | covered |
+            """
+        ).strip()
+        design = textwrap.dedent(
+            """
+            # Feature
+
+            ## Acceptance Criteria
+
+            - Quote is returned.
+            - Error response includes code.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            matrix = repo / "coverage.md"
+            unit = repo / "unit.txt"
+            review = repo / "business.md"
+            design_path = repo / "design.md"
+            matrix.write_text(markdown, encoding="utf-8")
+            unit.write_text("PASS\n", encoding="utf-8")
+            review.write_text("Reviewed.\n", encoding="utf-8")
+            design_path.write_text(design, encoding="utf-8")
+
+            result = coverage_gate.validate(repo, matrix, unit, review, design_path)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("AC-2" in reason for reason in result["blocked_reasons"]))
+
+    def test_blocks_missing_acs_from_design(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Quote returned | Create quote | services/a | QuoteTest | QuoteService | reviewed | covered |
+            """
+        ).strip()
+        design = textwrap.dedent(
+            """
+            # Feature
+
+            ## Acceptance Criteria
+
+            - AC-1 Quote is returned.
+            - AC-2 Error response includes code.
+            - AC-3 Health check returns 200.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            matrix = repo / "coverage.md"
+            unit = repo / "unit.txt"
+            review = repo / "business.md"
+            design_path = repo / "design.md"
+            matrix.write_text(markdown, encoding="utf-8")
+            unit.write_text("PASS\n", encoding="utf-8")
+            review.write_text("Reviewed.\n", encoding="utf-8")
+            design_path.write_text(design, encoding="utf-8")
+
+            result = coverage_gate.validate(repo, matrix, unit, review, design_path)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("AC-2" in reason for reason in result["blocked_reasons"]))
+
+    def test_passes_when_all_acs_covered(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Quote returned | Create quote | services/a | QuoteTest | QuoteService | reviewed | covered |
+            | AC-2 | Error code | Error case | services/a | ErrorTest | ErrorService | reviewed | covered |
+            """
+        ).strip()
+        design = textwrap.dedent(
+            """
+            # Feature
+
+            ## Acceptance Criteria
+
+            - AC-1 Quote is returned.
+            - AC-2 Error response includes code.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            matrix = repo / "coverage.md"
+            unit = repo / "unit.txt"
+            review = repo / "business.md"
+            design_path = repo / "design.md"
+            matrix.write_text(markdown, encoding="utf-8")
+            unit.write_text("PASS\n", encoding="utf-8")
+            review.write_text("Reviewed.\n", encoding="utf-8")
+            design_path.write_text(design, encoding="utf-8")
+
+            result = coverage_gate.validate(repo, matrix, unit, review, design_path)
+
+        self.assertTrue(result["ready"])
 
 
 if __name__ == "__main__":

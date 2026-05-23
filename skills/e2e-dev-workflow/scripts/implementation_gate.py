@@ -73,6 +73,8 @@ def validate_gate(
                 blocked_reasons.append("Clarification gate is not ready.")
     else:
         warnings.append("No design document supplied; clarification readiness was not checked.")
+        if phase == "completion":
+            blocked_reasons.append("Completion phase requires a design document via --design-doc for acceptance coverage checking.")
 
     kg_path = find_kg_status_file(repo, kg_status_file)
     kg_status = read_json(kg_path) if kg_path.exists() else None
@@ -103,12 +105,12 @@ def validate_gate(
                 blocked_reasons.append(f"Red test evidence is missing or empty: {evidence_path}")
             else:
                 red_test_result = str(evidence_path)
-        coverage_result = coverage_gate.validate(repo, coverage_matrix, unit_test_evidence, business_review)
+        coverage_result = coverage_gate.validate(repo, coverage_matrix, unit_test_evidence, business_review, design_doc)
         if not coverage_result["ready"]:
             blocked_reasons.extend(coverage_result["blocked_reasons"])
         if memory_updates:
             memory_path = memory_updates if memory_updates.is_absolute() else repo / memory_updates
-            memory_result = memory_capture.validate_proposed_updates(memory_path)
+            memory_result = memory_capture.validate_proposed_updates(memory_path, repo)
             if not memory_result["ready"]:
                 blocked_reasons.extend(memory_result["blocked_reasons"])
 

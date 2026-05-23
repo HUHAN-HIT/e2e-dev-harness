@@ -93,6 +93,8 @@ python skills/e2e-dev-workflow/scripts/memory_capture.py promote . --from-file d
 
 Run the completion gate with `--memory-updates` to block unhandled entries before reporting done.
 
+When the completion gate receives `--memory-updates`, it validates the proposal against existing `memory/*.md` entries. Exact duplicates of durable memory block completion; near-duplicates are warnings that should be merged, rejected, or explicitly kept out of durable memory.
+
 ## Multi-Agent Use
 
 Each agent should load only the memory files relevant to its phase:
@@ -106,4 +108,4 @@ Agents write proposed memory updates in their handoff artifact first. The main a
 
 ## Validation Rules
 
-`memory_capture.py validate .` blocks missing required memory files, duplicate entry text, unresolved TODO/TBD markers, local machine paths, and likely secrets or credentials. Treat a validation failure as a memory hygiene issue, not as a reason to ignore memory entirely; fix or remove the bad entry, then rerun validation.
+`memory_capture.py validate .` blocks missing required memory files, duplicate entry text, unresolved TODO/TBD markers, local machine paths, and likely secrets or credentials. It checks both structured entry text and the full memory file body, so unsafe freeform notes cannot hide outside entries. `memory_capture.py add` also refuses exact duplicates before writing. Treat a validation failure as a memory hygiene issue, not as a reason to ignore memory entirely; fix or remove the bad entry, then rerun validation.
