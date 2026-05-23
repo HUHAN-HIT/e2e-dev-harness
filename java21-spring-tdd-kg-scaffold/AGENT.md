@@ -12,10 +12,14 @@ These instructions apply to the whole repository.
 ## Process
 
 - Load this file before requirement clarification.
-- Load each affected service's `AGENT.md` before asking service-specific clarification questions.
+- Use discovery scope before affected services are known; do not load every service `AGENT.md` into context.
+- Load only affected service `AGENT.md` files before asking service-specific clarification questions or implementing.
+- Prefer the unified `e2e_dev_workflow.py prepare` command when the skill is available.
 - Clarify requirements and use cases before implementation.
 - Refresh the knowledge graph before implementation.
+- For complex or cross-service work, maintain an ExecPlan under `docs/design/`.
 - Use `superpowers:test-driven-development` for production-code changes.
+- Capture red-test evidence before production-code edits.
 - Keep memory updates limited to verified facts or user-approved decisions.
 
 ## Code Style

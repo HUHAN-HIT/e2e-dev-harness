@@ -15,7 +15,7 @@ Use this matrix before each implementation.
 1. Run the dry-run helper:
 
    ```bash
-   python skills/java-spring-tdd-kg/scripts/kg_refresh.py .
+   python skills/e2e-dev-workflow/scripts/kg_refresh.py .
    ```
 
 2. Inspect the recommended tools and detected service/module list.

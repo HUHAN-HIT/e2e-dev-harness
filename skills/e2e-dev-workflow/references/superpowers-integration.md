@@ -4,7 +4,7 @@ This skill treats Superpowers as a pluggable process adapter.
 
 ## Modes
 
-Set mode with `JAVA_SPRING_TDD_KG_SUPERPOWERS_MODE` or pass `--mode` to `scripts/superpowers_probe.py`.
+Set mode with `E2E_DEV_WORKFLOW_SUPERPOWERS_MODE` or pass `--mode` to `scripts/superpowers_probe.py`.
 
 | Mode | Behavior |
 | --- | --- |

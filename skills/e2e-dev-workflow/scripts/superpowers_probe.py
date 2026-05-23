@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Discover Superpowers skills and enforce the java-spring-tdd-kg adapter policy."""
+"""Discover Superpowers skills and enforce the e2e-dev-workflow adapter policy."""
 
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def main() -> int:
     parser.add_argument(
         "--mode",
         choices=["auto", "strict", "optional", "off"],
-        default=os.environ.get("JAVA_SPRING_TDD_KG_SUPERPOWERS_MODE", "auto"),
+        default=os.environ.get("E2E_DEV_WORKFLOW_SUPERPOWERS_MODE", "auto"),
     )
     parser.add_argument("--phase", choices=["all", "clarification", "implementation"], default="all")
     parser.add_argument("--json", action="store_true", help="Print JSON only.")

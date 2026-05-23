@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared helpers for java-spring-tdd-kg scripts."""
+"""Shared helpers for e2e-dev-workflow scripts."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
-SKIP_DIRS = {".git", ".idea", ".vscode", "target", "build", "node_modules", ".gradle", "graphify-out"}
+SKIP_DIRS = {".git", ".idea", ".vscode", "target", "build", "node_modules", ".gradle", "graphify-out", "agent-runs"}
 SHELL_CONTROL_TOKENS = {"&&", "||", "|", ";", "<", ">", ">>", "2>", "2>>", "&"}
 
 

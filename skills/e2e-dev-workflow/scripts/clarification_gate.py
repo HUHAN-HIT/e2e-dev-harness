@@ -11,13 +11,38 @@ from pathlib import Path
 
 
 REQUIRED = {
-    "goal": [r"goal", r"objective", r"目标"],
-    "scope": [r"scope", r"non-goals?", r"范围", r"非目标"],
+    "goal": [r"^(?!non[-\s])goals?\b", r"\bobjective\b", r"(?<!非)目标"],
+    "scope": [r"\bscope\b", r"\bnon[-\s]?goals?\b", r"范围", r"非目标"],
     "use_cases": [r"use cases?", r"用例", r"场景"],
     "acceptance": [r"acceptance criteria", r"验收"],
     "test_design": [r"test design", r"test plan", r"testing", r"测试"],
     "open_questions": [r"open questions?", r"questions?", r"待澄清", r"开放问题"],
 }
+
+UNRESOLVED_MARKERS = (
+    "todo",
+    "tbd",
+    "?",
+    "？",
+    "unknown",
+    "unclear",
+    "待定",
+    "待确认",
+    "待澄清",
+    "未确定",
+)
+RESOLVED_MARKERS = (
+    "resolved",
+    "answered",
+    "confirmed",
+    "decided",
+    "covered",
+    "已解决",
+    "已回答",
+    "已确认",
+    "已决定",
+    "已覆盖",
+)
 
 NONE_MARKERS = {
     "none",
@@ -71,8 +96,16 @@ def open_questions_clear(text: str | None) -> tuple[bool, list[str]]:
     joined = " ".join(lines).lower()
     if any(marker in joined for marker in NONE_MARKERS):
         return True, []
-    unresolved = [line for line in lines if "todo" in line.lower() or "tbd" in line.lower() or "?" in line or line]
-    return False, unresolved
+    unresolved = [
+        line
+        for line in lines
+        if any(marker in line.lower() for marker in UNRESOLVED_MARKERS)
+    ]
+    if unresolved:
+        return False, unresolved
+    if all(any(marker in line.lower() for marker in RESOLVED_MARKERS) for line in lines):
+        return True, []
+    return False, lines
 
 
 def validate(path: Path) -> dict:

@@ -3,6 +3,9 @@ param(
     [string]$Module,
     [ValidateSet("auto", "strict", "optional", "off")]
     [string]$AgentInstructionsMode = "strict",
+    [ValidateSet("auto", "discovery", "affected", "all")]
+    [string]$AgentInstructionsScope = "auto",
+    [string[]]$AgentService,
     [ValidateSet("auto", "strict", "optional", "off")]
     [string]$SuperpowersMode = "auto",
     [ValidateSet("auto", "single", "multi", "off")]
@@ -17,21 +20,25 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 if ($AgentInstructionsMode -ne "off") {
     $AgentInstructionCandidates = @(
-        (Join-Path $RepoRoot "skills\java-spring-tdd-kg\scripts\agent_instructions.py"),
-        (Join-Path $RepoRoot ".agents\skills\java-spring-tdd-kg\scripts\agent_instructions.py"),
-        (Join-Path $RepoRoot "..\skills\java-spring-tdd-kg\scripts\agent_instructions.py")
+        (Join-Path $RepoRoot "skills\e2e-dev-workflow\scripts\agent_instructions.py"),
+        (Join-Path $RepoRoot ".agents\skills\e2e-dev-workflow\scripts\agent_instructions.py"),
+        (Join-Path $RepoRoot "..\skills\e2e-dev-workflow\scripts\agent_instructions.py")
     )
     $AgentInstructionScript = $AgentInstructionCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $AgentInstructionScript) {
         throw "agent_instructions.py not found."
     }
-    python $AgentInstructionScript $RepoRoot --mode $AgentInstructionsMode
+    $AgentInstructionArgs = @($AgentInstructionScript, $RepoRoot, "--mode", $AgentInstructionsMode, "--scope", $AgentInstructionsScope)
+    foreach ($Service in $AgentService) {
+        $AgentInstructionArgs += @("--service", $Service)
+    }
+    python @AgentInstructionArgs
 }
 
 $SuperpowersCandidates = @(
-    (Join-Path $RepoRoot "skills\java-spring-tdd-kg\scripts\superpowers_probe.py"),
-    (Join-Path $RepoRoot ".agents\skills\java-spring-tdd-kg\scripts\superpowers_probe.py"),
-    (Join-Path $RepoRoot "..\skills\java-spring-tdd-kg\scripts\superpowers_probe.py")
+    (Join-Path $RepoRoot "skills\e2e-dev-workflow\scripts\superpowers_probe.py"),
+    (Join-Path $RepoRoot ".agents\skills\e2e-dev-workflow\scripts\superpowers_probe.py"),
+    (Join-Path $RepoRoot "..\skills\e2e-dev-workflow\scripts\superpowers_probe.py")
 )
 $SuperpowersScript = $SuperpowersCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 if ($SuperpowersScript) {
@@ -42,9 +49,9 @@ if ($SuperpowersScript) {
 
 if ($AgentMode -ne "off") {
     $OrchestrationCandidates = @(
-        (Join-Path $RepoRoot "skills\java-spring-tdd-kg\scripts\orchestration_plan.py"),
-        (Join-Path $RepoRoot ".agents\skills\java-spring-tdd-kg\scripts\orchestration_plan.py"),
-        (Join-Path $RepoRoot "..\skills\java-spring-tdd-kg\scripts\orchestration_plan.py")
+        (Join-Path $RepoRoot "skills\e2e-dev-workflow\scripts\orchestration_plan.py"),
+        (Join-Path $RepoRoot ".agents\skills\e2e-dev-workflow\scripts\orchestration_plan.py"),
+        (Join-Path $RepoRoot "..\skills\e2e-dev-workflow\scripts\orchestration_plan.py")
     )
     $OrchestrationScript = $OrchestrationCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $OrchestrationScript) {
@@ -59,26 +66,27 @@ if ($AgentMode -ne "off") {
 
 if ($MemoryMode -ne "off") {
     $MemoryCandidates = @(
-        (Join-Path $RepoRoot "skills\java-spring-tdd-kg\scripts\memory_capture.py"),
-        (Join-Path $RepoRoot ".agents\skills\java-spring-tdd-kg\scripts\memory_capture.py"),
-        (Join-Path $RepoRoot "..\skills\java-spring-tdd-kg\scripts\memory_capture.py")
+        (Join-Path $RepoRoot "skills\e2e-dev-workflow\scripts\memory_capture.py"),
+        (Join-Path $RepoRoot ".agents\skills\e2e-dev-workflow\scripts\memory_capture.py"),
+        (Join-Path $RepoRoot "..\skills\e2e-dev-workflow\scripts\memory_capture.py")
     )
     $MemoryScript = $MemoryCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $MemoryScript) {
         throw "memory_capture.py not found."
     }
     python $MemoryScript scan $RepoRoot --mode $MemoryMode
+    python $MemoryScript validate $RepoRoot
 }
 
 if ($DesignDoc) {
     $Candidates = @(
-        (Join-Path $RepoRoot "skills\java-spring-tdd-kg\scripts\clarification_gate.py"),
-        (Join-Path $RepoRoot ".agents\skills\java-spring-tdd-kg\scripts\clarification_gate.py"),
-        (Join-Path $RepoRoot "..\skills\java-spring-tdd-kg\scripts\clarification_gate.py")
+        (Join-Path $RepoRoot "skills\e2e-dev-workflow\scripts\clarification_gate.py"),
+        (Join-Path $RepoRoot ".agents\skills\e2e-dev-workflow\scripts\clarification_gate.py"),
+        (Join-Path $RepoRoot "..\skills\e2e-dev-workflow\scripts\clarification_gate.py")
     )
     $GateScript = $Candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $GateScript) {
-        throw "clarification_gate.py not found. Install or copy the java-spring-tdd-kg skill into skills/ or .agents/skills/."
+        throw "clarification_gate.py not found. Install or copy the e2e-dev-workflow skill into skills/ or .agents/skills/."
     }
     $DesignPath = Join-Path $RepoRoot $DesignDoc
     python $GateScript $DesignPath

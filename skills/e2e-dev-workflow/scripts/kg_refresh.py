@@ -9,17 +9,17 @@ import os
 import shutil
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
-SKIP_DIRS = {".git", ".idea", ".vscode", "target", "build", "node_modules", ".gradle"}
+from common import SKIP_DIRS, parse_modules, posix, split_command  # noqa: E402
+
+
 DOC_SUFFIXES = {".md", ".adoc", ".rst", ".pdf", ".docx", ".pptx", ".drawio", ".puml", ".plantuml", ".mmd", ".png", ".jpg", ".jpeg"}
 GRAPHIFY_GRAPH = Path("graphify-out") / "graph.json"
-
-
-def posix(pathlike) -> str:
-    return str(pathlike).replace("\\", "/")
 
 
 def walk_files(root: Path):
@@ -30,23 +30,9 @@ def walk_files(root: Path):
             yield base / name
 
 
-def parse_modules(pom: Path) -> list[str]:
-    try:
-        root = ET.fromstring(pom.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-    ns = ""
-    if root.tag.startswith("{"):
-        ns = root.tag.split("}", 1)[0] + "}"
-    modules = root.find(f"{ns}modules")
-    if modules is None:
-        return []
-    return [module.text.strip() for module in modules.findall(f"{ns}module") if module.text and module.text.strip()]
-
-
 def contains_text(path: Path, needle: str) -> bool:
     try:
-        return needle in path.read_text(encoding="utf-8", errors="ignore")
+        return needle in path.read_text(encoding="utf-8", errors="replace")
     except Exception:
         return False
 
@@ -116,13 +102,28 @@ def choose_tools(mode: str, facts: dict) -> list[str]:
         tools.append("gitnexus")
     if has_docs or (facts["multi_service"] and len(facts["root_modules"]) > 1):
         tools.append("graphify")
-    if not tools and has_docs:
-        tools.append("graphify")
     return tools
 
 
 def run_command(command: str, repo: Path) -> dict:
-    completed = subprocess.run(command, cwd=repo, shell=True, text=True, capture_output=True)
+    try:
+        args = split_command(command)
+    except ValueError as error:
+        return {
+            "command": command,
+            "exit_code": 2,
+            "stdout_tail": "",
+            "stderr_tail": str(error),
+        }
+    try:
+        completed = subprocess.run(args, cwd=repo, shell=False, text=True, capture_output=True)
+    except FileNotFoundError as error:
+        return {
+            "command": command,
+            "exit_code": 127,
+            "stdout_tail": "",
+            "stderr_tail": str(error),
+        }
     return {
         "command": command,
         "exit_code": completed.returncode,

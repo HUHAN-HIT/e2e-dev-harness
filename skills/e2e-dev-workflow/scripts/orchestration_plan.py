@@ -1,0 +1,448 @@
+#!/usr/bin/env python3
+"""Recommend single-agent or multi-agent orchestration for Spring 6 work."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+from datetime import date
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from kg_refresh import detect  # noqa: E402
+
+
+RISK_KEYWORDS = {
+    "api",
+    "contract",
+    "event",
+    "message",
+    "schema",
+    "migration",
+    "database",
+    "transaction",
+    "auth",
+    "permission",
+    "security",
+    "idempotent",
+    "retry",
+    "timeout",
+    "跨服务",
+    "契约",
+    "消息",
+    "事件",
+    "数据库",
+    "迁移",
+    "权限",
+    "幂等",
+    "重试",
+}
+SERVICE_SCOPES = ("auto", "discovery", "affected", "all")
+
+
+def read_design(path: Path | None) -> str:
+    if not path:
+        return ""
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+
+
+def feature_slug(design_doc: Path | None) -> str:
+    if design_doc and design_doc.name:
+        name = design_doc.stem
+        for suffix in ("-design", "-requirements", "-use-cases", "-test-plan", "-implementation-plan"):
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+        return name or "feature"
+    return "feature"
+
+
+def safe_slug(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", value.strip()).strip("-._")
+    return slug or "feature"
+
+
+def default_run_id(slug: str, run_date: str | None = None) -> str:
+    return f"{run_date or date.today().isoformat()}-{safe_slug(slug)}"
+
+
+def choose_mode(requested: str, facts: dict, design_text: str, design_is_template: bool) -> tuple[str, list[str]]:
+    if requested in {"single", "multi"}:
+        return requested, [f"mode explicitly set to {requested}"]
+
+    reasons: list[str] = []
+    service_count = len(facts.get("service_candidates", []))
+    if facts.get("multi_service") or service_count > 1:
+        reasons.append("multiple service candidates detected")
+    if design_is_template:
+        reasons.append("template design doc detected; placeholder risk keywords ignored")
+    elif len(design_text) > 3000:
+        reasons.append("design document is large enough to benefit from context isolation")
+    if not design_is_template:
+        lowered = design_text.lower()
+        matched = sorted(keyword for keyword in RISK_KEYWORDS if keyword.lower() in lowered)
+        if matched:
+            reasons.append("risk keywords detected: " + ", ".join(matched[:8]))
+    if not design_is_template and facts.get("design_docs_or_media_count", 0) >= 12:
+        reasons.append("many design/media artifacts detected")
+
+    actionable_reasons = [reason for reason in reasons if not reason.startswith("template design doc")]
+    if actionable_reasons:
+        return "multi", reasons
+    return "single", ["single service and low-risk design context detected"]
+
+
+def service_slug(service: str) -> str:
+    name = service.replace("\\", "/").rstrip("/").split("/")[-1]
+    return safe_slug(name)
+
+
+def normalize_path(value: str) -> str:
+    return value.replace("\\", "/").strip("/")
+
+
+def resolve_service_scope(service_scope: str, requested_services: list[str] | None, requested_paths: list[str] | None) -> str:
+    if service_scope != "auto":
+        return service_scope
+    if requested_services or requested_paths:
+        return "affected"
+    return "discovery"
+
+
+def match_requested_service(candidates: list[str], requested: str) -> str | None:
+    value = normalize_path(requested).lower()
+    for candidate in candidates:
+        normalized = normalize_path(candidate).lower()
+        if value == normalized or value == normalized.split("/")[-1]:
+            return candidate
+    return None
+
+
+def service_for_path(candidates: list[str], requested_path: str) -> str | None:
+    value = normalize_path(requested_path).lower()
+    matches = [
+        candidate
+        for candidate in candidates
+        if value == normalize_path(candidate).lower() or value.startswith(normalize_path(candidate).lower() + "/")
+    ]
+    if not matches:
+        return None
+    return sorted(matches, key=len, reverse=True)[0]
+
+
+def select_services(
+    facts: dict,
+    requested_services: list[str] | None = None,
+    requested_paths: list[str] | None = None,
+    service_scope: str = "auto",
+) -> tuple[list[str], str]:
+    candidates = [normalize_path(service) for service in facts.get("service_candidates", [])]
+    resolved = resolve_service_scope(service_scope, requested_services, requested_paths)
+    if resolved == "discovery":
+        return [], resolved
+    if resolved == "all":
+        return candidates, resolved
+
+    selected: list[str] = []
+    seen: set[str] = set()
+    for requested in requested_services or []:
+        matched = match_requested_service(candidates, requested)
+        if matched and matched not in seen:
+            seen.add(matched)
+            selected.append(matched)
+    for path in requested_paths or []:
+        matched = service_for_path(candidates, path)
+        if matched and matched not in seen:
+            seen.add(matched)
+            selected.append(matched)
+    return selected, resolved
+
+
+def mode_facts_for_service_scope(facts: dict, selected_services: list[str], resolved_service_scope: str) -> dict:
+    scoped = dict(facts)
+    if resolved_service_scope == "discovery":
+        scoped["service_candidates"] = []
+        scoped["multi_service"] = False
+    elif resolved_service_scope == "affected":
+        scoped["service_candidates"] = selected_services
+        scoped["multi_service"] = len(selected_services) > 1
+    elif resolved_service_scope == "all":
+        scoped["service_candidates"] = facts.get("service_candidates", [])
+        scoped["multi_service"] = len(scoped["service_candidates"]) > 1
+    return scoped
+
+
+def detection_summary(facts: dict, limit: int = 20) -> dict:
+    services = facts.get("service_candidates", [])
+    return {
+        "service_candidates_count": len(services),
+        "service_candidates_sample": services[:limit],
+        "service_candidates_truncated": len(services) > limit,
+        "multi_service": facts.get("multi_service", False),
+        "design_docs_or_media_count": facts.get("design_docs_or_media_count", 0),
+        "spring_entrypoints_count": len(facts.get("spring_entrypoints", [])),
+    }
+
+
+def discovery_result(
+    repo: Path,
+    requested_mode: str,
+    requested_service_scope: str,
+    requested_services: list[str] | None,
+    requested_paths: list[str] | None,
+    facts: dict,
+) -> dict:
+    return {
+        "repo": str(repo),
+        "requested_mode": requested_mode,
+        "selected_mode": "discovery",
+        "requested_service_scope": requested_service_scope,
+        "resolved_service_scope": "discovery",
+        "requested_services": requested_services or [],
+        "requested_paths": requested_paths or [],
+        "selected_services": [],
+        "reasons": [
+            "discovery scope defers implementation agent planning until affected services are known"
+        ],
+        "detected": detection_summary(facts),
+        "handoff_artifacts": {},
+        "agents": [],
+        "next_steps": [
+            "Clarify requirements and identify affected services or paths.",
+            "Rerun orchestration with --service-scope affected plus --service or --path.",
+            "Create agent-run archives only after affected services are known.",
+        ],
+    }
+
+
+def service_artifacts(base: str, services: list[str] | None) -> dict:
+    result: dict[str, dict[str, str]] = {}
+    for service in services or []:
+        slug = service_slug(service)
+        service_base = f"{base}/service-plans/{slug}"
+        result[service] = {
+            "service_dir": service,
+            "service_plan": f"{service_base}/implementation-plan.md",
+            "code_agent": f"{service_base}/code-agent.md",
+            "test_evidence": f"{service_base}/unit-test-evidence.txt",
+            "coverage_matrix": f"{service_base}/coverage-matrix.md",
+            "business_review": f"{service_base}/business-review.md",
+        }
+    return result
+
+
+def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None = None, services: list[str] | None = None) -> dict:
+    base = (agent_run_dir or f"docs/agent-runs/{default_run_id(slug, run_date)}").replace("\\", "/")
+    handoffs = f"{base}/handoffs"
+    evidence = f"{base}/evidence"
+    return {
+        "agent_run_dir": base,
+        "exec_plan": f"{base}/exec-plan.md",
+        "prepare_status": f"{base}/prepare.json",
+        "requirements": f"{handoffs}/01-requirements-clarifier.md",
+        "use_cases": f"{handoffs}/02-use-case-designer.md",
+        "test_plan": f"{handoffs}/03-test-case-developer.md",
+        "implementation_plan": f"{handoffs}/04-code-developer.md",
+        "proposed_memory_updates": f"{base}/proposed-memory-updates.md",
+        "knowledge_graph_status": f"{evidence}/knowledge-graph-refresh.json",
+        "red_test_evidence": f"{evidence}/red-test.txt",
+        "green_test_evidence": f"{evidence}/green-test.txt",
+        "verification_evidence": f"{evidence}/verification.txt",
+        "coverage_matrix": f"{evidence}/coverage-matrix.md",
+        "business_review": f"{evidence}/business-review.md",
+        "service_plans": service_artifacts(base, services),
+    }
+
+
+def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | None = None) -> list[dict]:
+    if selected_mode == "discovery":
+        return []
+    if selected_mode == "single":
+        return [
+            {
+                "name": "single-agent",
+                "owns": ["requirements", "use cases", "tests", "implementation"],
+                "inputs": ["user request", "knowledge graph summary"],
+                "outputs": [
+                    artifact_paths["exec_plan"],
+                    artifact_paths["requirements"],
+                    artifact_paths["use_cases"],
+                    artifact_paths["test_plan"],
+                    artifact_paths["implementation_plan"],
+                    artifact_paths["coverage_matrix"],
+                    artifact_paths["business_review"],
+                    artifact_paths["verification_evidence"],
+                ],
+                "gate": "Open questions, red-test evidence, coverage matrix, unit-test evidence, and business review must be complete.",
+            }
+        ]
+
+    agents = [
+        {
+            "name": "requirements-clarifier",
+            "owns": ["goal", "non-goals", "constraints", "acceptance criteria", "open questions"],
+            "inputs": ["user request", "knowledge graph summary"],
+            "outputs": [artifact_paths["requirements"]],
+            "gate": "Behavior/API/data/test-impacting open questions must be resolved.",
+        },
+        {
+            "name": "use-case-designer",
+            "owns": ["happy paths", "failure paths", "cross-service flow", "contracts", "data effects"],
+            "inputs": [artifact_paths["requirements"], "knowledge graph summary"],
+            "outputs": [artifact_paths["use_cases"]],
+            "gate": "Every acceptance criterion maps to a use case or is explicitly deferred.",
+        },
+        {
+            "name": "test-case-developer",
+            "owns": ["test strategy", "first red test", "contract tests", "Maven test scope"],
+            "inputs": [artifact_paths["requirements"], artifact_paths["use_cases"], "superpowers:test-driven-development"],
+            "outputs": [artifact_paths["test_plan"]],
+            "gate": "First red test must be written and observed failing for the expected reason.",
+        },
+    ]
+    service_plans = artifact_paths.get("service_plans", {})
+    if service_plans:
+        for service, paths in service_plans.items():
+            agents.append(
+                {
+                    "name": f"code-developer-{service_slug(service)}",
+                    "owns": [f"implementation for {service}", "service-local tests", "service-local verification evidence"],
+                    "inputs": [
+                        artifact_paths["requirements"],
+                        artifact_paths["use_cases"],
+                        artifact_paths["test_plan"],
+                        paths["service_plan"],
+                        "failing tests for this service",
+                    ],
+                    "outputs": [
+                        paths["code_agent"],
+                        paths["test_evidence"],
+                        paths["coverage_matrix"],
+                        paths["business_review"],
+                    ],
+                    "gate": "May edit only its assigned service/module and shared files explicitly listed in the service plan.",
+                }
+            )
+    else:
+        agents.append({
+            "name": "code-developer",
+            "owns": ["minimal implementation", "red-green-refactor", "verification"],
+            "inputs": [artifact_paths["requirements"], artifact_paths["use_cases"], artifact_paths["test_plan"], "failing tests"],
+            "outputs": [artifact_paths["implementation_plan"], "code changes", "test results"],
+            "gate": "All narrow and broadened verification commands pass.",
+        })
+    agents.append({
+        "name": "coverage-reviewer",
+        "owns": ["design coverage matrix", "unit test evidence check", "business logic review"],
+        "inputs": [artifact_paths["requirements"], artifact_paths["use_cases"], artifact_paths["test_plan"], artifact_paths["implementation_plan"]],
+        "outputs": [artifact_paths["coverage_matrix"], artifact_paths["business_review"], artifact_paths["verification_evidence"]],
+        "gate": "Every acceptance criterion maps to use cases, service plans, tests, code refs, and business review evidence.",
+    })
+    return agents
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("repo", nargs="?", default=".", type=Path)
+    parser.add_argument(
+        "--mode",
+        choices=["auto", "single", "multi"],
+        default=os.environ.get("E2E_DEV_WORKFLOW_AGENT_MODE", "auto"),
+    )
+    parser.add_argument("--design-doc", type=Path)
+    parser.add_argument("--agent-run-dir", help="Archive directory for generated agent run files.")
+    parser.add_argument("--run-date", help="Date prefix for default agent run directory, YYYY-MM-DD.")
+    parser.add_argument("--path", action="append", help="Path that may be touched; can be repeated.")
+    parser.add_argument("--service", action="append", help="Affected service directory or service name; can be repeated.")
+    parser.add_argument("--service-scope", choices=SERVICE_SCOPES, default=os.environ.get("E2E_DEV_WORKFLOW_SERVICE_SCOPE", "auto"))
+    parser.add_argument("--status-file", type=Path)
+    parser.add_argument("--json", action="store_true", help="Print JSON only.")
+    args = parser.parse_args()
+
+    repo = args.repo.resolve()
+    if not repo.exists():
+        print(f"Repo not found: {repo}", file=sys.stderr)
+        return 2
+
+    design_path = args.design_doc
+    if design_path and not design_path.is_absolute():
+        design_path = repo / design_path
+    design_text = read_design(design_path)
+    facts = detect(repo)
+    design_is_template = bool(design_path and "template" in design_path.stem.lower())
+    services, resolved_service_scope = select_services(facts, args.service, args.path, args.service_scope)
+    if resolved_service_scope == "discovery":
+        result = discovery_result(repo, args.mode, args.service_scope, args.service, args.path, facts)
+        text = json.dumps(result, indent=2, ensure_ascii=False)
+        if args.json:
+            print(text)
+        else:
+            print("Orchestration mode: discovery")
+            print("Next steps:")
+            for step in result["next_steps"]:
+                print(f"- {step}")
+        if args.status_file:
+            args.status_file.parent.mkdir(parents=True, exist_ok=True)
+            args.status_file.write_text(text + "\n", encoding="utf-8")
+        return 0
+    mode_facts = mode_facts_for_service_scope(facts, services, resolved_service_scope)
+    selected, reasons = choose_mode(args.mode, mode_facts, design_text, design_is_template)
+    slug = feature_slug(design_path)
+    artifact_paths = artifacts(slug, args.agent_run_dir, args.run_date, services)
+    result = {
+        "repo": str(repo),
+        "requested_mode": args.mode,
+        "selected_mode": selected,
+        "requested_service_scope": args.service_scope,
+        "resolved_service_scope": resolved_service_scope,
+        "requested_services": args.service or [],
+        "requested_paths": args.path or [],
+        "selected_services": services,
+        "reasons": reasons,
+        "detected": {
+            "service_candidates": facts.get("service_candidates", []),
+            "multi_service": facts.get("multi_service", False),
+            "design_docs_or_media_count": facts.get("design_docs_or_media_count", 0),
+            "spring_entrypoints": facts.get("spring_entrypoints", []),
+        },
+        "handoff_artifacts": artifact_paths,
+        "agents": agent_plan(selected, artifact_paths, services),
+        "notes": [
+            "Use files as handoff boundaries; do not rely on chat memory.",
+            "For multi-service work, keep each service implementation plan and code agent handoff separate.",
+            "Use superpowers:brainstorming before implementation planning.",
+            "Use superpowers:test-driven-development before production-code edits.",
+        ],
+    }
+
+    text = json.dumps(result, indent=2, ensure_ascii=False)
+    if args.json:
+        print(text)
+    else:
+        print(f"Orchestration mode: {selected}")
+        print("Reasons:")
+        for reason in reasons:
+            print(f"- {reason}")
+        print("Handoff artifacts:")
+        for name, path in artifact_paths.items():
+            print(f"- {name}: {path}")
+        print("Agents:")
+        for agent in result["agents"]:
+            print(f"- {agent['name']}: {', '.join(agent['owns'])}")
+
+    if args.status_file:
+        args.status_file.parent.mkdir(parents=True, exist_ok=True)
+        args.status_file.write_text(text + "\n", encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
