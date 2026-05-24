@@ -25,7 +25,7 @@ REQUIRED_COLUMNS = {
     "business_review",
     "status",
 }
-PASS_STATUSES = {"covered", "done", "pass", "passed", "verified"}
+PASS_STATUSES = {"implemented", "covered", "done", "pass", "passed", "verified"}
 TODO_RE = re.compile(
     r"\b(todo|tbd|fixme|unresolved|pending)\b|"
     r"\u5f85\u786e\u8ba4|\u672a\u786e\u8ba4|\u672a\u5b8c\u6210",
@@ -36,6 +36,8 @@ REVIEW_RE = re.compile(
     r"\u5df2\u5ba1\u67e5|\u5df2\u9a8c\u8bc1|\u5df2\u786e\u8ba4|\u901a\u8fc7",
     re.IGNORECASE,
 )
+SUCCESS_PATH_RE = re.compile(r"\b(success|successful|happy|valid|positive|normal)\b|\u6210\u529f|\u6b63\u5e38", re.IGNORECASE)
+FAILURE_PATH_RE = re.compile(r"\b(fail|failure|failed|invalid|negative|error|exception|missing|reject|denied)\b|\u5931\u8d25|\u5f02\u5e38|\u7f3a\u5931|\u62d2\u7edd", re.IGNORECASE)
 
 
 def strip_bom(text: str) -> str:
@@ -191,6 +193,14 @@ def validate(
                     value = row.get(column, "")
                     if TODO_RE.search(value):
                         blocked.append(f"Coverage matrix {row_id} has unresolved marker in {column}.")
+                path_text = " ".join(
+                    row.get(column, "")
+                    for column in ("acceptance", "use_case", "tests", "business_review")
+                )
+                if not (SUCCESS_PATH_RE.search(path_text) and FAILURE_PATH_RE.search(path_text)):
+                    warnings.append(
+                        f"Coverage matrix {row_id} should explicitly show happy/success and failure/edge-path test coverage."
+                    )
 
     if design_doc:
         design_path = design_doc if design_doc.is_absolute() else repo / design_doc

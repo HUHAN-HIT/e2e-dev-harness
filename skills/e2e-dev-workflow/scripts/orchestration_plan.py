@@ -320,6 +320,12 @@ def service_artifacts(base: str, services: list[str] | None) -> dict:
             "service_dir": service,
             "service_plan": f"{service_base}/implementation-plan.md",
             "code_agent": f"{service_base}/code-agent.md",
+            "review_requests_dir": f"{service_base}/review-requests",
+            "reviews_dir": f"{service_base}/reviews",
+            "test_review_request": f"{service_base}/review-requests/R2-test-review-request.md",
+            "test_review": f"{service_base}/reviews/R2-test-review.md",
+            "implementation_review_request": f"{service_base}/review-requests/R3-implementation-review-request.md",
+            "implementation_review": f"{service_base}/reviews/R3-implementation-review.md",
             "implementation_manifest": f"{service_base}/implementation-manifest.md",
             "test_evidence": f"{service_base}/unit-test-evidence.txt",
             "coverage_matrix": f"{service_base}/coverage-matrix.md",
@@ -334,6 +340,8 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
     base = (agent_run_dir or f"docs/agent-runs/{default_run_id(slug, run_date)}").replace("\\", "/")
     handoffs = f"{base}/handoffs"
     evidence = f"{base}/evidence"
+    review_requests = f"{base}/review-requests"
+    reviews = f"{base}/reviews"
     return {
         "agent_run_dir": base,
         "exec_plan": f"{base}/exec-plan.md",
@@ -343,6 +351,14 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
         "test_plan": f"{handoffs}/03-test-case-developer.md",
         "implementation_plan": f"{handoffs}/04-code-developer.md",
         "proposed_memory_updates": f"{base}/proposed-memory-updates.md",
+        "review_requests_dir": review_requests,
+        "reviews_dir": reviews,
+        "design_review_request": f"{review_requests}/R1-design-review-request.md",
+        "design_review": f"{reviews}/R1-design-review.md",
+        "test_review_request": f"{review_requests}/R2-test-review-request.md",
+        "test_review": f"{reviews}/R2-test-review.md",
+        "implementation_review_request": f"{review_requests}/R3-implementation-review-request.md",
+        "implementation_review": f"{reviews}/R3-implementation-review.md",
         "rework_dir": f"{base}/rework",
         "rework_pattern": f"{base}/rework/rework-NNN.md",
         "knowledge_graph_status": f"{evidence}/knowledge-graph-refresh.json",
@@ -360,12 +376,13 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
 def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | None = None) -> list[dict]:
     if selected_mode == "discovery":
         return []
+    agents: list[dict] = []
     if selected_mode == "single":
-        return [
+        agents.append(
             {
                 "name": "single-agent",
                 "owns": ["requirements", "use cases", "tests", "implementation"],
-                "inputs": ["user request", "knowledge graph summary"],
+                "inputs": ["user request", "knowledge graph summary", artifact_paths["dependency_report"]],
                 "outputs": [
                     artifact_paths["exec_plan"],
                     artifact_paths["requirements"],
@@ -377,11 +394,11 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
                     artifact_paths["business_review"],
                     artifact_paths["verification_evidence"],
                 ],
-                "gate": "Open questions, red-test evidence, coverage matrix, unit-test evidence, and business review must be complete.",
+                "gate": "Must not write semantic review reports; independent reviewer agents own R1/R2/R3 review artifacts.",
             }
-        ]
-
-    agents = [
+        )
+    else:
+        agents.extend([
         {
             "name": "requirements-clarifier",
             "owns": ["goal", "non-goals", "constraints", "acceptance criteria", "open questions"],
@@ -403,9 +420,36 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
             "outputs": [artifact_paths["test_plan"]],
             "gate": "First red test must be written and observed failing for the expected reason.",
         },
-    ]
+    ])
+    agents.extend([
+        {
+            "name": "design-reviewer",
+            "owns": ["semantic review of requirements, AC completeness, affected modules, security-sensitive paths, reference patterns"],
+            "inputs": [
+                artifact_paths["design_review_request"],
+                artifact_paths["requirements"],
+                artifact_paths["use_cases"],
+                "task request",
+                "project reference patterns",
+            ],
+            "outputs": [artifact_paths["design_review"]],
+            "gate": "Blocked findings become rework before implementation planning continues.",
+        },
+        {
+            "name": "test-reviewer",
+            "owns": ["semantic review of red tests, happy/failure paths, security and contract coverage"],
+            "inputs": [
+                artifact_paths["test_review_request"],
+                artifact_paths["requirements"],
+                artifact_paths["use_cases"],
+                artifact_paths["test_plan"],
+            ],
+            "outputs": [artifact_paths["test_review"]],
+            "gate": "Production code waits until test review is approved or rework is routed.",
+        },
+    ])
     service_plans = artifact_paths.get("service_plans", {})
-    if service_plans:
+    if service_plans and selected_mode != "single":
         for service, paths in service_plans.items():
             agents.append(
                 {
@@ -429,7 +473,29 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
                     "gate": "May edit only its assigned service/module and shared files explicitly listed in the service plan.",
                 }
             )
-    else:
+            agents.append(
+                {
+                    "name": f"implementation-reviewer-{service_slug(service)}",
+                    "owns": [
+                        f"independent semantic implementation review for {service}",
+                        "service-local completeness",
+                        "service-local tests and business logic risks",
+                    ],
+                    "inputs": [
+                        paths["implementation_review_request"],
+                        artifact_paths["requirements"],
+                        artifact_paths["use_cases"],
+                        artifact_paths["test_plan"],
+                        paths["service_plan"],
+                        paths["implementation_manifest"],
+                        paths["coverage_matrix"],
+                        paths["business_review"],
+                    ],
+                    "outputs": [paths["implementation_review"]],
+                    "gate": "Must run as an independent reviewer agent with no inherited developer chat context.",
+                }
+            )
+    elif selected_mode != "single":
         agents.append({
             "name": "code-developer",
             "owns": ["minimal implementation", "red-green-refactor", "verification"],
@@ -437,6 +503,20 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
             "outputs": [artifact_paths["implementation_plan"], "code changes", "test results"],
             "gate": "All narrow and broadened verification commands pass.",
         })
+    agents.append({
+        "name": "implementation-reviewer",
+        "owns": ["semantic review of implementation completeness, code/test depth, security risks, and project pattern consistency"],
+        "inputs": [
+            artifact_paths["implementation_review_request"],
+            artifact_paths["requirements"],
+            artifact_paths["use_cases"],
+            artifact_paths["test_plan"],
+            artifact_paths["dependency_report"],
+            artifact_paths["implementation_manifest"],
+        ],
+        "outputs": [artifact_paths["implementation_review"]],
+        "gate": "Findings create rework items; completion cannot proceed while implementation review is blocked.",
+    })
     agents.append({
         "name": "coverage-reviewer",
         "owns": ["design coverage matrix", "unit test evidence check", "business logic review"],

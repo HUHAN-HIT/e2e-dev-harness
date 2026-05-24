@@ -41,6 +41,10 @@ BEAN_RE = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*\s*\(",
     re.MULTILINE,
 )
+SIMPLE_DATE_FORMAT_FIELD_RE = re.compile(
+    r"(?m)^\s*(?:(?:public|protected|private|static|final|volatile)\s+)*"
+    r"(?:java\.text\.)?SimpleDateFormat\s+[A-Za-z_][A-Za-z0-9_]*\s*(?:=|;)"
+)
 
 
 @dataclass
@@ -119,6 +123,36 @@ def constructor_params(text: str, class_name: str) -> list[str]:
     return params
 
 
+def top_level_member_lines(text: str, class_name: str) -> str:
+    match = re.search(rf"\b(?:class|record)\s+{re.escape(class_name)}\b[^\{{]*\{{", text)
+    if not match:
+        return ""
+    depth = 1
+    current: list[str] = []
+    lines: list[str] = []
+    for char in text[match.end() :]:
+        if char == "\n":
+            if depth == 1:
+                lines.append("".join(current))
+            current = []
+            continue
+        if depth == 1:
+            current.append(char)
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                break
+    if current and depth == 1:
+        lines.append("".join(current))
+    return "\n".join(lines)
+
+
+def shared_simple_date_format_fields(text: str, class_name: str) -> bool:
+    return bool(SIMPLE_DATE_FORMAT_FIELD_RE.search(top_level_member_lines(text, class_name)))
+
+
 def collect_types(repo: Path) -> tuple[dict[str, JavaType], set[str], dict[Path, str]]:
     types: dict[str, JavaType] = {}
     bean_types: set[str] = set()
@@ -150,6 +184,11 @@ def validate(repo: Path) -> dict:
         if not java_type.component:
             continue
         text = texts[java_type.path]
+        if shared_simple_date_format_fields(text, java_type.name):
+            blocked.append(
+                f"Spring component {java_type.name} declares a shared SimpleDateFormat field in "
+                f"{posix(java_type.path.relative_to(repo))}; use DateTimeFormatter or create a formatter per use."
+            )
         for param_type in constructor_params(text, java_type.name):
             injected = types.get(param_type)
             if not injected:

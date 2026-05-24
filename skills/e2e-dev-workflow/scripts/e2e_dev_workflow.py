@@ -243,6 +243,15 @@ def align_prepare_scopes(agent_scope: str, service_scope: str) -> tuple[str, str
     elif agent_scope == "auto" and service_scope in {"discovery", "affected", "all"}:
         effective_agent_scope = service_scope
         notes.append(f"agent-scope inherited from service-scope: {service_scope}")
+    elif (
+        agent_scope in {"discovery", "affected", "all"}
+        and service_scope in {"discovery", "affected", "all"}
+        and agent_scope != service_scope
+    ):
+        notes.append(
+            f"agent-scope and service-scope differ: agent-scope={agent_scope}, service-scope={service_scope}; "
+            "keep this only when AGENT loading and service planning intentionally use different boundaries."
+        )
     return effective_agent_scope, effective_service_scope, notes
 
 
@@ -364,6 +373,8 @@ This is a living plan. Keep it current while implementing the feature.
 - Implementation plan: {artifacts['implementation_plan']}
 - Implementation manifest: {artifacts['implementation_manifest']}
 - Proposed memory updates: {artifacts['proposed_memory_updates']}
+- Review requests: {artifacts['review_requests_dir']}
+- Semantic reviews: {artifacts['reviews_dir']}
 - Rework log: {artifacts['rework_pattern']}
 - Cross-service dependencies: {artifacts['dependency_report']}
 
@@ -448,8 +459,45 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
             path.write_text(handoff_text(role), encoding="utf-8")
             created.append(str(path))
     starter_files = {
+        artifacts["design_review_request"]: review_request_template(
+            "design",
+            "R1 design semantic review request",
+            artifacts["design_review"],
+            "all-services",
+        ),
+        artifacts["test_review_request"]: review_request_template(
+            "test",
+            "R2 test semantic review request",
+            artifacts["test_review"],
+            "all-services",
+        ),
+        artifacts["implementation_review_request"]: review_request_template(
+            "implementation",
+            "R3 implementation semantic review request",
+            artifacts["implementation_review"],
+            "all-services",
+        ),
+        artifacts["design_review"]: semantic_review_template(
+            "design",
+            "R1 design semantic review",
+            "all-services",
+            artifacts["design_review_request"],
+        ),
+        artifacts["test_review"]: semantic_review_template(
+            "test",
+            "R2 test semantic review",
+            "all-services",
+            artifacts["test_review_request"],
+        ),
+        artifacts["implementation_review"]: semantic_review_template(
+            "implementation",
+            "R3 implementation semantic review",
+            "all-services",
+            artifacts["implementation_review_request"],
+        ),
         artifacts["implementation_manifest"]: implementation_manifest_template("all-services"),
         artifacts["green_test_evidence"]: unit_test_evidence_template("all-services"),
+        artifacts["verification_evidence"]: handoff_text("verification-evidence"),
         artifacts["coverage_matrix"]: coverage_matrix_template("all-services"),
         artifacts["business_review"]: handoff_text("business-logic-review"),
     }
@@ -460,9 +508,31 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
             path.write_text(text, encoding="utf-8")
             created.append(str(path))
     for service, paths in artifacts.get("service_plans", {}).items():
+        service_review_requests = {
+            "test_review_request": review_request_template(
+                "test",
+                f"test-review-request-{service}",
+                paths["test_review"],
+                service,
+            ),
+            "implementation_review_request": review_request_template(
+                "implementation",
+                f"implementation-review-request-{service}",
+                paths["implementation_review"],
+                service,
+            ),
+        }
+        for key, text in service_review_requests.items():
+            path = require_repo_path(repo, Path(paths[key]), f"{service} {key}")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_text(text, encoding="utf-8")
+                created.append(str(path))
         for key, title in (
             ("service_plan", f"service-plan-{service}"),
             ("code_agent", f"code-developer-{orchestration_plan.service_slug(service)}"),
+            ("test_review", f"test-review-{service}"),
+            ("implementation_review", f"implementation-review-{service}"),
             ("implementation_manifest", f"implementation-manifest-{service}"),
             ("test_evidence", f"unit-test-evidence-{service}"),
             ("coverage_matrix", f"coverage-{service}"),
@@ -479,6 +549,21 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
                     path.write_text(implementation_manifest_template(service), encoding="utf-8")
                 elif key == "service_plan":
                     path.write_text(service_plan_template(service), encoding="utf-8")
+                elif key == "test_review":
+                    path.write_text(
+                        semantic_review_template("test", title, service, paths["test_review_request"]),
+                        encoding="utf-8",
+                    )
+                elif key == "implementation_review":
+                    path.write_text(
+                        semantic_review_template(
+                            "implementation",
+                            title,
+                            service,
+                            paths["implementation_review_request"],
+                        ),
+                        encoding="utf-8",
+                    )
                 else:
                     path.write_text(handoff_text(title), encoding="utf-8")
                 created.append(str(path))
@@ -514,6 +599,50 @@ def unit_test_evidence_template(scope: str) -> str:
         },
         indent=2,
     ) + "\n"
+
+
+def review_request_template(phase: str, title: str, output_path: str, scope: str = "all-services") -> str:
+    return f"""# {title}
+
+- Phase: {phase}
+- Reviewer Role: independent semantic reviewer
+- Context Package: request-scoped; no inherited developer chat context
+- Allowed Inputs: design doc, AGENT.md files, requirements, use cases, test plan, implementation refs, dependency report, service plan for scope
+- Forbidden: inherited developer chat context; production-code edits; self-review; writing implementation artifacts
+- Output: {output_path}
+- Scope: {scope}
+- Developer Agent: <developer-agent-id>
+
+## Review Assignment
+
+Run this review in an independent reviewer agent. The reviewer may read only the allowed inputs and must write only the declared output review report or rework items requested by the gate.
+"""
+
+
+def semantic_review_template(phase: str, title: str, scope: str = "all-services", request_path: str = "") -> str:
+    return f"""# {title}
+
+- Phase: {phase}
+- Reviewer: semantic-reviewer
+- Review Request: {request_path}
+- Developer Agent: <developer-agent-id>
+- Reviewer Agent: <independent-reviewer-agent-id>
+- Independence: independent-agent
+- Context Boundary: request-scoped; no inherited developer chat context
+- No Code Changes: confirmed
+- Scope: {scope}
+- Inputs Reviewed:
+- Findings:
+- Required Rework:
+- Status:
+
+## Review Focus
+
+- Requirement/design completeness versus user request.
+- Project pattern consistency versus existing similar implementations.
+- Security-sensitive happy/failure paths and contract risks.
+- Missing artifacts, tests, code refs, or service ownership gaps.
+"""
 
 
 def service_plan_template(service: str) -> str:
@@ -607,6 +736,8 @@ def plan(args) -> tuple[int, dict]:
         run_dir = require_repo_path(repo, Path(result["agent_run_dir"]), "agent run directory")
         (run_dir / "handoffs").mkdir(parents=True, exist_ok=True)
         (run_dir / "evidence").mkdir(parents=True, exist_ok=True)
+        require_repo_path(repo, Path(result["handoff_artifacts"]["review_requests_dir"]), "review requests directory").mkdir(parents=True, exist_ok=True)
+        require_repo_path(repo, Path(result["handoff_artifacts"]["reviews_dir"]), "reviews directory").mkdir(parents=True, exist_ok=True)
         require_repo_path(repo, Path(result["handoff_artifacts"]["rework_dir"]), "rework directory").mkdir(parents=True, exist_ok=True)
         result["handoff_files_created"] = create_handoff_files(repo, result["handoff_artifacts"])
         proposed = require_repo_path(repo, Path(result["handoff_artifacts"]["proposed_memory_updates"]), "proposed memory updates")
@@ -638,6 +769,8 @@ def gate(args) -> tuple[int, dict]:
         rework_dirs=getattr(args, "rework_dir", None),
         dependency_report=getattr(args, "dependency_report", None),
         implementation_manifest=getattr(args, "implementation_manifest", None),
+        review_dirs=getattr(args, "review_dir", None),
+        require_semantic_reviews=getattr(args, "require_semantic_reviews", False),
     )
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
@@ -658,14 +791,26 @@ def verify(args) -> tuple[int, dict]:
     maven_result = {"skipped": True}
     if not args.skip_maven:
         command = ["mvn", "test"] if not args.module else ["mvn", "-pl", args.module, "-am", "test"]
-        completed = subprocess.run(command, cwd=as_repo(args.repo), text=True, capture_output=True)
-        maven_result = {
-            "skipped": False,
-            "command": " ".join(command),
-            "exit_code": completed.returncode,
-            "stdout_tail": completed.stdout[-4000:],
-            "stderr_tail": completed.stderr[-4000:],
-        }
+        maven_executable = shutil.which("mvn") or shutil.which("mvn.cmd")
+        if not maven_executable:
+            maven_result = {
+                "skipped": False,
+                "command": " ".join(command),
+                "exit_code": 127,
+                "stdout_tail": "",
+                "stderr_tail": "Maven executable not found on PATH. Install Maven or pass --skip-maven only with explicit workflow approval.",
+            }
+        else:
+            command[0] = maven_executable
+            completed = subprocess.run(command, cwd=as_repo(args.repo), text=True, capture_output=True)
+            display_command = ["mvn"] + command[1:]
+            maven_result = {
+                "skipped": False,
+                "command": " ".join(display_command),
+                "exit_code": completed.returncode,
+                "stdout_tail": completed.stdout[-4000:],
+                "stderr_tail": completed.stderr[-4000:],
+            }
     result = {
         "workflow": {
             "strict": getattr(args, "strict_workflow", False),
@@ -676,6 +821,7 @@ def verify(args) -> tuple[int, dict]:
             "dependency_scan_mode": getattr(args, "dependency_scan_mode", "auto"),
             "write_dependency_report": getattr(args, "write_dependency_report", True),
             "implementation_manifest": str(getattr(args, "implementation_manifest", "") or ""),
+            "require_semantic_reviews": args.phase == "completion" or getattr(args, "require_semantic_reviews", False),
         },
         "prepare": prep,
         "clarification": clarify_result,
@@ -775,6 +921,8 @@ def main() -> int:
     gate_parser.add_argument("--dependency-report", type=Path)
     gate_parser.add_argument("--implementation-manifest", type=Path)
     gate_parser.add_argument("--rework-dir", action="append", type=Path)
+    gate_parser.add_argument("--review-dir", action="append", type=Path)
+    gate_parser.add_argument("--require-semantic-reviews", action="store_true")
     gate_parser.add_argument("--skip-spring-static-check", action="store_true")
     gate_parser.add_argument("--status-file", type=Path)
 
@@ -792,6 +940,8 @@ def main() -> int:
     verify_parser.add_argument("--dependency-report", type=Path)
     verify_parser.add_argument("--implementation-manifest", type=Path)
     verify_parser.add_argument("--rework-dir", action="append", type=Path)
+    verify_parser.add_argument("--review-dir", action="append", type=Path)
+    verify_parser.add_argument("--require-semantic-reviews", action="store_true")
     verify_parser.add_argument("--skip-spring-static-check", action="store_true")
     verify_parser.add_argument("--skip-maven", action="store_true")
     verify_parser.add_argument("--strict-workflow", action="store_true")
@@ -819,7 +969,7 @@ def main() -> int:
             exit_code, result = guard(args)
         else:
             exit_code, result = verify(args)
-    except (FileNotFoundError, ValueError, KeyError) as error:
+    except (FileNotFoundError, ValueError) as error:
         print(f"e2e-dev-workflow error: {error}", file=sys.stderr)
         return 2
 

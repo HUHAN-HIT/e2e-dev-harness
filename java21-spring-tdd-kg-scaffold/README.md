@@ -14,11 +14,13 @@ Prerequisites: Java 21 and Maven 3.9+ available on `PATH`.
 6. Run the clarification gate. Implementation starts only when open questions are `None` or explicitly resolved.
 7. For complex work, write an ExecPlan and use file-based agent handoffs.
 8. For multi-service or multi-module work, keep one implementation plan, implementation manifest, and code-agent handoff per affected service/module.
-9. Use `superpowers:test-driven-development` and write the first failing test.
-10. Implement the smallest change to pass.
-11. Refactor while green.
-12. Capture implementation manifest, unit-test command JSON, coverage matrix, business review, Spring static check result, and verified memory updates.
-13. Run the affected Maven module tests, then broaden verification.
+9. Run independent R1 design review before planning proceeds.
+10. Use `superpowers:test-driven-development` and write the first failing test.
+11. Run independent R2 test review before production code.
+12. Implement the smallest change to pass and refactor while green.
+13. Run independent R3 implementation review before completion.
+14. Capture implementation manifest, unit-test command JSON, semantic review reports, coverage matrix, business review, Spring static check result, and verified memory updates.
+15. Run the affected Maven module tests, then broaden verification.
 
 ## Commands
 
@@ -77,21 +79,23 @@ For hook-like gates:
 ```powershell
 python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase planning --design-doc docs\design\feature-design-template.md
 python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase implementation --design-doc docs\design\feature-design-template.md --red-test-evidence docs\design\feature-red-test.txt
-python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase completion --design-doc docs\design\feature-design-template.md --red-test-evidence docs\agent-runs\<run>\evidence\red-test.txt --implementation-manifest docs\agent-runs\<run>\evidence\implementation-manifest.md --coverage-matrix docs\agent-runs\<run>\evidence\coverage-matrix.md --unit-test-evidence docs\agent-runs\<run>\evidence\green-test.txt --business-review docs\agent-runs\<run>\evidence\business-review.md --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json --memory-updates docs\agent-runs\<run>\proposed-memory-updates.md --rework-dir docs\agent-runs\<run>\rework
+python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase completion --design-doc docs\design\feature-design-template.md --red-test-evidence docs\agent-runs\<run>\evidence\red-test.txt --implementation-manifest docs\agent-runs\<run>\evidence\implementation-manifest.md --coverage-matrix docs\agent-runs\<run>\evidence\coverage-matrix.md --unit-test-evidence docs\agent-runs\<run>\evidence\green-test.txt --business-review docs\agent-runs\<run>\evidence\business-review.md --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json --memory-updates docs\agent-runs\<run>\proposed-memory-updates.md --rework-dir docs\agent-runs\<run>\rework --review-dir docs\agent-runs\<run>\reviews
 ```
 
 For strict hook/CI usage, save a verify status and run the guard:
 
 ```powershell
-python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py verify . --strict-workflow --run-gate --phase completion --design-doc docs\design\feature-design-template.md --red-test-evidence docs\agent-runs\<run>\evidence\red-test.txt --implementation-manifest docs\agent-runs\<run>\evidence\implementation-manifest.md --coverage-matrix docs\agent-runs\<run>\evidence\coverage-matrix.md --unit-test-evidence docs\agent-runs\<run>\evidence\green-test.txt --business-review docs\agent-runs\<run>\evidence\business-review.md --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json --memory-updates docs\agent-runs\<run>\proposed-memory-updates.md --rework-dir docs\agent-runs\<run>\rework --status-file docs\agent-runs\<run>\evidence\verify.json
+python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py verify . --strict-workflow --run-gate --phase completion --design-doc docs\design\feature-design-template.md --red-test-evidence docs\agent-runs\<run>\evidence\red-test.txt --implementation-manifest docs\agent-runs\<run>\evidence\implementation-manifest.md --coverage-matrix docs\agent-runs\<run>\evidence\coverage-matrix.md --unit-test-evidence docs\agent-runs\<run>\evidence\green-test.txt --business-review docs\agent-runs\<run>\evidence\business-review.md --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json --memory-updates docs\agent-runs\<run>\proposed-memory-updates.md --rework-dir docs\agent-runs\<run>\rework --review-dir docs\agent-runs\<run>\reviews --status-file docs\agent-runs\<run>\evidence\verify.json
 .\scripts\workflow-guard.ps1 -VerifyStatus docs\agent-runs\<run>\evidence\verify.json -Strict -RequireCompletion
 ```
 
-Strict guard blocks skipped Maven, disabled dependency scan, missing completion gate, unresolved dependency questions, and skipped Spring static check during completion unless an approval file contains `Approval: user-approved`.
+Strict guard blocks skipped Maven, disabled dependency scan, missing completion gate, missing independent R1/R2/R3 semantic review evidence, unresolved dependency questions, and skipped Spring static check during completion unless an approval file contains `Approval: user-approved`.
 
 For cross-service HTTP/DMQ work, unresolved dependency questions in `cross-service-dependencies.json` must be clarified before implementation or completion.
 
-For multi-module work, `implementation-manifest.md` is the hard completeness checklist. It must list every required artifact with module, source, tests, status, and evidence; missing required files or modules block completion.
+Semantic review requests live in `docs/agent-runs/<run>/review-requests/` and service-local `service-plans/<service>/review-requests/`. Reports live in `docs/agent-runs/<run>/reviews/` as `R1-design-review.md`, `R2-test-review.md`, and `R3-implementation-review.md`; multi-service R2/R3 reviews may also live under `service-plans/<service>/reviews/`. Each report must include `Phase`, `Reviewer`, `Review Request`, `Developer Agent`, `Reviewer Agent`, `Independence`, `Context Boundary`, `No Code Changes`, `Scope`, `Inputs Reviewed`, `Findings`, `Required Rework`, and `Status`. The reviewer must be an independent agent/session and the report must be the exact `Output` declared by its review request.
+
+For multi-module work, `implementation-manifest.md` is the hard completeness checklist. It must list every required artifact with module, source, tests, status, and evidence; missing required files or modules block completion. Use explicit design sections such as `Required Artifacts`, `Affected Classes`, or `[artifact] ClassName` markers for must-implement files/classes so reference notes do not become false requirements.
 
 If review finds missed behavior, create `docs/agent-runs/<run>/rework/rework-NNN.md` or `docs/agent-runs/<run>/service-plans/<service>/rework-NNN.md`, route it back to the required phase, and close it as `verified` or explicitly approved `deferred` before reporting done.
 
@@ -118,6 +122,12 @@ For multi-service changes, generated service-specific files live under:
 docs/agent-runs/<date-feature>/service-plans/<service>/
   implementation-plan.md
   code-agent.md
+  review-requests/
+    R2-test-review-request.md
+    R3-implementation-review-request.md
+  reviews/
+    R2-test-review.md
+    R3-implementation-review.md
   implementation-manifest.md
   unit-test-evidence.txt
   coverage-matrix.md

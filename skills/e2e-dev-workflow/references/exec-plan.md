@@ -47,7 +47,7 @@ python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py plan . \
   --create-archive
 ```
 
-Before production-code edits, the ExecPlan should identify the first red test and where its failing output will be recorded. For multi-service or multi-module changes, it should also list one implementation plan file per affected service/module and reference `evidence/cross-service-dependencies.json`. Before completion, it should reference the dependency report, implementation manifest, coverage matrix, structured unit test command JSON, Spring static check result, business review evidence, and rework gate result used by the completion gate.
+Before production-code edits, the ExecPlan should identify the first red test and where its failing output will be recorded. For multi-service or multi-module changes, it should also list one implementation plan file per affected service/module and reference `evidence/cross-service-dependencies.json`. Before completion, it should reference the dependency report, implementation manifest, coverage matrix, structured unit test command JSON, independent R1/R2/R3 semantic review requests and reports, Spring static check result, business review evidence, and rework gate result used by the completion gate.
 
 ## Implementation Manifest
 
@@ -57,7 +57,7 @@ Use `docs/agent-runs/<run>/evidence/implementation-manifest.md` to prevent self-
 id | module | artifact | artifact_type | source | required | tests | status | evidence
 ```
 
-Rows come from explicit task requirements, reference implementation inventory, dependency reports, and service plans. Required rows must point to existing artifacts and real tests. If a required artifact is missing, create a `missing-code` or `missing-test` rework item and return to the required phase.
+Rows come from explicit task requirements, reference implementation inventory, dependency reports, and service plans. If the design itself names required classes/files, put them in explicit sections such as `Required Artifacts`, `Affected Classes`, or mark them with `[artifact] ClassName`; generic notes and examples are not treated as required artifacts. Required rows must point to existing artifacts and real tests. If a required artifact is missing, create a `missing-code` or `missing-test` rework item and return to the required phase.
 
 ## Re-entry Protocol
 

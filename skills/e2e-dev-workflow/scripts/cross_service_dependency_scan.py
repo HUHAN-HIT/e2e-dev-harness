@@ -481,7 +481,7 @@ def gitnexus_evidence(
     return result, warnings
 
 
-def write_reports(repo: Path, result: dict, output_dir: Path | None = None) -> dict:
+def write_dependency_reports(repo: Path, result: dict, output_dir: Path | None = None) -> dict:
     target = output_dir or repo / "knowledge-graph"
     target.mkdir(parents=True, exist_ok=True)
     json_path = target / "cross-service-dependencies.json"
@@ -550,7 +550,7 @@ def scan(
         "report_paths": {},
     }
     if write_reports:
-        result["report_paths"] = globals()["write_reports"](repo, result, output_dir)
+        result["report_paths"] = write_dependency_reports(repo, result, output_dir)
     return result
 
 

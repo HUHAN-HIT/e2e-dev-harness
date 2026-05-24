@@ -18,6 +18,7 @@ REQUIRED = {
     "test_design": [r"test design", r"test plan", r"testing", r"测试"],
     "open_questions": [r"open questions?", r"questions?", r"待澄清", r"开放问题"],
 }
+CONTENT_REQUIRED_SECTIONS = tuple(key for key in REQUIRED if key != "open_questions")
 
 ACCEPTANCE_ID_RE = re.compile(r"^AC-?(\d+)\b", re.IGNORECASE)
 ACCEPTANCE_LINE_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(.*\S)")
@@ -58,6 +59,17 @@ NONE_MARKERS = {
     "没有",
     "已清零",
 }
+PLACEHOLDER_MARKERS = {
+    "",
+    "-",
+    "todo",
+    "tbd",
+    "n/a",
+    "na",
+    "unknown",
+    "unclear",
+    "pending",
+}
 
 
 def headings(markdown: str) -> list[tuple[str, int, int]]:
@@ -95,6 +107,19 @@ def normalize_lines(text: str) -> list[str]:
         if line and not line.startswith("<!--"):
             lines.append(line)
     return lines
+
+
+def section_has_content(text: str | None) -> bool:
+    if text is None:
+        return False
+    lines = normalize_lines(text)
+    if not lines:
+        return False
+    for line in lines:
+        normalized = line.strip().strip(".:;").lower()
+        if normalized not in PLACEHOLDER_MARKERS and not any(marker == normalized for marker in UNRESOLVED_MARKERS):
+            return True
+    return False
 
 
 def open_questions_clear(text: str | None) -> tuple[bool, list[str]]:
@@ -160,13 +185,19 @@ def validate(path: Path) -> dict:
         for key, patterns in REQUIRED.items()
         if not any(has_heading(title, patterns) for title in titles)
     ]
+    empty_sections = [
+        key
+        for key in CONTENT_REQUIRED_SECTIONS
+        if key not in missing and not section_has_content(section_text(markdown, REQUIRED[key]))
+    ]
     oq_text = section_text(markdown, REQUIRED["open_questions"])
     oq_clear, unresolved = open_questions_clear(oq_text)
-    ready = not missing and oq_clear
+    ready = not missing and not empty_sections and oq_clear
     return {
         "path": str(path),
         "ready_for_implementation": ready,
         "missing_sections": missing,
+        "empty_sections": empty_sections,
         "open_questions_clear": oq_clear,
         "unresolved_open_questions": unresolved,
     }
@@ -190,6 +221,8 @@ def main() -> int:
         print(f"Clarification gate: {status}")
         if result["missing_sections"]:
             print("Missing sections: " + ", ".join(result["missing_sections"]))
+        if result.get("empty_sections"):
+            print("Empty sections: " + ", ".join(result["empty_sections"]))
         if not result["open_questions_clear"]:
             print("Unresolved open questions:")
             for question in result["unresolved_open_questions"]:

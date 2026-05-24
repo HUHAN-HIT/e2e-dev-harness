@@ -6,11 +6,11 @@ Use this reference when a Java/Spring 6/Maven change benefits from smaller, isol
 
 | Mode | Use when | Behavior |
 | --- | --- | --- |
-| `single` | Small, single-module, low-risk work | One agent runs clarification, use-case design, TDD, and implementation. |
+| `single` | Small, single-module, low-risk work | One implementation agent may run clarification, use-case design, TDD, and implementation, but R1/R2/R3 semantic reviews still require independent reviewer agents or separate reviewer sessions. |
 | `multi` | User asks for split agents, cross-service work, contract/data changes, or high risk | Separate agents own requirements, use cases, tests, service-scoped code, and coverage review. |
 | `auto` | Default recommendation mode | The helper chooses based on repo shape, design doc size, services, and risk keywords. |
 
-Do not spawn subagents unless the runtime supports them and the user has explicitly allowed multi-agent work. If subagents are unavailable, emulate the same separation by completing one artifact at a time and keeping each handoff file small.
+Do not let an implementation agent review its own work. If the runtime cannot spawn subagents, use a separate reviewer session with only the review request and allowed artifact inputs. Same-chat/self-review is not an acceptable fallback for R1/R2/R3.
 
 ## Service Scope
 
@@ -66,6 +66,25 @@ Gate:
 - Every acceptance criterion maps to at least one use case or is explicitly deferred.
 - Every affected module/service from the design is either in scope for implementation or explicitly out of scope with approval.
 
+### R1 Design Reviewer
+
+Inputs:
+
+- Original user request or design seed
+- Requirements and use-case artifacts
+- Knowledge graph summary, dependency report, and selected project reference patterns
+
+Outputs:
+
+- `docs/agent-runs/<date-feature>/review-requests/R1-design-review-request.md`
+- `docs/agent-runs/<date-feature>/reviews/R1-design-review.md`
+- Findings on AC completeness, affected services/modules, security-sensitive behavior, hidden config/query requirements, and project pattern consistency
+
+Gate:
+
+- Planning waits until this review is `approved` or findings have rework/clarification items. The reviewer does not patch the design silently.
+- The review report must reference the review request, name a different Developer Agent and Reviewer Agent, declare `Independence: independent-agent`, and state `No Code Changes: confirmed`.
+
 ### Test Case Developer
 
 Inputs:
@@ -84,6 +103,26 @@ Outputs:
 Gate:
 
 - Production code cannot start until the first red test has been written and observed failing for the expected reason.
+
+### R2 Test Reviewer
+
+Inputs:
+
+- Requirements, use cases, and test plan
+- Red test files or test snippets
+- Target class/interface signatures and relevant existing tests
+
+Outputs:
+
+- `docs/agent-runs/<date-feature>/review-requests/R2-test-review-request.md`
+- `docs/agent-runs/<date-feature>/reviews/R2-test-review.md`
+- Service-local `docs/agent-runs/<date-feature>/service-plans/<service>/review-requests/R2-test-review-request.md` when services are split
+- Service-local `docs/agent-runs/<date-feature>/service-plans/<service>/reviews/R2-test-review.md` when services are split
+
+Gate:
+
+- Production code waits until tests prove meaningful behavior. Shallow tests that only assert a code or DTO field become `missing-test` rework for high-risk ACs.
+- R2 cannot be completed by the test author or code developer.
 
 ### Service-Scoped Code Developer
 
@@ -122,6 +161,27 @@ Service implementation plans should include:
 - Data/transaction effects.
 - Risks, rollback, and completion evidence.
 
+### R3 Implementation Reviewer
+
+Inputs:
+
+- Production diff or listed code refs
+- Tests, green command evidence, implementation manifest, service plans, dependency report
+- Existing same-domain implementation patterns selected with GitNexus, Graphify, `rg`, or memory
+
+Outputs:
+
+- `docs/agent-runs/<date-feature>/review-requests/R3-implementation-review-request.md`
+- `docs/agent-runs/<date-feature>/reviews/R3-implementation-review.md`
+- Service-local R3 review requests under `service-plans/<service>/review-requests/`
+- Service-local R3 reviews under `service-plans/<service>/reviews/`
+- Rework items for missing code, missing tests, security flaws, anti-patterns, or project-pattern drift
+
+Gate:
+
+- Completion waits for R3 review in the formal workflow. Findings create rework items; the implementation reviewer does not become a second code developer.
+- R3 cannot be authored by the same agent that wrote the code or service implementation handoff.
+
 ### Coverage Reviewer
 
 Inputs:
@@ -148,6 +208,7 @@ Gate:
 - Confirm the global `green-test.txt` or service `unit-test-evidence.txt` files contain structured command JSON with `exit_code: 0`.
 - Confirm cross-service designs have `cross-service-dependencies.json` and that it has no unresolved URL/topic/tag/service mapping questions.
 - Confirm Spring static check is clean or an explicit `--skip-spring-static-check` exception is justified.
+- Confirm semantic review artifacts are approved and machine-checkably independent for every completion run.
 - If any requirement, test, code, contract, or business-logic gap is found, create a rework item instead of telling the code agent to patch directly. Completion remains blocked until each item is `verified` or explicitly approved as `deferred`.
 
 ## Rework Protocol
@@ -174,6 +235,8 @@ The receiving agent must load only the relevant design, handoff, service plan, A
 - Put agent process artifacts under `docs/agent-runs/<date-feature>/`.
 - Keep `docs/design/` for durable design documents and reusable templates.
 - Keep multi-service implementation details under `docs/agent-runs/<date-feature>/service-plans/<service>/`.
+- Keep global semantic reviews under `docs/agent-runs/<date-feature>/reviews/`; keep service-local semantic reviews under `service-plans/<service>/reviews/`.
+- Keep review requests under `docs/agent-runs/<date-feature>/review-requests/` and `service-plans/<service>/review-requests/`. A review report must be the exact `Output` declared by its request.
 - Keep service-local rework next to that service plan as `rework-NNN.md`; do not merge similar service rework into one shared code-agent context.
 - Keep service-local implementation manifest rows next to each service plan, then merge them into `evidence/implementation-manifest.md` for the completion gate.
 - Keep each handoff artifact focused and under roughly 300 lines unless the task truly requires more.
@@ -191,16 +254,18 @@ Parallel work is useful only after requirements are stable:
 - Code Developer starts after the first red test is observed.
 - For multiple services, split Code Developer work by service or module with disjoint file ownership.
 - Service-scoped Code Developers may run in parallel only after requirements, cross-service flows, contracts, and service plans are stable.
-- Coverage Reviewer runs after service-scoped developers finish and blocks completion if any acceptance criterion lacks tests, code refs, or business review.
+- R1 review runs after clarification and before planning. R2 review runs after red tests and before green implementation. R3 review runs after green/refactor and before coverage review. Each one runs in an independent reviewer agent/session with no inherited developer chat context.
+- Coverage Reviewer runs after semantic reviewers and service-scoped developers finish; it blocks completion if any acceptance criterion lacks tests, code refs, business review, approved semantic review, or closed rework.
 
 ## Recommended Invocation Pattern
 
-1. Run `superpowers_probe.py --mode strict`.
+1. Run `superpowers_probe.py --mode auto` during repository discovery; switch to `--mode strict` only when the project has committed to making Superpowers a hard gate.
 2. Run `kg_refresh.py . --mode auto`.
 3. Run `memory_capture.py scan .`.
 4. Run `orchestration_plan.py . --mode auto --service-scope discovery --design-doc <doc>` to get service candidates and next steps only.
 5. After affected services are clear, run `orchestration_plan.py . --mode auto --design-doc <doc>`; if the design names affected modules, auto mode selects them. Use `--service-scope affected --service services/<service>` only when you need to override or disambiguate.
 6. Create an archive with `e2e_dev_workflow.py plan . --design-doc <doc> --create-archive`; verify the archive contains one `service-plans/<service>/code-agent.md` per affected service/module.
 7. In `multi` mode, update the handoff artifacts under `docs/agent-runs/<date-feature>/handoffs/` and the service plans under `docs/agent-runs/<date-feature>/service-plans/<service>/`.
-8. Gate each phase with review before passing work forward.
-9. Run `e2e_dev_workflow.py gate . --phase completion ...` before reporting done; include `--implementation-manifest` and `--rework-dir` when the run uses non-standard rework locations.
+8. Run R1/R2/R3 semantic reviews at the phase boundaries and convert findings into rework items.
+9. Gate each phase with review before passing work forward.
+10. Run `e2e_dev_workflow.py gate . --phase completion ... --review-dir docs/agent-runs/<run>/reviews` before reporting done; include service-local `--review-dir` values, `--implementation-manifest`, and `--rework-dir` when the run uses non-standard locations.

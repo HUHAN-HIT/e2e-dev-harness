@@ -26,6 +26,7 @@ import implementation_manifest  # noqa: E402
 import kg_refresh  # noqa: E402
 import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
+import reviewer_gate  # noqa: E402
 import rework_gate  # noqa: E402
 import workflow_guard  # noqa: E402
 from common import split_command  # noqa: E402
@@ -101,6 +102,38 @@ class ClarificationGateTests(unittest.TestCase):
 
         self.assertIn("goal", result["missing_sections"])
         self.assertFalse(result["ready_for_implementation"])
+
+    def test_empty_required_section_blocks_implementation(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+
+            ## Scope
+            - sample-service
+
+            ## Use Cases
+            - Create quote.
+
+            ## Acceptance Criteria
+            - AC-1 Quote is returned.
+
+            ## Test Design
+            - QuoteServiceTest covers success and failure paths.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path)
+
+        self.assertFalse(result["ready_for_implementation"])
+        self.assertIn("goal", result["empty_sections"])
 
 
 class CommandSplitTests(unittest.TestCase):
@@ -332,6 +365,27 @@ class CoverageGateTests(unittest.TestCase):
         self.assertEqual(1, result["coverage_rows"])
         self.assertEqual(0, result["unit_test_commands"][0]["exit_code"])
 
+    def test_coverage_gate_accepts_implemented_status(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Quote is returned | Create quote | services/quote-service | QuoteServiceTest | QuoteService | reviewed | implemented |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            matrix = repo / "coverage.md"
+            unit = repo / "unit.txt"
+            review = repo / "business.md"
+            matrix.write_text(markdown, encoding="utf-8")
+            write_command_evidence(unit)
+            review.write_text("Business logic reviewed against AC-1.\n", encoding="utf-8")
+
+            result = coverage_gate.validate(repo, matrix, unit, review)
+
+        self.assertTrue(result["ready"])
+
 
 class ImplementationManifestTests(unittest.TestCase):
     def test_manifest_blocks_missing_required_artifact(self) -> None:
@@ -393,12 +447,12 @@ class ImplementationManifestTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertIn("jeepay-service", " ".join(result["blocked_reasons"]))
 
-    def test_manifest_blocks_design_class_not_listed(self) -> None:
+    def test_manifest_blocks_required_artifact_section_class_not_listed(self) -> None:
         design = textwrap.dedent(
             """
             # VNPay
 
-            ## Acceptance Criteria
+            ## Required Artifacts
             - AC-1 VnpayQrOrderRS is returned for QR orders.
             """
         ).strip()
@@ -425,6 +479,42 @@ class ImplementationManifestTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("VnpayQrOrderRS" in reason for reason in result["blocked_reasons"]))
+
+    def test_manifest_ignores_reference_class_outside_required_artifact_sections(self) -> None:
+        design = textwrap.dedent(
+            """
+            # Checkout
+
+            ## Acceptance Criteria
+            - AC-1 Checkout result is returned.
+
+            ## Notes
+            - Legacy OrderService is a reference only and must not be reimplemented.
+            """
+        ).strip()
+        manifest = textwrap.dedent(
+            """
+            | id | module | artifact | artifact_type | source | required | tests | status | evidence |
+            | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+            | IM-1 | checkout-service | checkout-service/src/main/java/com/example/CheckoutService.java | service | explicit-requirement | yes | CheckoutServiceTest | verified | done |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            target = repo / "checkout-service/src/main/java/com/example/CheckoutService.java"
+            target.parent.mkdir(parents=True)
+            target.write_text("class Placeholder {}\n", encoding="utf-8")
+            design_path = repo / "docs" / "design" / "checkout.md"
+            manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            design_path.parent.mkdir(parents=True)
+            manifest_path.parent.mkdir(parents=True)
+            design_path.write_text(design, encoding="utf-8")
+            manifest_path.write_text(manifest, encoding="utf-8")
+
+            result = implementation_manifest.validate(repo, manifest_path, design_path)
+
+        self.assertTrue(result["ready"])
+        self.assertNotIn("OrderService", result["design_artifacts"])
 
     def test_manifest_allows_verified_existing_artifacts(self) -> None:
         design = textwrap.dedent(
@@ -534,6 +624,24 @@ class CrossServiceDependencyScanTests(unittest.TestCase):
         self.assertEqual("services/quote-service", dependency["source_service"])
         self.assertEqual("services/inventory-service", dependency["target_service"])
         self.assertEqual("/api/quotes", dependency["target_route"])
+
+    def test_scan_writes_reports_without_globals_indirection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            service = repo / "services" / "quote-service"
+            service.mkdir(parents=True)
+            (service / "pom.xml").write_text("<project />", encoding="utf-8")
+            output_dir = repo / "knowledge-graph"
+
+            result = cross_service_dependency_scan.scan(
+                repo,
+                gitnexus_mode="off",
+                write_reports=True,
+                output_dir=output_dir,
+            )
+
+            self.assertTrue(Path(result["report_paths"]["json"]).exists())
+            self.assertTrue(Path(result["report_paths"]["markdown"]).exists())
 
     def test_http_unresolved_placeholder_becomes_open_question(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -712,6 +820,7 @@ def verified_workflow_result() -> dict:
             "skip_spring_static_check": False,
             "dependency_scan_mode": "auto",
             "write_dependency_report": True,
+            "require_semantic_reviews": True,
         },
         "prepare": {
             "blocked": False,
@@ -729,7 +838,35 @@ def verified_workflow_result() -> dict:
             },
         },
         "clarification": {"ready_for_implementation": True},
-        "implementation_gate": {"phase": "completion", "ready": True, "blocked_reasons": []},
+        "implementation_gate": {
+            "phase": "completion",
+            "ready": True,
+            "blocked_reasons": [],
+            "semantic_reviews": {
+                "ready": True,
+                "covered_phases": ["design", "test", "implementation"],
+                "items": [
+                    {
+                        "phase": "design",
+                        "developer_agent": "developer-agent",
+                        "reviewer_agent": "design-reviewer",
+                        "independence": "independent-agent",
+                    },
+                    {
+                        "phase": "test",
+                        "developer_agent": "developer-agent",
+                        "reviewer_agent": "test-reviewer",
+                        "independence": "independent-agent",
+                    },
+                    {
+                        "phase": "implementation",
+                        "developer_agent": "developer-agent",
+                        "reviewer_agent": "implementation-reviewer",
+                        "independence": "independent-agent",
+                    },
+                ],
+            },
+        },
         "maven": {"skipped": False, "exit_code": 0, "command": "mvn test"},
     }
 
@@ -773,6 +910,16 @@ class WorkflowGuardTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("completion gate" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_guard_blocks_missing_independent_semantic_reviews_in_strict_completion(self) -> None:
+        verify_result = verified_workflow_result()
+        verify_result["workflow"]["require_semantic_reviews"] = False
+        verify_result["implementation_gate"]["semantic_reviews"] = None
+
+        result = workflow_guard.validate_verify_result(verify_result, strict=True, require_completion=True)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("semantic review" in reason.lower() for reason in result["blocked_reasons"]))
 
     def test_guard_allows_complete_verified_workflow_result(self) -> None:
         result = workflow_guard.validate_verify_result(
@@ -872,7 +1019,239 @@ class ReworkGateTests(unittest.TestCase):
         self.assertEqual("tdd-implement", result["items"][0]["return_phase"])
 
 
+class ReviewerGateTests(unittest.TestCase):
+    def review_doc(
+        self,
+        phase: str,
+        status: str = "approved",
+        findings: str = "None",
+        request: str | None = None,
+        developer_agent: str = "developer-agent-1",
+        reviewer_agent: str = "reviewer-agent-1",
+        independence: str = "independent-agent",
+    ) -> str:
+        request = request or f"docs/agent-runs/run/review-requests/{phase}-review-request.md"
+        return textwrap.dedent(
+            f"""
+            # {phase.title()} Review
+
+            - Phase: {phase}
+            - Reviewer: semantic-reviewer
+            - Review Request: {request}
+            - Developer Agent: {developer_agent}
+            - Reviewer Agent: {reviewer_agent}
+            - Independence: {independence}
+            - Context Boundary: request-scoped; no inherited developer chat context
+            - No Code Changes: confirmed
+            - Scope: services/payment-service
+            - Inputs Reviewed: design doc; tests; implementation files
+            - Findings: {findings}
+            - Required Rework: None
+            - Status: {status}
+            """
+        ).strip()
+
+    def write_request(
+        self,
+        repo: Path,
+        phase: str,
+        request_name: str | None = None,
+        output_name: str | None = None,
+        request_phase: str | None = None,
+    ) -> str:
+        request_name = request_name or f"{phase}-review-request.md"
+        output_name = output_name or {
+            "design": "R1-design-review.md",
+            "test": "R2-test-review.md",
+            "implementation": "R3-implementation-review.md",
+        }.get(phase, f"{phase}-review.md")
+        request = repo / "docs" / "agent-runs" / "run" / "review-requests" / request_name
+        request.parent.mkdir(parents=True, exist_ok=True)
+        request.write_text(
+            textwrap.dedent(
+                f"""
+                # {phase.title()} Review Request
+
+                - Phase: {request_phase or phase}
+                - Reviewer Role: independent semantic reviewer
+                - Context Package: request-scoped
+                - Allowed Inputs: design, tests, implementation refs, dependency report
+                - Forbidden: inherited developer chat context; production-code edits
+                - Output: docs/agent-runs/run/reviews/{output_name}
+                """
+            ).strip(),
+            encoding="utf-8",
+        )
+        return str(request.relative_to(repo)).replace("\\", "/")
+
+    def test_reviewer_gate_requires_all_phase_reviews_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "design")
+            (review_dir / "R1-design-review.md").write_text(self.review_doc("design", request=request), encoding="utf-8")
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["design", "test", "implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("test" in reason.lower() for reason in result["blocked_reasons"]))
+        self.assertTrue(any("implementation" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_allows_approved_phase_reviews(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            for name, phase in (
+                ("R1-design-review.md", "design"),
+                ("R2-test-review.md", "test"),
+                ("R3-implementation-review.md", "implementation"),
+            ):
+                request = self.write_request(repo, phase)
+                (review_dir / name).write_text(self.review_doc(phase, request=request), encoding="utf-8")
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["design", "test", "implementation"])
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(["design", "implementation", "test"], sorted(result["covered_phases"]))
+
+    def test_reviewer_gate_blocks_open_review_findings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc("implementation", status="blocked", findings="Missing VnpayQrOrderRS.", request=request),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("blocked" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_blocks_self_review_even_if_approved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc(
+                    "implementation",
+                    request=request,
+                    developer_agent="agent-1",
+                    reviewer_agent="agent-1",
+                    independence="self-review",
+                ),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("independent" in reason.lower() or "same" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_requires_existing_review_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            (review_dir / "R2-test-review.md").write_text(
+                self.review_doc("test", request="docs/agent-runs/run/review-requests/missing.md"),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["test"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("review request" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_blocks_request_phase_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation", request_phase="test")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc("implementation", request=request),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("phase" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_blocks_request_output_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation", output_name="other-review.md")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc("implementation", request=request),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("declared" in reason.lower() for reason in result["blocked_reasons"]))
+
+
 class ImplementationGateTests(unittest.TestCase):
+    def write_semantic_reviews(self, repo: Path) -> Path:
+        review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+        request_dir = repo / "docs" / "agent-runs" / "run" / "review-requests"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        request_dir.mkdir(parents=True, exist_ok=True)
+        for phase, review_name, request_name in (
+            ("design", "R1-design-review.md", "R1-design-review-request.md"),
+            ("test", "R2-test-review.md", "R2-test-review-request.md"),
+            ("implementation", "R3-implementation-review.md", "R3-implementation-review-request.md"),
+        ):
+            (request_dir / request_name).write_text(
+                textwrap.dedent(
+                    f"""
+                    # {phase.title()} Review Request
+
+                    - Phase: {phase}
+                    - Reviewer Role: independent semantic reviewer
+                    - Context Package: request-scoped
+                    - Allowed Inputs: design, tests, implementation refs, dependency report
+                    - Forbidden: inherited developer chat context; production-code edits
+                    - Output: docs/agent-runs/run/reviews/{review_name}
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            (review_dir / review_name).write_text(
+                textwrap.dedent(
+                    f"""
+                    # {phase.title()} Review
+
+                    - Phase: {phase}
+                    - Reviewer: semantic-reviewer
+                    - Review Request: docs/agent-runs/run/review-requests/{request_name}
+                    - Developer Agent: developer-agent-1
+                    - Reviewer Agent: reviewer-agent-{phase}
+                    - Independence: independent-agent
+                    - Context Boundary: request-scoped; no inherited developer chat context
+                    - No Code Changes: confirmed
+                    - Scope: all-services
+                    - Inputs Reviewed: requirements; use cases; tests; implementation refs
+                    - Findings: None
+                    - Required Rework: None
+                    - Status: approved
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+        return review_dir
+
     def test_planning_gate_requires_knowledge_graph_status(self) -> None:
         markdown = textwrap.dedent(
             """
@@ -956,12 +1335,105 @@ class ImplementationGateTests(unittest.TestCase):
             matrix.write_text(coverage, encoding="utf-8")
             write_command_evidence(unit, "mvn -pl services/sample-service -am test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
+            review_dir = self.write_semantic_reviews(repo)
 
-            result = implementation_gate.validate_gate(repo, design, kg, "completion", red, matrix, unit, review)
+            result = implementation_gate.validate_gate(
+                repo,
+                design,
+                kg,
+                "completion",
+                red,
+                matrix,
+                unit,
+                review,
+                review_dirs=[review_dir],
+            )
 
         self.assertTrue(result["ready"])
         self.assertEqual(1, result["coverage"]["coverage_rows"])
         self.assertTrue(result["spring_static_check"]["ready"])
+        self.assertTrue(result["semantic_reviews"]["ready"])
+
+    def test_completion_gate_blocks_missing_semantic_reviews_when_required(self) -> None:
+        design_text = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Return a quote.
+
+            ## Scope
+            - services/sample-service
+
+            ## Use Cases
+            - Create quote success and failure paths.
+
+            ## Acceptance Criteria
+            - AC-1 Quote is returned.
+
+            ## Test Design
+            - QuoteServiceTest covers success and failure paths.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        coverage = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Quote is returned | Create quote success and failure paths | services/sample-service | QuoteServiceTest success/failure | QuoteService | reviewed success/failure | verified |
+            """
+        ).strip()
+        manifest = textwrap.dedent(
+            """
+            | id | module | artifact | artifact_type | source | required | tests | status | evidence |
+            | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+            | IM-1 | services/sample-service | services/sample-service/src/main/java/com/example/QuoteService.java | service | explicit-requirement | yes | QuoteServiceTest | verified | done |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            source = repo / "services" / "sample-service" / "src" / "main" / "java" / "com" / "example" / "QuoteService.java"
+            source.parent.mkdir(parents=True)
+            source.write_text("package com.example; class QuoteService {}\n", encoding="utf-8")
+            design = repo / "docs" / "design" / "feature.md"
+            kg = repo / "docs" / "agent-runs" / "run" / "evidence" / "knowledge-graph-refresh.json"
+            red = repo / "docs" / "agent-runs" / "run" / "evidence" / "red-test.txt"
+            matrix = repo / "docs" / "agent-runs" / "run" / "evidence" / "coverage-matrix.md"
+            unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "green-test.txt"
+            business = repo / "docs" / "agent-runs" / "run" / "evidence" / "business-review.md"
+            manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            for path in (design, kg, red, matrix, unit, business, manifest_path):
+                path.parent.mkdir(parents=True, exist_ok=True)
+            review_dir.mkdir(parents=True)
+            design.write_text(design_text, encoding="utf-8")
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            red.write_text("Expected red test failed.\n", encoding="utf-8")
+            matrix.write_text(coverage, encoding="utf-8")
+            write_command_evidence(unit)
+            business.write_text("Business logic reviewed for success and failure.\n", encoding="utf-8")
+            manifest_path.write_text(manifest, encoding="utf-8")
+
+            result = implementation_gate.validate_gate(
+                repo,
+                design,
+                kg,
+                "completion",
+                red,
+                matrix,
+                unit,
+                business,
+                skip_spring_static_check=True,
+                implementation_manifest=manifest_path,
+                review_dirs=[review_dir],
+                require_semantic_reviews=True,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertIn("semantic_reviews", result)
+        self.assertTrue(any("review" in reason.lower() for reason in result["blocked_reasons"]))
 
     def test_completion_gate_blocks_missing_required_manifest_for_multi_module_design(self) -> None:
         markdown = textwrap.dedent(
@@ -1359,8 +1831,19 @@ class ImplementationGateTests(unittest.TestCase):
             write_command_evidence(unit, "mvn -pl services/sample-service -am test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
             rework_file.write_text(rework, encoding="utf-8")
+            review_dir = self.write_semantic_reviews(repo)
 
-            result = implementation_gate.validate_gate(repo, design, kg, "completion", red, matrix, unit, review)
+            result = implementation_gate.validate_gate(
+                repo,
+                design,
+                kg,
+                "completion",
+                red,
+                matrix,
+                unit,
+                review,
+                review_dirs=[review_dir],
+            )
 
         self.assertTrue(result["ready"])
         self.assertEqual(0, result["rework"]["open_count"])
@@ -1654,6 +2137,7 @@ class ImplementationGateTests(unittest.TestCase):
                 json.dumps({"ready": True, "dependencies": [{"kind": "http"}], "unresolved_questions": []}),
                 encoding="utf-8",
             )
+            review_dir = self.write_semantic_reviews(repo)
 
             result = implementation_gate.validate_gate(
                 repo,
@@ -1666,6 +2150,7 @@ class ImplementationGateTests(unittest.TestCase):
                 review,
                 dependency_report=dependency_report,
                 implementation_manifest=manifest_path,
+                review_dirs=[review_dir],
                 skip_spring_static_check=True,
             )
 
@@ -1810,6 +2295,34 @@ class SpringStaticCheckTests(unittest.TestCase):
             result = spring_static_check.validate(repo)
 
         self.assertTrue(result["ready"])
+
+    def test_blocks_shared_simple_date_format_field_in_spring_component(self) -> None:
+        spring_static_check = importlib.import_module("spring_static_check")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            source = repo / "services" / "payment-service" / "src" / "main" / "java" / "com" / "example"
+            source.mkdir(parents=True)
+            (source / "VnpayPaymentService.java").write_text(
+                textwrap.dedent(
+                    """
+                    package com.example;
+
+                    import java.text.SimpleDateFormat;
+                    import org.springframework.stereotype.Service;
+
+                    @Service
+                    public class VnpayPaymentService {
+                        private final SimpleDateFormat formatter = new SimpleDateFormat("yyyyMMddHHmmss");
+                    }
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            result = spring_static_check.validate(repo)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("SimpleDateFormat" in reason for reason in result["blocked_reasons"]))
 
 
 class MemoryCaptureTests(unittest.TestCase):
@@ -2077,6 +2590,19 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertEqual([], agents)
 
+    def test_single_agent_plan_still_requires_independent_reviewers(self) -> None:
+        artifacts = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
+
+        agents = orchestration_plan.agent_plan("single", artifacts, [])
+        names = [agent["name"] for agent in agents]
+        single = next(agent for agent in agents if agent["name"] == "single-agent")
+
+        self.assertIn("design-reviewer", names)
+        self.assertIn("test-reviewer", names)
+        self.assertIn("implementation-reviewer", names)
+        self.assertNotIn(artifacts["design_review"], single["outputs"])
+        self.assertNotIn(artifacts["implementation_review"], single["outputs"])
+
     def test_select_services_discovery_does_not_use_all_candidates(self) -> None:
         facts = {"service_candidates": ["services/order-service", "services/payment-service", "services/catalog-service"]}
 
@@ -2241,11 +2767,22 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
             self.assertEqual(0, code)
             self.assertEqual(["jeepay-core", "jeepay-payment", "jeepay-service"], sorted(result["selected_services"]))
+            self.assertTrue((repo / result["handoff_artifacts"]["design_review"]).exists())
+            self.assertTrue((repo / result["handoff_artifacts"]["design_review_request"]).exists())
+            self.assertTrue((repo / result["handoff_artifacts"]["test_review"]).exists())
+            self.assertTrue((repo / result["handoff_artifacts"]["test_review_request"]).exists())
+            self.assertTrue((repo / result["handoff_artifacts"]["implementation_review"]).exists())
+            self.assertTrue((repo / result["handoff_artifacts"]["implementation_review_request"]).exists())
             for module in ("jeepay-core", "jeepay-service", "jeepay-payment"):
                 paths = result["handoff_artifacts"]["service_plans"][module]
                 self.assertTrue((repo / paths["service_plan"]).exists())
                 self.assertTrue((repo / paths["code_agent"]).exists())
                 self.assertTrue((repo / paths["implementation_manifest"]).exists())
+                self.assertTrue((repo / paths["test_review"]).exists())
+                self.assertTrue((repo / paths["test_review_request"]).exists())
+                self.assertTrue((repo / paths["implementation_review"]).exists())
+                self.assertTrue((repo / paths["implementation_review_request"]).exists())
+            self.assertTrue((repo / result["handoff_artifacts"]["verification_evidence"]).exists())
 
     def test_unmatched_requested_services_are_reported(self) -> None:
         facts = {"service_candidates": ["services/order-service"]}
@@ -2345,6 +2882,32 @@ class OrchestrationArtifactTests(unittest.TestCase):
             result["service_plans"]["services/order-service"]["rework_dir"],
         )
 
+    def test_plan_artifacts_include_semantic_review_paths(self) -> None:
+        result = orchestration_plan.artifacts(
+            "checkout",
+            run_date="2026-05-23",
+            services=["services/order-service"],
+        )
+
+        self.assertEqual("docs/agent-runs/2026-05-23-checkout/reviews", result["reviews_dir"])
+        self.assertEqual("docs/agent-runs/2026-05-23-checkout/review-requests", result["review_requests_dir"])
+        self.assertEqual(
+            "docs/agent-runs/2026-05-23-checkout/review-requests/R1-design-review-request.md",
+            result["design_review_request"],
+        )
+        self.assertEqual(
+            "docs/agent-runs/2026-05-23-checkout/reviews/R1-design-review.md",
+            result["design_review"],
+        )
+        self.assertEqual(
+            "docs/agent-runs/2026-05-23-checkout/service-plans/order-service/review-requests/R3-implementation-review-request.md",
+            result["service_plans"]["services/order-service"]["implementation_review_request"],
+        )
+        self.assertEqual(
+            "docs/agent-runs/2026-05-23-checkout/service-plans/order-service/reviews/R3-implementation-review.md",
+            result["service_plans"]["services/order-service"]["implementation_review"],
+        )
+
     def test_plan_artifacts_include_dependency_report_path(self) -> None:
         result = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
 
@@ -2374,12 +2937,16 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
             service_plan = repo / artifacts["service_plans"]["services/order-service"]["service_plan"]
             text = service_plan.read_text(encoding="utf-8")
+            review_text = (repo / artifacts["implementation_review"]).read_text(encoding="utf-8")
 
         self.assertIn("# Service Implementation Plan: services/order-service", text)
         self.assertIn("## Modification Points", text)
         self.assertIn("## Service-local TDD Plan", text)
         self.assertIn("## Implementation Manifest", text)
         self.assertIn("## Cross-service Contracts", text)
+        self.assertIn("Review Request:", review_text)
+        self.assertIn("Independence:", review_text)
+        self.assertIn("No Code Changes:", review_text)
 
     def test_multi_agent_plan_splits_code_developers_by_service(self) -> None:
         artifacts = orchestration_plan.artifacts(
@@ -2393,10 +2960,73 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertIn("code-developer-order-service", names)
         self.assertIn("code-developer-payment-service", names)
+        self.assertIn("implementation-reviewer-order-service", names)
+        self.assertIn("implementation-reviewer-payment-service", names)
         self.assertIn("coverage-reviewer", names)
+        order_developer = next(agent for agent in agents if agent["name"] == "code-developer-order-service")
+        self.assertNotIn(
+            artifacts["service_plans"]["services/order-service"]["implementation_review"],
+            order_developer["outputs"],
+        )
 
 
 class UnifiedCliTests(unittest.TestCase):
+    def write_semantic_reviews(self, repo: Path) -> Path:
+        review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+        request_dir = repo / "docs" / "agent-runs" / "run" / "review-requests"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        request_dir.mkdir(parents=True, exist_ok=True)
+        for phase, review_name, request_name in (
+            ("design", "R1-design-review.md", "R1-design-review-request.md"),
+            ("test", "R2-test-review.md", "R2-test-review-request.md"),
+            ("implementation", "R3-implementation-review.md", "R3-implementation-review-request.md"),
+        ):
+            (request_dir / request_name).write_text(
+                textwrap.dedent(
+                    f"""
+                    # {phase.title()} Review Request
+
+                    - Phase: {phase}
+                    - Reviewer Role: independent semantic reviewer
+                    - Context Package: request-scoped
+                    - Allowed Inputs: design, tests, implementation refs, dependency report
+                    - Forbidden: inherited developer chat context; production-code edits
+                    - Output: docs/agent-runs/run/reviews/{review_name}
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            (review_dir / review_name).write_text(
+                textwrap.dedent(
+                    f"""
+                    # {phase.title()} Review
+
+                    - Phase: {phase}
+                    - Reviewer: semantic-reviewer
+                    - Review Request: docs/agent-runs/run/review-requests/{request_name}
+                    - Developer Agent: developer-agent-1
+                    - Reviewer Agent: reviewer-agent-{phase}
+                    - Independence: independent-agent
+                    - Context Boundary: request-scoped; no inherited developer chat context
+                    - No Code Changes: confirmed
+                    - Scope: all-services
+                    - Inputs Reviewed: requirements; use cases; tests; implementation refs
+                    - Findings: None
+                    - Required Rework: None
+                    - Status: approved
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+        return review_dir
+
+    def test_align_prepare_scopes_warns_when_explicit_scopes_differ(self) -> None:
+        agent_scope, service_scope, notes = e2e_dev_workflow.align_prepare_scopes("discovery", "affected")
+
+        self.assertEqual("discovery", agent_scope)
+        self.assertEqual("affected", service_scope)
+        self.assertTrue(any("differ" in note for note in notes))
+
     def test_prepare_reuses_single_knowledge_graph_detection(self) -> None:
         facts = {
             "poms": ["pom.xml"],
@@ -2692,6 +3322,7 @@ class UnifiedCliTests(unittest.TestCase):
             write_command_evidence(unit, "mvn -pl services/sample-service -am test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
             manifest_path.write_text(manifest, encoding="utf-8")
+            review_dir = self.write_semantic_reviews(repo)
             args = SimpleNamespace(
                 repo=repo,
                 design_doc=design,
@@ -2704,6 +3335,8 @@ class UnifiedCliTests(unittest.TestCase):
                 memory_updates=None,
                 dependency_report=None,
                 rework_dir=None,
+                review_dir=[review_dir],
+                require_semantic_reviews=False,
                 implementation_manifest=manifest_path,
                 skip_spring_static_check=True,
                 status_file=None,
@@ -2788,6 +3421,7 @@ class UnifiedCliTests(unittest.TestCase):
                 json.dumps({"ready": True, "dependencies": [{"kind": "http"}], "unresolved_questions": []}),
                 encoding="utf-8",
             )
+            review_dir = self.write_semantic_reviews(repo)
             args = SimpleNamespace(
                 repo=repo,
                 design_doc=design,
@@ -2801,6 +3435,8 @@ class UnifiedCliTests(unittest.TestCase):
                 dependency_report=dependency_report,
                 implementation_manifest=manifest_path,
                 rework_dir=None,
+                review_dir=[review_dir],
+                require_semantic_reviews=False,
                 skip_spring_static_check=True,
                 status_file=None,
             )
@@ -2868,6 +3504,59 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertEqual(2, code)
         self.assertFalse(result["workflow_guard"]["ready"])
         self.assertTrue(any("Maven" in reason for reason in result["workflow_guard"]["blocked_reasons"]))
+
+    def test_verify_reports_missing_maven_without_traceback(self) -> None:
+        args = SimpleNamespace(
+            repo=Path("."),
+            design_doc=None,
+            path=None,
+            service=None,
+            agent_mode="off",
+            agent_scope="auto",
+            include_agent_content=False,
+            max_agent_chars=12000,
+            max_discovered_services=agent_instructions.DEFAULT_DISCOVERED_SERVICE_LIMIT,
+            superpowers_mode="auto",
+            memory_mode="off",
+            agent_orchestration_mode="off",
+            service_scope="discovery",
+            agent_run_dir=None,
+            run_date="2026-05-23",
+            kg_mode="auto",
+            dependency_scan_mode="auto",
+            write_dependency_report=True,
+            dependency_output_dir=None,
+            run_gate=False,
+            phase="planning",
+            kg_status_file=None,
+            red_test_evidence=None,
+            coverage_matrix=None,
+            unit_test_evidence=None,
+            business_review=None,
+            memory_updates=None,
+            dependency_report=None,
+            implementation_manifest=None,
+            rework_dir=None,
+            skip_spring_static_check=False,
+            skip_maven=False,
+            strict_workflow=False,
+            workflow_approval=None,
+            status_file=None,
+            module=None,
+        )
+        prepare_result = {"blocked": False}
+
+        with (
+            patch.object(e2e_dev_workflow, "prepare", return_value=(0, prepare_result)),
+            patch.object(e2e_dev_workflow.shutil, "which", return_value=None),
+            patch.object(e2e_dev_workflow.subprocess, "run") as subprocess_run,
+        ):
+            code, result = e2e_dev_workflow.verify(args)
+
+        self.assertEqual(127, code)
+        self.assertEqual(127, result["maven"]["exit_code"])
+        self.assertIn("Maven executable not found", result["maven"]["stderr_tail"])
+        subprocess_run.assert_not_called()
 
 
 class MemorySafetyTests(unittest.TestCase):

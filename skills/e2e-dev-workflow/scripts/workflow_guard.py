@@ -36,6 +36,35 @@ def unique(values: list[str]) -> list[str]:
     return result
 
 
+def normalized_agent(value: str) -> str:
+    return re.sub(r"\s+", "", str(value or "").strip().lower().replace("_", "-"))
+
+
+def validate_semantic_reviews(gate: dict, workflow: dict, strict: bool, completion_required: bool) -> list[str]:
+    if not strict or not completion_required:
+        return []
+    blocked: list[str] = []
+    if workflow.get("require_semantic_reviews") is not True:
+        blocked.append("Strict completion requires independent semantic reviews to be enabled.")
+    semantic = gate.get("semantic_reviews")
+    if not isinstance(semantic, dict):
+        return blocked + ["Strict completion requires semantic review gate evidence."]
+    if not semantic.get("ready"):
+        blocked.append("Semantic review gate is not ready.")
+    covered = set(semantic.get("covered_phases") or [])
+    missing = [phase for phase in ("design", "test", "implementation") if phase not in covered]
+    if missing:
+        blocked.append("Strict completion requires semantic review phases: " + ", ".join(missing))
+    for item in semantic.get("items") or []:
+        developer = normalized_agent(item.get("developer_agent", ""))
+        reviewer = normalized_agent(item.get("reviewer_agent", ""))
+        if developer and reviewer and developer == reviewer:
+            blocked.append(f"Semantic review phase {item.get('phase', '<unknown>')} is self-review.")
+        if item.get("independence") != "independent-agent":
+            blocked.append(f"Semantic review phase {item.get('phase', '<unknown>')} is not independent-agent.")
+    return blocked
+
+
 def validate_prepare(prepare: dict | None, strict: bool, approval_text: str) -> tuple[list[str], list[str]]:
     blocked: list[str] = []
     warnings: list[str] = []
@@ -110,6 +139,7 @@ def validate_verify_result(
             if not gate.get("ready"):
                 blocked.append("Completion gate is not ready.")
                 blocked.extend(str(reason) for reason in gate.get("blocked_reasons", []) or [])
+            blocked.extend(validate_semantic_reviews(gate, workflow, strict, completion_required))
     elif isinstance(gate, dict) and not gate.get("ready", True):
         blocked.append("Implementation gate is not ready.")
         blocked.extend(str(reason) for reason in gate.get("blocked_reasons", []) or [])

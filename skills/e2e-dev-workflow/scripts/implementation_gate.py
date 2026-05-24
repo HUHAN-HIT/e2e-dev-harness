@@ -17,6 +17,7 @@ import coverage_gate  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import implementation_manifest as implementation_manifest_gate  # noqa: E402
 import memory_capture  # noqa: E402
+import reviewer_gate  # noqa: E402
 import rework_gate  # noqa: E402
 import spring_static_check  # noqa: E402
 
@@ -65,6 +66,8 @@ def validate_gate(
     rework_dirs: list[Path] | None = None,
     dependency_report: Path | None = None,
     implementation_manifest: Path | None = None,
+    review_dirs: list[Path] | None = None,
+    require_semantic_reviews: bool = True,
 ) -> dict:
     repo = repo.resolve()
     blocked_reasons: list[str] = []
@@ -106,6 +109,7 @@ def validate_gate(
     memory_result = None
     spring_result = None
     rework_result = None
+    semantic_review_result = None
     dependency_result = None
     implementation_manifest_result = None
     if phase == "completion":
@@ -142,6 +146,16 @@ def validate_gate(
         )
         if not rework_result["ready"]:
             blocked_reasons.extend(rework_result["blocked_reasons"])
+        semantic_reviews_required = phase == "completion" or require_semantic_reviews
+        if semantic_reviews_required or review_dirs:
+            semantic_review_result = reviewer_gate.validate(
+                repo,
+                review_dirs,
+                [red_test_evidence, coverage_matrix, unit_test_evidence, business_review, implementation_manifest],
+                ["design", "test", "implementation"] if semantic_reviews_required else None,
+            )
+            if not semantic_review_result["ready"]:
+                blocked_reasons.extend(semantic_review_result["blocked_reasons"])
         if not skip_spring_static_check:
             spring_result = spring_static_check.validate(repo)
             if not spring_result["ready"]:
@@ -162,6 +176,7 @@ def validate_gate(
         "dependency_report": dependency_result,
         "memory_updates": memory_result,
         "rework": rework_result,
+        "semantic_reviews": semantic_review_result,
         "spring_static_check": spring_result,
     }
 
@@ -180,6 +195,8 @@ def main() -> int:
     parser.add_argument("--dependency-report", type=Path)
     parser.add_argument("--implementation-manifest", type=Path)
     parser.add_argument("--rework-dir", action="append", type=Path)
+    parser.add_argument("--review-dir", action="append", type=Path)
+    parser.add_argument("--require-semantic-reviews", action="store_true")
     parser.add_argument("--skip-spring-static-check", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -198,6 +215,8 @@ def main() -> int:
         args.rework_dir,
         args.dependency_report,
         args.implementation_manifest,
+        args.review_dir,
+        args.require_semantic_reviews,
     )
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))

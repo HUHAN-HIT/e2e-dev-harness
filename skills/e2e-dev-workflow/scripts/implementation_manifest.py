@@ -38,6 +38,36 @@ CLASS_LIKE_RE = re.compile(
     r"Params|Config|Kit|Util|Dto|DTO|VO|DO|PO|Entity|Mapper|RS|RQ"
     r")\b"
 )
+ARTIFACT_SECTION_KEYWORDS = (
+    "required artifact",
+    "required artifacts",
+    "implementation artifact",
+    "implementation artifacts",
+    "affected artifact",
+    "affected artifacts",
+    "affected class",
+    "affected classes",
+    "required class",
+    "required classes",
+    "affected file",
+    "affected files",
+    "required file",
+    "required files",
+    "implementation manifest",
+    "artifact checklist",
+    "code artifacts",
+    "modification points",
+    "\u5fc5\u6539",
+    "\u9700\u5b9e\u73b0",
+    "\u5b9e\u73b0\u4ea7\u7269",
+    "\u4ea7\u7269\u6e05\u5355",
+    "\u7c7b\u6e05\u5355",
+    "\u6587\u4ef6\u6e05\u5355",
+)
+MARKED_ARTIFACT_RE = re.compile(
+    r"\[(?:artifact|required-artifact|must-implement|code-artifact)\]\s*`?(" + CLASS_LIKE_RE.pattern + r")`?",
+    re.IGNORECASE,
+)
 SECTION_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(?P<title>.+?)\s*$")
 MODULE_SECTION_KEYWORDS = (
     "scope",
@@ -108,6 +138,8 @@ def resolve_artifact_path(repo: Path, artifact: str) -> Path:
     text = artifact.strip().strip("`")
     if re.search(r"\.[a-zA-Z0-9]{1,8}:\d+$", text):
         text = text.rsplit(":", 1)[0]
+    if re.match(r"^[A-Za-z]:[\\/]", text) or text.startswith(("/", "\\")):
+        return Path(text)
     path = Path(text)
     return path if path.is_absolute() else repo / path
 
@@ -152,7 +184,16 @@ def extract_design_artifacts(design_path: Path | None) -> list[str]:
     text = strip_bom(design_path.read_text(encoding="utf-8", errors="replace"))
     result: list[str] = []
     seen: set[str] = set()
-    for match in CLASS_LIKE_RE.finditer(text):
+    bodies: list[str] = []
+    for title, body in design_sections(text).items():
+        if any(keyword in title for keyword in ARTIFACT_SECTION_KEYWORDS):
+            bodies.append(body)
+    for marker in MARKED_ARTIFACT_RE.finditer(text):
+        value = marker.group(1)
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
+    for match in CLASS_LIKE_RE.finditer("\n".join(bodies)):
         value = match.group(0)
         if value not in seen:
             seen.add(value)
