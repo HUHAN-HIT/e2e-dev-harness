@@ -51,6 +51,7 @@ docs/agent-runs/<date-feature>/
       unit-test-evidence.txt
       coverage-matrix.md
       business-review.md
+      rework-NNN.md
   evidence/
     knowledge-graph-refresh.json
     red-test.txt
@@ -59,6 +60,8 @@ docs/agent-runs/<date-feature>/
     business-review.md
     verification.txt
   proposed-memory-updates.md
+  rework/
+    rework-NNN.md
 ```
 
 Keep `AGENT.md` files in their directory scopes. Do not move them into this archive.
@@ -86,6 +89,10 @@ Coverage Reviewer:
 - Owns final design-to-code/test coverage and business logic review.
 - Builds a matrix with `id`, `acceptance`, `use_case`, `service`, `tests`, `code_refs`, `business_review`, and `status`.
 - Blocks completion if any acceptance criterion lacks test evidence, code refs, or business review.
+- Accepts unit-test evidence only when it is structured command JSON with `exit_code: 0`.
+- Checks Spring static check results unless the run explicitly documents why the check was skipped.
+- Creates a rework item instead of directly asking for code patches when review finds missed behavior, missing tests, failed verification, business-logic risk, or multi-service contract gaps.
+- Blocks completion while any rework item is `open`, `in-progress`, `blocked`, or `deferred` without explicit approval.
 
 ## Memory Rule
 

@@ -50,9 +50,31 @@ def read_design(path: Path | None) -> str:
     if not path:
         return ""
     try:
-        return path.read_text(encoding="utf-8", errors="ignore")
+        return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+
+
+def read_json(path: Path | None) -> dict:
+    if not path:
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def services_from_dependency_report(path: Path | None) -> list[str]:
+    report = read_json(path)
+    selected: list[str] = []
+    seen: set[str] = set()
+    for dependency in report.get("dependencies", []):
+        for key in ("source_service", "target_service"):
+            service = dependency.get(key)
+            if service and service not in seen:
+                seen.add(service)
+                selected.append(normalize_path(str(service)))
+    return selected
 
 
 def feature_slug(design_doc: Path | None) -> str:
@@ -244,6 +266,8 @@ def service_artifacts(base: str, services: list[str] | None) -> dict:
             "test_evidence": f"{service_base}/unit-test-evidence.txt",
             "coverage_matrix": f"{service_base}/coverage-matrix.md",
             "business_review": f"{service_base}/business-review.md",
+            "rework_dir": service_base,
+            "rework_pattern": f"{service_base}/rework-NNN.md",
         }
     return result
 
@@ -261,7 +285,10 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
         "test_plan": f"{handoffs}/03-test-case-developer.md",
         "implementation_plan": f"{handoffs}/04-code-developer.md",
         "proposed_memory_updates": f"{base}/proposed-memory-updates.md",
+        "rework_dir": f"{base}/rework",
+        "rework_pattern": f"{base}/rework/rework-NNN.md",
         "knowledge_graph_status": f"{evidence}/knowledge-graph-refresh.json",
+        "dependency_report": f"{evidence}/cross-service-dependencies.json",
         "red_test_evidence": f"{evidence}/red-test.txt",
         "green_test_evidence": f"{evidence}/green-test.txt",
         "verification_evidence": f"{evidence}/verification.txt",
@@ -305,7 +332,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
         {
             "name": "use-case-designer",
             "owns": ["happy paths", "failure paths", "cross-service flow", "contracts", "data effects"],
-            "inputs": [artifact_paths["requirements"], "knowledge graph summary"],
+            "inputs": [artifact_paths["requirements"], "knowledge graph summary", artifact_paths["dependency_report"]],
             "outputs": [artifact_paths["use_cases"]],
             "gate": "Every acceptance criterion maps to a use case or is explicitly deferred.",
         },
@@ -329,6 +356,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
                         artifact_paths["use_cases"],
                         artifact_paths["test_plan"],
                         paths["service_plan"],
+                        artifact_paths["dependency_report"],
                         "failing tests for this service",
                     ],
                     "outputs": [
@@ -351,7 +379,13 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
     agents.append({
         "name": "coverage-reviewer",
         "owns": ["design coverage matrix", "unit test evidence check", "business logic review"],
-        "inputs": [artifact_paths["requirements"], artifact_paths["use_cases"], artifact_paths["test_plan"], artifact_paths["implementation_plan"]],
+        "inputs": [
+            artifact_paths["requirements"],
+            artifact_paths["use_cases"],
+            artifact_paths["test_plan"],
+            artifact_paths["implementation_plan"],
+            artifact_paths["dependency_report"],
+        ],
         "outputs": [artifact_paths["coverage_matrix"], artifact_paths["business_review"], artifact_paths["verification_evidence"]],
         "gate": "Every acceptance criterion maps to use cases, service plans, tests, code refs, and business review evidence.",
     })
@@ -372,6 +406,7 @@ def main() -> int:
     parser.add_argument("--path", action="append", help="Path that may be touched; can be repeated.")
     parser.add_argument("--service", action="append", help="Affected service directory or service name; can be repeated.")
     parser.add_argument("--service-scope", choices=SERVICE_SCOPES, default=os.environ.get("E2E_DEV_WORKFLOW_SERVICE_SCOPE", "auto"))
+    parser.add_argument("--dependency-report", type=Path)
     parser.add_argument("--status-file", type=Path)
     parser.add_argument("--json", action="store_true", help="Print JSON only.")
     args = parser.parse_args()
@@ -387,8 +422,15 @@ def main() -> int:
     design_text = read_design(design_path)
     facts = detect(repo)
     design_is_template = bool(design_path and "template" in design_path.stem.lower())
-    services, resolved_service_scope = select_services(facts, args.service, args.path, args.service_scope)
-    unmatched_services = unmatched_requested_services(facts, args.service)
+    dependency_report = args.dependency_report
+    if dependency_report and not dependency_report.is_absolute():
+        dependency_report = repo / dependency_report
+    dependency_services = services_from_dependency_report(dependency_report)
+    requested_services = args.service
+    if args.service_scope == "auto" and not requested_services and not args.path and dependency_services:
+        requested_services = dependency_services
+    services, resolved_service_scope = select_services(facts, requested_services, args.path, args.service_scope)
+    unmatched_services = unmatched_requested_services(facts, requested_services)
     if unmatched_services:
         result = {
             "repo": str(repo),
@@ -396,7 +438,8 @@ def main() -> int:
             "selected_mode": "blocked",
             "requested_service_scope": args.service_scope,
             "resolved_service_scope": resolved_service_scope,
-            "requested_services": args.service or [],
+            "requested_services": requested_services or [],
+            "dependency_report": str(dependency_report) if dependency_report else None,
             "requested_paths": args.path or [],
             "selected_services": services,
             "unmatched_requested_services": unmatched_services,
@@ -415,7 +458,7 @@ def main() -> int:
             args.status_file.write_text(text + "\n", encoding="utf-8")
         return 2
     if resolved_service_scope == "discovery":
-        result = discovery_result(repo, args.mode, args.service_scope, args.service, args.path, facts)
+        result = discovery_result(repo, args.mode, args.service_scope, requested_services, args.path, facts)
         text = json.dumps(result, indent=2, ensure_ascii=False)
         if args.json:
             print(text)
@@ -438,9 +481,10 @@ def main() -> int:
         "selected_mode": selected,
         "requested_service_scope": args.service_scope,
         "resolved_service_scope": resolved_service_scope,
-        "requested_services": args.service or [],
+        "requested_services": requested_services or [],
         "requested_paths": args.path or [],
         "selected_services": services,
+        "dependency_report": str(dependency_report) if dependency_report else None,
         "reasons": reasons,
         "detected": {
             "service_candidates": facts.get("service_candidates", []),

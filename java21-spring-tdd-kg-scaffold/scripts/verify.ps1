@@ -12,6 +12,11 @@ param(
     [string]$AgentMode = "off",
     [ValidateSet("auto", "strict", "optional", "off")]
     [string]$MemoryMode = "auto",
+    [ValidateSet("auto", "strict", "optional", "off")]
+    [string]$DependencyScanMode = "auto",
+    [string]$MavenCommand = "mvn",
+    [switch]$SkipDependencyReportWrite,
+    [switch]$SkipSpringStaticCheck,
     [switch]$SkipMaven
 )
 
@@ -78,6 +83,24 @@ if ($MemoryMode -ne "off") {
     python $MemoryScript validate $RepoRoot
 }
 
+if ($DependencyScanMode -ne "off") {
+    $DependencyScanCandidates = @(
+        (Join-Path $RepoRoot "skills\e2e-dev-workflow\scripts\cross_service_dependency_scan.py"),
+        (Join-Path $RepoRoot ".agents\skills\e2e-dev-workflow\scripts\cross_service_dependency_scan.py"),
+        (Join-Path $RepoRoot "..\skills\e2e-dev-workflow\scripts\cross_service_dependency_scan.py")
+    )
+    $DependencyScanScript = $DependencyScanCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($DependencyScanScript) {
+        $DependencyScanArgs = @($DependencyScanScript, $RepoRoot, "--gitnexus-mode", $DependencyScanMode)
+        if ($SkipDependencyReportWrite) {
+            $DependencyScanArgs += "--no-write"
+        }
+        python @DependencyScanArgs
+    } else {
+        Write-Warning "cross_service_dependency_scan.py not found; skipping cross-service dependency scan."
+    }
+}
+
 if ($DesignDoc) {
     $Candidates = @(
         (Join-Path $RepoRoot "skills\e2e-dev-workflow\scripts\clarification_gate.py"),
@@ -92,12 +115,31 @@ if ($DesignDoc) {
     python $GateScript $DesignPath
 }
 
+if (-not $SkipSpringStaticCheck) {
+    $SpringCheckCandidates = @(
+        (Join-Path $RepoRoot "skills\e2e-dev-workflow\scripts\spring_static_check.py"),
+        (Join-Path $RepoRoot ".agents\skills\e2e-dev-workflow\scripts\spring_static_check.py"),
+        (Join-Path $RepoRoot "..\skills\e2e-dev-workflow\scripts\spring_static_check.py")
+    )
+    $SpringCheckScript = $SpringCheckCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($SpringCheckScript) {
+        python $SpringCheckScript $RepoRoot --json
+    } else {
+        Write-Warning "spring_static_check.py not found; skipping Spring static check."
+    }
+}
+
 if ($SkipMaven) {
     return
 }
 
-if ($Module) {
-    mvn -pl $Module -am test
-} else {
-    mvn test
+Push-Location $RepoRoot
+try {
+    if ($Module) {
+        & $MavenCommand -pl $Module -am test
+    } else {
+        & $MavenCommand test
+    }
+} finally {
+    Pop-Location
 }

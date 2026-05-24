@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import agent_instructions  # noqa: E402
 import clarification_gate  # noqa: E402
+import cross_service_dependency_scan  # noqa: E402
 import implementation_gate  # noqa: E402
 import kg_refresh  # noqa: E402
 import memory_capture  # noqa: E402
@@ -34,6 +35,19 @@ def resolve_repo_path(repo: Path, path: Path | None) -> Path | None:
     if not path:
         return None
     return path if path.is_absolute() else repo / path
+
+
+def require_repo_path(repo: Path, path: Path | None, label: str) -> Path:
+    resolved = resolve_repo_path(repo, path)
+    if resolved is None:
+        raise ValueError(f"{label} path is required.")
+    repo_root = repo.resolve()
+    target = resolved.resolve()
+    try:
+        target.relative_to(repo_root)
+    except ValueError as error:
+        raise ValueError(f"{label} path resolves outside repository: {resolved}") from error
+    return target
 
 
 def write_status(path: Path | None, result: dict) -> None:
@@ -100,6 +114,25 @@ def kg_status(repo: Path, mode: str, facts: dict | None = None) -> dict:
     }
 
 
+def dependency_scan_status(repo: Path, args) -> dict:
+    mode = getattr(args, "dependency_scan_mode", "auto")
+    if mode == "off":
+        return {
+            "mode": mode,
+            "enabled": False,
+            "ready": True,
+            "message": "Cross-service dependency scan disabled by policy.",
+        }
+    output_dir = resolve_repo_path(repo, getattr(args, "dependency_output_dir", None))
+    return cross_service_dependency_scan.scan(
+        repo,
+        gitnexus_mode=mode,
+        graphify_mode="auxiliary",
+        write_reports=getattr(args, "write_dependency_report", True),
+        output_dir=output_dir,
+    )
+
+
 def orchestration_status(
     repo: Path,
     mode: str,
@@ -110,6 +143,7 @@ def orchestration_status(
     services_requested: list[str] | None = None,
     paths_requested: list[str] | None = None,
     facts: dict | None = None,
+    dependency_report: Path | None = None,
 ) -> dict:
     if mode == "off":
         return {"requested_mode": mode, "enabled": False, "selected_mode": "off", "blocked": False}
@@ -118,6 +152,9 @@ def orchestration_status(
     facts = facts or kg_refresh.detect(repo)
     design_is_template = bool(design_path and "template" in design_path.stem.lower())
     slug = orchestration_plan.feature_slug(design_path)
+    dependency_services = orchestration_plan.services_from_dependency_report(resolve_repo_path(repo, dependency_report))
+    if service_scope == "auto" and not services_requested and not paths_requested and dependency_services:
+        services_requested = dependency_services
     services, resolved_service_scope = orchestration_plan.select_services(
         facts,
         services_requested,
@@ -192,6 +229,8 @@ def prepare(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
     effective_agent_scope, effective_service_scope, scope_notes = align_prepare_scopes(args.agent_scope, args.service_scope)
     kg_facts = kg_refresh.detect(repo)
+    dependency_scan = dependency_scan_status(repo, args)
+    dependency_report_path = dependency_scan.get("report_paths", {}).get("json")
     agent = (
         {"mode": args.agent_mode, "enabled": False, "blocked": False}
         if args.agent_mode == "off"
@@ -235,8 +274,10 @@ def prepare(args) -> tuple[int, dict]:
             args.service,
             args.path,
             kg_facts,
+            Path(dependency_report_path) if dependency_report_path else None,
         ),
         "knowledge_graph": kg_status(repo, args.kg_mode, kg_facts),
+        "cross_service_dependencies": dependency_scan,
     }
     blocked = [
         name
@@ -284,6 +325,7 @@ This is a living plan. Keep it current while implementing the feature.
 - AGENT instructions loaded:
 - Memory reviewed:
 - Knowledge graph refreshed:
+- Cross-service dependency report:
 - Superpowers skills applied:
 
 ## Target Behavior
@@ -300,6 +342,8 @@ This is a living plan. Keep it current while implementing the feature.
 - Test plan: {artifacts['test_plan']}
 - Implementation plan: {artifacts['implementation_plan']}
 - Proposed memory updates: {artifacts['proposed_memory_updates']}
+- Rework log: {artifacts['rework_pattern']}
+- Cross-service dependencies: {artifacts['dependency_report']}
 
 ## Service Implementation Plans
 
@@ -308,10 +352,12 @@ This is a living plan. Keep it current while implementing the feature.
 ## Evidence Paths
 
 - Knowledge graph status: {artifacts['knowledge_graph_status']}
+- Dependency report: {artifacts['dependency_report']}
 - Red test: {artifacts['red_test_evidence']}
 - Green test: {artifacts['green_test_evidence']}
 - Coverage matrix: {artifacts['coverage_matrix']}
 - Business review: {artifacts['business_review']}
+- Rework gate: {artifacts['rework_dir']}
 - Verification: {artifacts['verification_evidence']}
 
 ## Agent Protocol
@@ -329,6 +375,10 @@ This is a living plan. Keep it current while implementing the feature.
 ## Evidence
 
 Record concise command output, graph status, failing-test output, passing-test output, and residual risks here.
+
+## Rework Log
+
+If coverage review, tests, business review, or user review finds a missed requirement or logic issue, create `rework-NNN.md` under the global or service-scoped rework path, route it back to the earliest required phase, and close it as `verified` or explicitly approved `deferred` before reporting done.
 """
 
 
@@ -369,20 +419,18 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
     }
     created: list[str] = []
     for role, relative_path in role_files.items():
-        path = resolve_repo_path(repo, Path(relative_path))
-        assert path is not None
+        path = require_repo_path(repo, Path(relative_path), role)
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
             path.write_text(handoff_text(role), encoding="utf-8")
             created.append(str(path))
     starter_files = {
-        artifacts["green_test_evidence"]: "# Unit Test Evidence\n\nRecord the passing narrow and broadened test commands here.\n",
+        artifacts["green_test_evidence"]: unit_test_evidence_template("all-services"),
         artifacts["coverage_matrix"]: coverage_matrix_template("all-services"),
         artifacts["business_review"]: handoff_text("business-logic-review"),
     }
     for relative_path, text in starter_files.items():
-        path = resolve_repo_path(repo, Path(relative_path))
-        assert path is not None
+        path = require_repo_path(repo, Path(relative_path), "starter artifact")
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
             path.write_text(text, encoding="utf-8")
@@ -395,14 +443,15 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
             ("coverage_matrix", f"coverage-{service}"),
             ("business_review", f"business-review-{service}"),
         ):
-            path = resolve_repo_path(repo, Path(paths[key]))
-            assert path is not None
+            path = require_repo_path(repo, Path(paths[key]), f"{service} {key}")
             path.parent.mkdir(parents=True, exist_ok=True)
             if not path.exists():
                 if key == "coverage_matrix":
                     path.write_text(coverage_matrix_template(service), encoding="utf-8")
                 elif key == "test_evidence":
-                    path.write_text("# Unit Test Evidence\n\nRecord the passing service test command here.\n", encoding="utf-8")
+                    path.write_text(unit_test_evidence_template(service), encoding="utf-8")
+                elif key == "service_plan":
+                    path.write_text(service_plan_template(service), encoding="utf-8")
                 else:
                     path.write_text(handoff_text(title), encoding="utf-8")
                 created.append(str(path))
@@ -415,6 +464,76 @@ def coverage_matrix_template(service: str) -> str:
 | id | acceptance | use_case | service | tests | code_refs | business_review | status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | AC-1 |  |  | {service} |  |  |  |  |
+"""
+
+
+def unit_test_evidence_template(scope: str) -> str:
+    return json.dumps(
+        {
+            "scope": scope,
+            "command": "",
+            "exit_code": None,
+            "stdout_tail": "",
+            "stderr_tail": "",
+        },
+        indent=2,
+    ) + "\n"
+
+
+def service_plan_template(service: str) -> str:
+    return f"""# Service Implementation Plan: {service}
+
+## Scope
+
+- Service/module:
+- Files allowed to change:
+- Shared files allowed to change:
+- Out of scope:
+
+## Modification Points
+
+| path | planned change | reason | acceptance/use case |
+| --- | --- | --- | --- |
+|  |  |  |  |
+
+## Service-local TDD Plan
+
+| red test | expected failure | implementation target | verification command |
+| --- | --- | --- | --- |
+|  |  |  | mvn -pl {service} -am test |
+
+## Cross-service Contracts
+
+| dependency/contract | producer | consumer | compatibility rule | verification |
+| --- | --- | --- | --- | --- |
+|  |  | {service} |  |  |
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Service as {orchestration_plan.service_slug(service)}
+    Caller->>Service: request
+    Service-->>Caller: response
+```
+
+## Data And Transaction Effects
+
+- Tables/entities:
+- Events/messages:
+- Idempotency/retry/timeout behavior:
+
+## Risks And Rollback
+
+- Risk:
+- Mitigation:
+- Rollback:
+
+## Completion Evidence
+
+- Red test evidence:
+- Green test command JSON:
+- Coverage matrix:
+- Business review:
 """
 
 
@@ -431,6 +550,7 @@ def plan(args) -> tuple[int, dict]:
         args.service,
         args.path,
         kg_facts,
+        getattr(args, "dependency_report", None),
     )
     if (args.create_archive or args.write_exec_plan) and not result.get("handoff_artifacts"):
         result["blocked"] = True
@@ -440,19 +560,17 @@ def plan(args) -> tuple[int, dict]:
         write_status(args.status_file, result)
         return 2, result
     if args.create_archive or args.write_exec_plan:
-        run_dir = resolve_repo_path(repo, Path(result["agent_run_dir"]))
-        assert run_dir is not None
+        run_dir = require_repo_path(repo, Path(result["agent_run_dir"]), "agent run directory")
         (run_dir / "handoffs").mkdir(parents=True, exist_ok=True)
         (run_dir / "evidence").mkdir(parents=True, exist_ok=True)
+        require_repo_path(repo, Path(result["handoff_artifacts"]["rework_dir"]), "rework directory").mkdir(parents=True, exist_ok=True)
         result["handoff_files_created"] = create_handoff_files(repo, result["handoff_artifacts"])
-        proposed = resolve_repo_path(repo, Path(result["handoff_artifacts"]["proposed_memory_updates"]))
-        assert proposed is not None
+        proposed = require_repo_path(repo, Path(result["handoff_artifacts"]["proposed_memory_updates"]), "proposed memory updates")
         if not proposed.exists():
             proposed.write_text("# Proposed Memory Updates\n\n", encoding="utf-8")
         result["agent_run_archive_created"] = str(run_dir)
     if args.write_exec_plan or args.create_archive:
-        target = resolve_repo_path(repo, args.write_exec_plan or Path(result["handoff_artifacts"]["exec_plan"]))
-        assert target is not None
+        target = require_repo_path(repo, args.write_exec_plan or Path(result["handoff_artifacts"]["exec_plan"]), "exec plan")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(exec_plan_text(repo, args.design_doc, result), encoding="utf-8")
         result["exec_plan_written"] = str(target)
@@ -472,6 +590,9 @@ def gate(args) -> tuple[int, dict]:
         args.unit_test_evidence,
         args.business_review,
         args.memory_updates,
+        skip_spring_static_check=getattr(args, "skip_spring_static_check", False),
+        rework_dirs=getattr(args, "rework_dir", None),
+        dependency_report=getattr(args, "dependency_report", None),
     )
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
@@ -527,6 +648,10 @@ def add_prepare_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--agent-run-dir", help="Archive directory for generated agent run files.")
     parser.add_argument("--run-date", help="Date prefix for default agent run directory, YYYY-MM-DD.")
     parser.add_argument("--kg-mode", choices=["auto", "gitnexus", "graphify", "both"], default="auto")
+    parser.add_argument("--dependency-scan-mode", choices=["auto", "strict", "optional", "off"], default="auto")
+    parser.add_argument("--dependency-output-dir", type=Path)
+    parser.add_argument("--no-write-dependency-report", dest="write_dependency_report", action="store_false")
+    parser.set_defaults(write_dependency_report=True)
     parser.add_argument("--status-file", type=Path)
 
 
@@ -552,6 +677,7 @@ def main() -> int:
     plan_parser.add_argument("--path", action="append", help="Path that may be touched; can be repeated.")
     plan_parser.add_argument("--service", action="append", help="Affected service directory or service name; can be repeated.")
     plan_parser.add_argument("--service-scope", choices=["auto", "discovery", "affected", "all"], default="auto")
+    plan_parser.add_argument("--dependency-report", type=Path)
     plan_parser.add_argument("--create-archive", action="store_true", help="Create agent run archive directories and starter files.")
     plan_parser.add_argument("--write-exec-plan", type=Path)
     plan_parser.add_argument("--status-file", type=Path)
@@ -566,6 +692,9 @@ def main() -> int:
     gate_parser.add_argument("--unit-test-evidence", type=Path)
     gate_parser.add_argument("--business-review", type=Path)
     gate_parser.add_argument("--memory-updates", type=Path)
+    gate_parser.add_argument("--dependency-report", type=Path)
+    gate_parser.add_argument("--rework-dir", action="append", type=Path)
+    gate_parser.add_argument("--skip-spring-static-check", action="store_true")
     gate_parser.add_argument("--status-file", type=Path)
 
     verify_parser = subparsers.add_parser("verify", help="Run prepare, clarification, optional gate, and optional Maven.")
@@ -579,6 +708,9 @@ def main() -> int:
     verify_parser.add_argument("--unit-test-evidence", type=Path)
     verify_parser.add_argument("--business-review", type=Path)
     verify_parser.add_argument("--memory-updates", type=Path)
+    verify_parser.add_argument("--dependency-report", type=Path)
+    verify_parser.add_argument("--rework-dir", action="append", type=Path)
+    verify_parser.add_argument("--skip-spring-static-check", action="store_true")
     verify_parser.add_argument("--skip-maven", action="store_true")
 
     args = parser.parse_args()
@@ -593,8 +725,8 @@ def main() -> int:
             exit_code, result = gate(args)
         else:
             exit_code, result = verify(args)
-    except FileNotFoundError as error:
-        print(str(error), file=sys.stderr)
+    except (FileNotFoundError, ValueError, KeyError) as error:
+        print(f"e2e-dev-workflow error: {error}", file=sys.stderr)
         return 2
 
     print(json.dumps(result, indent=2, ensure_ascii=False))

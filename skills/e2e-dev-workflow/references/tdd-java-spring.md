@@ -37,6 +37,17 @@ Before finishing:
 mvn test
 ```
 
+Record each passing command as JSON evidence for the completion gate:
+
+```json
+{
+  "command": "mvn -pl services/<service> -am test",
+  "exit_code": 0,
+  "stdout_tail": "BUILD SUCCESS",
+  "stderr_tail": ""
+}
+```
+
 ## Coding Biases
 
 - Keep domain rules in plain Java classes or records when practical.
@@ -45,3 +56,4 @@ mvn test
 - Avoid starting containers or Spring contexts for tests that can run as plain JUnit.
 - Prefer explicit validation and error tests over snapshot-style assertions.
 - Refactor only while green, as required by Superpowers TDD.
+- For Spring-managed constructor dependencies declared in this repository, register the injected type with a component stereotype or an explicit `@Bean`; `spring_static_check.py` is the completion safety net for this.

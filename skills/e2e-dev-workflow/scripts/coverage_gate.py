@@ -26,9 +26,20 @@ REQUIRED_COLUMNS = {
     "status",
 }
 PASS_STATUSES = {"covered", "done", "pass", "passed", "verified"}
-TODO_RE = re.compile(r"\b(todo|tbd|fixme|unresolved|pending)\b|待确认|未确认|未完成", re.IGNORECASE)
-REVIEW_RE = re.compile(r"\b(reviewed|verified|approved|pass|passed)\b|已审查|已验证|已确认|通过", re.IGNORECASE)
-UNIT_RE = re.compile(r"\b(pass|passed|success|successful|build success|tests run)\b|通过|成功", re.IGNORECASE)
+TODO_RE = re.compile(
+    r"\b(todo|tbd|fixme|unresolved|pending)\b|"
+    r"\u5f85\u786e\u8ba4|\u672a\u786e\u8ba4|\u672a\u5b8c\u6210",
+    re.IGNORECASE,
+)
+REVIEW_RE = re.compile(
+    r"\b(reviewed|verified|approved|pass|passed)\b|"
+    r"\u5df2\u5ba1\u67e5|\u5df2\u9a8c\u8bc1|\u5df2\u786e\u8ba4|\u901a\u8fc7",
+    re.IGNORECASE,
+)
+
+
+def strip_bom(text: str) -> str:
+    return text.lstrip("\ufeff")
 
 
 def normalize_header(value: str) -> str:
@@ -80,13 +91,63 @@ def file_ok(path: Path | None, repo: Path, label: str, blocked: list[str]) -> tu
     if not resolved.exists():
         blocked.append(f"{label} evidence is missing or empty: {resolved}")
         return str(resolved), ""
-    text = resolved.read_text(encoding="utf-8", errors="replace")
+    text = strip_bom(resolved.read_text(encoding="utf-8", errors="replace"))
     if not text.strip():
         blocked.append(f"{label} evidence is missing or empty: {resolved}")
         return str(resolved), text
     if TODO_RE.search(text):
         blocked.append(f"{label} evidence contains unresolved TODO/TBD markers: {resolved}")
     return str(resolved), text
+
+
+def command_entries(data) -> list[dict]:
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if not isinstance(data, dict):
+        return []
+    if "command" in data and "exit_code" in data:
+        return [data]
+    if isinstance(data.get("maven"), dict):
+        return [data["maven"]]
+    if isinstance(data.get("commands"), list):
+        return [item for item in data["commands"] if isinstance(item, dict)]
+    return []
+
+
+def validate_command_evidence(text: str, label: str, blocked: list[str]) -> list[dict]:
+    text = strip_bom(text)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        blocked.append(f"{label} evidence must be structured JSON command evidence with command and exit_code.")
+        return []
+
+    entries = command_entries(parsed)
+    if not entries:
+        blocked.append(f"{label} evidence must include at least one command result with command and exit_code.")
+        return []
+
+    normalized: list[dict] = []
+    for index, entry in enumerate(entries, start=1):
+        command = str(entry.get("command", "")).strip()
+        exit_code = entry.get("exit_code")
+        if entry.get("skipped") is True:
+            blocked.append(f"{label} command {index} was skipped; run the test command and record its result.")
+        if not command:
+            blocked.append(f"{label} command {index} is missing command.")
+        if not isinstance(exit_code, int):
+            blocked.append(f"{label} command {index} is missing integer exit_code.")
+        elif exit_code != 0:
+            blocked.append(f"{label} command {index} failed with exit_code {exit_code}: {command}")
+        normalized.append(
+            {
+                "command": command,
+                "exit_code": exit_code,
+                "stdout_tail": str(entry.get("stdout_tail", "")),
+                "stderr_tail": str(entry.get("stderr_tail", "")),
+            }
+        )
+    return normalized
 
 
 def validate(
@@ -109,7 +170,7 @@ def validate(
     elif not matrix_path.exists():
         blocked.append(f"Coverage matrix not found: {matrix_path}")
     else:
-        text = matrix_path.read_text(encoding="utf-8", errors="replace")
+        text = strip_bom(matrix_path.read_text(encoding="utf-8", errors="replace"))
         rows = parse_markdown_tables(text)
         if not rows:
             blocked.append(f"Coverage matrix has no Markdown table rows: {matrix_path}")
@@ -149,10 +210,10 @@ def validate(
                         "Coverage matrix missing acceptance criteria from design: " + ", ".join(missing_acs)
                     )
 
+    unit_test_commands: list[dict] = []
     unit_test_path, unit_text = file_ok(unit_test_evidence, repo, "Unit test", blocked)
     if unit_test_path:
-        if not UNIT_RE.search(unit_text):
-            blocked.append(f"Unit test evidence must explicitly show tests passed: {unit_test_path}")
+        unit_test_commands = validate_command_evidence(unit_text, "Unit test", blocked)
     business_review_path, review_text = file_ok(business_review, repo, "Business review", blocked)
     if business_review_path:
         if not REVIEW_RE.search(review_text):
@@ -168,6 +229,7 @@ def validate(
         "expected_acceptance_ids": expected_acs,
         "missing_acceptance_ids": missing_acs,
         "unit_test_evidence": unit_test_path,
+        "unit_test_commands": unit_test_commands,
         "business_review": business_review_path,
     }
 

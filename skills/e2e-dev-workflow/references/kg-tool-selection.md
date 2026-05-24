@@ -5,7 +5,8 @@ Use this matrix before each implementation.
 | Repo/task shape | Default | Add-on | Reason |
 | --- | --- | --- | --- |
 | Java/Spring 6/Maven code change in one service | GitNexus | None | Code structure, call paths, and impact analysis matter most. |
-| Multi-service Java monorepo | GitNexus | Graphify when docs or diagrams drive the change | GitNexus follows code; Graphify helps visualize broader project context. |
+| Multi-service Java monorepo | GitNexus | Deterministic scanner, then Graphify when docs or diagrams drive the change | GitNexus follows code; the scanner extracts HTTP/DMQ seeds; Graphify helps visualize broader project context. |
+| Cross-service HTTP or DMQ dependency analysis | Deterministic scanner plus GitNexus | Graphify for docs/ADR/architecture semantics only | Scan URLs, routes, topics, tags, groups, constants, producers, and consumers first; GitNexus verifies symbol context and impact. |
 | Design document, PDF, architecture diagram, screenshot, or mixed media input | Graphify | GitNexus when code will change | Graphify is better for multimodal/project-document understanding. |
 | Ambiguous service ownership or cross-service contract change | Both | None | Compare doc-level architecture against code-level dependencies. |
 | Tool unavailable | Fallback to repo inspection | None | Use Maven modules, `rg`, dependency trees, and targeted tests. |
@@ -22,6 +23,23 @@ Use this matrix before each implementation.
 3. Run installed repo-specific graph commands. Prefer commands already documented in the repo.
 4. Save or note the graph refresh location in the design note before implementation.
 5. If Graphify is installed, prefer a fast local refresh when a graph already exists; use full extraction only when the graph is missing or stale.
+
+## Cross-Service Dependency Protocol
+
+Use GitNexus-first evidence for hidden service dependencies:
+
+1. Run the deterministic scanner:
+
+   ```bash
+   python skills/e2e-dev-workflow/scripts/cross_service_dependency_scan.py . --gitnexus-mode auto --json
+   ```
+
+2. Inspect `knowledge-graph/cross-service-dependencies.json` and `.md`.
+3. Treat unresolved URL, topic, tag, group, or service mappings as clarification questions.
+4. Use GitNexus evidence from the report (`analyze`, `context`, `impact`) as code-level evidence for implementation planning and completion.
+5. Use Graphify only to add document/ADR/architecture context. `INFERRED` or `AMBIGUOUS` Graphify relationships are not hard completion evidence.
+
+For high-risk cross-service work, use `--gitnexus-mode strict`. If GitNexus is unavailable, the report remains useful as a seed list, but it should be treated as evidence-insufficient until reviewed with `rg`, Maven modules, and targeted code reads.
 
 ## Command Discovery
 

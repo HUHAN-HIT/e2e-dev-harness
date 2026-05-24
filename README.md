@@ -7,9 +7,12 @@
 - 需求和用例没有澄清清楚前，不进入实现。
 - 需求澄清前必须加载根目录 `AGENT.md` / `AGENTS.md` 和受影响微服务目录下的 `AGENT.md` / `AGENTS.md`。
 - 实施前刷新知识图谱。
+- 跨微服务 HTTP/DMQ 依赖默认采用 GitNexus-first：先用确定性扫描器抽取 URL、route、topic、tag、group、常量等种子，再用 GitNexus 校验调用链和影响面，Graphify 只补充文档/架构语义证据。
 - TDD 以 `superpowers:test-driven-development` 为权威范式。
 - 复杂任务可拆成多 agent，通过文件交接降低单个 agent 的上下文压力。
-- 完成前必须用 coverage matrix 证明设计、用例、代码、UT 和业务审查已闭环。
+- 完成前必须用 coverage matrix 和 rework gate 证明设计、用例、代码、UT、业务审查和返工项已闭环。
+- UT 通过证据必须是实际命令结果 JSON，不能只写“PASS”。
+- 完成前默认运行 Spring 6 静态检查，防止构造器注入的本仓库类型没有 `@Component`/`@Service`/`@Bean`。
 - memory 只记录已验证或用户确认的事实，不能覆盖当前代码、测试和最新知识图谱。
 
 ## 目录结构
@@ -37,11 +40,13 @@
 |           |-- clarification_gate.py
 |           |-- common.py
 |           |-- coverage_gate.py
+|           |-- cross_service_dependency_scan.py
 |           |-- implementation_gate.py
 |           |-- e2e_dev_workflow.py
 |           |-- kg_refresh.py
 |           |-- memory_capture.py
 |           |-- orchestration_plan.py
+|           |-- spring_static_check.py
 |           `-- superpowers_probe.py
 |-- tests/
 |   `-- test_e2e_dev_workflow_scripts.py
@@ -108,6 +113,15 @@ python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py prepare . `
   --service-scope discovery `
   --include-agent-content
 ```
+
+`prepare` 默认还会执行 GitNexus-first 跨服务依赖扫描，并写入：
+
+```text
+knowledge-graph/cross-service-dependencies.json
+knowledge-graph/cross-service-dependencies.md
+```
+
+如果只想做 AGENT、Superpowers、memory 和编排探测，可加 `--dependency-scan-mode off`。
 
 如果已经知道会改哪些服务或文件，可以传入 `--service` 或 `--path`，只加载对应服务和目录作用域内的 AGENT 指令：
 
@@ -192,6 +206,10 @@ python ..\skills\e2e-dev-workflow\scripts\memory_capture.py add . `
   --type decision `
   --source user-approved `
   --confidence approved `
+  --tag decision `
+  --tag service/sample-service `
+  --link services/sample-service `
+  --link AC-1 `
   --text "Use Spring Framework 6.x directly rather than Spring Boot."
 ```
 
@@ -291,10 +309,18 @@ docs/agent-runs/<YYYY-MM-DD-feature>/
       unit-test-evidence.txt
       coverage-matrix.md
       business-review.md
+      rework-NNN.md
   evidence/
+    cross-service-dependencies.json
+    knowledge-graph-refresh.json
+    red-test.txt
+    green-test.txt
     coverage-matrix.md
     business-review.md
+    verification.txt
   proposed-memory-updates.md
+  rework/
+    rework-NNN.md
 ```
 
 ### 6. 刷新知识图谱
@@ -304,6 +330,16 @@ docs/agent-runs/<YYYY-MM-DD-feature>/
 ```powershell
 .\scripts\update-knowledge-graph.ps1
 ```
+
+跨微服务 HTTP/DMQ 依赖分析优先用 GitNexus-first 扫描器：
+
+```powershell
+python ..\skills\e2e-dev-workflow\scripts\cross_service_dependency_scan.py . `
+  --gitnexus-mode auto `
+  --json
+```
+
+扫描器会抽取配置 URL、Spring route、`@Value`、`Environment.getProperty`、RestTemplate/WebClient 调用、DMQ producer/listener、topic 常量、tag/group 和 payload 线索，并用 GitNexus `analyze/context/impact` 补充代码级证据。Graphify 只作为文档、ADR、架构图和模糊语义关系的辅助来源；Graphify 推断出的不确定关系要进入澄清问题，不能直接作为 completion gate 的硬证据。
 
 只使用 Graphify：
 
@@ -375,8 +411,23 @@ python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . `
   --coverage-matrix docs\agent-runs\<run>\evidence\coverage-matrix.md `
   --unit-test-evidence docs\agent-runs\<run>\evidence\green-test.txt `
   --business-review docs\agent-runs\<run>\evidence\business-review.md `
-  --memory-updates docs\agent-runs\<run>\proposed-memory-updates.md
+  --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json `
+  --memory-updates docs\agent-runs\<run>\proposed-memory-updates.md `
+  --rework-dir docs\agent-runs\<run>\rework
 ```
+
+`--unit-test-evidence` 必须是实际命令结果 JSON，例如：
+
+```json
+{
+  "command": "mvn -pl services/sample-service -am test",
+  "exit_code": 0,
+  "stdout_tail": "BUILD SUCCESS",
+  "stderr_tail": ""
+}
+```
+
+completion gate 默认还会运行 Spring 静态检查。若是非 Spring 项目或需要临时绕过，可显式加 `--skip-spring-static-check`，但正式 Java/Spring 6 项目不建议跳过。
 
 coverage matrix 需要逐项映射：
 
@@ -384,7 +435,16 @@ coverage matrix 需要逐项映射：
 id | acceptance | use_case | service | tests | code_refs | business_review | status
 ```
 
-只有每个验收项都关联到用例、服务、测试、代码引用和业务审查，且状态为 `covered` / `verified` 等通过状态，completion gate 才会放行。传入 `--memory-updates` 时，未标记处理状态的 proposed memory update 也会阻断完成。
+只有每个验收项都关联到用例、服务、测试、代码引用和业务审查，且状态为 `covered` / `verified` 等通过状态，completion gate 才会放行。跨服务设计还必须传入 `--dependency-report`，且报告里不能存在未澄清的 URL、topic、tag、group 或服务映射问题。传入 `--memory-updates` 时，未标记处理状态的 proposed memory update 也会阻断完成。
+
+如果 completion gate、Coverage Reviewer、UT、业务审查或用户 review 发现漏实现、漏测试或业务逻辑风险，不允许直接补代码绕过流程。先创建返工项，再回到最早必要阶段：
+
+```text
+docs/agent-runs/<run>/rework/rework-NNN.md
+docs/agent-runs/<run>/service-plans/<service>/rework-NNN.md
+```
+
+返工项必须包含 `Source`、`Related AC`、`Affected Services`、`Problem Type`、`Return Phase`、`Required Red Test`、`Evidence`、`Exit Criteria`、`Status`。`missing-code` / `test-failure` 回到 `tdd-implement`，`missing-test` 回到 `test-case-design`，`missing-use-case` / `business-logic-risk` 回到 `use-case-design`，`unclear-requirement` / `missing-acceptance` 回到 `clarify`，`multi-service-contract` 回到 `plan`。只有 `Status: verified` 或带 `Approval: user-approved` 的 `Status: deferred` 才能通过 rework gate。
 
 完整验证：
 
@@ -402,6 +462,14 @@ id | acceptance | use_case | service | tests | code_refs | business_review | sta
 ```powershell
 mvn -pl services/sample-service -am test
 mvn test
+```
+
+如果当前终端还没有把 Maven 加入 `PATH`，`verify.ps1` 支持显式传入 Maven 可执行文件：
+
+```powershell
+.\scripts\verify.ps1 -DesignDoc docs\design\feature-design-template.md `
+  -Module services/sample-service `
+  -MavenCommand "D:\SOFTWARE\apache-maven-3.9.16\bin\mvn.cmd"
 ```
 
 ## AGENT 指令策略
@@ -429,7 +497,7 @@ mvn test
 - `docs/design/`：长期设计文档和模板。
 - `docs/agent-runs/<date-feature>/`：某次 agent 执行的 ExecPlan、handoff、证据和 proposed memory updates。
 - `memory/`：用户确认或验证后的长期记忆。
-- `knowledge-graph/`：本地知识图谱刷新状态。
+- `knowledge-graph/`：本地知识图谱刷新状态和跨服务依赖报告。
 
 这样可以避免 `docs/design/` 被过程文件污染，也方便回放一次多 agent 执行过程。
 知识图谱刷新默认跳过 `agent-runs` 目录，避免历史执行过程污染当前代码/设计分析。
@@ -438,9 +506,10 @@ mvn test
 
 默认策略：
 
-- GitNexus：用于 Java/Spring/Maven 代码结构、调用链、影响分析。
-- Graphify：用于设计文档、架构材料、图、PDF、跨服务关系和可视化分析。
-- 两者一起用：适合多微服务、跨服务契约变更、设计文档驱动的改动。
+- GitNexus：用于 Java/Spring/Maven 代码结构、调用链、影响分析，是跨微服务代码依赖的主判定来源。
+- 确定性扫描器：抽取 HTTP/DMQ 依赖种子，包括 URL、route、topic、tag、group、常量和配置 key。
+- Graphify：用于设计文档、架构材料、图、PDF、历史说明和模糊语义关系，不替代 GitNexus 的代码级证据。
+- 两者一起用：适合多微服务、跨服务契约变更、设计文档驱动的改动；先 GitNexus/code evidence，后 Graphify semantic evidence。
 
 脚本会检测：
 
@@ -486,10 +555,18 @@ graphify-out/memory/
 记录规则：
 
 - 只记录已验证事实或用户确认的决策。
+- 用受控 Obsidian tag/link 做索引和关联，例如 `#service/sample-service`、`#phase/code`、`[[services/sample-service]]`、`[[AC-1]]`。
 - 不记录猜测、密钥、个人信息、本机路径。
 - 标注来源和置信度。
 - 当前代码、测试和最新知识图谱优先级高于旧 memory。
 - 多 agent 模式下，各 agent 先在交接文档里提出 memory 更新，主控确认后再写入 `memory/*.md`。
+
+tag/link 规则：
+
+- tag 必须小写，只使用字母、数字、`-` 和 `/`。
+- `#service/<name>` 需要匹配工程中发现的服务名。
+- link 使用纯 Obsidian `[[target]]`，不使用别名，不写 URL、本机路径或敏感信息。
+- `memory_capture.py select --phase code --service services/<service>` 会优先利用 `#service/<service>` 和 `[[services/<service>]]` 缩小加载上下文。
 
 ## `.ps1` 脚本说明
 
@@ -498,7 +575,7 @@ graphify-out/memory/
 当前脚本：
 
 - `scripts/update-knowledge-graph.ps1`：封装知识图谱刷新。
-- `scripts/verify.ps1`：封装 AGENT 指令检查、Superpowers、agent orchestration、memory、澄清门禁和 Maven 验证。
+- `scripts/verify.ps1`：封装 AGENT 指令检查、Superpowers、agent orchestration、memory、跨服务依赖扫描、澄清门禁、Spring 静态检查和 Maven 验证。
 
 Linux/macOS 可以直接调用底层 Python 脚本，或后续补充 `.sh` 脚本。
 
@@ -512,7 +589,10 @@ Linux/macOS 可以直接调用底层 Python 脚本，或后续补充 `.sh` 脚�
 - Graphify/GitNexus 工具选择和刷新门禁。
 - 单 agent / 多 agent 编排建议、ExecPlan 和 agent handoff 模板。
 - hook-like planning / implementation / completion gate。
+- rework gate 强制漏实现、漏测试、业务逻辑风险和跨服务契约问题回到正确阶段。
 - coverage matrix 检查设计实现覆盖、UT 证据和业务逻辑审查。
+- UT 证据要求结构化 JSON 且 `exit_code` 为 0，避免人工文本伪通过。
+- completion gate 默认运行 Spring 静态检查，检查本仓库构造器注入类型是否由组件注解或 `@Bean` 注册。
 - 多微服务时按 `service-plans/<service>/` 生成独立实施计划和 code agent 文件。
 - memory 初始化、扫描和受控写入。
 - Java 21 + Spring Framework 6.x + Maven 非 Spring Boot 脚手架。
@@ -567,9 +647,11 @@ python skills\e2e-dev-workflow\scripts\superpowers_probe.py --mode strict
 python skills\e2e-dev-workflow\scripts\memory_capture.py scan . --mode strict
 python skills\e2e-dev-workflow\scripts\memory_capture.py validate .
 python skills\e2e-dev-workflow\scripts\kg_refresh.py . --mode auto
+python skills\e2e-dev-workflow\scripts\cross_service_dependency_scan.py . --gitnexus-mode auto --json
 python skills\e2e-dev-workflow\scripts\clarification_gate.py <design-doc>
+python skills\e2e-dev-workflow\scripts\spring_static_check.py . --json
 python skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase planning --design-doc <design-doc>
-python skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase completion --design-doc <design-doc> --red-test-evidence <red-test> --coverage-matrix <coverage-matrix> --unit-test-evidence <unit-test-evidence> --business-review <business-review> --memory-updates <proposed-memory-updates>
+python skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase completion --design-doc <design-doc> --red-test-evidence <red-test> --coverage-matrix <coverage-matrix> --unit-test-evidence <unit-test-evidence> --business-review <business-review> --dependency-report <cross-service-dependencies.json> --memory-updates <proposed-memory-updates> --rework-dir <rework-dir>
 python -m unittest discover tests
 mvn -pl <changed-modules> -am test
 mvn test
@@ -597,7 +679,8 @@ skills/e2e-dev-workflow/assets/scaffold/
 - 增加 contract test 示例。
 - 增加多服务示例模块。
 - 让 `agent_instructions.py` 支持从 git diff 自动推导 `--path`。
-- 将 Graphify/GitNexus 查询结果自动汇总为“受影响服务/类/接口”。
+- 扩展 `cross_service_dependency_scan.py` 的项目特定 DMQ wrapper 配置，例如自研 producer/listener 注解、topic 命名规范、payload schema 规则。
+- 将 GitNexus 查询结果进一步汇总为“受影响服务/类/接口/消息契约”。
 - 增加 memory 与 Graphify `save-result` 的自动衔接。
 - 增加 CI 示例。
 - 将统一 Python CLI 接入更多真实 Maven/Graphify/GitNexus 执行证据。
