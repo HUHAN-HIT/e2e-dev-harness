@@ -44,6 +44,20 @@ RISK_KEYWORDS = {
     "重试",
 }
 SERVICE_SCOPES = ("auto", "discovery", "affected", "all")
+SECTION_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(?P<title>.+?)\s*$")
+AFFECTED_SECTION_KEYWORDS = (
+    "scope",
+    "affected service",
+    "affected services",
+    "affected module",
+    "affected modules",
+    "affected services/modules",
+    "in-scope",
+    "in scope",
+    "涉及模块",
+    "影响模块",
+    "影响服务",
+)
 
 
 def read_design(path: Path | None) -> str:
@@ -74,6 +88,49 @@ def services_from_dependency_report(path: Path | None) -> list[str]:
             if service and service not in seen:
                 seen.add(service)
                 selected.append(normalize_path(str(service)))
+    return selected
+
+
+def design_sections(text: str) -> dict[str, str]:
+    sections: dict[str, list[str]] = {}
+    current = ""
+    for line in text.splitlines():
+        match = SECTION_HEADING_RE.match(line)
+        if match:
+            current = match.group("title").strip().lower()
+            sections.setdefault(current, [])
+            continue
+        if current:
+            sections.setdefault(current, []).append(line)
+    return {title: "\n".join(lines).strip() for title, lines in sections.items()}
+
+
+def requested_services_from_design(text: str) -> list[str]:
+    requested: list[str] = []
+    seen: set[str] = set()
+    for title, body in design_sections(text).items():
+        if not any(keyword in title for keyword in AFFECTED_SECTION_KEYWORDS):
+            continue
+        for line in body.splitlines():
+            if not re.match(r"\s*[-*]\s+", line):
+                continue
+            item = re.sub(r"^\s*[-*]\s+", "", line).strip()
+            service = normalize_path(item.split(":", 1)[0].split(" - ", 1)[0].split(" ", 1)[0])
+            if service and service.lower() not in {"none", "n/a"} and service not in seen:
+                seen.add(service)
+                requested.append(service)
+    return requested
+
+
+def services_from_design(text: str, facts: dict) -> list[str]:
+    candidates = [normalize_path(service) for service in facts.get("service_candidates", [])]
+    selected: list[str] = []
+    seen: set[str] = set()
+    for requested in requested_services_from_design(text):
+        matched = match_requested_service(candidates, requested)
+        if matched and matched not in seen:
+            seen.add(matched)
+            selected.append(matched)
     return selected
 
 
@@ -263,6 +320,7 @@ def service_artifacts(base: str, services: list[str] | None) -> dict:
             "service_dir": service,
             "service_plan": f"{service_base}/implementation-plan.md",
             "code_agent": f"{service_base}/code-agent.md",
+            "implementation_manifest": f"{service_base}/implementation-manifest.md",
             "test_evidence": f"{service_base}/unit-test-evidence.txt",
             "coverage_matrix": f"{service_base}/coverage-matrix.md",
             "business_review": f"{service_base}/business-review.md",
@@ -289,6 +347,7 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
         "rework_pattern": f"{base}/rework/rework-NNN.md",
         "knowledge_graph_status": f"{evidence}/knowledge-graph-refresh.json",
         "dependency_report": f"{evidence}/cross-service-dependencies.json",
+        "implementation_manifest": f"{evidence}/implementation-manifest.md",
         "red_test_evidence": f"{evidence}/red-test.txt",
         "green_test_evidence": f"{evidence}/green-test.txt",
         "verification_evidence": f"{evidence}/verification.txt",
@@ -313,6 +372,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
                     artifact_paths["use_cases"],
                     artifact_paths["test_plan"],
                     artifact_paths["implementation_plan"],
+                    artifact_paths["implementation_manifest"],
                     artifact_paths["coverage_matrix"],
                     artifact_paths["business_review"],
                     artifact_paths["verification_evidence"],
@@ -361,6 +421,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
                     ],
                     "outputs": [
                         paths["code_agent"],
+                        paths["implementation_manifest"],
                         paths["test_evidence"],
                         paths["coverage_matrix"],
                         paths["business_review"],
@@ -385,9 +446,10 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
             artifact_paths["test_plan"],
             artifact_paths["implementation_plan"],
             artifact_paths["dependency_report"],
+            artifact_paths["implementation_manifest"],
         ],
-        "outputs": [artifact_paths["coverage_matrix"], artifact_paths["business_review"], artifact_paths["verification_evidence"]],
-        "gate": "Every acceptance criterion maps to use cases, service plans, tests, code refs, and business review evidence.",
+        "outputs": [artifact_paths["implementation_manifest"], artifact_paths["coverage_matrix"], artifact_paths["business_review"], artifact_paths["verification_evidence"]],
+        "gate": "Every acceptance criterion maps to use cases, required implementation artifacts, tests, code refs, and business review evidence.",
     })
     return agents
 
@@ -426,9 +488,15 @@ def main() -> int:
     if dependency_report and not dependency_report.is_absolute():
         dependency_report = repo / dependency_report
     dependency_services = services_from_dependency_report(dependency_report)
+    design_services = [] if design_is_template else services_from_design(design_text, facts)
     requested_services = args.service
-    if args.service_scope == "auto" and not requested_services and not args.path and dependency_services:
-        requested_services = dependency_services
+    if args.service_scope == "auto" and not requested_services and not args.path:
+        if dependency_services:
+            requested_services = dependency_services
+        elif design_services:
+            requested_services = design_services
+    elif args.service_scope == "affected" and not requested_services and not args.path and design_services:
+        requested_services = design_services
     services, resolved_service_scope = select_services(facts, requested_services, args.path, args.service_scope)
     unmatched_services = unmatched_requested_services(facts, requested_services)
     if unmatched_services:
@@ -439,6 +507,7 @@ def main() -> int:
             "requested_service_scope": args.service_scope,
             "resolved_service_scope": resolved_service_scope,
             "requested_services": requested_services or [],
+            "design_selected_services": design_services,
             "dependency_report": str(dependency_report) if dependency_report else None,
             "requested_paths": args.path or [],
             "selected_services": services,
@@ -482,6 +551,7 @@ def main() -> int:
         "requested_service_scope": args.service_scope,
         "resolved_service_scope": resolved_service_scope,
         "requested_services": requested_services or [],
+        "design_selected_services": design_services,
         "requested_paths": args.path or [],
         "selected_services": services,
         "dependency_report": str(dependency_report) if dependency_report else None,
@@ -496,7 +566,7 @@ def main() -> int:
         "agents": agent_plan(selected, artifact_paths, services),
         "notes": [
             "Use files as handoff boundaries; do not rely on chat memory.",
-            "For multi-service work, keep each service implementation plan and code agent handoff separate.",
+            "For multi-service or multi-module work, keep each service/module implementation plan and code agent handoff separate.",
             "Use superpowers:brainstorming before implementation planning.",
             "Use superpowers:test-driven-development before production-code edits.",
         ],

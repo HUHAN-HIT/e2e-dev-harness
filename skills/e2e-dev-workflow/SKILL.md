@@ -47,6 +47,7 @@ Use focused subcommands when needed:
 - `plan`: choose single/multi-agent mode and optionally write an ExecPlan.
 - `gate`: hook-like planning, implementation, and completion gate.
 - `verify`: run prepare, clarification, optional gate, and optional Maven.
+- `guard`: strict hook/CI guard over a saved verify status artifact.
 
 In `prepare`, `--agent-scope` and `--service-scope` are aligned when only one is explicitly set to `discovery`, `affected`, or `all`. Set both only when you intentionally need different instruction-loading and orchestration scopes.
 
@@ -81,23 +82,24 @@ Before planning a non-trivial change, run:
 python skills/e2e-dev-workflow/scripts/orchestration_plan.py . --mode auto --service-scope discovery --design-doc docs/design/<feature>.md
 ```
 
-After clarification identifies affected services, rerun with service scope:
+After clarification identifies affected services, rerun with service scope. If the approved design has an `Affected services/modules` or `Scope` section whose bullets match discovered service candidates, root Maven modules, or service directory names, `--service-scope auto` derives the affected services automatically. Use explicit `--service` or `--path` when the design is still incomplete or the names are ambiguous:
 
 ```bash
 python skills/e2e-dev-workflow/scripts/orchestration_plan.py . --mode auto --service-scope affected --service services/<service> --design-doc docs/design/<feature>.md
+python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py plan . --mode auto --design-doc docs/design/<feature>.md --create-archive
 ```
 
-The orchestration helper recommends `single` or `multi` mode and names the handoff artifacts under `docs/agent-runs/<date-feature>/` by default. Discovery scope reports available service candidates but does not generate per-service implementation plans from the full `service_candidates` list. Affected scope generates service plans only for requested `--service` or `--path` matches; `--service-scope all` is reserved for whole-repo service work. In multi-agent mode, split work into:
+The orchestration helper recommends `single` or `multi` mode and names the handoff artifacts under `docs/agent-runs/<date-feature>/` by default. Discovery scope reports available service candidates but does not generate per-service implementation plans from the full `service_candidates` list. Affected scope generates service plans only for explicit `--service`/`--path` matches or for design-declared affected services/modules that match discovered candidates; `--service-scope all` is reserved for whole-repo service work. In multi-agent mode, split work into:
 
-Discovery scope is intentionally lightweight: it returns a service inventory summary, next steps, and no agent plan or handoff artifact map. Create ExecPlans, agent-run archives, and service-scoped code agents only after rerunning with `--service-scope affected` or explicit `--service-scope all`.
+Discovery scope is intentionally lightweight: it returns a service inventory summary, next steps, and no agent plan or handoff artifact map. Create ExecPlans, agent-run archives, and service-scoped code agents only after the design names affected services/modules, after rerunning with `--service-scope affected`, or with explicit `--service-scope all`.
 
 - Requirements Clarifier: owns requirements, non-goals, acceptance criteria, and open questions.
 - Use Case Designer: owns happy paths, failure paths, cross-service flows, data effects, and contracts.
 - Test Case Developer: owns test strategy, first red tests, contract tests, and Maven test scope using `superpowers:test-driven-development`.
 - Code Developer: owns implementation after approved requirements, use cases, test plan, and failing tests exist. For multi-service work, split Code Developer into one service-scoped agent per affected service/module.
-- Coverage Reviewer: owns the design-to-code coverage matrix, unit-test evidence check, and business logic review before completion.
+- Coverage Reviewer: owns the implementation manifest, design-to-code coverage matrix, unit-test evidence check, and business logic review before completion.
 
-Use files as handoff boundaries. Do not rely on chat memory for cross-agent transfer. Keep process files in `docs/agent-runs/`; keep durable human-facing design in `docs/design/`. For multi-service changes, keep each service implementation plan under `docs/agent-runs/<date-feature>/service-plans/<service>/` so similar service logic does not bleed across agent contexts. Read `references/agent-orchestration.md` for mode selection and role contracts, and `references/agent-handoff-schema.md` for the handoff file schema.
+Use files as handoff boundaries. Do not rely on chat memory for cross-agent transfer. Keep process files in `docs/agent-runs/`; keep durable human-facing design in `docs/design/`. For multi-service or multi-module changes, keep each service/module implementation plan under `docs/agent-runs/<date-feature>/service-plans/<service>/` so similar service logic does not bleed across agent contexts. Read `references/agent-orchestration.md` for mode selection and role contracts, and `references/agent-handoff-schema.md` for the handoff file schema.
 
 ## Memory Adapter
 
@@ -153,9 +155,9 @@ Keep the ExecPlan current as a living document. Read `references/exec-plan.md` f
 2. Clarify: use Superpowers brainstorming plus the Markdown clarification gate; stop while behavior/API/data/test-impacting questions remain unresolved.
 3. Plan: design use cases, choose single/multi-agent mode, and write an ExecPlan for complex work.
 4. TDD implement: invoke or load `superpowers:test-driven-development`, capture red-test evidence, implement with Red-Green-Refactor.
-5. Completion gate: prove every acceptance criterion is covered by use cases, service plans, tests, code refs, business review evidence, and closed rework items.
+5. Completion gate: prove every acceptance criterion and every required implementation artifact is covered by use cases, service plans, tests, code refs, business review evidence, and closed rework items.
 6. Rework loop: when coverage review, tests, business review, or user review finds missed behavior, create a rework item and return to the earliest required phase before more production-code edits.
-7. Verify and report: run narrow then broadened Maven tests, capture approved memory updates, and report loaded AGENT files, graph status, tests, commands, coverage, rework status, and residual risks.
+7. Strict guard and report: run narrow then broadened Maven tests, run `verify --strict-workflow` or `guard`, capture approved memory updates, and report loaded AGENT files, graph status, tests, commands, coverage, rework status, and residual risks.
 
 ## Knowledge Graph Choice
 
@@ -198,10 +200,21 @@ Use hook-like gates to keep lifecycle requirements enforceable:
 ```bash
 python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . --phase planning --design-doc docs/design/<feature>.md
 python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . --phase implementation --design-doc docs/design/<feature>.md --red-test-evidence docs/design/<feature>-red-test.txt
-python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . --phase completion --design-doc docs/design/<feature>.md --red-test-evidence docs/agent-runs/<run>/evidence/red-test.txt --coverage-matrix docs/agent-runs/<run>/evidence/coverage-matrix.md --unit-test-evidence docs/agent-runs/<run>/evidence/green-test.txt --business-review docs/agent-runs/<run>/evidence/business-review.md --dependency-report docs/agent-runs/<run>/evidence/cross-service-dependencies.json --memory-updates docs/agent-runs/<run>/proposed-memory-updates.md --rework-dir docs/agent-runs/<run>/rework
+python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . --phase completion --design-doc docs/design/<feature>.md --red-test-evidence docs/agent-runs/<run>/evidence/red-test.txt --implementation-manifest docs/agent-runs/<run>/evidence/implementation-manifest.md --coverage-matrix docs/agent-runs/<run>/evidence/coverage-matrix.md --unit-test-evidence docs/agent-runs/<run>/evidence/green-test.txt --business-review docs/agent-runs/<run>/evidence/business-review.md --dependency-report docs/agent-runs/<run>/evidence/cross-service-dependencies.json --memory-updates docs/agent-runs/<run>/proposed-memory-updates.md --rework-dir docs/agent-runs/<run>/rework
 ```
 
-Planning gate checks clarification readiness and knowledge graph status. Implementation gate additionally requires red-test evidence. Completion gate requires `--design-doc`, non-empty red-test evidence, unit-test command evidence, business review evidence, and a coverage matrix that maps every acceptance criterion to use cases, service/module ownership, tests, code refs, and covered/verified status. If the design is cross-service, completion also requires `--dependency-report`; any unresolved URL/topic/tag/service mapping question blocks completion. Unit-test evidence must be structured JSON with `command` and integer `exit_code`; text that merely says PASS is not accepted. The coverage gate extracts acceptance IDs from the design doc; unnumbered acceptance bullets are treated as `AC-1`, `AC-2`, and so on, and every extracted AC must appear in the matrix `id` column. When `--memory-updates` is supplied, completion also blocks unhandled proposed memory updates; mark each one accepted, rejected, deferred, or skipped. Completion also scans inferred or explicit rework items and blocks while any item is `open`, `in-progress`, `blocked`, or `deferred` without `Approval: user-approved`. Completion also runs `spring_static_check.py` by default to catch repository-local constructor-injected types that are not Spring components or `@Bean`s; use `--skip-spring-static-check` only for non-Spring or exceptional cases.
+Planning gate checks clarification readiness and knowledge graph status. Implementation gate additionally requires red-test evidence. Completion gate requires `--design-doc`, non-empty red-test evidence, unit-test command evidence, business review evidence, and a coverage matrix that maps every acceptance criterion to use cases, service/module ownership, tests, code refs, and covered/verified status. For multi-module or artifact-heavy designs, completion also requires an implementation manifest at `docs/agent-runs/<run>/evidence/implementation-manifest.md`. The manifest table must include `id`, `module`, `artifact`, `artifact_type`, `source`, `required`, `tests`, `status`, and `evidence`; required rows must point to existing artifacts, real tests, and implemented/verified status. Build it from explicit task requirements, reference implementation patterns, dependency reports, and service plans before coding. This catches cases where the coverage matrix only proves self-selected ACs while required files or modules were skipped. If the design is cross-service, completion also requires `--dependency-report`; any unresolved URL/topic/tag/service mapping question blocks completion. Unit-test evidence must be structured JSON with `command` and integer `exit_code`; text that merely says PASS is not accepted. The coverage gate extracts acceptance IDs from the design doc; unnumbered acceptance bullets are treated as `AC-1`, `AC-2`, and so on, and every extracted AC must appear in the matrix `id` column. When `--memory-updates` is supplied, completion also blocks unhandled proposed memory updates; mark each one accepted, rejected, deferred, or skipped. Completion also scans inferred or explicit rework items and blocks while any item is `open`, `in-progress`, `blocked`, or `deferred` without `Approval: user-approved`. Completion also runs `spring_static_check.py` by default to catch repository-local constructor-injected types that are not Spring components or `@Bean`s; use `--skip-spring-static-check` only for non-Spring or exceptional cases.
+
+## Strict Workflow Guard
+
+Use the workflow guard when the requirement is "do not let the model skip scripts." It verifies the saved `verify` result instead of trusting chat claims:
+
+```bash
+python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py verify . --strict-workflow --run-gate --phase completion --design-doc docs/design/<feature>.md --red-test-evidence docs/agent-runs/<run>/evidence/red-test.txt --implementation-manifest docs/agent-runs/<run>/evidence/implementation-manifest.md --coverage-matrix docs/agent-runs/<run>/evidence/coverage-matrix.md --unit-test-evidence docs/agent-runs/<run>/evidence/green-test.txt --business-review docs/agent-runs/<run>/evidence/business-review.md --dependency-report docs/agent-runs/<run>/evidence/cross-service-dependencies.json --memory-updates docs/agent-runs/<run>/proposed-memory-updates.md --rework-dir docs/agent-runs/<run>/rework --status-file docs/agent-runs/<run>/evidence/verify.json
+python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py guard . --verify-status docs/agent-runs/<run>/evidence/verify.json --strict --require-completion
+```
+
+Strict guard blocks missing `prepare`, disabled dependency scan, disabled dependency report writing, skipped Maven, skipped Spring static check during completion, missing clarification status, missing completion gate, failed completion gate, failed Maven, and unresolved dependency questions. A skip can pass only with an explicit approval file containing `Approval: user-approved`.
 
 ## Rework Loop
 
@@ -243,9 +256,11 @@ python skills/e2e-dev-workflow/scripts/memory_capture.py promote . --from-file d
 python skills/e2e-dev-workflow/scripts/kg_refresh.py .
 python skills/e2e-dev-workflow/scripts/cross_service_dependency_scan.py . --gitnexus-mode auto --json
 python skills/e2e-dev-workflow/scripts/clarification_gate.py docs/design/<feature>.md
+python skills/e2e-dev-workflow/scripts/implementation_manifest.py . --manifest docs/agent-runs/<run>/evidence/implementation-manifest.md --design-doc docs/design/<feature>.md
 python skills/e2e-dev-workflow/scripts/coverage_gate.py . --design-doc docs/design/<feature>.md --coverage-matrix docs/agent-runs/<run>/evidence/coverage-matrix.md --unit-test-evidence docs/agent-runs/<run>/evidence/green-test.txt --business-review docs/agent-runs/<run>/evidence/business-review.md
 python skills/e2e-dev-workflow/scripts/spring_static_check.py . --json
 python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py verify . --design-doc docs/design/<feature>.md --skip-maven
+python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py guard . --verify-status docs/agent-runs/<run>/evidence/verify.json --strict --require-completion
 mvn -pl services/<service> -am test
 mvn test
 ```

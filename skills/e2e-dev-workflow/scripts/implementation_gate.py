@@ -15,6 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
 import clarification_gate  # noqa: E402
 import coverage_gate  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
+import implementation_manifest as implementation_manifest_gate  # noqa: E402
 import memory_capture  # noqa: E402
 import rework_gate  # noqa: E402
 import spring_static_check  # noqa: E402
@@ -63,6 +64,7 @@ def validate_gate(
     skip_spring_static_check: bool = False,
     rework_dirs: list[Path] | None = None,
     dependency_report: Path | None = None,
+    implementation_manifest: Path | None = None,
 ) -> dict:
     repo = repo.resolve()
     blocked_reasons: list[str] = []
@@ -105,6 +107,7 @@ def validate_gate(
     spring_result = None
     rework_result = None
     dependency_result = None
+    implementation_manifest_result = None
     if phase == "completion":
         if not red_test_evidence:
             blocked_reasons.append("Completion phase requires --red-test-evidence.")
@@ -117,6 +120,13 @@ def validate_gate(
         coverage_result = coverage_gate.validate(repo, coverage_matrix, unit_test_evidence, business_review, design_doc)
         if not coverage_result["ready"]:
             blocked_reasons.extend(coverage_result["blocked_reasons"])
+        implementation_manifest_result = implementation_manifest_gate.validate(
+            repo,
+            implementation_manifest,
+            design_doc,
+        )
+        if not implementation_manifest_result["ready"]:
+            blocked_reasons.extend(implementation_manifest_result["blocked_reasons"])
         dependency_result = cross_service_dependency_scan.validate_dependency_report(repo, dependency_report, design_doc)
         if not dependency_result["ready"]:
             blocked_reasons.extend(dependency_result["blocked_reasons"])
@@ -128,7 +138,7 @@ def validate_gate(
         rework_result = rework_gate.validate(
             repo,
             rework_dirs,
-            [red_test_evidence, coverage_matrix, unit_test_evidence, business_review, memory_updates],
+            [red_test_evidence, coverage_matrix, unit_test_evidence, business_review, memory_updates, implementation_manifest],
         )
         if not rework_result["ready"]:
             blocked_reasons.extend(rework_result["blocked_reasons"])
@@ -148,6 +158,7 @@ def validate_gate(
         "knowledge_graph_status_loaded": bool(kg_status),
         "red_test_evidence": red_test_result,
         "coverage": coverage_result,
+        "implementation_manifest": implementation_manifest_result,
         "dependency_report": dependency_result,
         "memory_updates": memory_result,
         "rework": rework_result,
@@ -167,6 +178,7 @@ def main() -> int:
     parser.add_argument("--business-review", type=Path)
     parser.add_argument("--memory-updates", type=Path)
     parser.add_argument("--dependency-report", type=Path)
+    parser.add_argument("--implementation-manifest", type=Path)
     parser.add_argument("--rework-dir", action="append", type=Path)
     parser.add_argument("--skip-spring-static-check", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -185,6 +197,7 @@ def main() -> int:
         args.skip_spring_static_check,
         args.rework_dir,
         args.dependency_report,
+        args.implementation_manifest,
     )
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))

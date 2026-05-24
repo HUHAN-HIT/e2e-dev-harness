@@ -9,10 +9,10 @@ An ExecPlan is a living document. Keep it updated as facts change. It is not a o
 - Design source: issue, design doc, or user-approved requirement.
 - Current state: loaded AGENT files, memory reviewed, graph status, cross-service dependency report, affected services.
 - Target behavior: goal, non-goals, acceptance criteria.
-- Handoff artifacts: requirements, use cases, test plan, implementation plan, service-scoped plans.
+- Handoff artifacts: requirements, use cases, test plan, implementation plan, implementation manifest, service-scoped plans.
 - Agent protocol: role ownership, inputs, outputs, stop conditions.
 - Milestones: small verifiable implementation steps.
-- Evidence: commands, graph status, GitNexus-first dependency report, red test output, green/unit test output, coverage matrix, business review, residual risks.
+- Evidence: commands, graph status, GitNexus-first dependency report, implementation manifest, red test output, green/unit test output, coverage matrix, business review, residual risks.
 - Rework log: missed requirements, missing tests/code, business review issues, return phase, status, and approval when deferred.
 
 ## Archive Location
@@ -25,11 +25,13 @@ docs/agent-runs/<date-feature>/
   handoffs/
   service-plans/
     <service>/
+      implementation-manifest.md
       rework-NNN.md
   rework/
     rework-NNN.md
   evidence/
     cross-service-dependencies.json
+    implementation-manifest.md
   proposed-memory-updates.md
 ```
 
@@ -45,7 +47,17 @@ python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py plan . \
   --create-archive
 ```
 
-Before production-code edits, the ExecPlan should identify the first red test and where its failing output will be recorded. For multi-service changes, it should also list one implementation plan file per affected service and reference `evidence/cross-service-dependencies.json`. Before completion, it should reference the dependency report, coverage matrix, structured unit test command JSON, Spring static check result, business review evidence, and rework gate result used by the completion gate.
+Before production-code edits, the ExecPlan should identify the first red test and where its failing output will be recorded. For multi-service or multi-module changes, it should also list one implementation plan file per affected service/module and reference `evidence/cross-service-dependencies.json`. Before completion, it should reference the dependency report, implementation manifest, coverage matrix, structured unit test command JSON, Spring static check result, business review evidence, and rework gate result used by the completion gate.
+
+## Implementation Manifest
+
+Use `docs/agent-runs/<run>/evidence/implementation-manifest.md` to prevent self-selected coverage from hiding missed work. The table columns are:
+
+```text
+id | module | artifact | artifact_type | source | required | tests | status | evidence
+```
+
+Rows come from explicit task requirements, reference implementation inventory, dependency reports, and service plans. Required rows must point to existing artifacts and real tests. If a required artifact is missing, create a `missing-code` or `missing-test` rework item and return to the required phase.
 
 ## Re-entry Protocol
 

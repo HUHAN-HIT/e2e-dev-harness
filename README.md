@@ -10,7 +10,7 @@
 - 跨微服务 HTTP/DMQ 依赖默认采用 GitNexus-first：先用确定性扫描器抽取 URL、route、topic、tag、group、常量等种子，再用 GitNexus 校验调用链和影响面，Graphify 只补充文档/架构语义证据。
 - TDD 以 `superpowers:test-driven-development` 为权威范式。
 - 复杂任务可拆成多 agent，通过文件交接降低单个 agent 的上下文压力。
-- 完成前必须用 coverage matrix 和 rework gate 证明设计、用例、代码、UT、业务审查和返工项已闭环。
+- 完成前必须用 implementation manifest、coverage matrix 和 rework gate 证明必改文件、设计、用例、代码、UT、业务审查和返工项已闭环。
 - UT 通过证据必须是实际命令结果 JSON，不能只写“PASS”。
 - 完成前默认运行 Spring 6 静态检查，防止构造器注入的本仓库类型没有 `@Component`/`@Service`/`@Bean`。
 - memory 只记录已验证或用户确认的事实，不能覆盖当前代码、测试和最新知识图谱。
@@ -42,12 +42,14 @@
 |           |-- coverage_gate.py
 |           |-- cross_service_dependency_scan.py
 |           |-- implementation_gate.py
+|           |-- implementation_manifest.py
 |           |-- e2e_dev_workflow.py
 |           |-- kg_refresh.py
 |           |-- memory_capture.py
 |           |-- orchestration_plan.py
 |           |-- spring_static_check.py
-|           `-- superpowers_probe.py
+|           |-- superpowers_probe.py
+|           `-- workflow_guard.py
 |-- tests/
 |   `-- test_e2e_dev_workflow_scripts.py
 `-- java21-spring-tdd-kg-scaffold/
@@ -59,6 +61,7 @@
     |-- memory/
     |-- scripts/
     |   |-- update-knowledge-graph.ps1
+    |   |-- workflow-guard.ps1
     |   `-- verify.ps1
     `-- services/
         `-- sample-service/
@@ -237,9 +240,13 @@ python ..\skills\e2e-dev-workflow\scripts\orchestration_plan.py . `
   --design-doc docs\design\feature-design-template.md
 ```
 
-设计方案大致确定受影响服务后再按服务收敛：
+设计方案大致确定受影响服务后再按服务收敛。若设计文档的 `Affected services/modules`、`Scope`、`影响模块` 等章节已经列出受影响模块，且这些名称能匹配 `service_candidates`，`auto` 会自动选择这些服务或根 Maven module：
 
 ```powershell
+python ..\skills\e2e-dev-workflow\scripts\orchestration_plan.py . `
+  --mode auto `
+  --design-doc docs\design\feature-design-template.md
+
 python ..\skills\e2e-dev-workflow\scripts\orchestration_plan.py . `
   --mode auto `
   --service-scope affected `
@@ -261,8 +268,8 @@ python ..\skills\e2e-dev-workflow\scripts\orchestration_plan.py . `
 - Code Developer：代码实现和验证；跨微服务时按服务拆成多个 service-scoped Code Developer。
 - Coverage Reviewer：完成前检查设计覆盖、UT 证据和业务逻辑审查。
 
-关键原则：交接靠文件，不靠聊天记忆。跨服务任务的实施计划必须按微服务粒度放在 `docs/agent-runs/<date-feature>/service-plans/<service>/`，避免相似业务描述在同一个 agent 上下文里互相污染。
-`kg_refresh.detect()` 返回的 `service_candidates` 只是候选服务列表，不能直接当成本次实现范围。`discovery` 阶段不会基于全量候选服务生成 service plan；只有 `affected` 或显式 `all` 才会生成服务级计划。
+关键原则：交接靠文件，不靠聊天记忆。跨服务或跨 Maven module 任务的实施计划必须按服务/模块粒度放在 `docs/agent-runs/<date-feature>/service-plans/<service>/`，避免相似业务描述在同一个 agent 上下文里互相污染。
+`kg_refresh.detect()` 返回的 `service_candidates` 只是候选服务列表，不能直接当成本次实现范围。`discovery` 阶段不会基于全量候选服务生成 service plan；只有设计文档明确列出的受影响服务/模块、`affected` 显式参数或显式 `all` 才会生成服务级计划。根 Maven module 也会被当作服务/模块边界，例如 `jeepay-core`、`jeepay-service`、`jeepay-payment`。
 
 ### 5. 编写或更新设计文档
 
@@ -282,9 +289,13 @@ docs/design/agent-handoff-template.md
 
 复杂功能、跨服务改动、迁移或长时间重构建议创建一次 agent run 归档：
 
-`discovery` 阶段也不会生成完整 agent plan、ExecPlan 路径或 handoff artifact map，只返回服务候选摘要和下一步提示。真正创建 `docs/agent-runs/<run>/` 归档时，先用 `--service-scope affected --service ...` 或 `--path ...` 锁定本次实施范围。
+`discovery` 阶段也不会生成完整 agent plan、ExecPlan 路径或 handoff artifact map，只返回服务候选摘要和下一步提示。真正创建 `docs/agent-runs/<run>/` 归档时，优先让设计文档的 `Affected services/modules` 锁定本次实施范围；名称不清楚时再用 `--service-scope affected --service ...` 或 `--path ...` 显式锁定。
 
 ```powershell
+python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py plan . `
+  --design-doc docs\design\feature-design-template.md `
+  --create-archive
+
 python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py plan . `
   --design-doc docs\design\feature-design-template.md `
   --service-scope affected `
@@ -306,6 +317,7 @@ docs/agent-runs/<YYYY-MM-DD-feature>/
     <service>/
       implementation-plan.md
       code-agent.md
+      implementation-manifest.md
       unit-test-evidence.txt
       coverage-matrix.md
       business-review.md
@@ -313,6 +325,7 @@ docs/agent-runs/<YYYY-MM-DD-feature>/
   evidence/
     cross-service-dependencies.json
     knowledge-graph-refresh.json
+    implementation-manifest.md
     red-test.txt
     green-test.txt
     coverage-matrix.md
@@ -408,6 +421,7 @@ python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . `
   --phase completion `
   --design-doc docs\design\feature-design-template.md `
   --red-test-evidence docs\agent-runs\<run>\evidence\red-test.txt `
+  --implementation-manifest docs\agent-runs\<run>\evidence\implementation-manifest.md `
   --coverage-matrix docs\agent-runs\<run>\evidence\coverage-matrix.md `
   --unit-test-evidence docs\agent-runs\<run>\evidence\green-test.txt `
   --business-review docs\agent-runs\<run>\evidence\business-review.md `
@@ -429,13 +443,54 @@ python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . `
 
 completion gate 默认还会运行 Spring 静态检查。若是非 Spring 项目或需要临时绕过，可显式加 `--skip-spring-static-check`，但正式 Java/Spring 6 项目不建议跳过。
 
+implementation manifest 需要列出每个必改产物，尤其是多模块/多服务场景中容易漏掉的配置服务、响应对象、消息监听器、client、DTO、工具类和环境配置：
+
+```text
+id | module | artifact | artifact_type | source | required | tests | status | evidence
+```
+
+`source` 建议使用 `explicit-requirement`、`reference-pattern`、`dependency-report` 或 `service-plan`。required 行必须指向真实存在的文件，`tests` 不能只写“代码审查”，`status` 必须是 `implemented` / `verified` / `covered` 等通过状态。多模块或显式列出多个受影响模块的设计，如果没有 implementation manifest，completion gate 会阻断。
+
 coverage matrix 需要逐项映射：
 
 ```text
 id | acceptance | use_case | service | tests | code_refs | business_review | status
 ```
 
-只有每个验收项都关联到用例、服务、测试、代码引用和业务审查，且状态为 `covered` / `verified` 等通过状态，completion gate 才会放行。跨服务设计还必须传入 `--dependency-report`，且报告里不能存在未澄清的 URL、topic、tag、group 或服务映射问题。传入 `--memory-updates` 时，未标记处理状态的 proposed memory update 也会阻断完成。
+只有每个必改产物都在 implementation manifest 中验证、每个验收项都关联到用例、服务、测试、代码引用和业务审查，且状态为 `covered` / `verified` 等通过状态，completion gate 才会放行。跨服务设计还必须传入 `--dependency-report`，且报告里不能存在未澄清的 URL、topic、tag、group 或服务映射问题。传入 `--memory-updates` 时，未标记处理状态的 proposed memory update 也会阻断完成。
+
+严格 hook/CI 模式使用 `verify --strict-workflow` 或独立 `guard`。它会检查是否真的跑过 prepare、依赖扫描、completion gate、Maven 和 Spring 静态检查，并阻断 `--dependency-scan-mode off`、`--no-write-dependency-report`、`--skip-maven`、completion 阶段的 `--skip-spring-static-check` 等绕过参数，除非提供包含 `Approval: user-approved` 的审批文件。
+
+```powershell
+python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py verify . `
+  --strict-workflow `
+  --run-gate `
+  --phase completion `
+  --design-doc docs\design\feature-design-template.md `
+  --red-test-evidence docs\agent-runs\<run>\evidence\red-test.txt `
+  --implementation-manifest docs\agent-runs\<run>\evidence\implementation-manifest.md `
+  --coverage-matrix docs\agent-runs\<run>\evidence\coverage-matrix.md `
+  --unit-test-evidence docs\agent-runs\<run>\evidence\green-test.txt `
+  --business-review docs\agent-runs\<run>\evidence\business-review.md `
+  --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json `
+  --memory-updates docs\agent-runs\<run>\proposed-memory-updates.md `
+  --rework-dir docs\agent-runs\<run>\rework `
+  --status-file docs\agent-runs\<run>\evidence\verify.json
+
+python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py guard . `
+  --verify-status docs\agent-runs\<run>\evidence\verify.json `
+  --strict `
+  --require-completion
+```
+
+脚手架也提供 PowerShell 包装，适合接到 pre-push 或 CI：
+
+```powershell
+.\scripts\workflow-guard.ps1 `
+  -VerifyStatus docs\agent-runs\<run>\evidence\verify.json `
+  -Strict `
+  -RequireCompletion
+```
 
 如果 completion gate、Coverage Reviewer、UT、业务审查或用户 review 发现漏实现、漏测试或业务逻辑风险，不允许直接补代码绕过流程。先创建返工项，再回到最早必要阶段：
 
@@ -576,6 +631,7 @@ tag/link 规则：
 
 - `scripts/update-knowledge-graph.ps1`：封装知识图谱刷新。
 - `scripts/verify.ps1`：封装 AGENT 指令检查、Superpowers、agent orchestration、memory、跨服务依赖扫描、澄清门禁、Spring 静态检查和 Maven 验证。
+- `scripts/workflow-guard.ps1`：封装严格 workflow hook，可对 `verify.json` 做 pre-push / CI 阻断。
 
 Linux/macOS 可以直接调用底层 Python 脚本，或后续补充 `.sh` 脚本。
 
@@ -589,7 +645,9 @@ Linux/macOS 可以直接调用底层 Python 脚本，或后续补充 `.sh` 脚�
 - Graphify/GitNexus 工具选择和刷新门禁。
 - 单 agent / 多 agent 编排建议、ExecPlan 和 agent handoff 模板。
 - hook-like planning / implementation / completion gate。
+- strict workflow guard，可作为模型流程内 hook、pre-push hook 或 CI gate 使用。
 - rework gate 强制漏实现、漏测试、业务逻辑风险和跨服务契约问题回到正确阶段。
+- implementation manifest 检查任务要求、参考模式、服务计划对应的必改文件是否真实存在并有测试证据。
 - coverage matrix 检查设计实现覆盖、UT 证据和业务逻辑审查。
 - UT 证据要求结构化 JSON 且 `exit_code` 为 0，避免人工文本伪通过。
 - completion gate 默认运行 Spring 静态检查，检查本仓库构造器注入类型是否由组件注解或 `@Bean` 注册。
@@ -651,7 +709,9 @@ python skills\e2e-dev-workflow\scripts\cross_service_dependency_scan.py . --gitn
 python skills\e2e-dev-workflow\scripts\clarification_gate.py <design-doc>
 python skills\e2e-dev-workflow\scripts\spring_static_check.py . --json
 python skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase planning --design-doc <design-doc>
-python skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase completion --design-doc <design-doc> --red-test-evidence <red-test> --coverage-matrix <coverage-matrix> --unit-test-evidence <unit-test-evidence> --business-review <business-review> --dependency-report <cross-service-dependencies.json> --memory-updates <proposed-memory-updates> --rework-dir <rework-dir>
+python skills\e2e-dev-workflow\scripts\implementation_manifest.py . --manifest <implementation-manifest.md> --design-doc <design-doc>
+python skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase completion --design-doc <design-doc> --red-test-evidence <red-test> --implementation-manifest <implementation-manifest.md> --coverage-matrix <coverage-matrix> --unit-test-evidence <unit-test-evidence> --business-review <business-review> --dependency-report <cross-service-dependencies.json> --memory-updates <proposed-memory-updates> --rework-dir <rework-dir>
+python skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py guard . --verify-status <verify.json> --strict --require-completion
 python -m unittest discover tests
 mvn -pl <changed-modules> -am test
 mvn test

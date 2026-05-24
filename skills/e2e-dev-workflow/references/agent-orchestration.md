@@ -17,11 +17,13 @@ Do not spawn subagents unless the runtime supports them and the user has explici
 `kg_refresh.detect()` reports all service candidates. Treat that list as discovery data, not as the implementation list.
 
 - `--service-scope discovery`: pre-clarification/default when affected services are unknown. Return only a lean service inventory and next steps; do not generate agent plans, handoff artifacts, or per-service plans from all candidates.
-- `--service-scope affected`: post-clarification mode. Generate service plans only for `--service` or `--path` matches.
+- `--service-scope affected`: post-clarification mode. Generate service plans only for `--service` / `--path` matches or for design-declared affected services/modules that match discovered candidates.
 - `--service-scope all`: explicit whole-repo mode. Use only when every service is genuinely in scope.
 
 This mirrors AGENT loading: first discover services, then narrow the implementation plan after requirements and use cases identify affected services.
 If `--service` does not match a discovered service path or service directory name, the helper blocks instead of silently planning no service work.
+
+When `--service-scope auto` and no explicit service/path is supplied, the helper first uses verified dependency-report services. If none exist, it reads `Scope`, `Affected services/modules`, `Affected modules`, or equivalent Chinese headings from the design document and matches bullet items against discovered candidates. This includes root Maven modules such as `jeepay-core`, `jeepay-service`, and `jeepay-payment`, not only `services/*` directories. A matching design must generate one service plan, one code-agent handoff, and one service-local implementation manifest per affected module.
 
 ## Agent Roles
 
@@ -57,10 +59,12 @@ Outputs:
 
 - `docs/agent-runs/<date-feature>/handoffs/02-use-case-designer.md`
 - Happy paths, failure paths, actors, cross-service flows, data effects, contracts, observability
+- Initial implementation completeness notes: required modules, explicit file/class requirements, reference patterns to inventory
 
 Gate:
 
 - Every acceptance criterion maps to at least one use case or is explicitly deferred.
+- Every affected module/service from the design is either in scope for implementation or explicitly out of scope with approval.
 
 ### Test Case Developer
 
@@ -98,6 +102,7 @@ Outputs:
 - Minimal production code through Red-Green-Refactor
 - Updated tests
 - `docs/agent-runs/<date-feature>/service-plans/<service>/code-agent.md`
+- `docs/agent-runs/<date-feature>/service-plans/<service>/implementation-manifest.md`
 - `docs/agent-runs/<date-feature>/service-plans/<service>/unit-test-evidence.txt`
 - `docs/agent-runs/<date-feature>/service-plans/<service>/coverage-matrix.md`
 - `docs/agent-runs/<date-feature>/service-plans/<service>/business-review.md`
@@ -111,6 +116,7 @@ Service implementation plans should include:
 
 - Scope and allowed files.
 - Modification points table.
+- Implementation manifest rows for every required artifact in the service/module.
 - Service-local TDD plan with Maven command.
 - Cross-service contracts and compatibility rules.
 - Data/transaction effects.
@@ -127,6 +133,7 @@ Inputs:
 
 Outputs:
 
+- `docs/agent-runs/<date-feature>/evidence/implementation-manifest.md`
 - `docs/agent-runs/<date-feature>/evidence/coverage-matrix.md`
 - `docs/agent-runs/<date-feature>/evidence/business-review.md`
 - `docs/agent-runs/<date-feature>/evidence/verification.txt`
@@ -134,6 +141,9 @@ Outputs:
 
 Gate:
 
+- Merge service-local implementation manifests into the global manifest. Required rows must name the source (`explicit-requirement`, `reference-pattern`, `dependency-report`, or `service-plan`), artifact path, tests, status, and evidence.
+- Confirm every module/service listed in the design appears in the implementation manifest. Missing modules become `missing-code` rework.
+- Confirm design-named artifacts such as response objects, config services, listeners, clients, DTOs, or utility classes appear in the manifest and exist in the repo.
 - Every acceptance criterion extracted from the design document maps to a use case, service plan, tests, code refs, and business review evidence before completion.
 - Confirm the global `green-test.txt` or service `unit-test-evidence.txt` files contain structured command JSON with `exit_code: 0`.
 - Confirm cross-service designs have `cross-service-dependencies.json` and that it has no unresolved URL/topic/tag/service mapping questions.
@@ -165,6 +175,7 @@ The receiving agent must load only the relevant design, handoff, service plan, A
 - Keep `docs/design/` for durable design documents and reusable templates.
 - Keep multi-service implementation details under `docs/agent-runs/<date-feature>/service-plans/<service>/`.
 - Keep service-local rework next to that service plan as `rework-NNN.md`; do not merge similar service rework into one shared code-agent context.
+- Keep service-local implementation manifest rows next to each service plan, then merge them into `evidence/implementation-manifest.md` for the completion gate.
 - Keep each handoff artifact focused and under roughly 300 lines unless the task truly requires more.
 - Include `Open Questions: None` explicitly before the next phase proceeds.
 - Name assumptions and mark whether they are approved, inferred, or still pending.
@@ -188,8 +199,8 @@ Parallel work is useful only after requirements are stable:
 2. Run `kg_refresh.py . --mode auto`.
 3. Run `memory_capture.py scan .`.
 4. Run `orchestration_plan.py . --mode auto --service-scope discovery --design-doc <doc>` to get service candidates and next steps only.
-5. After affected services are clear, run `orchestration_plan.py . --mode auto --service-scope affected --service services/<service> --design-doc <doc>`.
-6. Create an archive with `e2e_dev_workflow.py plan . --design-doc <doc> --service-scope affected --service services/<service> --create-archive`.
+5. After affected services are clear, run `orchestration_plan.py . --mode auto --design-doc <doc>`; if the design names affected modules, auto mode selects them. Use `--service-scope affected --service services/<service>` only when you need to override or disambiguate.
+6. Create an archive with `e2e_dev_workflow.py plan . --design-doc <doc> --create-archive`; verify the archive contains one `service-plans/<service>/code-agent.md` per affected service/module.
 7. In `multi` mode, update the handoff artifacts under `docs/agent-runs/<date-feature>/handoffs/` and the service plans under `docs/agent-runs/<date-feature>/service-plans/<service>/`.
 8. Gate each phase with review before passing work forward.
-9. Run `e2e_dev_workflow.py gate . --phase completion ...` before reporting done; include `--rework-dir` when the run uses non-standard rework locations.
+9. Run `e2e_dev_workflow.py gate . --phase completion ...` before reporting done; include `--implementation-manifest` and `--rework-dir` when the run uses non-standard rework locations.

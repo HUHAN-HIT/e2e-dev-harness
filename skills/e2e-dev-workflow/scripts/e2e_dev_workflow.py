@@ -22,6 +22,7 @@ import kg_refresh  # noqa: E402
 import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
 import superpowers_probe  # noqa: E402
+import workflow_guard  # noqa: E402
 
 
 def as_repo(path: Path) -> Path:
@@ -55,6 +56,18 @@ def write_status(path: Path | None, result: dict) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def optional_text(path: Path | None) -> str:
+    if not path:
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def without_status_file(args):
+    values = vars(args).copy()
+    values["status_file"] = None
+    return argparse.Namespace(**values)
 
 
 def superpowers_status(mode: str, phase: str) -> dict:
@@ -153,8 +166,14 @@ def orchestration_status(
     design_is_template = bool(design_path and "template" in design_path.stem.lower())
     slug = orchestration_plan.feature_slug(design_path)
     dependency_services = orchestration_plan.services_from_dependency_report(resolve_repo_path(repo, dependency_report))
-    if service_scope == "auto" and not services_requested and not paths_requested and dependency_services:
-        services_requested = dependency_services
+    design_services = [] if design_is_template else orchestration_plan.services_from_design(design_text, facts)
+    if service_scope == "auto" and not services_requested and not paths_requested:
+        if dependency_services:
+            services_requested = dependency_services
+        elif design_services:
+            services_requested = design_services
+    elif service_scope == "affected" and not services_requested and not paths_requested and design_services:
+        services_requested = design_services
     services, resolved_service_scope = orchestration_plan.select_services(
         facts,
         services_requested,
@@ -171,6 +190,7 @@ def orchestration_status(
             "requested_service_scope": service_scope,
             "resolved_service_scope": resolved_service_scope,
             "requested_services": services_requested or [],
+            "design_selected_services": design_services,
             "requested_paths": paths_requested or [],
             "selected_services": services,
             "unmatched_requested_services": unmatched_services,
@@ -203,6 +223,7 @@ def orchestration_status(
         "requested_service_scope": service_scope,
         "resolved_service_scope": resolved_service_scope,
         "requested_services": services_requested or [],
+        "design_selected_services": design_services,
         "requested_paths": paths_requested or [],
         "selected_services": services,
         "reasons": reasons,
@@ -341,6 +362,7 @@ This is a living plan. Keep it current while implementing the feature.
 - Use cases: {artifacts['use_cases']}
 - Test plan: {artifacts['test_plan']}
 - Implementation plan: {artifacts['implementation_plan']}
+- Implementation manifest: {artifacts['implementation_manifest']}
 - Proposed memory updates: {artifacts['proposed_memory_updates']}
 - Rework log: {artifacts['rework_pattern']}
 - Cross-service dependencies: {artifacts['dependency_report']}
@@ -353,6 +375,7 @@ This is a living plan. Keep it current while implementing the feature.
 
 - Knowledge graph status: {artifacts['knowledge_graph_status']}
 - Dependency report: {artifacts['dependency_report']}
+- Implementation manifest: {artifacts['implementation_manifest']}
 - Red test: {artifacts['red_test_evidence']}
 - Green test: {artifacts['green_test_evidence']}
 - Coverage matrix: {artifacts['coverage_matrix']}
@@ -425,6 +448,7 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
             path.write_text(handoff_text(role), encoding="utf-8")
             created.append(str(path))
     starter_files = {
+        artifacts["implementation_manifest"]: implementation_manifest_template("all-services"),
         artifacts["green_test_evidence"]: unit_test_evidence_template("all-services"),
         artifacts["coverage_matrix"]: coverage_matrix_template("all-services"),
         artifacts["business_review"]: handoff_text("business-logic-review"),
@@ -439,6 +463,7 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
         for key, title in (
             ("service_plan", f"service-plan-{service}"),
             ("code_agent", f"code-developer-{orchestration_plan.service_slug(service)}"),
+            ("implementation_manifest", f"implementation-manifest-{service}"),
             ("test_evidence", f"unit-test-evidence-{service}"),
             ("coverage_matrix", f"coverage-{service}"),
             ("business_review", f"business-review-{service}"),
@@ -450,6 +475,8 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
                     path.write_text(coverage_matrix_template(service), encoding="utf-8")
                 elif key == "test_evidence":
                     path.write_text(unit_test_evidence_template(service), encoding="utf-8")
+                elif key == "implementation_manifest":
+                    path.write_text(implementation_manifest_template(service), encoding="utf-8")
                 elif key == "service_plan":
                     path.write_text(service_plan_template(service), encoding="utf-8")
                 else:
@@ -464,6 +491,15 @@ def coverage_matrix_template(service: str) -> str:
 | id | acceptance | use_case | service | tests | code_refs | business_review | status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | AC-1 |  |  | {service} |  |  |  |  |
+"""
+
+
+def implementation_manifest_template(scope: str) -> str:
+    return f"""# Implementation Manifest: {scope}
+
+| id | module | artifact | artifact_type | source | required | tests | status | evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| IM-1 | {scope} |  |  | explicit-requirement | yes |  |  |  |
 """
 
 
@@ -495,6 +531,14 @@ def service_plan_template(service: str) -> str:
 | path | planned change | reason | acceptance/use case |
 | --- | --- | --- | --- |
 |  |  |  |  |
+
+## Implementation Manifest
+
+Copy service/module-local required artifacts into the global `evidence/implementation-manifest.md`.
+
+| id | module | artifact | artifact_type | source | required | tests | status | evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| IM-1 | {service} |  |  | explicit-requirement | yes |  |  |  |
 
 ## Service-local TDD Plan
 
@@ -593,21 +637,23 @@ def gate(args) -> tuple[int, dict]:
         skip_spring_static_check=getattr(args, "skip_spring_static_check", False),
         rework_dirs=getattr(args, "rework_dir", None),
         dependency_report=getattr(args, "dependency_report", None),
+        implementation_manifest=getattr(args, "implementation_manifest", None),
     )
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
 
 
 def verify(args) -> tuple[int, dict]:
-    prepare_code, prep = prepare(args)
+    phase_args = without_status_file(args)
+    prepare_code, prep = prepare(phase_args)
     clarify_code = 0
     clarify_result = None
     if args.design_doc:
-        clarify_code, clarify_result = clarify(args)
+        clarify_code, clarify_result = clarify(phase_args)
     gate_result = None
     gate_code = 0
     if args.run_gate:
-        gate_code, gate_result = gate(args)
+        gate_code, gate_result = gate(phase_args)
 
     maven_result = {"skipped": True}
     if not args.skip_maven:
@@ -621,14 +667,48 @@ def verify(args) -> tuple[int, dict]:
             "stderr_tail": completed.stderr[-4000:],
         }
     result = {
+        "workflow": {
+            "strict": getattr(args, "strict_workflow", False),
+            "phase": args.phase,
+            "run_gate": args.run_gate,
+            "skip_maven": args.skip_maven,
+            "skip_spring_static_check": getattr(args, "skip_spring_static_check", False),
+            "dependency_scan_mode": getattr(args, "dependency_scan_mode", "auto"),
+            "write_dependency_report": getattr(args, "write_dependency_report", True),
+            "implementation_manifest": str(getattr(args, "implementation_manifest", "") or ""),
+        },
         "prepare": prep,
         "clarification": clarify_result,
         "implementation_gate": gate_result,
         "maven": maven_result,
     }
     exit_code = max(prepare_code, clarify_code, gate_code, maven_result.get("exit_code", 0) if not args.skip_maven else 0)
+    if getattr(args, "strict_workflow", False):
+        approval_path = resolve_repo_path(as_repo(args.repo), getattr(args, "workflow_approval", None))
+        guard_result = workflow_guard.validate_verify_result(
+            result,
+            strict=True,
+            require_completion=args.phase == "completion",
+            approval_text=optional_text(approval_path),
+        )
+        result["workflow_guard"] = guard_result
+        if not guard_result["ready"]:
+            exit_code = max(exit_code, 2)
     write_status(args.status_file, result)
     return exit_code, result
+
+
+def guard(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    result = workflow_guard.validate_status_file(
+        repo,
+        args.verify_status,
+        strict=args.strict,
+        require_completion=args.require_completion,
+        approval_file=args.approval_file,
+    )
+    write_status(args.status_file, result)
+    return (0 if result["ready"] else 2), result
 
 
 def add_prepare_args(parser: argparse.ArgumentParser) -> None:
@@ -693,6 +773,7 @@ def main() -> int:
     gate_parser.add_argument("--business-review", type=Path)
     gate_parser.add_argument("--memory-updates", type=Path)
     gate_parser.add_argument("--dependency-report", type=Path)
+    gate_parser.add_argument("--implementation-manifest", type=Path)
     gate_parser.add_argument("--rework-dir", action="append", type=Path)
     gate_parser.add_argument("--skip-spring-static-check", action="store_true")
     gate_parser.add_argument("--status-file", type=Path)
@@ -709,9 +790,20 @@ def main() -> int:
     verify_parser.add_argument("--business-review", type=Path)
     verify_parser.add_argument("--memory-updates", type=Path)
     verify_parser.add_argument("--dependency-report", type=Path)
+    verify_parser.add_argument("--implementation-manifest", type=Path)
     verify_parser.add_argument("--rework-dir", action="append", type=Path)
     verify_parser.add_argument("--skip-spring-static-check", action="store_true")
     verify_parser.add_argument("--skip-maven", action="store_true")
+    verify_parser.add_argument("--strict-workflow", action="store_true")
+    verify_parser.add_argument("--workflow-approval", type=Path)
+
+    guard_parser = subparsers.add_parser("guard", help="Run strict workflow guard against a verify status artifact.")
+    guard_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    guard_parser.add_argument("--verify-status", required=True, type=Path)
+    guard_parser.add_argument("--strict", action="store_true")
+    guard_parser.add_argument("--require-completion", action="store_true")
+    guard_parser.add_argument("--approval-file", type=Path)
+    guard_parser.add_argument("--status-file", type=Path)
 
     args = parser.parse_args()
     try:
@@ -723,6 +815,8 @@ def main() -> int:
             exit_code, result = plan(args)
         elif args.command == "gate":
             exit_code, result = gate(args)
+        elif args.command == "guard":
+            exit_code, result = guard(args)
         else:
             exit_code, result = verify(args)
     except (FileNotFoundError, ValueError, KeyError) as error:

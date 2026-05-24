@@ -22,10 +22,12 @@ import coverage_gate  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import e2e_dev_workflow  # noqa: E402
 import implementation_gate  # noqa: E402
+import implementation_manifest  # noqa: E402
 import kg_refresh  # noqa: E402
 import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
 import rework_gate  # noqa: E402
+import workflow_guard  # noqa: E402
 from common import split_command  # noqa: E402
 
 
@@ -331,6 +333,142 @@ class CoverageGateTests(unittest.TestCase):
         self.assertEqual(0, result["unit_test_commands"][0]["exit_code"])
 
 
+class ImplementationManifestTests(unittest.TestCase):
+    def test_manifest_blocks_missing_required_artifact(self) -> None:
+        manifest = textwrap.dedent(
+            """
+            | id | module | artifact | artifact_type | source | required | tests | status | evidence |
+            | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+            | IM-1 | jeepay-service | jeepay-service/src/main/java/com/example/VnpayPaymentConfigService.java | config-service | explicit-requirement | yes | VnpayPaymentConfigServiceTest | verified | required by task |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(manifest, encoding="utf-8")
+
+            result = implementation_manifest.validate(repo, manifest_path)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("does not exist" in reason for reason in result["blocked_reasons"]))
+
+    def test_manifest_requires_all_design_modules(self) -> None:
+        design = textwrap.dedent(
+            """
+            # VNPay
+
+            ## Affected services/modules
+            - jeepay-core: constants and params
+            - jeepay-service: channel config service
+            - jeepay-payment: payment, notice, refund services
+            """
+        ).strip()
+        manifest = textwrap.dedent(
+            """
+            | id | module | artifact | artifact_type | source | required | tests | status | evidence |
+            | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+            | IM-1 | jeepay-core | jeepay-core/src/main/java/com/example/VnpayNormalMchParams.java | params | explicit-requirement | yes | VnpayNormalMchParamsTest | verified | done |
+            | IM-2 | jeepay-payment | jeepay-payment/src/main/java/com/example/VnpayPaymentService.java | payment-service | explicit-requirement | yes | VnpayPaymentServiceTest | verified | done |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            for path in (
+                "jeepay-core/src/main/java/com/example/VnpayNormalMchParams.java",
+                "jeepay-payment/src/main/java/com/example/VnpayPaymentService.java",
+            ):
+                target = repo / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("class Placeholder {}\n", encoding="utf-8")
+            design_path = repo / "docs" / "design" / "vnpay.md"
+            manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            design_path.parent.mkdir(parents=True)
+            manifest_path.parent.mkdir(parents=True)
+            design_path.write_text(design, encoding="utf-8")
+            manifest_path.write_text(manifest, encoding="utf-8")
+
+            result = implementation_manifest.validate(repo, manifest_path, design_path)
+
+        self.assertFalse(result["ready"])
+        self.assertIn("jeepay-service", " ".join(result["blocked_reasons"]))
+
+    def test_manifest_blocks_design_class_not_listed(self) -> None:
+        design = textwrap.dedent(
+            """
+            # VNPay
+
+            ## Acceptance Criteria
+            - AC-1 VnpayQrOrderRS is returned for QR orders.
+            """
+        ).strip()
+        manifest = textwrap.dedent(
+            """
+            | id | module | artifact | artifact_type | source | required | tests | status | evidence |
+            | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+            | IM-1 | jeepay-payment | jeepay-payment/src/main/java/com/example/VnpayPaymentService.java | payment-service | explicit-requirement | yes | VnpayPaymentServiceTest | verified | done |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            target = repo / "jeepay-payment/src/main/java/com/example/VnpayPaymentService.java"
+            target.parent.mkdir(parents=True)
+            target.write_text("class Placeholder {}\n", encoding="utf-8")
+            design_path = repo / "docs" / "design" / "vnpay.md"
+            manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            design_path.parent.mkdir(parents=True)
+            manifest_path.parent.mkdir(parents=True)
+            design_path.write_text(design, encoding="utf-8")
+            manifest_path.write_text(manifest, encoding="utf-8")
+
+            result = implementation_manifest.validate(repo, manifest_path, design_path)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("VnpayQrOrderRS" in reason for reason in result["blocked_reasons"]))
+
+    def test_manifest_allows_verified_existing_artifacts(self) -> None:
+        design = textwrap.dedent(
+            """
+            # VNPay
+
+            ## Affected services/modules
+            - jeepay-core: constants and params
+            - jeepay-payment: payment service
+
+            ## Acceptance Criteria
+            - AC-1 VnpayPaymentService returns the VNPay URL.
+            """
+        ).strip()
+        manifest = textwrap.dedent(
+            """
+            | id | module | artifact | artifact_type | source | required | tests | status | evidence |
+            | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+            | IM-1 | jeepay-core | jeepay-core/src/main/java/com/example/VnpayNormalMchParams.java | params | explicit-requirement | yes | VnpayNormalMchParamsTest | verified | done |
+            | IM-2 | jeepay-payment | jeepay-payment/src/main/java/com/example/VnpayPaymentService.java | payment-service | explicit-requirement | yes | VnpayPaymentServiceTest | verified | done |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            for path in (
+                "jeepay-core/src/main/java/com/example/VnpayNormalMchParams.java",
+                "jeepay-payment/src/main/java/com/example/VnpayPaymentService.java",
+            ):
+                target = repo / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("class Placeholder {}\n", encoding="utf-8")
+            design_path = repo / "docs" / "design" / "vnpay.md"
+            manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            design_path.parent.mkdir(parents=True)
+            manifest_path.parent.mkdir(parents=True)
+            design_path.write_text(design, encoding="utf-8")
+            manifest_path.write_text(manifest, encoding="utf-8")
+
+            result = implementation_manifest.validate(repo, manifest_path, design_path)
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(2, result["required_rows"])
+
+
 class CrossServiceDependencyScanTests(unittest.TestCase):
     def test_http_configured_url_matches_controller_route(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -564,6 +702,121 @@ class CrossServiceDependencyScanTests(unittest.TestCase):
         self.assertTrue(any("low-confidence" in reason.lower() for reason in result["blocked_reasons"]))
 
 
+def verified_workflow_result() -> dict:
+    return {
+        "workflow": {
+            "strict": True,
+            "phase": "completion",
+            "run_gate": True,
+            "skip_maven": False,
+            "skip_spring_static_check": False,
+            "dependency_scan_mode": "auto",
+            "write_dependency_report": True,
+        },
+        "prepare": {
+            "blocked": False,
+            "agent_instructions": {"blocked": False},
+            "superpowers": {"blocked": False, "enabled": True},
+            "memory": {"blocked": False},
+            "orchestration": {"blocked": False},
+            "knowledge_graph": {"selected_tools": ["gitnexus"]},
+            "cross_service_dependencies": {
+                "enabled": True,
+                "mode": "auto",
+                "ready": True,
+                "report_paths": {"json": "knowledge-graph/cross-service-dependencies.json"},
+                "unresolved_questions": [],
+            },
+        },
+        "clarification": {"ready_for_implementation": True},
+        "implementation_gate": {"phase": "completion", "ready": True, "blocked_reasons": []},
+        "maven": {"skipped": False, "exit_code": 0, "command": "mvn test"},
+    }
+
+
+class WorkflowGuardTests(unittest.TestCase):
+    def test_guard_blocks_missing_prepare_status(self) -> None:
+        result = workflow_guard.validate_verify_result(
+            {"maven": {"skipped": False, "exit_code": 0}},
+            strict=True,
+            require_completion=True,
+        )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("prepare" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_guard_blocks_dependency_scan_disabled_in_strict_mode(self) -> None:
+        verify_result = verified_workflow_result()
+        verify_result["prepare"]["cross_service_dependencies"] = {"enabled": False, "mode": "off"}
+        verify_result["workflow"]["dependency_scan_mode"] = "off"
+
+        result = workflow_guard.validate_verify_result(verify_result, strict=True, require_completion=True)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("dependency scan" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_guard_blocks_skipped_maven_in_strict_mode(self) -> None:
+        verify_result = verified_workflow_result()
+        verify_result["workflow"]["skip_maven"] = True
+        verify_result["maven"] = {"skipped": True}
+
+        result = workflow_guard.validate_verify_result(verify_result, strict=True, require_completion=True)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("maven" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_guard_blocks_missing_completion_gate_in_completion_mode(self) -> None:
+        verify_result = verified_workflow_result()
+        verify_result["implementation_gate"] = None
+
+        result = workflow_guard.validate_verify_result(verify_result, strict=True, require_completion=True)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("completion gate" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_guard_allows_complete_verified_workflow_result(self) -> None:
+        result = workflow_guard.validate_verify_result(
+            verified_workflow_result(),
+            strict=True,
+            require_completion=True,
+        )
+
+        self.assertTrue(result["ready"])
+        self.assertEqual([], result["blocked_reasons"])
+
+    def test_guard_validates_verify_status_file_for_hook_usage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            status = repo / "docs" / "agent-runs" / "run" / "verify.json"
+            status.parent.mkdir(parents=True)
+            status.write_text(json.dumps(verified_workflow_result()), encoding="utf-8")
+
+            result = workflow_guard.validate_status_file(
+                repo,
+                status,
+                strict=True,
+                require_completion=True,
+            )
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(str(status), result["verify_status"])
+
+    def test_guard_blocks_missing_verify_status_file_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            status = repo / "missing-verify.json"
+
+            result = workflow_guard.validate_status_file(
+                repo,
+                status,
+                strict=True,
+                require_completion=True,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("not found" in reason.lower() for reason in result["blocked_reasons"]))
+
+
 class ReworkGateTests(unittest.TestCase):
     def test_rework_gate_requires_required_fields(self) -> None:
         item = textwrap.dedent(
@@ -709,6 +962,157 @@ class ImplementationGateTests(unittest.TestCase):
         self.assertTrue(result["ready"])
         self.assertEqual(1, result["coverage"]["coverage_rows"])
         self.assertTrue(result["spring_static_check"]["ready"])
+
+    def test_completion_gate_blocks_missing_required_manifest_for_multi_module_design(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Add VNPay.
+
+            ## Affected services/modules
+            - jeepay-core: constants and params
+            - jeepay-service: config service
+            - jeepay-payment: payment flow
+
+            ## Use Cases
+            - Merchant creates a VNPay QR order.
+
+            ## Acceptance Criteria
+            - AC-1 VnpayPaymentService returns a VNPay URL.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        coverage = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | VNPay URL is returned | Create QR order | jeepay-payment | VnpayPaymentServiceTest | VnpayPaymentService | reviewed | covered |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "vnpay.md"
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            red = repo / "docs" / "agent-runs" / "run" / "evidence" / "red.txt"
+            matrix = repo / "docs" / "agent-runs" / "run" / "evidence" / "coverage.md"
+            unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
+            review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
+            design.parent.mkdir(parents=True)
+            kg.parent.mkdir(parents=True)
+            matrix.parent.mkdir(parents=True)
+            design.write_text(markdown, encoding="utf-8")
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            matrix.write_text(coverage, encoding="utf-8")
+            write_command_evidence(unit, "mvn -pl jeepay-payment -am test")
+            review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
+
+            result = implementation_gate.validate_gate(
+                repo,
+                design,
+                kg,
+                "completion",
+                red,
+                matrix,
+                unit,
+                review,
+                skip_spring_static_check=True,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Implementation manifest" in reason for reason in result["blocked_reasons"]))
+
+    def test_completion_gate_blocks_incomplete_implementation_manifest(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Add VNPay.
+
+            ## Affected services/modules
+            - jeepay-core: constants and params
+            - jeepay-service: config service
+            - jeepay-payment: payment flow
+
+            ## Use Cases
+            - Merchant creates a VNPay QR order.
+
+            ## Acceptance Criteria
+            - AC-1 VnpayPaymentService returns a VNPay URL.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        coverage = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | VNPay URL is returned | Create QR order | jeepay-payment | VnpayPaymentServiceTest | VnpayPaymentService | reviewed | covered |
+            """
+        ).strip()
+        manifest = textwrap.dedent(
+            """
+            | id | module | artifact | artifact_type | source | required | tests | status | evidence |
+            | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+            | IM-1 | jeepay-core | jeepay-core/src/main/java/com/example/VnpayNormalMchParams.java | params | explicit-requirement | yes | VnpayNormalMchParamsTest | verified | done |
+            | IM-2 | jeepay-payment | jeepay-payment/src/main/java/com/example/VnpayPaymentService.java | payment-service | explicit-requirement | yes | VnpayPaymentServiceTest | verified | done |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            for path in (
+                "jeepay-core/src/main/java/com/example/VnpayNormalMchParams.java",
+                "jeepay-payment/src/main/java/com/example/VnpayPaymentService.java",
+            ):
+                target = repo / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("class Placeholder {}\n", encoding="utf-8")
+            design = repo / "docs" / "design" / "vnpay.md"
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            red = repo / "docs" / "agent-runs" / "run" / "evidence" / "red.txt"
+            matrix = repo / "docs" / "agent-runs" / "run" / "evidence" / "coverage.md"
+            unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
+            review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
+            manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            design.parent.mkdir(parents=True)
+            kg.parent.mkdir(parents=True)
+            matrix.parent.mkdir(parents=True)
+            design.write_text(markdown, encoding="utf-8")
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            matrix.write_text(coverage, encoding="utf-8")
+            write_command_evidence(unit, "mvn -pl jeepay-payment -am test")
+            review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
+            manifest_path.write_text(manifest, encoding="utf-8")
+
+            result = implementation_gate.validate_gate(
+                repo,
+                design,
+                kg,
+                "completion",
+                red,
+                matrix,
+                unit,
+                review,
+                skip_spring_static_check=True,
+                implementation_manifest=manifest_path,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertFalse(result["implementation_manifest"]["ready"])
+        self.assertIn("jeepay-service", " ".join(result["blocked_reasons"]))
 
     def test_completion_gate_requires_design_doc_for_acceptance_coverage(self) -> None:
         coverage = textwrap.dedent(
@@ -1138,7 +1542,15 @@ class ImplementationGateTests(unittest.TestCase):
             matrix = repo / "docs" / "agent-runs" / "run" / "evidence" / "coverage.md"
             unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
+            manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
             dependency_report = repo / "knowledge-graph" / "cross-service-dependencies.json"
+            for path in (
+                "services/quote-service/src/main/java/com/example/BillingClient.java",
+                "services/billing-service/src/main/java/com/example/BillingController.java",
+            ):
+                target = repo / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("class Placeholder {}\n", encoding="utf-8")
             design.parent.mkdir(parents=True)
             kg.parent.mkdir(parents=True)
             matrix.parent.mkdir(parents=True)
@@ -1209,7 +1621,15 @@ class ImplementationGateTests(unittest.TestCase):
             matrix = repo / "docs" / "agent-runs" / "run" / "evidence" / "coverage.md"
             unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
+            manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
             dependency_report = repo / "knowledge-graph" / "cross-service-dependencies.json"
+            for path in (
+                "services/quote-service/src/main/java/com/example/BillingClient.java",
+                "services/billing-service/src/main/java/com/example/BillingController.java",
+            ):
+                target = repo / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("class Placeholder {}\n", encoding="utf-8")
             design.parent.mkdir(parents=True)
             kg.parent.mkdir(parents=True)
             matrix.parent.mkdir(parents=True)
@@ -1219,6 +1639,17 @@ class ImplementationGateTests(unittest.TestCase):
             matrix.write_text(coverage, encoding="utf-8")
             write_command_evidence(unit, "mvn test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
+            manifest_path.write_text(
+                textwrap.dedent(
+                    """
+                    | id | module | artifact | artifact_type | source | required | tests | status | evidence |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | IM-1 | services/quote-service | services/quote-service/src/main/java/com/example/BillingClient.java | client | dependency-report | yes | CallbackTest | verified | done |
+                    | IM-2 | services/billing-service | services/billing-service/src/main/java/com/example/BillingController.java | controller | dependency-report | yes | CallbackTest | verified | done |
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
             dependency_report.write_text(
                 json.dumps({"ready": True, "dependencies": [{"kind": "http"}], "unresolved_questions": []}),
                 encoding="utf-8",
@@ -1234,6 +1665,7 @@ class ImplementationGateTests(unittest.TestCase):
                 unit,
                 review,
                 dependency_report=dependency_report,
+                implementation_manifest=manifest_path,
                 skip_spring_static_check=True,
             )
 
@@ -1671,6 +2103,150 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(["services/payment-service"], selected)
         self.assertEqual("affected", resolved_scope)
 
+    def test_design_affected_modules_select_root_maven_modules(self) -> None:
+        facts = {"service_candidates": ["jeepay-core", "jeepay-service", "jeepay-payment"]}
+        design_text = textwrap.dedent(
+            """
+            # VNPay
+
+            ## Affected services/modules
+            - jeepay-core: constants and params
+            - jeepay-service: channel config service
+            - jeepay-payment: payment, notice, refund services
+            """
+        ).strip()
+
+        selected = orchestration_plan.services_from_design(design_text, facts)
+
+        self.assertEqual(["jeepay-core", "jeepay-service", "jeepay-payment"], selected)
+
+    def test_orchestration_status_uses_design_modules_for_service_plans(self) -> None:
+        facts = {
+            "service_candidates": ["jeepay-core", "jeepay-service", "jeepay-payment"],
+            "multi_service": True,
+            "design_docs_or_media_count": 0,
+            "spring_entrypoints": [],
+        }
+        design_text = textwrap.dedent(
+            """
+            # VNPay
+
+            ## Goal
+            - Add VNPay channel.
+
+            ## Affected services/modules
+            - jeepay-core: constants and params
+            - jeepay-service: channel config service
+            - jeepay-payment: payment, notice, refund services
+
+            ## Use Cases
+            - Merchant creates a VNPay QR payment.
+
+            ## Acceptance Criteria
+            - AC-1 VNPay order can be created.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "vnpay.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(design_text, encoding="utf-8")
+
+            result = e2e_dev_workflow.orchestration_status(
+                repo,
+                "auto",
+                design,
+                run_date="2026-05-23",
+                service_scope="auto",
+                facts=facts,
+            )
+
+        self.assertEqual("affected", result["resolved_service_scope"])
+        self.assertEqual(["jeepay-core", "jeepay-service", "jeepay-payment"], result["selected_services"])
+        self.assertIn("jeepay-service", result["handoff_artifacts"]["service_plans"])
+        self.assertIn("code-developer-jeepay-service", [agent["name"] for agent in result["agents"]])
+
+    def test_plan_archive_creates_handoffs_for_design_affected_root_modules(self) -> None:
+        design_text = textwrap.dedent(
+            """
+            # VNPay
+
+            ## Goal
+            - Add VNPay channel.
+
+            ## Affected services/modules
+            - jeepay-core: constants and params
+            - jeepay-service: channel config service
+            - jeepay-payment: payment, notice, refund services
+
+            ## Use Cases
+            - Merchant creates a VNPay QR payment.
+
+            ## Acceptance Criteria
+            - AC-1 VNPay order can be created.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            repo.joinpath("pom.xml").write_text(
+                textwrap.dedent(
+                    """
+                    <project xmlns="http://maven.apache.org/POM/4.0.0">
+                      <modelVersion>4.0.0</modelVersion>
+                      <modules>
+                        <module>jeepay-core</module>
+                        <module>jeepay-service</module>
+                        <module>jeepay-payment</module>
+                      </modules>
+                    </project>
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            for module in ("jeepay-core", "jeepay-service", "jeepay-payment"):
+                module_dir = repo / module
+                (module_dir / "src" / "main" / "java").mkdir(parents=True)
+                (module_dir / "pom.xml").write_text("<project />", encoding="utf-8")
+            design = repo / "docs" / "design" / "vnpay.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(design_text, encoding="utf-8")
+            args = SimpleNamespace(
+                repo=repo,
+                mode="auto",
+                design_doc=design,
+                agent_run_dir=None,
+                run_date="2026-05-23",
+                service_scope="auto",
+                service=None,
+                path=None,
+                dependency_report=None,
+                create_archive=True,
+                write_exec_plan=None,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_workflow.plan(args)
+
+            self.assertEqual(0, code)
+            self.assertEqual(["jeepay-core", "jeepay-payment", "jeepay-service"], sorted(result["selected_services"]))
+            for module in ("jeepay-core", "jeepay-service", "jeepay-payment"):
+                paths = result["handoff_artifacts"]["service_plans"][module]
+                self.assertTrue((repo / paths["service_plan"]).exists())
+                self.assertTrue((repo / paths["code_agent"]).exists())
+                self.assertTrue((repo / paths["implementation_manifest"]).exists())
+
     def test_unmatched_requested_services_are_reported(self) -> None:
         facts = {"service_candidates": ["services/order-service"]}
 
@@ -1777,6 +2353,14 @@ class OrchestrationArtifactTests(unittest.TestCase):
             result["dependency_report"],
         )
 
+    def test_plan_artifacts_include_implementation_manifest_path(self) -> None:
+        result = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
+
+        self.assertEqual(
+            "docs/agent-runs/2026-05-23-checkout/evidence/implementation-manifest.md",
+            result["implementation_manifest"],
+        )
+
     def test_service_plan_archive_contains_microservice_scoped_sections(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -1794,6 +2378,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertIn("# Service Implementation Plan: services/order-service", text)
         self.assertIn("## Modification Points", text)
         self.assertIn("## Service-local TDD Plan", text)
+        self.assertIn("## Implementation Manifest", text)
         self.assertIn("## Cross-service Contracts", text)
 
     def test_multi_agent_plan_splits_code_developers_by_service(self) -> None:
@@ -2047,6 +2632,88 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertEqual(2, code)
         self.assertEqual(1, result["rework"]["open_count"])
 
+    def test_cli_gate_accepts_implementation_manifest(self) -> None:
+        design_text = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Add a quote endpoint.
+
+            ## Scope
+            - services/sample-service
+
+            ## Use Cases
+            - Return a quote.
+
+            ## Acceptance Criteria
+            - AC-1 QuoteService returns a quote.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        coverage = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Quote is returned | Create quote | services/sample-service | QuoteServiceTest | QuoteService | reviewed | covered |
+            """
+        ).strip()
+        manifest = textwrap.dedent(
+            """
+            | id | module | artifact | artifact_type | source | required | tests | status | evidence |
+            | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+            | IM-1 | services/sample-service | services/sample-service/src/main/java/com/example/QuoteService.java | service | explicit-requirement | yes | QuoteServiceTest | verified | done |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            artifact = repo / "services/sample-service/src/main/java/com/example/QuoteService.java"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("class QuoteService {}\n", encoding="utf-8")
+            design = repo / "docs" / "design" / "feature.md"
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            red = repo / "docs" / "agent-runs" / "run" / "evidence" / "red.txt"
+            matrix = repo / "docs" / "agent-runs" / "run" / "evidence" / "coverage.md"
+            unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
+            review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
+            manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            design.parent.mkdir(parents=True)
+            kg.parent.mkdir(parents=True)
+            matrix.parent.mkdir(parents=True)
+            design.write_text(design_text, encoding="utf-8")
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            matrix.write_text(coverage, encoding="utf-8")
+            write_command_evidence(unit, "mvn -pl services/sample-service -am test")
+            review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
+            manifest_path.write_text(manifest, encoding="utf-8")
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=design,
+                kg_status_file=kg,
+                phase="completion",
+                red_test_evidence=red,
+                coverage_matrix=matrix,
+                unit_test_evidence=unit,
+                business_review=review,
+                memory_updates=None,
+                dependency_report=None,
+                rework_dir=None,
+                implementation_manifest=manifest_path,
+                skip_spring_static_check=True,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_workflow.gate(args)
+
+        self.assertEqual(0, code)
+        self.assertTrue(result["implementation_manifest"]["ready"])
+
     def test_cli_gate_accepts_dependency_report(self) -> None:
         design_text = textwrap.dedent(
             """
@@ -2087,7 +2754,15 @@ class UnifiedCliTests(unittest.TestCase):
             matrix = repo / "docs" / "agent-runs" / "run" / "evidence" / "coverage.md"
             unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
+            manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
             dependency_report = repo / "knowledge-graph" / "cross-service-dependencies.json"
+            for path in (
+                "services/order-service/src/main/java/com/example/PaymentClient.java",
+                "services/payment-service/src/main/java/com/example/PaymentController.java",
+            ):
+                target = repo / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("class Placeholder {}\n", encoding="utf-8")
             design.parent.mkdir(parents=True)
             kg.parent.mkdir(parents=True)
             matrix.parent.mkdir(parents=True)
@@ -2098,6 +2773,17 @@ class UnifiedCliTests(unittest.TestCase):
             matrix.write_text(coverage, encoding="utf-8")
             write_command_evidence(unit, "mvn test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
+            manifest_path.write_text(
+                textwrap.dedent(
+                    """
+                    | id | module | artifact | artifact_type | source | required | tests | status | evidence |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | IM-1 | services/order-service | services/order-service/src/main/java/com/example/PaymentClient.java | client | dependency-report | yes | PaymentCallbackTest | verified | done |
+                    | IM-2 | services/payment-service | services/payment-service/src/main/java/com/example/PaymentController.java | controller | dependency-report | yes | PaymentCallbackTest | verified | done |
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
             dependency_report.write_text(
                 json.dumps({"ready": True, "dependencies": [{"kind": "http"}], "unresolved_questions": []}),
                 encoding="utf-8",
@@ -2113,6 +2799,7 @@ class UnifiedCliTests(unittest.TestCase):
                 business_review=review,
                 memory_updates=None,
                 dependency_report=dependency_report,
+                implementation_manifest=manifest_path,
                 rework_dir=None,
                 skip_spring_static_check=True,
                 status_file=None,
@@ -2122,6 +2809,65 @@ class UnifiedCliTests(unittest.TestCase):
 
         self.assertEqual(0, code)
         self.assertTrue(result["dependency_report"]["ready"])
+
+    def test_verify_strict_workflow_blocks_skip_maven(self) -> None:
+        args = SimpleNamespace(
+            repo=Path("."),
+            design_doc=None,
+            path=None,
+            service=None,
+            agent_mode="off",
+            agent_scope="auto",
+            include_agent_content=False,
+            max_agent_chars=12000,
+            max_discovered_services=agent_instructions.DEFAULT_DISCOVERED_SERVICE_LIMIT,
+            superpowers_mode="auto",
+            memory_mode="off",
+            agent_orchestration_mode="off",
+            service_scope="discovery",
+            agent_run_dir=None,
+            run_date="2026-05-23",
+            kg_mode="auto",
+            dependency_scan_mode="auto",
+            write_dependency_report=True,
+            dependency_output_dir=None,
+            run_gate=False,
+            phase="planning",
+            kg_status_file=None,
+            red_test_evidence=None,
+            coverage_matrix=None,
+            unit_test_evidence=None,
+            business_review=None,
+            memory_updates=None,
+            dependency_report=None,
+            rework_dir=None,
+            skip_spring_static_check=False,
+            skip_maven=True,
+            strict_workflow=True,
+            workflow_approval=None,
+            status_file=None,
+        )
+        prepare_result = {
+            "blocked": False,
+            "agent_instructions": {"blocked": False},
+            "superpowers": {"blocked": False, "enabled": True},
+            "memory": {"blocked": False},
+            "orchestration": {"blocked": False},
+            "knowledge_graph": {"selected_tools": ["gitnexus"]},
+            "cross_service_dependencies": {
+                "enabled": True,
+                "mode": "auto",
+                "ready": True,
+                "report_paths": {"json": "knowledge-graph/cross-service-dependencies.json"},
+            },
+        }
+
+        with patch.object(e2e_dev_workflow, "prepare", return_value=(0, prepare_result)):
+            code, result = e2e_dev_workflow.verify(args)
+
+        self.assertEqual(2, code)
+        self.assertFalse(result["workflow_guard"]["ready"])
+        self.assertTrue(any("Maven" in reason for reason in result["workflow_guard"]["blocked_reasons"]))
 
 
 class MemorySafetyTests(unittest.TestCase):
