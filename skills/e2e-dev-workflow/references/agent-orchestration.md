@@ -237,6 +237,7 @@ The receiving agent must load only the relevant design, handoff, service plan, A
 - Keep multi-service implementation details under `docs/agent-runs/<date-feature>/service-plans/<service>/`.
 - Keep global semantic reviews under `docs/agent-runs/<date-feature>/reviews/`; keep service-local semantic reviews under `service-plans/<service>/reviews/`.
 - Keep review requests under `docs/agent-runs/<date-feature>/review-requests/` and `service-plans/<service>/review-requests/`. A review report must be the exact `Output` declared by its request.
+- Do not pre-fill review reports during archive creation. Create review request files first, assign concrete Developer Agent and Reviewer Agent ids, then let the independent reviewer write the report with `Reviewer Session`, `Reviewer Invocation`, and `Request Hash`.
 - Keep service-local rework next to that service plan as `rework-NNN.md`; do not merge similar service rework into one shared code-agent context.
 - Keep service-local implementation manifest rows next to each service plan, then merge them into `evidence/implementation-manifest.md` for the completion gate.
 - Keep each handoff artifact focused and under roughly 300 lines unless the task truly requires more.

@@ -477,24 +477,6 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
             artifacts["implementation_review"],
             "all-services",
         ),
-        artifacts["design_review"]: semantic_review_template(
-            "design",
-            "R1 design semantic review",
-            "all-services",
-            artifacts["design_review_request"],
-        ),
-        artifacts["test_review"]: semantic_review_template(
-            "test",
-            "R2 test semantic review",
-            "all-services",
-            artifacts["test_review_request"],
-        ),
-        artifacts["implementation_review"]: semantic_review_template(
-            "implementation",
-            "R3 implementation semantic review",
-            "all-services",
-            artifacts["implementation_review_request"],
-        ),
         artifacts["implementation_manifest"]: implementation_manifest_template("all-services"),
         artifacts["green_test_evidence"]: unit_test_evidence_template("all-services"),
         artifacts["verification_evidence"]: handoff_text("verification-evidence"),
@@ -531,8 +513,6 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
         for key, title in (
             ("service_plan", f"service-plan-{service}"),
             ("code_agent", f"code-developer-{orchestration_plan.service_slug(service)}"),
-            ("test_review", f"test-review-{service}"),
-            ("implementation_review", f"implementation-review-{service}"),
             ("implementation_manifest", f"implementation-manifest-{service}"),
             ("test_evidence", f"unit-test-evidence-{service}"),
             ("coverage_matrix", f"coverage-{service}"),
@@ -549,21 +529,6 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
                     path.write_text(implementation_manifest_template(service), encoding="utf-8")
                 elif key == "service_plan":
                     path.write_text(service_plan_template(service), encoding="utf-8")
-                elif key == "test_review":
-                    path.write_text(
-                        semantic_review_template("test", title, service, paths["test_review_request"]),
-                        encoding="utf-8",
-                    )
-                elif key == "implementation_review":
-                    path.write_text(
-                        semantic_review_template(
-                            "implementation",
-                            title,
-                            service,
-                            paths["implementation_review_request"],
-                        ),
-                        encoding="utf-8",
-                    )
                 else:
                     path.write_text(handoff_text(title), encoding="utf-8")
                 created.append(str(path))
@@ -602,6 +567,9 @@ def unit_test_evidence_template(scope: str) -> str:
 
 
 def review_request_template(phase: str, title: str, output_path: str, scope: str = "all-services") -> str:
+    invocation_path = output_path.replace("/reviews/", "/review-invocations/").replace("\\reviews\\", "\\review-invocations\\")
+    if invocation_path.endswith(".md"):
+        invocation_path = invocation_path[:-3] + "-invocation.json"
     return f"""# {title}
 
 - Phase: {phase}
@@ -612,6 +580,8 @@ def review_request_template(phase: str, title: str, output_path: str, scope: str
 - Output: {output_path}
 - Scope: {scope}
 - Developer Agent: <developer-agent-id>
+- Reviewer Agent: <independent-reviewer-agent-id>
+- Reviewer Invocation: {invocation_path}
 
 ## Review Assignment
 
@@ -627,6 +597,8 @@ def semantic_review_template(phase: str, title: str, scope: str = "all-services"
 - Review Request: {request_path}
 - Developer Agent: <developer-agent-id>
 - Reviewer Agent: <independent-reviewer-agent-id>
+- Reviewer Session: <reviewer-session-id>
+- Request Hash: <sha256-of-review-request-file>
 - Independence: independent-agent
 - Context Boundary: request-scoped; no inherited developer chat context
 - No Code Changes: confirmed

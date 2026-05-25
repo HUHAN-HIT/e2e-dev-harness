@@ -112,6 +112,21 @@ def validate_gate(
     semantic_review_result = None
     dependency_result = None
     implementation_manifest_result = None
+
+    required_review_phases = {
+        "planning": ["design"],
+        "implementation": ["design", "test"],
+        "completion": ["design", "test", "implementation"],
+    }[phase]
+    semantic_review_result = reviewer_gate.validate(
+        repo,
+        review_dirs,
+        [red_test_evidence, coverage_matrix, unit_test_evidence, business_review, implementation_manifest, design_doc],
+        required_review_phases,
+    )
+    if not semantic_review_result["ready"]:
+        blocked_reasons.extend(semantic_review_result["blocked_reasons"])
+
     if phase == "completion":
         if not red_test_evidence:
             blocked_reasons.append("Completion phase requires --red-test-evidence.")
@@ -146,16 +161,6 @@ def validate_gate(
         )
         if not rework_result["ready"]:
             blocked_reasons.extend(rework_result["blocked_reasons"])
-        semantic_reviews_required = phase == "completion" or require_semantic_reviews
-        if semantic_reviews_required or review_dirs:
-            semantic_review_result = reviewer_gate.validate(
-                repo,
-                review_dirs,
-                [red_test_evidence, coverage_matrix, unit_test_evidence, business_review, implementation_manifest],
-                ["design", "test", "implementation"] if semantic_reviews_required else None,
-            )
-            if not semantic_review_result["ready"]:
-                blocked_reasons.extend(semantic_review_result["blocked_reasons"])
         if not skip_spring_static_check:
             spring_result = spring_static_check.validate(repo)
             if not spring_result["ready"]:

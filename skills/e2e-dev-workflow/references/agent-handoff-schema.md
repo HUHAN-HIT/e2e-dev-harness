@@ -101,9 +101,10 @@ Semantic Reviewers:
 - R2 Test Reviewer checks red-test depth, happy/failure coverage, security paths, and contract coverage before production code.
 - R3 Implementation Reviewer checks code/test completeness, security flaws, anti-patterns, and project-pattern consistency before completion.
 - Review requests use fields: `Phase`, `Reviewer Role`, `Context Package`, `Allowed Inputs`, `Forbidden`, and `Output`.
-- Review reports use fields: `Phase`, `Reviewer`, `Review Request`, `Developer Agent`, `Reviewer Agent`, `Independence`, `Context Boundary`, `No Code Changes`, `Scope`, `Inputs Reviewed`, `Findings`, `Required Rework`, and `Status`.
-- `Developer Agent` and `Reviewer Agent` must be different. `Independence` must be `independent-agent`. `Context Boundary` must be request-scoped with no inherited developer chat context. `No Code Changes` must be confirmed/read-only.
-- The `Review Request` file must exist, match the report phase, and declare the report as its exact `Output`.
+- Review reports use fields: `Phase`, `Reviewer`, `Review Request`, `Developer Agent`, `Reviewer Agent`, `Reviewer Session`, `Reviewer Invocation`, `Request Hash`, `Independence`, `Context Boundary`, `No Code Changes`, `Scope`, `Inputs Reviewed`, `Findings`, `Required Rework`, and `Status`.
+- `Developer Agent`, `Reviewer Agent`, and `Reviewer Session` must be concrete ids, not placeholders. `Developer Agent` and `Reviewer Agent` must be different. `Independence` must be exactly `independent-agent`. `Context Boundary` must be request-scoped with no inherited developer chat context. `No Code Changes` must be confirmed/read-only.
+- The `Review Request` file must exist, match the report phase, declare the report as its exact `Output`, assign the same Developer Agent and Reviewer Agent as the report, and hash to the report `Request Hash`.
+- The `Reviewer Invocation` JSON must match Developer Agent, Reviewer Agent, and Reviewer Session; point to the same review request and output; declare `fork_context: false`; use a request-only/no-inherited context policy; and be `status: completed`.
 - Findings become rework items; reviewer agents do not patch implementation directly.
 
 Code Developer:

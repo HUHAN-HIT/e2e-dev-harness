@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import hashlib
 import json
 import sys
 import tempfile
@@ -1029,8 +1030,13 @@ class ReviewerGateTests(unittest.TestCase):
         developer_agent: str = "developer-agent-1",
         reviewer_agent: str = "reviewer-agent-1",
         independence: str = "independent-agent",
+        request_hash: str = "",
+        reviewer_session: str = "review-session-1",
+        reviewer_invocation: str | None = None,
     ) -> str:
         request = request or f"docs/agent-runs/run/review-requests/{phase}-review-request.md"
+        reviewer_invocation = reviewer_invocation or f"docs/agent-runs/run/review-invocations/{phase}-reviewer-invocation.json"
+        request_hash_line = f"- Request Hash: {request_hash}\n" if request_hash else ""
         return textwrap.dedent(
             f"""
             # {phase.title()} Review
@@ -1040,6 +1046,9 @@ class ReviewerGateTests(unittest.TestCase):
             - Review Request: {request}
             - Developer Agent: {developer_agent}
             - Reviewer Agent: {reviewer_agent}
+            - Reviewer Session: {reviewer_session}
+            - Reviewer Invocation: {reviewer_invocation}
+            {request_hash_line.rstrip()}
             - Independence: {independence}
             - Context Boundary: request-scoped; no inherited developer chat context
             - No Code Changes: confirmed
@@ -1058,6 +1067,9 @@ class ReviewerGateTests(unittest.TestCase):
         request_name: str | None = None,
         output_name: str | None = None,
         request_phase: str | None = None,
+        developer_agent: str = "developer-agent-1",
+        reviewer_agent: str = "reviewer-agent-1",
+        reviewer_session: str = "review-session-1",
     ) -> str:
         request_name = request_name or f"{phase}-review-request.md"
         output_name = output_name or {
@@ -1066,6 +1078,8 @@ class ReviewerGateTests(unittest.TestCase):
             "implementation": "R3-implementation-review.md",
         }.get(phase, f"{phase}-review.md")
         request = repo / "docs" / "agent-runs" / "run" / "review-requests" / request_name
+        invocation = repo / "docs" / "agent-runs" / "run" / "review-invocations" / f"{phase}-reviewer-invocation.json"
+        invocation.parent.mkdir(parents=True, exist_ok=True)
         request.parent.mkdir(parents=True, exist_ok=True)
         request.write_text(
             textwrap.dedent(
@@ -1074,15 +1088,37 @@ class ReviewerGateTests(unittest.TestCase):
 
                 - Phase: {request_phase or phase}
                 - Reviewer Role: independent semantic reviewer
-                - Context Package: request-scoped
+                - Context Package: request-scoped; no inherited developer chat context
                 - Allowed Inputs: design, tests, implementation refs, dependency report
-                - Forbidden: inherited developer chat context; production-code edits
+                - Forbidden: inherited developer chat context; production-code edits; self-review
                 - Output: docs/agent-runs/run/reviews/{output_name}
+                - Developer Agent: {developer_agent}
+                - Reviewer Agent: {reviewer_agent}
+                - Reviewer Invocation: docs/agent-runs/run/review-invocations/{phase}-reviewer-invocation.json
                 """
             ).strip(),
             encoding="utf-8",
         )
+        invocation.write_text(
+            json.dumps(
+                {
+                    "developer_agent": developer_agent,
+                    "reviewer_agent": reviewer_agent,
+                    "reviewer_session": reviewer_session,
+                    "review_request": f"docs/agent-runs/run/review-requests/{request_name}",
+                    "output": f"docs/agent-runs/run/reviews/{output_name}",
+                    "fork_context": False,
+                    "context_policy": "request-scoped; no-inherited-developer-chat-context",
+                    "status": "completed",
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         return str(request.relative_to(repo)).replace("\\", "/")
+
+    def request_hash(self, repo: Path, request: str) -> str:
+        return hashlib.sha256((repo / request).read_bytes()).hexdigest()
 
     def test_reviewer_gate_requires_all_phase_reviews_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1090,7 +1126,10 @@ class ReviewerGateTests(unittest.TestCase):
             review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
             review_dir.mkdir(parents=True)
             request = self.write_request(repo, "design")
-            (review_dir / "R1-design-review.md").write_text(self.review_doc("design", request=request), encoding="utf-8")
+            (review_dir / "R1-design-review.md").write_text(
+                self.review_doc("design", request=request, request_hash=self.request_hash(repo, request)),
+                encoding="utf-8",
+            )
 
             result = reviewer_gate.validate(repo, [review_dir], require_phases=["design", "test", "implementation"])
 
@@ -1109,7 +1148,10 @@ class ReviewerGateTests(unittest.TestCase):
                 ("R3-implementation-review.md", "implementation"),
             ):
                 request = self.write_request(repo, phase)
-                (review_dir / name).write_text(self.review_doc(phase, request=request), encoding="utf-8")
+                (review_dir / name).write_text(
+                    self.review_doc(phase, request=request, request_hash=self.request_hash(repo, request)),
+                    encoding="utf-8",
+                )
 
             result = reviewer_gate.validate(repo, [review_dir], require_phases=["design", "test", "implementation"])
 
@@ -1123,7 +1165,13 @@ class ReviewerGateTests(unittest.TestCase):
             review_dir.mkdir(parents=True)
             request = self.write_request(repo, "implementation")
             (review_dir / "R3-implementation-review.md").write_text(
-                self.review_doc("implementation", status="blocked", findings="Missing VnpayQrOrderRS.", request=request),
+                self.review_doc(
+                    "implementation",
+                    status="blocked",
+                    findings="Missing VnpayQrOrderRS.",
+                    request=request,
+                    request_hash=self.request_hash(repo, request),
+                ),
                 encoding="utf-8",
             )
 
@@ -1142,6 +1190,7 @@ class ReviewerGateTests(unittest.TestCase):
                 self.review_doc(
                     "implementation",
                     request=request,
+                    request_hash=self.request_hash(repo, request),
                     developer_agent="agent-1",
                     reviewer_agent="agent-1",
                     independence="self-review",
@@ -1160,7 +1209,7 @@ class ReviewerGateTests(unittest.TestCase):
             review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
             review_dir.mkdir(parents=True)
             (review_dir / "R2-test-review.md").write_text(
-                self.review_doc("test", request="docs/agent-runs/run/review-requests/missing.md"),
+                self.review_doc("test", request="docs/agent-runs/run/review-requests/missing.md", request_hash="0" * 64),
                 encoding="utf-8",
             )
 
@@ -1176,7 +1225,7 @@ class ReviewerGateTests(unittest.TestCase):
             review_dir.mkdir(parents=True)
             request = self.write_request(repo, "implementation", request_phase="test")
             (review_dir / "R3-implementation-review.md").write_text(
-                self.review_doc("implementation", request=request),
+                self.review_doc("implementation", request=request, request_hash=self.request_hash(repo, request)),
                 encoding="utf-8",
             )
 
@@ -1192,7 +1241,7 @@ class ReviewerGateTests(unittest.TestCase):
             review_dir.mkdir(parents=True)
             request = self.write_request(repo, "implementation", output_name="other-review.md")
             (review_dir / "R3-implementation-review.md").write_text(
-                self.review_doc("implementation", request=request),
+                self.review_doc("implementation", request=request, request_hash=self.request_hash(repo, request)),
                 encoding="utf-8",
             )
 
@@ -1201,33 +1250,186 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("declared" in reason.lower() for reason in result["blocked_reasons"]))
 
+    def test_reviewer_gate_blocks_placeholder_agent_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(
+                repo,
+                "implementation",
+                developer_agent="<developer-agent-id>",
+                reviewer_agent="<independent-reviewer-agent-id>",
+            )
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc(
+                    "implementation",
+                    request=request,
+                    request_hash=self.request_hash(repo, request),
+                    developer_agent="<developer-agent-id>",
+                    reviewer_agent="<independent-reviewer-agent-id>",
+                    reviewer_session="<reviewer-session-id>",
+                ),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("placeholder" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_blocks_request_developer_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation", developer_agent="developer-agent-1")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc(
+                    "implementation",
+                    request=request,
+                    request_hash=self.request_hash(repo, request),
+                    developer_agent="developer-agent-2",
+                ),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("developer agent" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_blocks_request_reviewer_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation", reviewer_agent="reviewer-agent-1")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc(
+                    "implementation",
+                    request=request,
+                    request_hash=self.request_hash(repo, request),
+                    reviewer_agent="reviewer-agent-2",
+                ),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("reviewer agent" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_blocks_tampered_request_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc("implementation", request=request, request_hash="0" * 64),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("request hash" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_blocks_invocation_forked_from_developer_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            invocation = repo / "docs" / "agent-runs" / "run" / "review-invocations" / "implementation-reviewer-invocation.json"
+            data = json.loads(invocation.read_text(encoding="utf-8"))
+            data["fork_context"] = True
+            invocation.write_text(json.dumps(data), encoding="utf-8")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc("implementation", request=request, request_hash=self.request_hash(repo, request)),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("fork_context" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_blocks_independence_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc(
+                    "implementation",
+                    request=request,
+                    request_hash=self.request_hash(repo, request),
+                    independence="subagent",
+                ),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("independence" in reason.lower() for reason in result["blocked_reasons"]))
+
 
 class ImplementationGateTests(unittest.TestCase):
-    def write_semantic_reviews(self, repo: Path) -> Path:
+    def write_semantic_reviews(self, repo: Path, phases: tuple[str, ...] = ("design", "test", "implementation")) -> Path:
         review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
         request_dir = repo / "docs" / "agent-runs" / "run" / "review-requests"
+        invocation_dir = repo / "docs" / "agent-runs" / "run" / "review-invocations"
         review_dir.mkdir(parents=True, exist_ok=True)
         request_dir.mkdir(parents=True, exist_ok=True)
+        invocation_dir.mkdir(parents=True, exist_ok=True)
         for phase, review_name, request_name in (
             ("design", "R1-design-review.md", "R1-design-review-request.md"),
             ("test", "R2-test-review.md", "R2-test-review-request.md"),
             ("implementation", "R3-implementation-review.md", "R3-implementation-review-request.md"),
         ):
-            (request_dir / request_name).write_text(
+            if phase not in phases:
+                continue
+            request_path = request_dir / request_name
+            invocation_path = invocation_dir / f"{phase}-reviewer-invocation.json"
+            request_path.write_text(
                 textwrap.dedent(
                     f"""
                     # {phase.title()} Review Request
 
                     - Phase: {phase}
                     - Reviewer Role: independent semantic reviewer
-                    - Context Package: request-scoped
+                    - Context Package: request-scoped; no inherited developer chat context
                     - Allowed Inputs: design, tests, implementation refs, dependency report
-                    - Forbidden: inherited developer chat context; production-code edits
+                    - Forbidden: inherited developer chat context; production-code edits; self-review
                     - Output: docs/agent-runs/run/reviews/{review_name}
+                    - Developer Agent: developer-agent-1
+                    - Reviewer Agent: reviewer-agent-{phase}
+                    - Reviewer Invocation: docs/agent-runs/run/review-invocations/{phase}-reviewer-invocation.json
                     """
                 ).strip(),
                 encoding="utf-8",
             )
+            invocation_path.write_text(
+                json.dumps(
+                    {
+                        "developer_agent": "developer-agent-1",
+                        "reviewer_agent": f"reviewer-agent-{phase}",
+                        "reviewer_session": f"reviewer-session-{phase}",
+                        "review_request": f"docs/agent-runs/run/review-requests/{request_name}",
+                        "output": f"docs/agent-runs/run/reviews/{review_name}",
+                        "fork_context": False,
+                        "context_policy": "request-scoped; no-inherited-developer-chat-context",
+                        "status": "completed",
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            request_hash = hashlib.sha256(request_path.read_bytes()).hexdigest()
             (review_dir / review_name).write_text(
                 textwrap.dedent(
                     f"""
@@ -1238,6 +1440,9 @@ class ImplementationGateTests(unittest.TestCase):
                     - Review Request: docs/agent-runs/run/review-requests/{request_name}
                     - Developer Agent: developer-agent-1
                     - Reviewer Agent: reviewer-agent-{phase}
+                    - Reviewer Session: reviewer-session-{phase}
+                    - Reviewer Invocation: docs/agent-runs/run/review-invocations/{phase}-reviewer-invocation.json
+                    - Request Hash: {request_hash}
                     - Independence: independent-agent
                     - Context Boundary: request-scoped; no inherited developer chat context
                     - No Code Changes: confirmed
@@ -1286,6 +1491,93 @@ class ImplementationGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("Knowledge graph status" in reason for reason in result["blocked_reasons"]))
+
+    def test_planning_gate_blocks_without_r1_design_review(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Return a quote.
+
+            ## Scope
+            - sample-service
+
+            ## Use Cases
+            - Create quote.
+
+            ## Acceptance Criteria
+            - Quote is returned.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            design.parent.mkdir(parents=True)
+            kg.parent.mkdir(parents=True)
+            design.write_text(markdown, encoding="utf-8")
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+
+            result = implementation_gate.validate_gate(repo, design, kg, "planning", None)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("semantic review" in reason.lower() or "design" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_implementation_gate_blocks_without_r2_test_review(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Return a quote.
+
+            ## Scope
+            - sample-service
+
+            ## Use Cases
+            - Create quote.
+
+            ## Acceptance Criteria
+            - Quote is returned.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            red = repo / "docs" / "agent-runs" / "run" / "evidence" / "red-test.txt"
+            design.parent.mkdir(parents=True)
+            kg.parent.mkdir(parents=True)
+            red.parent.mkdir(parents=True)
+            design.write_text(markdown, encoding="utf-8")
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            review_dir = self.write_semantic_reviews(repo, phases=("design",))
+
+            result = implementation_gate.validate_gate(
+                repo,
+                design,
+                kg,
+                "implementation",
+                red,
+                review_dirs=[review_dir],
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("test" in reason.lower() for reason in result["blocked_reasons"]))
 
     def test_completion_gate_requires_coverage_and_unit_evidence(self) -> None:
         markdown = textwrap.dedent(
@@ -2767,21 +3059,21 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
             self.assertEqual(0, code)
             self.assertEqual(["jeepay-core", "jeepay-payment", "jeepay-service"], sorted(result["selected_services"]))
-            self.assertTrue((repo / result["handoff_artifacts"]["design_review"]).exists())
             self.assertTrue((repo / result["handoff_artifacts"]["design_review_request"]).exists())
-            self.assertTrue((repo / result["handoff_artifacts"]["test_review"]).exists())
             self.assertTrue((repo / result["handoff_artifacts"]["test_review_request"]).exists())
-            self.assertTrue((repo / result["handoff_artifacts"]["implementation_review"]).exists())
             self.assertTrue((repo / result["handoff_artifacts"]["implementation_review_request"]).exists())
+            self.assertFalse((repo / result["handoff_artifacts"]["design_review"]).exists())
+            self.assertFalse((repo / result["handoff_artifacts"]["test_review"]).exists())
+            self.assertFalse((repo / result["handoff_artifacts"]["implementation_review"]).exists())
             for module in ("jeepay-core", "jeepay-service", "jeepay-payment"):
                 paths = result["handoff_artifacts"]["service_plans"][module]
                 self.assertTrue((repo / paths["service_plan"]).exists())
                 self.assertTrue((repo / paths["code_agent"]).exists())
                 self.assertTrue((repo / paths["implementation_manifest"]).exists())
-                self.assertTrue((repo / paths["test_review"]).exists())
                 self.assertTrue((repo / paths["test_review_request"]).exists())
-                self.assertTrue((repo / paths["implementation_review"]).exists())
                 self.assertTrue((repo / paths["implementation_review_request"]).exists())
+                self.assertFalse((repo / paths["test_review"]).exists())
+                self.assertFalse((repo / paths["implementation_review"]).exists())
             self.assertTrue((repo / result["handoff_artifacts"]["verification_evidence"]).exists())
 
     def test_unmatched_requested_services_are_reported(self) -> None:
@@ -2937,16 +3229,16 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
             service_plan = repo / artifacts["service_plans"]["services/order-service"]["service_plan"]
             text = service_plan.read_text(encoding="utf-8")
-            review_text = (repo / artifacts["implementation_review"]).read_text(encoding="utf-8")
+            request_text = (repo / artifacts["implementation_review_request"]).read_text(encoding="utf-8")
 
         self.assertIn("# Service Implementation Plan: services/order-service", text)
         self.assertIn("## Modification Points", text)
         self.assertIn("## Service-local TDD Plan", text)
         self.assertIn("## Implementation Manifest", text)
         self.assertIn("## Cross-service Contracts", text)
-        self.assertIn("Review Request:", review_text)
-        self.assertIn("Independence:", review_text)
-        self.assertIn("No Code Changes:", review_text)
+        self.assertIn("Reviewer Agent:", request_text)
+        self.assertIn("Forbidden:", request_text)
+        self.assertIn("Output:", request_text)
 
     def test_multi_agent_plan_splits_code_developers_by_service(self) -> None:
         artifacts = orchestration_plan.artifacts(
@@ -2974,28 +3266,52 @@ class UnifiedCliTests(unittest.TestCase):
     def write_semantic_reviews(self, repo: Path) -> Path:
         review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
         request_dir = repo / "docs" / "agent-runs" / "run" / "review-requests"
+        invocation_dir = repo / "docs" / "agent-runs" / "run" / "review-invocations"
         review_dir.mkdir(parents=True, exist_ok=True)
         request_dir.mkdir(parents=True, exist_ok=True)
+        invocation_dir.mkdir(parents=True, exist_ok=True)
         for phase, review_name, request_name in (
             ("design", "R1-design-review.md", "R1-design-review-request.md"),
             ("test", "R2-test-review.md", "R2-test-review-request.md"),
             ("implementation", "R3-implementation-review.md", "R3-implementation-review-request.md"),
         ):
-            (request_dir / request_name).write_text(
+            request_path = request_dir / request_name
+            invocation_path = invocation_dir / f"{phase}-reviewer-invocation.json"
+            request_path.write_text(
                 textwrap.dedent(
                     f"""
                     # {phase.title()} Review Request
 
                     - Phase: {phase}
                     - Reviewer Role: independent semantic reviewer
-                    - Context Package: request-scoped
+                    - Context Package: request-scoped; no inherited developer chat context
                     - Allowed Inputs: design, tests, implementation refs, dependency report
-                    - Forbidden: inherited developer chat context; production-code edits
+                    - Forbidden: inherited developer chat context; production-code edits; self-review
                     - Output: docs/agent-runs/run/reviews/{review_name}
+                    - Developer Agent: developer-agent-1
+                    - Reviewer Agent: reviewer-agent-{phase}
+                    - Reviewer Invocation: docs/agent-runs/run/review-invocations/{phase}-reviewer-invocation.json
                     """
                 ).strip(),
                 encoding="utf-8",
             )
+            invocation_path.write_text(
+                json.dumps(
+                    {
+                        "developer_agent": "developer-agent-1",
+                        "reviewer_agent": f"reviewer-agent-{phase}",
+                        "reviewer_session": f"reviewer-session-{phase}",
+                        "review_request": f"docs/agent-runs/run/review-requests/{request_name}",
+                        "output": f"docs/agent-runs/run/reviews/{review_name}",
+                        "fork_context": False,
+                        "context_policy": "request-scoped; no-inherited-developer-chat-context",
+                        "status": "completed",
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            request_hash = hashlib.sha256(request_path.read_bytes()).hexdigest()
             (review_dir / review_name).write_text(
                 textwrap.dedent(
                     f"""
@@ -3006,6 +3322,9 @@ class UnifiedCliTests(unittest.TestCase):
                     - Review Request: docs/agent-runs/run/review-requests/{request_name}
                     - Developer Agent: developer-agent-1
                     - Reviewer Agent: reviewer-agent-{phase}
+                    - Reviewer Session: reviewer-session-{phase}
+                    - Reviewer Invocation: docs/agent-runs/run/review-invocations/{phase}-reviewer-invocation.json
+                    - Request Hash: {request_hash}
                     - Independence: independent-agent
                     - Context Boundary: request-scoped; no inherited developer chat context
                     - No Code Changes: confirmed

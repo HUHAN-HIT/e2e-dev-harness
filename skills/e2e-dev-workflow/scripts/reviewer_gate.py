@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -15,6 +16,9 @@ REQUIRED_FIELDS = {
     "review_request": "Review Request",
     "developer_agent": "Developer Agent",
     "reviewer_agent": "Reviewer Agent",
+    "reviewer_session": "Reviewer Session",
+    "reviewer_invocation": "Reviewer Invocation",
+    "request_hash": "Request Hash",
     "independence": "Independence",
     "context_boundary": "Context Boundary",
     "no_code_changes": "No Code Changes",
@@ -39,7 +43,7 @@ PASS_STATUSES = {"approved", "verified", "clear", "passed"}
 PASS_WITH_REWORK_STATUSES = {"approved-with-rework", "verified-with-rework"}
 BLOCK_STATUSES = {"open", "in-progress", "in_progress", "blocked", "changes-requested", "needs-rework"}
 NONE_VALUES = {"", "-", "none", "n/a", "na", "no", "no findings", "no rework", "无", "没有"}
-INDEPENDENT_VALUES = {"independent-agent", "separate-agent", "subagent", "separate-session", "parallel-agent"}
+INDEPENDENT_VALUES = {"independent-agent"}
 SELF_REVIEW_VALUES = {"self-review", "same-agent", "developer-agent", "same-session"}
 NO_CODE_CHANGE_VALUES = {"confirmed", "true", "yes", "no-code-changes", "read-only", "none"}
 REQUEST_REQUIRED_FIELDS = {
@@ -48,8 +52,12 @@ REQUEST_REQUIRED_FIELDS = {
     "context_package": "Context Package",
     "forbidden": "Forbidden",
     "output": "Output",
+    "developer_agent": "Developer Agent",
+    "reviewer_agent": "Reviewer Agent",
+    "reviewer_invocation": "Reviewer Invocation",
 }
 FIELD_RE = re.compile(r"^\s*-?\s*([A-Za-z][A-Za-z _-]*):\s*(.*?)\s*$")
+PLACEHOLDER_RE = re.compile(r"^\s*(<[^>]+>|\[[^\]]+\]|todo|tbd|unknown|draft|placeholder)\s*$", re.IGNORECASE)
 
 
 def normalize_key(value: str) -> str:
@@ -83,8 +91,23 @@ def parse_item(path: Path) -> dict[str, str]:
     return fields
 
 
+def read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def normalize_agent_id(value: str) -> str:
     return re.sub(r"\s+", "", normalize_value(value).strip("<>"))
+
+
+def is_placeholder(value: str) -> bool:
+    return not value.strip() or bool(PLACEHOLDER_RE.match(value.strip()))
+
+
+def request_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def resolve_repo_path(repo: Path, value: str) -> Path:
@@ -159,11 +182,21 @@ def validate_item(repo: Path, path: Path, fields: dict[str, str]) -> tuple[dict,
     required_rework = fields.get("required_rework", "")
     developer_agent = fields.get("developer_agent", "").strip()
     reviewer_agent = fields.get("reviewer_agent", "").strip()
+    reviewer_session = fields.get("reviewer_session", "").strip()
+    reviewer_invocation = fields.get("reviewer_invocation", "").strip()
+    report_request_hash = fields.get("request_hash", "").strip().lower()
     independence = normalize_value(fields.get("independence", ""))
     no_code_changes = normalize_value(fields.get("no_code_changes", ""))
     context_boundary = fields.get("context_boundary", "").strip().lower()
     review_request = fields.get("review_request", "").strip()
 
+    for label, value in (
+        ("Developer Agent", developer_agent),
+        ("Reviewer Agent", reviewer_agent),
+        ("Reviewer Session", reviewer_session),
+    ):
+        if is_placeholder(value):
+            blocked.append(f"Semantic review {path} has placeholder {label}; use a concrete independent agent/session id.")
     if developer_agent and reviewer_agent and normalize_agent_id(developer_agent) == normalize_agent_id(reviewer_agent):
         blocked.append(f"Semantic review {path} uses the same Developer Agent and Reviewer Agent; self-review is not allowed.")
     if not independence or independence in SELF_REVIEW_VALUES or independence not in INDEPENDENT_VALUES:
@@ -172,6 +205,30 @@ def validate_item(repo: Path, path: Path, fields: dict[str, str]) -> tuple[dict,
         blocked.append(f"Semantic review {path} must declare No Code Changes: confirmed/read-only, got {fields.get('no_code_changes')}.")
     if not context_boundary or not ("request" in context_boundary and ("no inherited" in context_boundary or "isolated" in context_boundary)):
         blocked.append(f"Semantic review {path} must use a request-scoped isolated context boundary.")
+    invocation_fields: dict = {}
+    if reviewer_invocation:
+        resolved_invocation = resolve_repo_path(repo, reviewer_invocation)
+        if not inside_repo(repo, resolved_invocation):
+            blocked.append(f"Semantic review {path} references Reviewer Invocation outside repo: {reviewer_invocation}")
+        elif not resolved_invocation.exists():
+            blocked.append(f"Semantic review {path} references missing Reviewer Invocation: {reviewer_invocation}")
+        else:
+            invocation_fields = read_json(resolved_invocation)
+            if not invocation_fields:
+                blocked.append(f"Reviewer Invocation {resolved_invocation} is missing or not valid JSON.")
+            if normalize_agent_id(str(invocation_fields.get("developer_agent", ""))) != normalize_agent_id(developer_agent):
+                blocked.append(f"Reviewer Invocation {resolved_invocation} Developer Agent does not match review report.")
+            if normalize_agent_id(str(invocation_fields.get("reviewer_agent", ""))) != normalize_agent_id(reviewer_agent):
+                blocked.append(f"Reviewer Invocation {resolved_invocation} Reviewer Agent does not match review report.")
+            if normalize_agent_id(str(invocation_fields.get("reviewer_session", ""))) != normalize_agent_id(reviewer_session):
+                blocked.append(f"Reviewer Invocation {resolved_invocation} Reviewer Session does not match review report.")
+            if invocation_fields.get("fork_context") is not False:
+                blocked.append(f"Reviewer Invocation {resolved_invocation} must declare fork_context=false.")
+            context_policy = str(invocation_fields.get("context_policy", "")).lower()
+            if not ("request" in context_policy and ("no-inherited" in context_policy or "no inherited" in context_policy or "isolated" in context_policy)):
+                blocked.append(f"Reviewer Invocation {resolved_invocation} must declare request-only/no-inherited context policy.")
+            if normalize_value(str(invocation_fields.get("status", ""))) not in {"completed", "complete", "done"}:
+                blocked.append(f"Reviewer Invocation {resolved_invocation} must have status=completed.")
     if review_request:
         resolved_request = resolve_repo_path(repo, review_request)
         if not inside_repo(repo, resolved_request):
@@ -189,6 +246,49 @@ def validate_item(repo: Path, path: Path, fields: dict[str, str]) -> tuple[dict,
                 blocked.append(
                     f"Review Request {resolved_request} missing required fields: {', '.join(missing_request)}"
                 )
+            request_developer = request_fields.get("developer_agent", "").strip()
+            request_reviewer = request_fields.get("reviewer_agent", "").strip()
+            request_invocation = request_fields.get("reviewer_invocation", "").strip()
+            for label, value in (
+                ("Review Request Developer Agent", request_developer),
+                ("Review Request Reviewer Agent", request_reviewer),
+            ):
+                if is_placeholder(value):
+                    blocked.append(f"Review Request {resolved_request} has placeholder {label}; assign concrete agent ids before review.")
+            if request_developer and developer_agent and normalize_agent_id(request_developer) != normalize_agent_id(developer_agent):
+                blocked.append(f"Semantic review {path} Developer Agent does not match Review Request Developer Agent.")
+            if request_reviewer and reviewer_agent and normalize_agent_id(request_reviewer) != normalize_agent_id(reviewer_agent):
+                blocked.append(f"Semantic review {path} Reviewer Agent does not match Review Request Reviewer Agent.")
+            if request_developer and request_reviewer and normalize_agent_id(request_developer) == normalize_agent_id(request_reviewer):
+                blocked.append(f"Review Request {resolved_request} assigns the same Developer Agent and Reviewer Agent.")
+            if request_invocation and reviewer_invocation:
+                resolved_request_invocation = resolve_repo_path(repo, request_invocation)
+                resolved_report_invocation = resolve_repo_path(repo, reviewer_invocation)
+                if resolved_request_invocation.resolve() != resolved_report_invocation.resolve():
+                    blocked.append(f"Semantic review {path} Reviewer Invocation does not match Review Request.")
+            context_package = request_fields.get("context_package", "").strip().lower()
+            forbidden = request_fields.get("forbidden", "").strip().lower()
+            if not ("request" in context_package and ("no inherited" in context_package or "isolated" in context_package)):
+                blocked.append(f"Review Request {resolved_request} must declare a request-scoped context with no inherited developer chat context.")
+            if not ("self-review" in forbidden and "production-code edits" in forbidden):
+                blocked.append(f"Review Request {resolved_request} must forbid self-review and production-code edits.")
+            if report_request_hash != request_hash(resolved_request):
+                blocked.append(f"Semantic review {path} Request Hash does not match Review Request content.")
+            if invocation_fields:
+                invocation_request = str(invocation_fields.get("review_request", "")).strip()
+                invocation_output = str(invocation_fields.get("output", "")).strip()
+                if invocation_request:
+                    resolved_invocation_request = resolve_repo_path(repo, invocation_request)
+                    if resolved_invocation_request.resolve() != resolved_request.resolve():
+                        blocked.append(f"Reviewer Invocation for {path} does not point to the same Review Request.")
+                else:
+                    blocked.append(f"Reviewer Invocation for {path} must include review_request.")
+                if invocation_output:
+                    resolved_invocation_output = resolve_repo_path(repo, invocation_output)
+                    if resolved_invocation_output.resolve() != path.resolve():
+                        blocked.append(f"Reviewer Invocation for {path} does not point to this review report output.")
+                else:
+                    blocked.append(f"Reviewer Invocation for {path} must include output.")
             request_phase = normalize_phase(request_fields.get("phase", ""))
             if phase and request_phase and phase != request_phase:
                 blocked.append(
@@ -216,8 +316,11 @@ def validate_item(repo: Path, path: Path, fields: dict[str, str]) -> tuple[dict,
             "status": status,
             "developer_agent": developer_agent,
             "reviewer_agent": reviewer_agent,
+            "reviewer_session": reviewer_session,
+            "reviewer_invocation": reviewer_invocation,
             "independence": independence,
             "review_request": review_request,
+            "request_hash": report_request_hash,
             "has_required_rework": not is_none_value(required_rework),
         }
     )

@@ -352,7 +352,7 @@ docs/agent-runs/<YYYY-MM-DD-feature>/
 
 语义 Reviewer Agent 采用 R1/R2/R3 三段式：R1 在澄清后审查需求和设计完整性，R2 在 red test 后审查测试深度，R3 在 green/refactor 后审查实现完整性、安全风险、反模式和项目模式一致性。Reviewer 只输出 review artifact 和 rework item，不直接补代码；多服务任务的 R2/R3 可以放在 `service-plans/<service>/reviews/`，避免不同服务上下文互相污染。
 
-Independent reviewer agent is mandatory: R1/R2/R3 reports must be produced by a reviewer agent/session that did not implement the code or author the reviewed handoff. Each report must point to a `review-requests/*-review-request.md`, use different `Developer Agent` and `Reviewer Agent` values, declare `Independence: independent-agent`, use a request-scoped context with no inherited developer chat context, and declare `No Code Changes: confirmed`. Self-review blocks completion.
+Independent reviewer agent is mandatory: R1/R2/R3 reports must be produced by a reviewer agent/session that did not implement the code or author the reviewed handoff. The archive creates review requests, not completed review reports. Assign concrete `Developer Agent` and `Reviewer Agent` values in the request before dispatch; placeholders are invalid. Each report must point to a `review-requests/*-review-request.md`, repeat the same Developer/Reviewer ids, include `Reviewer Session`, reference a `Reviewer Invocation` JSON audit artifact, include the SHA-256 `Request Hash`, declare `Independence: independent-agent`, use a request-scoped context with no inherited developer chat context, and declare `No Code Changes: confirmed`. Self-review blocks completion.
 
 ### 6. 刷新知识图谱
 
@@ -524,7 +524,7 @@ python ..\skills\e2e-dev-workflow\scripts\reviewer_gate.py . `
   --require-phase implementation
 ```
 
-review artifact 必须包含 `Phase`、`Reviewer`、`Review Request`、`Developer Agent`、`Reviewer Agent`、`Independence`、`Context Boundary`、`No Code Changes`、`Scope`、`Inputs Reviewed`、`Findings`、`Required Rework`、`Status`。`Review Request` 必须存在，phase 必须一致，且 request 的 `Output` 必须指向当前 report；`Developer Agent` 和 `Reviewer Agent` 不能相同；`Independence` 必须是 `independent-agent`。`Status: approved` / `verified` / `clear` / `passed` 可放行；`blocked`、`changes-requested`、`needs-rework`、`open`、`in-progress` 会阻断。若 review 发现问题，先生成 rework item，再按 Return Phase 回环。
+review artifact 必须包含 `Phase`、`Reviewer`、`Review Request`、`Developer Agent`、`Reviewer Agent`、`Reviewer Session`、`Reviewer Invocation`、`Request Hash`、`Independence`、`Context Boundary`、`No Code Changes`、`Scope`、`Inputs Reviewed`、`Findings`、`Required Rework`、`Status`。`Review Request` 必须存在，phase 必须一致，且 request 的 `Output` 必须指向当前 report；request/report 的 Developer/Reviewer 必须一致，`Developer Agent` 和 `Reviewer Agent` 不能相同，不能是 `<...>` 占位值；`Request Hash` 必须等于 request 文件当前 SHA-256；`Reviewer Invocation` JSON 必须匹配 Developer/Reviewer/Session、指向同一个 request 和 output、声明 `fork_context: false`、使用 request-only/no-inherited context policy 且 `status: completed`；`Independence` 必须是 `independent-agent`。`Status: approved` / `verified` / `clear` / `passed` 可放行；`blocked`、`changes-requested`、`needs-rework`、`open`、`in-progress` 会阻断。若 review 发现问题，先生成 rework item，再按 Return Phase 回环。
 
 ```text
 docs/agent-runs/<run>/rework/rework-NNN.md
