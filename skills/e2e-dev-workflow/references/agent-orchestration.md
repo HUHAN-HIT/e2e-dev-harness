@@ -7,10 +7,13 @@ Use this reference when a Java/Spring 6/Maven change benefits from smaller, isol
 | Mode | Use when | Behavior |
 | --- | --- | --- |
 | `single` | Small, single-module, low-risk work | One implementation agent may run clarification, use-case design, TDD, and implementation, but R1/R2/R3 semantic reviews still require independent reviewer agents or separate reviewer sessions. |
+| `single-review` | Single-service medium work where a compact developer context is useful but formal review is still required | One implementation agent does the development work; R1, R2, and R3 still run as separate request-scoped reviewer invocations, and Coverage Reviewer still runs before completion. Multiple services or high-risk evidence escalates to `multi`. |
 | `multi` | User asks for split agents, cross-service work, contract/data changes, or high risk | Separate agents own requirements, use cases, tests, service-scoped code, and coverage review. |
-| `auto` | Default recommendation mode | The helper chooses based on repo shape, design doc size, services, and risk keywords. |
+| `auto` | Default recommendation mode | The helper chooses `single` or `multi` based on repo shape, design doc size, services, and risk keywords; `single-review` is explicit only. |
 
 Do not let an implementation agent review its own work. If the runtime cannot spawn subagents, use a separate reviewer session with only the review request and allowed artifact inputs. Same-chat/self-review is not an acceptable fallback for R1/R2/R3.
+
+Do not use `single-review` to collapse the three reviews into one after-the-fact report. It only compresses the developer side of the workflow; review timing, reviewer independence, request hashes, invocation JSON, and Coverage Reviewer remain unchanged.
 
 ## Service Scope
 
@@ -259,6 +262,7 @@ Parallel work is useful only after requirements are stable:
 - For multiple services, split Code Developer work by service or module with disjoint file ownership.
 - Service-scoped Code Developers may run in parallel only after requirements, cross-service flows, contracts, and service plans are stable. If service A depends on service B, freeze and ACK the shared contract first; otherwise run the producer/contract work before the consumer implementation.
 - R1 review runs after clarification and before planning. R2 review runs after red tests and before green implementation. R3 review runs after green/refactor and before coverage review. Each one runs in an independent reviewer agent/session with no inherited developer chat context.
+- In `single-review`, the reviewer may share a role family such as `single-reviewer-*`, but each phase still gets its own review request, output file, invocation JSON, and reviewer session.
 - Coverage Reviewer runs after semantic reviewers and service-scoped developers finish; it blocks completion if any acceptance criterion lacks tests, code refs, business review, approved semantic review, or closed rework.
 
 ## Recommended Invocation Pattern

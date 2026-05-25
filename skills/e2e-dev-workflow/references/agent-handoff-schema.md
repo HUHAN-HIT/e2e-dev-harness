@@ -132,6 +132,7 @@ Semantic Reviewers:
 - R1 Design Reviewer checks requirements, AC completeness, affected modules, security-sensitive paths, and reference-pattern consistency before planning.
 - R2 Test Reviewer checks red-test depth, happy/failure coverage, security paths, and contract coverage before production code.
 - R3 Implementation Reviewer checks code/test completeness, security flaws, anti-patterns, and project-pattern consistency before completion.
+- In `single-review` mode, the same reviewer role family may cover R1/R2/R3, but only through separate phase-boundary review requests, outputs, invocation JSON files, and reviewer sessions. A single consolidated report does not satisfy the gate.
 - Review requests use fields: `Phase`, `Reviewer Role`, `Context Package`, `Allowed Inputs`, `Forbidden`, and `Output`.
 - Review reports use fields: `Phase`, `Reviewer`, `Review Request`, `Developer Agent`, `Reviewer Agent`, `Reviewer Session`, `Reviewer Invocation`, `Request Hash`, `Independence`, `Context Boundary`, `No Code Changes`, `Scope`, `Inputs Reviewed`, `Findings`, `Required Rework`, and `Status`.
 - `Developer Agent`, `Reviewer Agent`, and `Reviewer Session` must be concrete ids, not placeholders. `Developer Agent` and `Reviewer Agent` must be different. `Independence` must be exactly `independent-agent`. `Context Boundary` must be request-scoped with no inherited developer chat context. `No Code Changes` must be confirmed/read-only.

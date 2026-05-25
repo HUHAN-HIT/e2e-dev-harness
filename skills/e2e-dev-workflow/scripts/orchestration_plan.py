@@ -18,25 +18,44 @@ if str(SCRIPT_DIR) not in sys.path:
 from kg_refresh import detect  # noqa: E402
 
 
+AGENT_MODES = ("auto", "single", "single-review", "multi")
+EXPLICIT_AGENT_MODES = {"single", "single-review", "multi"}
+LARGE_DESIGN_CHAR_THRESHOLD = 6000
 RISK_KEYWORDS = {
-    "api",
     "contract",
-    "event",
-    "message",
     "schema",
     "migration",
     "database",
     "transaction",
     "auth",
+    "authentication",
+    "authorization",
     "permission",
     "security",
     "idempotent",
     "retry",
-    "timeout",
+    "topic",
+    "producer",
+    "consumer",
+    "listener",
+    "publish",
+    "subscribe",
+    "payload",
+    "dmq",
+    "rocketmq",
+    "kafka",
+    "rabbitmq",
     "跨服务",
     "契约",
-    "消息",
-    "事件",
+    "消息契约",
+    "主题",
+    "生产者",
+    "消费者",
+    "监听",
+    "发布",
+    "订阅",
+    "载荷",
+    "队列",
     "数据库",
     "迁移",
     "权限",
@@ -153,27 +172,47 @@ def default_run_id(slug: str, run_date: str | None = None) -> str:
     return f"{run_date or date.today().isoformat()}-{safe_slug(slug)}"
 
 
-def choose_mode(requested: str, facts: dict, design_text: str, design_is_template: bool) -> tuple[str, list[str]]:
-    if requested in {"single", "multi"}:
-        return requested, [f"mode explicitly set to {requested}"]
+def keyword_matches(keyword: str, lowered_text: str) -> bool:
+    if re.fullmatch(r"[a-z0-9][a-z0-9 -]*", keyword):
+        pattern = r"(?<![a-z0-9])" + re.escape(keyword).replace(r"\ ", r"\s+") + r"(?![a-z0-9])"
+        return re.search(pattern, lowered_text) is not None
+    return keyword.lower() in lowered_text
 
+
+def mode_reasons(facts: dict, design_text: str, design_is_template: bool) -> list[str]:
     reasons: list[str] = []
     service_count = len(facts.get("service_candidates", []))
     if facts.get("multi_service") or service_count > 1:
         reasons.append("multiple service candidates detected")
     if design_is_template:
         reasons.append("template design doc detected; placeholder risk keywords ignored")
-    elif len(design_text) > 3000:
+    elif len(design_text) > LARGE_DESIGN_CHAR_THRESHOLD:
         reasons.append("design document is large enough to benefit from context isolation")
     if not design_is_template:
         lowered = design_text.lower()
-        matched = sorted(keyword for keyword in RISK_KEYWORDS if keyword.lower() in lowered)
+        matched = sorted(keyword for keyword in RISK_KEYWORDS if keyword_matches(keyword, lowered))
         if matched:
             reasons.append("risk keywords detected: " + ", ".join(matched[:8]))
     if not design_is_template and facts.get("design_docs_or_media_count", 0) >= 12:
         reasons.append("many design/media artifacts detected")
+    return reasons
 
-    actionable_reasons = [reason for reason in reasons if not reason.startswith("template design doc")]
+
+def actionable_mode_reasons(reasons: list[str]) -> list[str]:
+    return [reason for reason in reasons if not reason.startswith("template design doc")]
+
+
+def choose_mode(requested: str, facts: dict, design_text: str, design_is_template: bool) -> tuple[str, list[str]]:
+    reasons = mode_reasons(facts, design_text, design_is_template)
+    if requested == "single-review":
+        actionable_reasons = actionable_mode_reasons(reasons)
+        if actionable_reasons:
+            return "multi", ["single-review escalated to multi: " + "; ".join(actionable_reasons[:3])] + reasons
+        return requested, [f"mode explicitly set to {requested}"]
+    if requested in EXPLICIT_AGENT_MODES:
+        return requested, [f"mode explicitly set to {requested}"]
+
+    actionable_reasons = actionable_mode_reasons(reasons)
     if actionable_reasons:
         return "multi", reasons
     return "single", ["single service and low-risk design context detected"]
@@ -379,7 +418,8 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
     if selected_mode == "discovery":
         return []
     agents: list[dict] = []
-    if selected_mode == "single":
+    if selected_mode in {"single", "single-review"}:
+        review_owner = "single-reviewer phase-boundary invocations" if selected_mode == "single-review" else "independent reviewer agents"
         agents.append(
             {
                 "name": "single-agent",
@@ -396,7 +436,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
                     artifact_paths["business_review"],
                     artifact_paths["verification_evidence"],
                 ],
-                "gate": "Must not write semantic review reports; independent reviewer agents own R1/R2/R3 review artifacts.",
+                "gate": f"Must not write semantic review reports; {review_owner} own R1/R2/R3 review artifacts.",
             }
         )
     else:
@@ -423,9 +463,14 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
             "gate": "First red test must be written and observed failing for the expected reason.",
         },
     ])
+    design_reviewer_name = "single-reviewer-r1-design" if selected_mode == "single-review" else "design-reviewer"
+    test_reviewer_name = "single-reviewer-r2-test" if selected_mode == "single-review" else "test-reviewer"
+    implementation_reviewer_name = (
+        "single-reviewer-r3-implementation" if selected_mode == "single-review" else "implementation-reviewer"
+    )
     agents.extend([
         {
-            "name": "design-reviewer",
+            "name": design_reviewer_name,
             "owns": ["semantic review of requirements, AC completeness, affected modules, security-sensitive paths, reference patterns"],
             "inputs": [
                 artifact_paths["design_review_request"],
@@ -438,7 +483,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
             "gate": "Blocked findings become rework before implementation planning continues.",
         },
         {
-            "name": "test-reviewer",
+            "name": test_reviewer_name,
             "owns": ["semantic review of red tests, happy/failure paths, security and contract coverage"],
             "inputs": [
                 artifact_paths["test_review_request"],
@@ -451,7 +496,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
         },
     ])
     service_plans = artifact_paths.get("service_plans", {})
-    if service_plans and selected_mode != "single":
+    if service_plans and selected_mode not in {"single", "single-review"}:
         for service, paths in service_plans.items():
             agents.append(
                 {
@@ -497,7 +542,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
                     "gate": "Must run as an independent reviewer agent with no inherited developer chat context.",
                 }
             )
-    elif selected_mode != "single":
+    elif selected_mode not in {"single", "single-review"}:
         agents.append({
             "name": "code-developer",
             "owns": ["minimal implementation", "red-green-refactor", "verification"],
@@ -506,7 +551,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
             "gate": "All narrow and broadened verification commands pass.",
         })
     agents.append({
-        "name": "implementation-reviewer",
+        "name": implementation_reviewer_name,
         "owns": ["semantic review of implementation completeness, code/test depth, security risks, and project pattern consistency"],
         "inputs": [
             artifact_paths["implementation_review_request"],
@@ -541,7 +586,7 @@ def main() -> int:
     parser.add_argument("repo", nargs="?", default=".", type=Path)
     parser.add_argument(
         "--mode",
-        choices=["auto", "single", "multi"],
+        choices=AGENT_MODES,
         default=os.environ.get("E2E_DEV_WORKFLOW_AGENT_MODE", "auto"),
     )
     parser.add_argument("--design-doc", type=Path)

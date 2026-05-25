@@ -30,8 +30,9 @@
 |       |   |-- agent-handoff-schema.md
 |       |   |-- agent-orchestration.md
 |       |   |-- clarification-gate.md
-|       |   |-- exec-plan.md
-|       |   |-- kg-tool-selection.md
+ |       |   |-- exec-plan.md
+ |       |   |-- implementation-gates.md
+ |       |   |-- kg-tool-selection.md
 |       |   |-- memory-integration.md
 |       |   |-- superpowers-integration.md
 |       |   `-- tdd-java-spring.md
@@ -257,8 +258,9 @@ python ..\skills\e2e-dev-workflow\scripts\orchestration_plan.py . `
 模式说明：
 
 - `single`：小任务，一个 agent 串行完成。
+- `single-review`：单服务中等任务，一个开发 agent 串行完成，但 R1/R2/R3 仍分别由独立 reviewer invocation 审查，完成前仍保留 Coverage Reviewer；不要用于跨服务、契约、数据迁移或高风险任务，脚本发现这类证据时会升级为 `multi`。
 - `multi`：中大型、高风险、跨服务任务，拆成多个 agent。
-- `auto`：根据服务数量、设计文档和风险关键词自动建议。
+- `auto`：根据服务数量、设计文档和风险关键词自动建议 `single` 或 `multi`；`single-review` 需要显式指定。
 
 多 agent 模式下建议角色：
 
@@ -269,6 +271,7 @@ python ..\skills\e2e-dev-workflow\scripts\orchestration_plan.py . `
 - Coverage Reviewer：完成前检查设计覆盖、UT 证据和业务逻辑审查。
 
 关键原则：交接靠文件，不靠聊天记忆。跨服务或跨 Maven module 任务的实施计划必须按服务/模块粒度放在 `docs/agent-runs/<date-feature>/service-plans/<service>/`，避免相似业务描述在同一个 agent 上下文里互相污染。
+`single-review` 只压缩开发侧上下文，不压缩审查侧门禁；不能把 R1/R2/R3 合成一个事后 review，也不能跳过 Coverage Reviewer。
 `kg_refresh.detect()` 返回的 `service_candidates` 只是候选服务列表，不能直接当成本次实现范围。`discovery` 阶段不会基于全量候选服务生成 service plan；只有设计文档明确列出的受影响服务/模块、`affected` 显式参数或显式 `all` 才会生成服务级计划。根 Maven module 也会被当作服务/模块边界，例如 `jeepay-core`、`jeepay-service`、`jeepay-payment`。
 
 ### 5. 编写或更新设计文档

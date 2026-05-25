@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import importlib
 import hashlib
 import json
@@ -3720,6 +3721,149 @@ class OrchestrationArtifactTests(unittest.TestCase):
             artifacts["service_plans"]["services/order-service"]["implementation_review"],
             order_developer["outputs"],
         )
+
+    def test_auto_mode_ignores_low_signal_api_message_words(self) -> None:
+        body = "\n".join(
+            f"Line {i}: The api endpoint emits an event message and uses a timeout."
+            for i in range(80)
+        )
+        design_text = f"# Feature\n\n## Goal\nAdd one REST api endpoint.\n\n{body}"
+        facts: dict = {"service_candidates": ["services/order-service"]}
+
+        mode, reasons = orchestration_plan.choose_mode("auto", facts, design_text, False)
+
+        self.assertEqual("single", mode, reasons)
+
+    def test_auto_mode_triggers_multi_for_dmq_contract_terms(self) -> None:
+        design_text = textwrap.dedent(
+            """
+            # Payment Notice
+
+            The payment service publishes a DMQ topic with a payload schema.
+            The order service consumes that topic through a frozen message contract.
+            """
+        )
+        facts: dict = {"service_candidates": ["services/payment-service"]}
+
+        mode, reasons = orchestration_plan.choose_mode("auto", facts, design_text, False)
+
+        self.assertEqual("multi", mode)
+        self.assertTrue(any("risk keywords" in reason for reason in reasons))
+
+    def test_auto_mode_triggers_multi_above_large_design_threshold(self) -> None:
+        design_text = "# Large Feature\n\n" + ("x" * (orchestration_plan.LARGE_DESIGN_CHAR_THRESHOLD + 1))
+        facts: dict = {"service_candidates": ["services/order-service"]}
+
+        mode, reasons = orchestration_plan.choose_mode("auto", facts, design_text, False)
+
+        self.assertEqual("multi", mode)
+        self.assertTrue(any("context isolation" in reason for reason in reasons))
+
+    def test_choose_mode_accepts_single_review(self) -> None:
+        facts: dict = {"service_candidates": ["services/order-service"]}
+
+        mode, reasons = orchestration_plan.choose_mode("single-review", facts, "irrelevant", False)
+
+        self.assertEqual("single-review", mode)
+        self.assertEqual(["mode explicitly set to single-review"], reasons)
+
+    def test_single_review_escalates_to_multi_for_multiple_services(self) -> None:
+        facts: dict = {"service_candidates": ["services/order-service", "services/payment-service"]}
+
+        mode, reasons = orchestration_plan.choose_mode("single-review", facts, "irrelevant", False)
+
+        self.assertEqual("multi", mode)
+        self.assertTrue(any("single-review escalated" in reason for reason in reasons))
+
+    def test_single_review_keeps_phase_reviewers_and_coverage_reviewer(self) -> None:
+        artifacts = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
+
+        agents = orchestration_plan.agent_plan("single-review", artifacts, [])
+        names = [agent["name"] for agent in agents]
+
+        self.assertIn("single-agent", names)
+        self.assertIn("single-reviewer-r1-design", names)
+        self.assertIn("single-reviewer-r2-test", names)
+        self.assertIn("single-reviewer-r3-implementation", names)
+        self.assertIn("coverage-reviewer", names)
+        self.assertNotIn("requirements-clarifier", names)
+        self.assertNotIn("use-case-designer", names)
+        self.assertNotIn("test-case-developer", names)
+        self.assertNotIn("code-developer", names)
+
+    def test_orchestration_plan_cli_accepts_single_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            facts = {
+                "service_candidates": ["services/order-service"],
+                "multi_service": False,
+                "design_docs_or_media_count": 0,
+                "spring_entrypoints": [],
+            }
+
+            with patch.object(orchestration_plan, "detect", return_value=facts), \
+                    patch.object(
+                        sys,
+                        "argv",
+                        [
+                            "orchestration_plan.py",
+                            str(repo),
+                            "--mode",
+                            "single-review",
+                            "--service-scope",
+                            "affected",
+                            "--service",
+                            "services/order-service",
+                            "--json",
+                        ],
+                    ), \
+                    patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = orchestration_plan.main()
+
+            result = json.loads(stdout.getvalue())
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("single-review", result["selected_mode"])
+        self.assertIn("coverage-reviewer", [agent["name"] for agent in result["agents"]])
+
+
+class SkillDocumentationTests(unittest.TestCase):
+    def test_skill_body_is_concise_for_progressive_disclosure(self) -> None:
+        skill_text = (ROOT / "skills" / "e2e-dev-workflow" / "SKILL.md").read_text(encoding="utf-8")
+        body = skill_text.split("---", 2)[-1]
+        words = body.split()
+        long_lines = [
+            line
+            for line in body.splitlines()
+            if len(line) > 240 and not line.startswith("description:")
+        ]
+
+        self.assertLessEqual(len(words), 2200)
+        self.assertEqual([], long_lines)
+
+    def test_compacted_skill_keeps_hard_gate_navigation(self) -> None:
+        skill_text = (ROOT / "skills" / "e2e-dev-workflow" / "SKILL.md").read_text(encoding="utf-8")
+
+        required_terms = [
+            "Superpowers",
+            "GitNexus",
+            "Graphify",
+            "R1/R2/R3",
+            "Coverage Reviewer",
+            "single-review",
+            "rework",
+            "memory",
+            "agent-instructions.md",
+            "agent-orchestration.md",
+            "implementation-gates.md",
+            "kg-tool-selection.md",
+            "memory-integration.md",
+            "tdd-java-spring.md",
+        ]
+
+        for term in required_terms:
+            with self.subTest(term=term):
+                self.assertIn(term, skill_text)
 
 
 class UnifiedCliTests(unittest.TestCase):

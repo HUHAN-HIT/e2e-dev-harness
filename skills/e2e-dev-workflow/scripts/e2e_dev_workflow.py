@@ -854,7 +854,7 @@ def add_prepare_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-discovered-services", type=int, default=agent_instructions.DEFAULT_DISCOVERED_SERVICE_LIMIT)
     parser.add_argument("--superpowers-mode", choices=["auto", "strict", "optional", "off"], default="auto")
     parser.add_argument("--memory-mode", choices=["auto", "strict", "optional", "off"], default="auto")
-    parser.add_argument("--agent-orchestration-mode", choices=["auto", "single", "multi", "off"], default="auto")
+    parser.add_argument("--agent-orchestration-mode", choices=["auto", "single", "single-review", "multi", "off"], default="auto")
     parser.add_argument("--service-scope", choices=["auto", "discovery", "affected", "all"], default="auto")
     parser.add_argument("--agent-run-dir", help="Archive directory for generated agent run files.")
     parser.add_argument("--run-date", help="Date prefix for default agent run directory, YYYY-MM-DD.")
@@ -881,7 +881,7 @@ def main() -> int:
 
     plan_parser = subparsers.add_parser("plan", help="Plan agent orchestration and optionally write an ExecPlan.")
     plan_parser.add_argument("repo", nargs="?", default=".", type=Path)
-    plan_parser.add_argument("--mode", choices=["auto", "single", "multi"], default="auto")
+    plan_parser.add_argument("--mode", choices=["auto", "single", "single-review", "multi"], default="auto")
     plan_parser.add_argument("--design-doc", type=Path)
     plan_parser.add_argument("--agent-run-dir", help="Archive directory for generated agent run files.")
     plan_parser.add_argument("--run-date", help="Date prefix for default agent run directory, YYYY-MM-DD.")
