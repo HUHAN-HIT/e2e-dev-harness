@@ -238,9 +238,12 @@ The receiving agent must load only the relevant design, handoff, service plan, A
 - Keep global semantic reviews under `docs/agent-runs/<date-feature>/reviews/`; keep service-local semantic reviews under `service-plans/<service>/reviews/`.
 - Keep review requests under `docs/agent-runs/<date-feature>/review-requests/` and `service-plans/<service>/review-requests/`. A review report must be the exact `Output` declared by its request.
 - Do not pre-fill review reports during archive creation. Create review request files first, assign concrete Developer Agent and Reviewer Agent ids, then let the independent reviewer write the report with `Reviewer Session`, `Reviewer Invocation`, and `Request Hash`.
+- When `service-plans/<service>/` exists, required R2 and R3 phases must have service-local reports under that service's `reviews/` directory. Global R2/R3 reports are still useful for cross-cutting synthesis but do not replace service-local review evidence.
 - Keep service-local rework next to that service plan as `rework-NNN.md`; do not merge similar service rework into one shared code-agent context.
 - Keep service-local implementation manifest rows next to each service plan, then merge them into `evidence/implementation-manifest.md` for the completion gate.
 - Keep each handoff artifact focused and under roughly 300 lines unless the task truly requires more.
+- Before another agent consumes a handoff, fill `agent_id`, `status`, `inputs`, `outputs`, `input_hashes`, `output_hashes`, `consumed_by`, and `open_questions: None`, then run `handoff_gate.py`. Hashes make stale or silently rewritten handoffs visible at the communication boundary. Writers must use `<handoff>.md.partial` then atomically rename to `<handoff>.md` and write `<handoff>.ready.json`; readers must reject missing ready markers and any leftover partial files.
+- Keep cross-service HTTP/DMQ contracts under `docs/agent-runs/<date-feature>/contracts/<contract-id>.md`. Producer and consumer agents both ACK the frozen contract before service-scoped code agents proceed. Run `contract_gate.py`; missing ACKs, missing contract tests, incomplete endpoint/topic/tag/group data, or draft contracts block parallel service implementation.
 - Include `Open Questions: None` explicitly before the next phase proceeds.
 - Name assumptions and mark whether they are approved, inferred, or still pending.
 - Record knowledge graph refresh location and timestamp in the requirements or use-case artifact.
@@ -254,7 +257,7 @@ Parallel work is useful only after requirements are stable:
 - The Use Case Designer and Test Case Developer may overlap only when acceptance criteria are stable.
 - Code Developer starts after the first red test is observed.
 - For multiple services, split Code Developer work by service or module with disjoint file ownership.
-- Service-scoped Code Developers may run in parallel only after requirements, cross-service flows, contracts, and service plans are stable.
+- Service-scoped Code Developers may run in parallel only after requirements, cross-service flows, contracts, and service plans are stable. If service A depends on service B, freeze and ACK the shared contract first; otherwise run the producer/contract work before the consumer implementation.
 - R1 review runs after clarification and before planning. R2 review runs after red tests and before green implementation. R3 review runs after green/refactor and before coverage review. Each one runs in an independent reviewer agent/session with no inherited developer chat context.
 - Coverage Reviewer runs after semantic reviewers and service-scoped developers finish; it blocks completion if any acceptance criterion lacks tests, code refs, business review, approved semantic review, or closed rework.
 
@@ -269,4 +272,4 @@ Parallel work is useful only after requirements are stable:
 7. In `multi` mode, update the handoff artifacts under `docs/agent-runs/<date-feature>/handoffs/` and the service plans under `docs/agent-runs/<date-feature>/service-plans/<service>/`.
 8. Run R1/R2/R3 semantic reviews at the phase boundaries and convert findings into rework items.
 9. Gate each phase with review before passing work forward.
-10. Run `e2e_dev_workflow.py gate . --phase completion ... --review-dir docs/agent-runs/<run>/reviews` before reporting done; include service-local `--review-dir` values, `--implementation-manifest`, and `--rework-dir` when the run uses non-standard locations.
+10. Run `e2e_dev_workflow.py gate . --phase completion ... --review-dir docs/agent-runs/<run>/reviews --handoff-dir docs/agent-runs/<run>/handoffs --contract-dir docs/agent-runs/<run>/contracts` before reporting done; explicit review dirs are merged with inferred service-local reviews from the same agent run. Include additional service-local `--review-dir` values, `--implementation-manifest`, and `--rework-dir` when the run uses non-standard locations.

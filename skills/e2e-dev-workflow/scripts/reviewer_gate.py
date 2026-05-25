@@ -139,6 +139,18 @@ def explicit_files(repo: Path, inputs: list[Path] | None) -> list[Path]:
     )
 
 
+def dedupe_paths(paths: list[Path]) -> list[Path]:
+    result: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        result.append(path)
+    return sorted(result)
+
+
 def agent_run_dir_from_path(repo: Path, path: Path | None) -> Path | None:
     if not path:
         return None
@@ -156,6 +168,49 @@ def infer_agent_run_dir(repo: Path, anchor_paths: list[Path | None] | None) -> P
         if run_dir:
             return run_dir
     return None
+
+
+def service_slug(value: str) -> str:
+    text = value.strip().strip("`").replace("\\", "/").strip("/")
+    if not text:
+        return ""
+    text = text.split(":", 1)[0].strip()
+    text = text.split(" - ", 1)[0].strip()
+    text = text.split(" ", 1)[0].strip()
+    return text.rsplit("/", 1)[-1].strip("/.,;")
+
+
+def expected_services(agent_run_dir: Path | None) -> list[str]:
+    if not agent_run_dir:
+        return []
+    service_plans = agent_run_dir / "service-plans"
+    if not service_plans.exists():
+        return []
+    services = [
+        path.name
+        for path in sorted(service_plans.iterdir())
+        if path.is_dir()
+    ]
+    return sorted(dict.fromkeys(services))
+
+
+def service_from_review_path(agent_run_dir: Path | None, path: Path) -> str:
+    if not agent_run_dir:
+        return ""
+    service_plans = agent_run_dir / "service-plans"
+    try:
+        relative = path.resolve().relative_to(service_plans.resolve())
+    except ValueError:
+        return ""
+    parts = relative.parts
+    if len(parts) >= 3 and parts[1] == "reviews":
+        return parts[0]
+    return ""
+
+
+def service_from_scope(scope: str, expected: list[str]) -> str:
+    slug = service_slug(scope)
+    return slug if slug in expected else ""
 
 
 def discovered_files(repo: Path, agent_run_dir: Path | None) -> list[Path]:
@@ -336,17 +391,23 @@ def validate(
     repo = repo.resolve()
     files = explicit_files(repo, review_dirs)
     inferred_run_dir = None
-    if not review_dirs:
-        inferred_run_dir = infer_agent_run_dir(repo, anchor_paths)
-        files = discovered_files(repo, inferred_run_dir)
+    inferred_run_dir = infer_agent_run_dir(repo, list(review_dirs or []) + list(anchor_paths or []))
+    if inferred_run_dir:
+        files = dedupe_paths(files + discovered_files(repo, inferred_run_dir))
 
     required = [normalize_phase(phase) for phase in require_phases or []]
+    services = expected_services(inferred_run_dir)
     blocked: list[str] = []
     items: list[dict] = []
     covered: set[str] = set()
+    covered_service_reviews: dict[str, set[str]] = {service: set() for service in services}
     for path in files:
         fields = parse_item(path)
         item, item_blocked = validate_item(repo, path, fields)
+        service = service_from_review_path(inferred_run_dir, path) or service_from_scope(fields.get("scope", ""), services)
+        if service and item.get("phase") in {"test", "implementation"}:
+            covered_service_reviews.setdefault(service, set()).add(item["phase"])
+            item["service"] = service
         items.append(item)
         blocked.extend(item_blocked)
         if item.get("phase"):
@@ -355,6 +416,10 @@ def validate(
     missing_phases = [phase for phase in required if phase not in covered]
     if missing_phases:
         blocked.append("Missing required semantic review phases: " + ", ".join(missing_phases))
+    for service in services:
+        for phase in [phase for phase in required if phase in {"test", "implementation"}]:
+            if phase not in covered_service_reviews.get(service, set()):
+                blocked.append(f"Missing service-local semantic review for service {service} phase {phase}.")
 
     return {
         "repo": str(repo),
@@ -364,6 +429,11 @@ def validate(
         "scanned_files": [str(path) for path in files],
         "inferred_agent_run_dir": str(inferred_run_dir) if inferred_run_dir else None,
         "covered_phases": sorted(covered),
+        "expected_services": services,
+        "covered_service_reviews": {
+            service: sorted(phases)
+            for service, phases in covered_service_reviews.items()
+        },
         "required_phases": required,
         "items": items,
     }

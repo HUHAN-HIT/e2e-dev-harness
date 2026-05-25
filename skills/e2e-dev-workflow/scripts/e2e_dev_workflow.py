@@ -19,6 +19,7 @@ import clarification_gate  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import implementation_gate  # noqa: E402
 import kg_refresh  # noqa: E402
+import handoff_gate  # noqa: E402
 import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
 import superpowers_probe  # noqa: E402
@@ -377,6 +378,7 @@ This is a living plan. Keep it current while implementing the feature.
 - Semantic reviews: {artifacts['reviews_dir']}
 - Rework log: {artifacts['rework_pattern']}
 - Cross-service dependencies: {artifacts['dependency_report']}
+- Cross-service contracts: {artifacts['contract_pattern']}
 
 ## Service Implementation Plans
 
@@ -419,10 +421,16 @@ If coverage review, tests, business review, or user review finds a missed requir
 def handoff_text(agent_name: str) -> str:
     return f"""---
 agent: {agent_name}
+agent_id: <agent-id>
 status: draft
+service_scope: all-services
 inputs: []
 outputs: []
+input_hashes: []
+output_hashes: []
 blocked_by: []
+consumed_by: []
+open_questions: <none-before-downstream-consumption>
 memory_updates_proposed: []
 ---
 
@@ -711,6 +719,7 @@ def plan(args) -> tuple[int, dict]:
         require_repo_path(repo, Path(result["handoff_artifacts"]["review_requests_dir"]), "review requests directory").mkdir(parents=True, exist_ok=True)
         require_repo_path(repo, Path(result["handoff_artifacts"]["reviews_dir"]), "reviews directory").mkdir(parents=True, exist_ok=True)
         require_repo_path(repo, Path(result["handoff_artifacts"]["rework_dir"]), "rework directory").mkdir(parents=True, exist_ok=True)
+        require_repo_path(repo, Path(result["handoff_artifacts"]["contracts_dir"]), "contracts directory").mkdir(parents=True, exist_ok=True)
         result["handoff_files_created"] = create_handoff_files(repo, result["handoff_artifacts"])
         proposed = require_repo_path(repo, Path(result["handoff_artifacts"]["proposed_memory_updates"]), "proposed memory updates")
         if not proposed.exists():
@@ -742,6 +751,9 @@ def gate(args) -> tuple[int, dict]:
         dependency_report=getattr(args, "dependency_report", None),
         implementation_manifest=getattr(args, "implementation_manifest", None),
         review_dirs=getattr(args, "review_dir", None),
+        handoff_dirs=getattr(args, "handoff_dir", None),
+        contract_dirs=getattr(args, "contract_dir", None),
+        require_contracts=getattr(args, "require_contracts", False),
         require_semantic_reviews=getattr(args, "require_semantic_reviews", False),
     )
     write_status(args.status_file, result)
@@ -794,6 +806,7 @@ def verify(args) -> tuple[int, dict]:
             "write_dependency_report": getattr(args, "write_dependency_report", True),
             "implementation_manifest": str(getattr(args, "implementation_manifest", "") or ""),
             "require_semantic_reviews": args.phase == "completion" or getattr(args, "require_semantic_reviews", False),
+            "require_contracts": getattr(args, "require_contracts", False),
         },
         "prepare": prep,
         "clarification": clarify_result,
@@ -894,6 +907,9 @@ def main() -> int:
     gate_parser.add_argument("--implementation-manifest", type=Path)
     gate_parser.add_argument("--rework-dir", action="append", type=Path)
     gate_parser.add_argument("--review-dir", action="append", type=Path)
+    gate_parser.add_argument("--handoff-dir", action="append", type=Path)
+    gate_parser.add_argument("--contract-dir", action="append", type=Path)
+    gate_parser.add_argument("--require-contracts", action="store_true")
     gate_parser.add_argument("--require-semantic-reviews", action="store_true")
     gate_parser.add_argument("--skip-spring-static-check", action="store_true")
     gate_parser.add_argument("--status-file", type=Path)
@@ -913,6 +929,9 @@ def main() -> int:
     verify_parser.add_argument("--implementation-manifest", type=Path)
     verify_parser.add_argument("--rework-dir", action="append", type=Path)
     verify_parser.add_argument("--review-dir", action="append", type=Path)
+    verify_parser.add_argument("--handoff-dir", action="append", type=Path)
+    verify_parser.add_argument("--contract-dir", action="append", type=Path)
+    verify_parser.add_argument("--require-contracts", action="store_true")
     verify_parser.add_argument("--require-semantic-reviews", action="store_true")
     verify_parser.add_argument("--skip-spring-static-check", action="store_true")
     verify_parser.add_argument("--skip-maven", action="store_true")

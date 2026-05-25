@@ -361,6 +361,8 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
         "implementation_review": f"{reviews}/R3-implementation-review.md",
         "rework_dir": f"{base}/rework",
         "rework_pattern": f"{base}/rework/rework-NNN.md",
+        "contracts_dir": f"{base}/contracts",
+        "contract_pattern": f"{base}/contracts/<contract-id>.md",
         "knowledge_graph_status": f"{evidence}/knowledge-graph-refresh.json",
         "dependency_report": f"{evidence}/cross-service-dependencies.json",
         "implementation_manifest": f"{evidence}/implementation-manifest.md",

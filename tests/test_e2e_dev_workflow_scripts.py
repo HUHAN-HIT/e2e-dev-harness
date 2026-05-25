@@ -22,6 +22,8 @@ import agent_instructions  # noqa: E402
 import coverage_gate  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import e2e_dev_workflow  # noqa: E402
+import handoff_gate  # noqa: E402
+import contract_gate  # noqa: E402
 import implementation_gate  # noqa: E402
 import implementation_manifest  # noqa: E402
 import kg_refresh  # noqa: E402
@@ -965,6 +967,335 @@ class WorkflowGuardTests(unittest.TestCase):
         self.assertTrue(any("not found" in reason.lower() for reason in result["blocked_reasons"]))
 
 
+class HandoffGateTests(unittest.TestCase):
+    def write_ready_marker(
+        self,
+        handoff: Path,
+        producer_agent: str = "developer-agent-1",
+        status: str = "ready",
+        sha256: str | None = None,
+    ) -> None:
+        marker = handoff.with_suffix(".ready.json")
+        marker.write_text(
+            json.dumps(
+                {
+                    "path": str(handoff.name),
+                    "sha256": sha256 or hashlib.sha256(handoff.read_bytes()).hexdigest(),
+                    "producer_agent": producer_agent,
+                    "status": status,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    def test_handoff_gate_blocks_draft_template_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+            (handoff_dir / "04-code-developer.md").write_text(
+                e2e_dev_workflow.handoff_text("code-developer"),
+                encoding="utf-8",
+            )
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("draft" in reason.lower() for reason in result["blocked_reasons"]))
+        self.assertTrue(any("agent id" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_handoff_gate_blocks_partial_file_before_downstream_consumption(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+            (handoff_dir / "04-code-developer.md.partial").write_text("half written", encoding="utf-8")
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("partial" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_handoff_gate_allows_ready_handoff_with_hashes_and_no_open_questions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+            handoff = handoff_dir / "04-code-developer.md"
+            handoff.write_text(
+                textwrap.dedent(
+                    """
+                    ---
+                    agent: code-developer
+                    agent_id: developer-agent-1
+                    status: ready
+                    inputs:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md
+                    outputs:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md
+                    input_hashes:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    output_hashes:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                    blocked_by: []
+                    consumed_by:
+                      - coverage-reviewer
+                    open_questions: None
+                    service_scope: services/order-service
+                    memory_updates_proposed: []
+                    ---
+
+                    # Agent Handoff
+
+                    ## Open Questions
+
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            self.write_ready_marker(handoff)
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(1, len(result["items"]))
+
+    def test_handoff_gate_blocks_missing_ready_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+            handoff = handoff_dir / "04-code-developer.md"
+            handoff.write_text(
+                textwrap.dedent(
+                    """
+                    ---
+                    agent: code-developer
+                    agent_id: developer-agent-1
+                    status: ready
+                    inputs:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md
+                    outputs:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md
+                    input_hashes:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    output_hashes:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                    consumed_by:
+                      - coverage-reviewer
+                    open_questions: None
+                    ---
+
+                    # Agent Handoff
+
+                    ## Open Questions
+
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("ready marker" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_handoff_gate_blocks_stale_ready_marker_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+            handoff = handoff_dir / "04-code-developer.md"
+            handoff.write_text(
+                textwrap.dedent(
+                    """
+                    ---
+                    agent: code-developer
+                    agent_id: developer-agent-1
+                    status: ready
+                    inputs:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md
+                    outputs:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md
+                    input_hashes:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    output_hashes:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                    consumed_by:
+                      - coverage-reviewer
+                    open_questions: None
+                    ---
+
+                    # Agent Handoff
+
+                    ## Open Questions
+
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            self.write_ready_marker(handoff, sha256="0" * 64)
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("sha256" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_handoff_gate_blocks_ready_marker_path_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+            handoff = handoff_dir / "04-code-developer.md"
+            handoff.write_text(
+                textwrap.dedent(
+                    """
+                    ---
+                    agent: code-developer
+                    agent_id: developer-agent-1
+                    status: ready
+                    inputs:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md
+                    outputs:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md
+                    input_hashes:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    output_hashes:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                    consumed_by:
+                      - coverage-reviewer
+                    open_questions: None
+                    ---
+
+                    # Agent Handoff
+
+                    ## Open Questions
+
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            marker = handoff.with_suffix(".ready.json")
+            marker.write_text(
+                json.dumps(
+                    {
+                        "path": "other.md",
+                        "sha256": hashlib.sha256(handoff.read_bytes()).hexdigest(),
+                        "producer_agent": "developer-agent-1",
+                        "status": "ready",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("path" in reason.lower() for reason in result["blocked_reasons"]))
+
+
+class ContractGateTests(unittest.TestCase):
+    def contract_doc(
+        self,
+        kind: str = "http",
+        status: str = "verified",
+        producer_ack: str = "ACK: quote-service owner approved",
+        consumer_ack: str = "ACK: billing-service owner approved",
+        contract_tests: str = "QuoteBillingContractTest",
+    ) -> str:
+        transport_field = "- Endpoint: POST /billing/callback" if kind == "http" else "- Topic: quote.created\n- Tag: paid\n- Group: billing"
+        return textwrap.dedent(
+            f"""
+            # quote-to-billing
+
+            - Contract ID: quote-to-billing
+            - Kind: {kind}
+            - Producer Service: services/quote-service
+            - Consumer Services: services/billing-service
+            {transport_field}
+            - Payload Schema: QuoteCreatedEvent(orderId, amount)
+            - Compatibility Rule: backward-compatible additive fields only
+            - Producer ACK: {producer_ack}
+            - Consumer ACK: {consumer_ack}
+            - Contract Tests: {contract_tests}
+            - Status: {status}
+            """
+        ).strip()
+
+    def test_contract_gate_blocks_missing_consumer_ack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            contract_dir = repo / "docs" / "agent-runs" / "run" / "contracts"
+            contract_dir.mkdir(parents=True)
+            (contract_dir / "quote-to-billing.md").write_text(
+                self.contract_doc(consumer_ack=""),
+                encoding="utf-8",
+            )
+
+            result = contract_gate.validate(repo, [contract_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("consumer ack" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_contract_gate_blocks_missing_contract_tests(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            contract_dir = repo / "docs" / "agent-runs" / "run" / "contracts"
+            contract_dir.mkdir(parents=True)
+            (contract_dir / "quote-to-billing.md").write_text(
+                self.contract_doc(contract_tests="None"),
+                encoding="utf-8",
+            )
+
+            result = contract_gate.validate(repo, [contract_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("contract tests" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_contract_gate_allows_verified_http_contract_with_bidirectional_ack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            contract_dir = repo / "docs" / "agent-runs" / "run" / "contracts"
+            contract_dir.mkdir(parents=True)
+            (contract_dir / "quote-to-billing.md").write_text(self.contract_doc(), encoding="utf-8")
+
+            result = contract_gate.validate(repo, [contract_dir])
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(["services/billing-service"], result["items"][0]["consumer_services"])
+
+    def test_contract_gate_allows_verified_dmq_contract_with_topic_tag_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            contract_dir = repo / "docs" / "agent-runs" / "run" / "contracts"
+            contract_dir.mkdir(parents=True)
+            (contract_dir / "quote-created.md").write_text(self.contract_doc(kind="dmq"), encoding="utf-8")
+
+            result = contract_gate.validate(repo, [contract_dir])
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_archive_handoff_template_contains_machine_checkable_communication_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            artifacts = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
+
+            e2e_dev_workflow.create_handoff_files(repo, artifacts)
+
+            text = (repo / artifacts["implementation_plan"]).read_text(encoding="utf-8")
+
+        self.assertIn("agent_id:", text)
+        self.assertIn("input_hashes:", text)
+        self.assertIn("output_hashes:", text)
+        self.assertIn("consumed_by:", text)
+        self.assertIn("open_questions:", text)
+
+
 class ReworkGateTests(unittest.TestCase):
     def test_rework_gate_requires_required_fields(self) -> None:
         item = textwrap.dedent(
@@ -1119,6 +1450,81 @@ class ReviewerGateTests(unittest.TestCase):
 
     def request_hash(self, repo: Path, request: str) -> str:
         return hashlib.sha256((repo / request).read_bytes()).hexdigest()
+
+    def write_service_review(
+        self,
+        repo: Path,
+        service: str,
+        phase: str,
+        developer_agent: str = "developer-agent-1",
+    ) -> Path:
+        review_name = {
+            "test": "R2-test-review.md",
+            "implementation": "R3-implementation-review.md",
+        }[phase]
+        request_name = {
+            "test": "R2-test-review-request.md",
+            "implementation": "R3-implementation-review-request.md",
+        }[phase]
+        reviewer_agent = f"reviewer-agent-{service}-{phase}"
+        reviewer_session = f"review-session-{service}-{phase}"
+        service_base = repo / "docs" / "agent-runs" / "run" / "service-plans" / service
+        request = service_base / "review-requests" / request_name
+        review = service_base / "reviews" / review_name
+        invocation = service_base / "review-invocations" / f"{phase}-reviewer-invocation.json"
+        request.parent.mkdir(parents=True, exist_ok=True)
+        review.parent.mkdir(parents=True, exist_ok=True)
+        invocation.parent.mkdir(parents=True, exist_ok=True)
+        request_rel = str(request.relative_to(repo)).replace("\\", "/")
+        review_rel = str(review.relative_to(repo)).replace("\\", "/")
+        invocation_rel = str(invocation.relative_to(repo)).replace("\\", "/")
+        request.write_text(
+            textwrap.dedent(
+                f"""
+                # {service} {phase.title()} Review Request
+
+                - Phase: {phase}
+                - Reviewer Role: independent semantic reviewer
+                - Context Package: request-scoped; no inherited developer chat context
+                - Allowed Inputs: design, tests, implementation refs, dependency report, service plan
+                - Forbidden: inherited developer chat context; production-code edits; self-review
+                - Output: {review_rel}
+                - Developer Agent: {developer_agent}
+                - Reviewer Agent: {reviewer_agent}
+                - Reviewer Invocation: {invocation_rel}
+                """
+            ).strip(),
+            encoding="utf-8",
+        )
+        invocation.write_text(
+            json.dumps(
+                {
+                    "developer_agent": developer_agent,
+                    "reviewer_agent": reviewer_agent,
+                    "reviewer_session": reviewer_session,
+                    "review_request": request_rel,
+                    "output": review_rel,
+                    "fork_context": False,
+                    "context_policy": "request-scoped; no-inherited-developer-chat-context",
+                    "status": "completed",
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        review.write_text(
+            self.review_doc(
+                phase,
+                request=request_rel,
+                request_hash=hashlib.sha256(request.read_bytes()).hexdigest(),
+                developer_agent=developer_agent,
+                reviewer_agent=reviewer_agent,
+                reviewer_session=reviewer_session,
+                reviewer_invocation=invocation_rel,
+            ).replace("- Scope: services/payment-service", f"- Scope: {service}"),
+            encoding="utf-8",
+        )
+        return review
 
     def test_reviewer_gate_requires_all_phase_reviews_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1376,6 +1782,54 @@ class ReviewerGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("independence" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_blocks_missing_service_local_reviews(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            for service in ("jeepay-core", "jeepay-service"):
+                (repo / "docs" / "agent-runs" / "run" / "service-plans" / service).mkdir(parents=True)
+            for name, phase in (
+                ("R1-design-review.md", "design"),
+                ("R2-test-review.md", "test"),
+                ("R3-implementation-review.md", "implementation"),
+            ):
+                request = self.write_request(repo, phase)
+                (review_dir / name).write_text(
+                    self.review_doc(phase, request=request, request_hash=self.request_hash(repo, request)),
+                    encoding="utf-8",
+                )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["design", "test", "implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("jeepay-core" in reason and "test" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any("jeepay-service" in reason and "implementation" in reason for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_merges_explicit_review_dir_with_service_reviews(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            for name, phase in (
+                ("R1-design-review.md", "design"),
+                ("R2-test-review.md", "test"),
+                ("R3-implementation-review.md", "implementation"),
+            ):
+                request = self.write_request(repo, phase)
+                (review_dir / name).write_text(
+                    self.review_doc(phase, request=request, request_hash=self.request_hash(repo, request)),
+                    encoding="utf-8",
+                )
+            self.write_service_review(repo, "jeepay-core", "test")
+            self.write_service_review(repo, "jeepay-core", "implementation")
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["design", "test", "implementation"])
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertIn("jeepay-core", result["expected_services"])
+        self.assertEqual(["implementation", "test"], sorted(result["covered_service_reviews"]["jeepay-core"]))
 
 
 class ImplementationGateTests(unittest.TestCase):
@@ -3207,6 +3661,12 @@ class OrchestrationArtifactTests(unittest.TestCase):
             "docs/agent-runs/2026-05-23-checkout/evidence/cross-service-dependencies.json",
             result["dependency_report"],
         )
+
+    def test_plan_artifacts_include_contract_paths(self) -> None:
+        result = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
+
+        self.assertEqual("docs/agent-runs/2026-05-23-checkout/contracts", result["contracts_dir"])
+        self.assertEqual("docs/agent-runs/2026-05-23-checkout/contracts/<contract-id>.md", result["contract_pattern"])
 
     def test_plan_artifacts_include_implementation_manifest_path(self) -> None:
         result = orchestration_plan.artifacts("checkout", run_date="2026-05-23")

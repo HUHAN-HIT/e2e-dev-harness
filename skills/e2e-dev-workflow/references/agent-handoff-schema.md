@@ -7,14 +7,23 @@ Each agent writes a Markdown handoff file with YAML frontmatter:
 ```yaml
 ---
 agent: requirements-clarifier
+agent_id: developer-agent-1
 status: draft | blocked | ready
+service_scope: all-services | services/<service> | <module>
 inputs:
   - user request
   - AGENT.md load order
   - knowledge graph status
 outputs:
   - docs/agent-runs/<date-feature>/handoffs/01-requirements-clarifier.md
+input_hashes:
+  - user-request sha256:<64-hex>
+output_hashes:
+  - docs/agent-runs/<date-feature>/handoffs/01-requirements-clarifier.md sha256:<64-hex>
 blocked_by: []
+consumed_by:
+  - use-case-designer
+open_questions: None
 memory_updates_proposed: []
 ---
 ```
@@ -32,6 +41,27 @@ memory_updates_proposed: []
 ## Role Contracts
 
 Each role owns a narrow context boundary and writes only its promised outputs. Later roles consume the previous files as artifacts instead of reloading the whole conversation.
+
+Run `scripts/handoff_gate.py` before a downstream agent consumes a handoff. The gate requires a concrete `agent_id`, a pass status, non-empty inputs/outputs, input/output SHA-256 entries, `consumed_by`, and `open_questions: None`. Draft starter files are intentionally not ready until the owning agent fills them.
+
+Handoff writes must be atomic:
+
+1. Write `<handoff>.md.partial`.
+2. Compute the final SHA-256.
+3. Rename the partial file to `<handoff>.md`.
+4. Write `<handoff>.ready.json` with `path`, `sha256`, `producer_agent`, and `status: ready`.
+
+Consumers read only `<handoff>.md` files that have a matching ready marker. Any leftover `*.partial` file blocks `handoff_gate.py`.
+
+## Contract Artifacts
+
+For HTTP/DMQ dependencies between services, write a contract artifact before parallel service implementation:
+
+```text
+docs/agent-runs/<date-feature>/contracts/<contract-id>.md
+```
+
+Required fields are `Contract ID`, `Kind`, `Producer Service`, `Consumer Services`, `Payload Schema`, `Compatibility Rule`, `Producer ACK`, `Consumer ACK`, `Contract Tests`, and `Status`. HTTP contracts must include `Endpoint` or `Route`; DMQ contracts must include `Topic`, `Tag`, and `Group`. Run `scripts/contract_gate.py` before service-scoped Code Developer agents implement against the contract.
 
 ## Archive Layout
 
@@ -54,6 +84,8 @@ docs/agent-runs/<date-feature>/
     R1-design-review.md
     R2-test-review.md
     R3-implementation-review.md
+  contracts/
+    <contract-id>.md
   service-plans/
     <service>/
       implementation-plan.md
@@ -105,6 +137,7 @@ Semantic Reviewers:
 - `Developer Agent`, `Reviewer Agent`, and `Reviewer Session` must be concrete ids, not placeholders. `Developer Agent` and `Reviewer Agent` must be different. `Independence` must be exactly `independent-agent`. `Context Boundary` must be request-scoped with no inherited developer chat context. `No Code Changes` must be confirmed/read-only.
 - The `Review Request` file must exist, match the report phase, declare the report as its exact `Output`, assign the same Developer Agent and Reviewer Agent as the report, and hash to the report `Request Hash`.
 - The `Reviewer Invocation` JSON must match Developer Agent, Reviewer Agent, and Reviewer Session; point to the same review request and output; declare `fork_context: false`; use a request-only/no-inherited context policy; and be `status: completed`.
+- In multi-service runs, service-local R2 and R3 reviews are required for every `service-plans/<service>/` directory when those phases are required. A global R2/R3 report does not replace service-local review evidence.
 - Findings become rework items; reviewer agents do not patch implementation directly.
 
 Code Developer:

@@ -7,9 +7,9 @@ An ExecPlan is a living document. Keep it updated as facts change. It is not a o
 ## Required Sections
 
 - Design source: issue, design doc, or user-approved requirement.
-- Current state: loaded AGENT files, memory reviewed, graph status, cross-service dependency report, affected services.
+- Current state: loaded AGENT files, memory reviewed, graph status, cross-service dependency report, frozen contracts, affected services.
 - Target behavior: goal, non-goals, acceptance criteria.
-- Handoff artifacts: requirements, use cases, test plan, implementation plan, implementation manifest, service-scoped plans.
+- Handoff artifacts: requirements, use cases, test plan, implementation plan, implementation manifest, service-scoped plans, cross-service contracts.
 - Agent protocol: role ownership, inputs, outputs, stop conditions.
 - Milestones: small verifiable implementation steps.
 - Evidence: commands, graph status, GitNexus-first dependency report, implementation manifest, red test output, green/unit test output, coverage matrix, business review, residual risks.
@@ -23,6 +23,8 @@ By default, generated agent-run files are archived under:
 docs/agent-runs/<date-feature>/
   exec-plan.md
   handoffs/
+  contracts/
+    <contract-id>.md
   service-plans/
     <service>/
       implementation-manifest.md
@@ -47,7 +49,11 @@ python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py plan . \
   --create-archive
 ```
 
-Before production-code edits, the ExecPlan should identify the first red test and where its failing output will be recorded. For multi-service or multi-module changes, it should also list one implementation plan file per affected service/module and reference `evidence/cross-service-dependencies.json`. Before completion, it should reference the dependency report, implementation manifest, coverage matrix, structured unit test command JSON, independent R1/R2/R3 semantic review requests and reports, Spring static check result, business review evidence, and rework gate result used by the completion gate.
+Before production-code edits, the ExecPlan should identify the first red test and where its failing output will be recorded. For multi-service or multi-module changes, it should also list one implementation plan file per affected service/module, reference `evidence/cross-service-dependencies.json`, and link any frozen HTTP/DMQ contracts under `contracts/`. Before completion, it should reference the dependency report, contract gate result, implementation manifest, coverage matrix, structured unit test command JSON, independent R1/R2/R3 semantic review requests and reports, Spring static check result, business review evidence, and rework gate result used by the completion gate.
+
+## Contract Gate
+
+Use `docs/agent-runs/<run>/contracts/<contract-id>.md` when one service depends on another by HTTP or DMQ. Each contract must include producer, consumers, endpoint or topic/tag/group, payload schema, compatibility rule, producer ACK, consumer ACK, contract tests, and status. Service-scoped implementation can run in parallel only after `contract_gate.py` passes or the dependency order is made explicit in the plan.
 
 ## Implementation Manifest
 

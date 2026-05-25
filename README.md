@@ -321,6 +321,8 @@ docs/agent-runs/<YYYY-MM-DD-feature>/
     R1-design-review.md
     R2-test-review.md
     R3-implementation-review.md
+  contracts/
+    <contract-id>.md
   service-plans/
     <service>/
       implementation-plan.md
@@ -353,6 +355,8 @@ docs/agent-runs/<YYYY-MM-DD-feature>/
 语义 Reviewer Agent 采用 R1/R2/R3 三段式：R1 在澄清后审查需求和设计完整性，R2 在 red test 后审查测试深度，R3 在 green/refactor 后审查实现完整性、安全风险、反模式和项目模式一致性。Reviewer 只输出 review artifact 和 rework item，不直接补代码；多服务任务的 R2/R3 可以放在 `service-plans/<service>/reviews/`，避免不同服务上下文互相污染。
 
 Independent reviewer agent is mandatory: R1/R2/R3 reports must be produced by a reviewer agent/session that did not implement the code or author the reviewed handoff. The archive creates review requests, not completed review reports. Assign concrete `Developer Agent` and `Reviewer Agent` values in the request before dispatch; placeholders are invalid. Each report must point to a `review-requests/*-review-request.md`, repeat the same Developer/Reviewer ids, include `Reviewer Session`, reference a `Reviewer Invocation` JSON audit artifact, include the SHA-256 `Request Hash`, declare `Independence: independent-agent`, use a request-scoped context with no inherited developer chat context, and declare `No Code Changes: confirmed`. Self-review blocks completion.
+
+Multi-service review coverage is mandatory: once `service-plans/<service>/` exists, that service must have its own R2 test review and R3 implementation review when those phases are required. Passing only a global `--review-dir docs\agent-runs\<run>\reviews` no longer hides missing service-local reviews; the gate merges explicit review dirs with inferred `service-plans/*/reviews/` from the same run. Non-reviewer handoffs can be checked with `handoff_gate.py` or `--handoff-dir`: downstream agents should only consume handoffs with concrete `agent_id`, non-draft status, input/output SHA-256 hashes, `consumed_by`, `open_questions: None`, no `*.partial` files, and a matching `<handoff>.ready.json` marker. Cross-service HTTP/DMQ dependencies should be frozen under `contracts/<contract-id>.md` and checked with `contract_gate.py` or `--contract-dir`; producer and consumer ACKs plus contract tests are required before parallel service implementation.
 
 ### 6. 刷新知识图谱
 
@@ -444,9 +448,11 @@ python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . `
   --unit-test-evidence docs\agent-runs\<run>\evidence\green-test.txt `
   --business-review docs\agent-runs\<run>\evidence\business-review.md `
   --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json `
+  --contract-dir docs\agent-runs\<run>\contracts `
   --memory-updates docs\agent-runs\<run>\proposed-memory-updates.md `
   --rework-dir docs\agent-runs\<run>\rework `
-  --review-dir docs\agent-runs\<run>\reviews
+  --review-dir docs\agent-runs\<run>\reviews `
+  --handoff-dir docs\agent-runs\<run>\handoffs
 ```
 
 `--unit-test-evidence` 必须是实际命令结果 JSON，例如：
@@ -476,7 +482,7 @@ coverage matrix 需要逐项映射：
 id | acceptance | use_case | service | tests | code_refs | business_review | status
 ```
 
-只有每个必改产物都在 implementation manifest 中验证、每个验收项都关联到用例、服务、测试、代码引用和业务审查，且状态为通过状态，completion gate 才会放行。coverage gate 会对没有显式体现 happy/success 与 failure/edge 路径的行给出 warning；高风险业务逻辑需要把该 warning 转成 rework item，而不是只靠单个浅层 UT 放行。跨服务设计还必须传入 `--dependency-report`，且报告里不能存在未澄清的 URL、topic、tag、group 或服务映射问题。传入 `--memory-updates` 时，未标记处理状态的 proposed memory update 也会阻断完成。
+只有每个必改产物都在 implementation manifest 中验证、每个验收项都关联到用例、服务、测试、代码引用和业务审查，且状态为通过状态，completion gate 才会放行。coverage gate 会对没有显式体现 happy/success 与 failure/edge 路径的行给出 warning；高风险业务逻辑需要把该 warning 转成 rework item，而不是只靠单个浅层 UT 放行。跨服务设计还必须传入 `--dependency-report`，且报告里不能存在未澄清的 URL、topic、tag、group 或服务映射问题；如果存在 HTTP/DMQ 契约变更，还要传入 `--contract-dir` 或使用 `--require-contracts`，确保 producer/consumer 双向 ACK 和 contract tests 已闭环。传入 `--memory-updates` 时，未标记处理状态的 proposed memory update 也会阻断完成。
 
 严格 hook/CI 模式使用 `verify --strict-workflow` 或独立 `guard`。它会检查是否真的跑过 prepare、依赖扫描、completion gate、Maven、Spring 静态检查和独立 semantic review gate，并阻断 `--dependency-scan-mode off`、`--no-write-dependency-report`、`--skip-maven`、completion 阶段的 `--skip-spring-static-check`、缺失 R1/R2/R3 独立审查证据等绕过方式，除非提供包含 `Approval: user-approved` 的审批文件。
 
@@ -492,9 +498,11 @@ python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py verify . `
   --unit-test-evidence docs\agent-runs\<run>\evidence\green-test.txt `
   --business-review docs\agent-runs\<run>\evidence\business-review.md `
   --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json `
+  --contract-dir docs\agent-runs\<run>\contracts `
   --memory-updates docs\agent-runs\<run>\proposed-memory-updates.md `
   --rework-dir docs\agent-runs\<run>\rework `
   --review-dir docs\agent-runs\<run>\reviews `
+  --handoff-dir docs\agent-runs\<run>\handoffs `
   --status-file docs\agent-runs\<run>\evidence\verify.json
 
 python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py guard . `
@@ -524,7 +532,9 @@ python ..\skills\e2e-dev-workflow\scripts\reviewer_gate.py . `
   --require-phase implementation
 ```
 
-review artifact 必须包含 `Phase`、`Reviewer`、`Review Request`、`Developer Agent`、`Reviewer Agent`、`Reviewer Session`、`Reviewer Invocation`、`Request Hash`、`Independence`、`Context Boundary`、`No Code Changes`、`Scope`、`Inputs Reviewed`、`Findings`、`Required Rework`、`Status`。`Review Request` 必须存在，phase 必须一致，且 request 的 `Output` 必须指向当前 report；request/report 的 Developer/Reviewer 必须一致，`Developer Agent` 和 `Reviewer Agent` 不能相同，不能是 `<...>` 占位值；`Request Hash` 必须等于 request 文件当前 SHA-256；`Reviewer Invocation` JSON 必须匹配 Developer/Reviewer/Session、指向同一个 request 和 output、声明 `fork_context: false`、使用 request-only/no-inherited context policy 且 `status: completed`；`Independence` 必须是 `independent-agent`。`Status: approved` / `verified` / `clear` / `passed` 可放行；`blocked`、`changes-requested`、`needs-rework`、`open`、`in-progress` 会阻断。若 review 发现问题，先生成 rework item，再按 Return Phase 回环。
+review artifact 必须包含 `Phase`、`Reviewer`、`Review Request`、`Developer Agent`、`Reviewer Agent`、`Reviewer Session`、`Reviewer Invocation`、`Request Hash`、`Independence`、`Context Boundary`、`No Code Changes`、`Scope`、`Inputs Reviewed`、`Findings`、`Required Rework`、`Status`。`Review Request` 必须存在，phase 必须一致，且 request 的 `Output` 必须指向当前 report；request/report 的 Developer/Reviewer 必须一致，`Developer Agent` 和 `Reviewer Agent` 不能相同，不能是 `<...>` 占位值；`Request Hash` 必须等于 request 文件当前 SHA-256；`Reviewer Invocation` JSON 必须匹配 Developer/Reviewer/Session、指向同一个 request 和 output、声明 `fork_context: false`、使用 request-only/no-inherited context policy 且 `status: completed`；`Independence` 必须是 `independent-agent`。`Status: approved` / `verified` / `clear` / `passed` 可放行；`blocked`、`changes-requested`、`needs-rework`、`open`、`in-progress` 会阻断。多服务任务中，每个 `service-plans/<service>/` 都必须有服务级 R2/R3 review；全局 R2/R3 不能替代服务级 review。若 review 发现问题，先生成 rework item，再按 Return Phase 回环。
+
+contract artifact 放在 `docs/agent-runs/<run>/contracts/<contract-id>.md`。必须包含 `Contract ID`、`Kind`、`Producer Service`、`Consumer Services`、`Payload Schema`、`Compatibility Rule`、`Producer ACK`、`Consumer ACK`、`Contract Tests`、`Status`；HTTP 契约还要有 `Endpoint` 或 `Route`，DMQ 契约还要有 `Topic`、`Tag`、`Group`。缺少任一服务 ACK、缺少 contract tests、契约仍是 draft/open，都会被 `contract_gate.py` 阻断。
 
 ```text
 docs/agent-runs/<run>/rework/rework-NNN.md
@@ -666,6 +676,8 @@ tag/link 规则：
 - `scripts/update-knowledge-graph.ps1`：封装知识图谱刷新。
 - `scripts/verify.ps1`：封装 AGENT 指令检查、Superpowers、agent orchestration、memory、跨服务依赖扫描、澄清门禁、Spring 静态检查和 Maven 验证。
 - `scripts/workflow-guard.ps1`：封装严格 workflow hook，可对 `verify.json` 做 pre-push / CI 阻断。
+- `skills/e2e-dev-workflow/scripts/handoff_gate.py`：校验非 reviewer agent 的文件交接是否有 agent id、输入/输出 hash、下游消费者和已关闭 open questions。
+- `skills/e2e-dev-workflow/scripts/contract_gate.py`：校验跨服务 HTTP/DMQ 契约是否有 producer/consumer ACK、payload/兼容性规则和 contract tests。
 
 Linux/macOS 可以直接调用底层 Python 脚本，或后续补充 `.sh` 脚本。
 
@@ -744,7 +756,7 @@ python skills\e2e-dev-workflow\scripts\clarification_gate.py <design-doc>
 python skills\e2e-dev-workflow\scripts\spring_static_check.py . --json
 python skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase planning --design-doc <design-doc>
 python skills\e2e-dev-workflow\scripts\implementation_manifest.py . --manifest <implementation-manifest.md> --design-doc <design-doc>
-python skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase completion --design-doc <design-doc> --red-test-evidence <red-test> --implementation-manifest <implementation-manifest.md> --coverage-matrix <coverage-matrix> --unit-test-evidence <unit-test-evidence> --business-review <business-review> --dependency-report <cross-service-dependencies.json> --memory-updates <proposed-memory-updates> --rework-dir <rework-dir> --review-dir <reviews-dir>
+python skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase completion --design-doc <design-doc> --red-test-evidence <red-test> --implementation-manifest <implementation-manifest.md> --coverage-matrix <coverage-matrix> --unit-test-evidence <unit-test-evidence> --business-review <business-review> --dependency-report <cross-service-dependencies.json> --contract-dir <contracts-dir> --memory-updates <proposed-memory-updates> --rework-dir <rework-dir> --review-dir <reviews-dir> --handoff-dir <handoffs-dir>
 python skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py guard . --verify-status <verify.json> --strict --require-completion
 python -m unittest discover tests
 mvn -pl <changed-modules> -am test

@@ -13,8 +13,10 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import clarification_gate  # noqa: E402
+import contract_gate  # noqa: E402
 import coverage_gate  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
+import handoff_gate  # noqa: E402
 import implementation_manifest as implementation_manifest_gate  # noqa: E402
 import memory_capture  # noqa: E402
 import reviewer_gate  # noqa: E402
@@ -67,6 +69,9 @@ def validate_gate(
     dependency_report: Path | None = None,
     implementation_manifest: Path | None = None,
     review_dirs: list[Path] | None = None,
+    handoff_dirs: list[Path] | None = None,
+    contract_dirs: list[Path] | None = None,
+    require_contracts: bool = False,
     require_semantic_reviews: bool = True,
 ) -> dict:
     repo = repo.resolve()
@@ -112,6 +117,8 @@ def validate_gate(
     semantic_review_result = None
     dependency_result = None
     implementation_manifest_result = None
+    handoff_result = None
+    contract_result = None
 
     required_review_phases = {
         "planning": ["design"],
@@ -126,6 +133,22 @@ def validate_gate(
     )
     if not semantic_review_result["ready"]:
         blocked_reasons.extend(semantic_review_result["blocked_reasons"])
+    if handoff_dirs:
+        handoff_result = handoff_gate.validate(
+            repo,
+            handoff_dirs,
+            [red_test_evidence, coverage_matrix, unit_test_evidence, business_review, implementation_manifest, design_doc],
+        )
+        if not handoff_result["ready"]:
+            blocked_reasons.extend(handoff_result["blocked_reasons"])
+    contract_result = contract_gate.validate(
+        repo,
+        contract_dirs,
+        [red_test_evidence, coverage_matrix, unit_test_evidence, business_review, implementation_manifest, design_doc],
+        require_contracts=require_contracts,
+    )
+    if not contract_result["ready"]:
+        blocked_reasons.extend(contract_result["blocked_reasons"])
 
     if phase == "completion":
         if not red_test_evidence:
@@ -182,6 +205,8 @@ def validate_gate(
         "memory_updates": memory_result,
         "rework": rework_result,
         "semantic_reviews": semantic_review_result,
+        "handoffs": handoff_result,
+        "contracts": contract_result,
         "spring_static_check": spring_result,
     }
 
@@ -201,6 +226,9 @@ def main() -> int:
     parser.add_argument("--implementation-manifest", type=Path)
     parser.add_argument("--rework-dir", action="append", type=Path)
     parser.add_argument("--review-dir", action="append", type=Path)
+    parser.add_argument("--handoff-dir", action="append", type=Path)
+    parser.add_argument("--contract-dir", action="append", type=Path)
+    parser.add_argument("--require-contracts", action="store_true")
     parser.add_argument("--require-semantic-reviews", action="store_true")
     parser.add_argument("--skip-spring-static-check", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -221,6 +249,9 @@ def main() -> int:
         args.dependency_report,
         args.implementation_manifest,
         args.review_dir,
+        args.handoff_dir,
+        args.contract_dir,
+        args.require_contracts,
         args.require_semantic_reviews,
     )
     if args.json:
