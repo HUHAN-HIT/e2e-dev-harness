@@ -1,0 +1,124 @@
+{
+  "name": "default",
+  "description": "Common required semantic review checks for e2e-dev-workflow R1/R2/R3 reviews.",
+  "common_issues": [
+    {
+      "id": "missing-acceptance-coverage",
+      "title": "Acceptance criteria are not fully mapped to tests and code.",
+      "reference": "references/common-review-issues.md#missing-acceptance-coverage"
+    },
+    {
+      "id": "dependency-impact-gap",
+      "title": "Affected services or modules are asserted without evidence.",
+      "reference": "references/common-review-issues.md#dependency-impact-gap"
+    },
+    {
+      "id": "findings-without-rework",
+      "title": "Reviewer findings are approved without required rework routing.",
+      "reference": "references/common-review-issues.md#findings-without-rework"
+    }
+  ],
+  "required_checklist": {
+    "design": [
+      {
+        "id": "ac-completeness",
+        "title": "Acceptance criteria completeness",
+        "description": "Check that goals, non-goals, use cases, acceptance criteria, data/API effects, and resolved questions are explicit enough for implementation.",
+        "severity": "blocker",
+        "references": [
+          "references/clarification-gate.md",
+          "references/common-review-issues.md#missing-acceptance-coverage"
+        ],
+        "required": true
+      },
+      {
+        "id": "dependency-impact",
+        "title": "Affected service/module impact evidence",
+        "description": "Verify that affected services, modules, contracts, routes, topics, and downstream dependencies are backed by GitNexus/scanner evidence or clearly marked non-applicable.",
+        "severity": "blocker",
+        "references": [
+          "references/kg-tool-selection.md",
+          "references/common-review-issues.md#dependency-impact-gap"
+        ],
+        "required": true
+      },
+      {
+        "id": "security-sensitive-paths",
+        "title": "Security-sensitive paths identified",
+        "description": "Identify authorization, authentication, tenant boundary, sensitive data, and abuse/failure paths that must be tested or explicitly ruled out.",
+        "severity": "blocker",
+        "references": [
+          "references/common-review-issues.md#security-negative-path-gap"
+        ],
+        "required": true
+      }
+    ],
+    "test": [
+      {
+        "id": "happy-and-failure-paths",
+        "title": "Happy and failure path test depth",
+        "description": "Confirm red tests cover meaningful success behavior plus failure, edge, validation, and regression paths instead of only smoke-level execution.",
+        "severity": "blocker",
+        "references": [
+          "references/tdd-java-spring.md",
+          "references/common-review-issues.md#missing-acceptance-coverage"
+        ],
+        "required": true
+      },
+      {
+        "id": "contract-coverage",
+        "title": "HTTP/DMQ contract test coverage",
+        "description": "Check that HTTP and DMQ contracts have producer/consumer expectations, topic/tag/group details, and tests, or a documented non-applicability reason.",
+        "severity": "blocker",
+        "references": [
+          "references/implementation-gates.md",
+          "references/common-review-issues.md#contract-coverage-gap"
+        ],
+        "required": true
+      },
+      {
+        "id": "security-negative-paths",
+        "title": "Security negative path coverage",
+        "description": "Confirm authorization, authentication, validation, tenant isolation, and sensitive-data negative paths are tested when the feature touches them.",
+        "severity": "blocker",
+        "references": [
+          "references/common-review-issues.md#security-negative-path-gap"
+        ],
+        "required": true
+      }
+    ],
+    "implementation": [
+      {
+        "id": "implementation-completeness",
+        "title": "Implementation completeness",
+        "description": "Verify all acceptance criteria, required artifacts, migrations/config, service ownership, and manifest rows are implemented or explicitly deferred with approval.",
+        "severity": "blocker",
+        "references": [
+          "references/implementation-gates.md",
+          "references/common-review-issues.md#missing-acceptance-coverage"
+        ],
+        "required": true
+      },
+      {
+        "id": "security-negative-paths",
+        "title": "Security-sensitive paths implemented and tested",
+        "description": "Check that security-sensitive paths found during design/test review are implemented, tested, and not bypassed by local shortcuts.",
+        "severity": "blocker",
+        "references": [
+          "references/common-review-issues.md#security-negative-path-gap"
+        ],
+        "required": true
+      },
+      {
+        "id": "project-pattern-consistency",
+        "title": "Project pattern consistency",
+        "description": "Compare implementation against existing project patterns for layering, transactions, DTO mapping, error handling, naming, and dependency direction.",
+        "severity": "blocker",
+        "references": [
+          "references/common-review-issues.md#project-pattern-drift"
+        ],
+        "required": true
+      }
+    ]
+  }
+}

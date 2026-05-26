@@ -30,6 +30,8 @@ import implementation_manifest  # noqa: E402
 import kg_refresh  # noqa: E402
 import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
+import requirements_archive  # noqa: E402
+import superpowers_probe  # noqa: E402
 import reviewer_gate  # noqa: E402
 import rework_gate  # noqa: E402
 import workflow_guard  # noqa: E402
@@ -825,6 +827,7 @@ def verified_workflow_result() -> dict:
             "dependency_scan_mode": "auto",
             "write_dependency_report": True,
             "require_semantic_reviews": True,
+            "require_requirements_archive": True,
         },
         "prepare": {
             "blocked": False,
@@ -869,6 +872,11 @@ def verified_workflow_result() -> dict:
                         "independence": "independent-agent",
                     },
                 ],
+            },
+            "requirements_archive": {
+                "ready": True,
+                "blocked_reasons": [],
+                "path": "docs/agent-runs/run/requirements-archive.md",
             },
         },
         "maven": {"skipped": False, "exit_code": 0, "command": "mvn test"},
@@ -924,6 +932,16 @@ class WorkflowGuardTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("semantic review" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_guard_blocks_missing_requirements_archive_in_strict_completion(self) -> None:
+        verify_result = verified_workflow_result()
+        verify_result["workflow"]["require_requirements_archive"] = False
+        verify_result["implementation_gate"]["requirements_archive"] = None
+
+        result = workflow_guard.validate_verify_result(verify_result, strict=True, require_completion=True)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("requirements archive" in reason.lower() for reason in result["blocked_reasons"]))
 
     def test_guard_allows_complete_verified_workflow_result(self) -> None:
         result = workflow_guard.validate_verify_result(
@@ -1296,6 +1314,17 @@ class ContractGateTests(unittest.TestCase):
         self.assertIn("consumed_by:", text)
         self.assertIn("open_questions:", text)
 
+    def test_review_request_template_names_default_profile_and_checklist(self) -> None:
+        text = e2e_dev_workflow.review_request_template(
+            "implementation",
+            "R3 implementation semantic review request",
+            "docs/agent-runs/run/reviews/R3-implementation-review.md",
+        )
+
+        self.assertIn("Review Profile: skills/e2e-dev-workflow/review-profiles/default.json", text)
+        self.assertIn("security-negative-paths", text)
+        self.assertIn("project-pattern-consistency", text)
+
 
 class ReworkGateTests(unittest.TestCase):
     def test_rework_gate_requires_required_fields(self) -> None:
@@ -1358,6 +1387,8 @@ class ReviewerGateTests(unittest.TestCase):
         phase: str,
         status: str = "approved",
         findings: str = "None",
+        required_rework: str = "None",
+        checklist: str = "",
         request: str | None = None,
         developer_agent: str = "developer-agent-1",
         reviewer_agent: str = "reviewer-agent-1",
@@ -1387,8 +1418,10 @@ class ReviewerGateTests(unittest.TestCase):
             - Scope: services/payment-service
             - Inputs Reviewed: design doc; tests; implementation files
             - Findings: {findings}
-            - Required Rework: None
+            - Required Rework: {required_rework}
             - Status: {status}
+
+            {checklist}
             """
         ).strip()
 
@@ -1586,6 +1619,243 @@ class ReviewerGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("blocked" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_blocks_findings_without_rework_or_blocking_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc(
+                    "implementation",
+                    findings="Missing negative authorization test.",
+                    request=request,
+                    request_hash=self.request_hash(repo, request),
+                ),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("findings" in reason.lower() and "rework" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_uses_profile_required_checklist_items(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            profile = repo / "review-profiles" / "strict.json"
+            profile.parent.mkdir(parents=True)
+            profile.write_text(
+                json.dumps(
+                    {
+                        "required_checklist": {
+                            "implementation": [
+                                {
+                                    "id": "security-negative-paths",
+                                    "title": "Security negative paths",
+                                    "required": True,
+                                }
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc(
+                    "implementation",
+                    request=request,
+                    request_hash=self.request_hash(repo, request),
+                    checklist="## Review Checklist\n\n- [x] project-pattern-consistency: checked",
+                ),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(
+                repo,
+                [review_dir],
+                require_phases=["implementation"],
+                review_profile=profile,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("security-negative-paths" in reason for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_resolves_bundled_default_review_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc(
+                    "implementation",
+                    request=request,
+                    request_hash=self.request_hash(repo, request),
+                    checklist=textwrap.dedent(
+                        """
+                        ## Review Checklist
+
+                        - [x] implementation-completeness: checked
+                        - [x] security-negative-paths: checked
+                        - [x] project-pattern-consistency: checked
+                        """
+                    ).strip(),
+                ),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(
+                repo,
+                [review_dir],
+                require_phases=["implementation"],
+                review_profile=Path("skills/e2e-dev-workflow/review-profiles/default.json"),
+        )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertTrue(result["review_profile"].replace("\\", "/").endswith("skills/e2e-dev-workflow/review-profiles/default.json"))
+
+    def test_reviewer_gate_auto_discovers_project_review_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            profile = repo / ".e2e" / "review-profile.json"
+            profile.parent.mkdir(parents=True)
+            profile.write_text(
+                json.dumps(
+                    {
+                        "required_checklist": {
+                            "implementation": [
+                                {
+                                    "id": "project-specific-risk",
+                                    "title": "Project-specific risk",
+                                    "description": "Reviewer must check the project-specific edge case.",
+                                    "severity": "blocker",
+                                }
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc(
+                    "implementation",
+                    request=request,
+                    request_hash=self.request_hash(repo, request),
+                    checklist="## Review Checklist\n\n- [x] project-pattern-consistency: checked",
+                ),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertEqual("project", result["review_profile_source"])
+        self.assertTrue(result["review_profile"].replace("\\", "/").endswith(".e2e/review-profile.json"))
+        self.assertTrue(any("project-specific-risk" in reason for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_explicit_profile_overrides_project_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            project_profile = repo / ".e2e" / "review-profile.json"
+            project_profile.parent.mkdir(parents=True)
+            project_profile.write_text(
+                '{"required_checklist":{"implementation":["project-specific-risk"]}}\n',
+                encoding="utf-8",
+            )
+            explicit_profile = repo / "docs" / "review-profiles" / "explicit.json"
+            explicit_profile.parent.mkdir(parents=True)
+            explicit_profile.write_text(
+                '{"required_checklist":{"implementation":["project-pattern-consistency"]}}\n',
+                encoding="utf-8",
+            )
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc(
+                    "implementation",
+                    request=request,
+                    request_hash=self.request_hash(repo, request),
+                    checklist="## Review Checklist\n\n- [x] project-pattern-consistency: checked",
+                ),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(
+                repo,
+                [review_dir],
+                require_phases=["implementation"],
+                review_profile=explicit_profile,
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("explicit", result["review_profile_source"])
+        self.assertTrue(result["review_profile"].replace("\\", "/").endswith("docs/review-profiles/explicit.json"))
+
+    def test_reviewer_gate_merges_profile_extends_and_warns_for_warning_severity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            profile = repo / ".e2e" / "review-profile.json"
+            profile.parent.mkdir(parents=True)
+            profile.write_text(
+                json.dumps(
+                    {
+                        "extends": "default",
+                        "required_checklist": {
+                            "implementation": [
+                                {
+                                    "id": "project-specific-risk",
+                                    "title": "Project-specific risk",
+                                    "severity": "blocker",
+                                },
+                                {
+                                    "id": "observability-note",
+                                    "title": "Observability note",
+                                    "description": "Reviewer should mention logs or metrics when relevant.",
+                                    "severity": "warning",
+                                },
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc(
+                    "implementation",
+                    request=request,
+                    request_hash=self.request_hash(repo, request),
+                    checklist=textwrap.dedent(
+                        """
+                        ## Review Checklist
+
+                        - [x] implementation-completeness: checked
+                        - [x] security-negative-paths: checked
+                        - [x] project-pattern-consistency: checked
+                        - [x] project-specific-risk: checked
+                        """
+                    ).strip(),
+                ),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["implementation"])
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("project", result["review_profile_source"])
+        self.assertTrue(any("default.json" in path.replace("\\", "/") for path in result["review_profile_chain"]))
+        self.assertTrue(any("observability-note" in warning for warning in result["warnings"]))
 
     def test_reviewer_gate_blocks_self_review_even_if_approved(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1833,6 +2103,90 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertEqual(["implementation", "test"], sorted(result["covered_service_reviews"]["jeepay-core"]))
 
 
+class RequirementsArchiveTests(unittest.TestCase):
+    def archive_doc(self) -> str:
+        return textwrap.dedent(
+            """
+            # Requirements Archive
+
+            ## Original Request
+            Build quote creation.
+
+            ## Final Clarified Requirement
+            Return a quote for valid input and reject invalid input.
+
+            ## Scope And Non-Goals
+            Scope: services/sample-service. Non-goals: billing integration.
+
+            ## Acceptance Criteria Status
+            | id | requirement | status | evidence |
+            | --- | --- | --- | --- |
+            | AC-1 | Quote is returned | verified | docs/agent-runs/run/evidence/coverage-matrix.md |
+
+            ## Use Case Coverage
+            UC-1 covers AC-1 happy path and validation failure.
+
+            ## Impacted Services APIs And Contracts
+            services/sample-service; no HTTP/DMQ contract change.
+
+            ## Implementation Evidence
+            docs/agent-runs/run/evidence/implementation-manifest.md
+
+            ## Test Evidence
+            docs/agent-runs/run/evidence/green-test.txt
+
+            ## Review And Rework Summary
+            R1/R2/R3 approved; no open rework.
+
+            ## Deferred And Residual Risks
+            None.
+
+            ## Promoted Memory Entries
+            M-1 promoted to memory/decisions.md.
+
+            ## Follow Up Opportunities
+            None.
+            """
+        ).strip()
+
+    def test_requirements_archive_blocks_missing_required_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            archive = repo / "docs" / "agent-runs" / "run" / "requirements-archive.md"
+            archive.parent.mkdir(parents=True)
+            archive.write_text("# Requirements Archive\n\n## Original Request\nBuild quote creation.\n", encoding="utf-8")
+
+            result = requirements_archive.validate(repo, archive)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Final Clarified Requirement" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any("Acceptance Criteria Status" in reason for reason in result["blocked_reasons"]))
+
+    def test_requirements_archive_allows_complete_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            archive = repo / "docs" / "agent-runs" / "run" / "requirements-archive.md"
+            archive.parent.mkdir(parents=True)
+            archive.write_text(self.archive_doc(), encoding="utf-8")
+
+            result = requirements_archive.validate(repo, archive)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(12, result["section_count"])
+
+    def test_requirements_archive_blocks_placeholders_in_required_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            archive = repo / "docs" / "agent-runs" / "run" / "requirements-archive.md"
+            archive.parent.mkdir(parents=True)
+            archive.write_text(self.archive_doc().replace("Return a quote for valid input", "TBD"), encoding="utf-8")
+
+            result = requirements_archive.validate(repo, archive)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("placeholder" in reason.lower() for reason in result["blocked_reasons"]))
+
+
 class ImplementationGateTests(unittest.TestCase):
     def write_semantic_reviews(self, repo: Path, phases: tuple[str, ...] = ("design", "test", "implementation")) -> Path:
         review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
@@ -1946,6 +2300,35 @@ class ImplementationGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("Knowledge graph status" in reason for reason in result["blocked_reasons"]))
+
+    def test_implementation_gate_passes_review_profile_to_reviewer_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            kg.parent.mkdir(parents=True)
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            profile = repo / "review-profiles" / "strict.json"
+            profile.parent.mkdir(parents=True)
+            profile.write_text('{"required_checklist":{"design":["ac-completeness"]}}\n', encoding="utf-8")
+            reviewer_result = {
+                "ready": True,
+                "blocked_reasons": [],
+                "warnings": [],
+                "covered_phases": ["design"],
+                "items": [],
+            }
+            with patch.object(implementation_gate.reviewer_gate, "validate", return_value=reviewer_result) as validate:
+                result = implementation_gate.validate_gate(
+                    repo,
+                    None,
+                    kg,
+                    "planning",
+                    None,
+                    review_profile=profile,
+                )
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(profile, validate.call_args.args[4])
 
     def test_planning_gate_blocks_without_r1_design_review(self) -> None:
         markdown = textwrap.dedent(
@@ -2100,6 +2483,132 @@ class ImplementationGateTests(unittest.TestCase):
         self.assertEqual(1, result["coverage"]["coverage_rows"])
         self.assertTrue(result["spring_static_check"]["ready"])
         self.assertTrue(result["semantic_reviews"]["ready"])
+
+    def test_completion_gate_validates_requirements_archive_when_supplied(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Return a quote.
+
+            ## Scope
+            - sample-service
+
+            ## Use Cases
+            - Create quote.
+
+            ## Acceptance Criteria
+            - Quote is returned.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        coverage = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Quote is returned | Create quote | services/sample-service | QuoteTest | QuoteService | reviewed | covered |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            red = repo / "docs" / "agent-runs" / "red.txt"
+            matrix = repo / "docs" / "agent-runs" / "coverage.md"
+            unit = repo / "docs" / "agent-runs" / "unit.txt"
+            review = repo / "docs" / "agent-runs" / "business.md"
+            archive = repo / "docs" / "agent-runs" / "run" / "requirements-archive.md"
+            design.parent.mkdir(parents=True)
+            kg.parent.mkdir(parents=True)
+            matrix.parent.mkdir(parents=True)
+            archive.parent.mkdir(parents=True)
+            design.write_text(markdown, encoding="utf-8")
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            matrix.write_text(coverage, encoding="utf-8")
+            write_command_evidence(unit, "mvn -pl services/sample-service -am test")
+            review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
+            archive.write_text("# Requirements Archive\n\n## Original Request\nBuild quote creation.\n", encoding="utf-8")
+            review_dir = self.write_semantic_reviews(repo)
+
+            result = implementation_gate.validate_gate(
+                repo,
+                design,
+                kg,
+                "completion",
+                red,
+                matrix,
+                unit,
+                review,
+                review_dirs=[review_dir],
+                requirements_archive=archive,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertIsNotNone(result["requirements_archive"])
+        self.assertTrue(any("requirements archive" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_completion_gate_requires_archive_when_explicitly_required(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            kg.parent.mkdir(parents=True)
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+
+            result = implementation_gate.validate_gate(
+                repo,
+                None,
+                kg,
+                "completion",
+                None,
+                require_requirements_archive=True,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("--requirements-archive" in reason for reason in result["blocked_reasons"]))
+
+    def test_unified_gate_requires_archive_for_strict_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            gate_result = {"ready": False, "blocked_reasons": ["missing archive"], "warnings": []}
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=None,
+                kg_status_file=None,
+                phase="completion",
+                red_test_evidence=None,
+                coverage_matrix=None,
+                unit_test_evidence=None,
+                business_review=None,
+                memory_updates=None,
+                requirements_archive=None,
+                require_requirements_archive=False,
+                skip_spring_static_check=False,
+                rework_dir=None,
+                dependency_report=None,
+                implementation_manifest=None,
+                review_dir=None,
+                handoff_dir=None,
+                contract_dir=None,
+                require_contracts=False,
+                require_semantic_reviews=False,
+                review_profile=None,
+                strict_workflow=True,
+                status_file=None,
+            )
+
+            with patch.object(e2e_dev_workflow.implementation_gate, "validate_gate", return_value=gate_result) as validate:
+                code, result = e2e_dev_workflow.gate(args)
+
+        self.assertEqual(2, code)
+        self.assertEqual(gate_result, result)
+        self.assertTrue(validate.call_args.kwargs["require_requirements_archive"])
 
     def test_completion_gate_blocks_missing_semantic_reviews_when_required(self) -> None:
         design_text = textwrap.dedent(
@@ -3520,6 +4029,10 @@ class OrchestrationArtifactTests(unittest.TestCase):
             self.assertFalse((repo / result["handoff_artifacts"]["design_review"]).exists())
             self.assertFalse((repo / result["handoff_artifacts"]["test_review"]).exists())
             self.assertFalse((repo / result["handoff_artifacts"]["implementation_review"]).exists())
+            self.assertTrue((repo / result["handoff_artifacts"]["requirements_archive"]).exists())
+            archive_text = (repo / result["handoff_artifacts"]["requirements_archive"]).read_text(encoding="utf-8")
+            self.assertIn("Final Clarified Requirement", archive_text)
+            self.assertIn("Acceptance Criteria Status", archive_text)
             for module in ("jeepay-core", "jeepay-service", "jeepay-payment"):
                 paths = result["handoff_artifacts"]["service_plans"][module]
                 self.assertTrue((repo / paths["service_plan"]).exists())
@@ -3592,6 +4105,10 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(
             "docs/agent-runs/2026-05-23-checkout/evidence/coverage-matrix.md",
             result["coverage_matrix"],
+        )
+        self.assertEqual(
+            "docs/agent-runs/2026-05-23-checkout/requirements-archive.md",
+            result["requirements_archive"],
         )
 
     def test_artifacts_allow_explicit_agent_run_dir(self) -> None:
@@ -3790,6 +4307,8 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertNotIn("use-case-designer", names)
         self.assertNotIn("test-case-developer", names)
         self.assertNotIn("code-developer", names)
+        coverage = next(agent for agent in agents if agent["name"] == "coverage-reviewer")
+        self.assertIn(artifacts["requirements_archive"], coverage["outputs"])
 
     def test_orchestration_plan_cli_accepts_single_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3828,6 +4347,65 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
 
 class SkillDocumentationTests(unittest.TestCase):
+    def test_skill_points_non_codex_agents_to_platform_compatibility_reference(self) -> None:
+        skill_text = (ROOT / "skills" / "e2e-dev-workflow" / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("Claude Code", skill_text)
+        self.assertIn("Codex", skill_text)
+        self.assertIn("Gemini", skill_text)
+        self.assertIn("references/platform-compatibility.md", skill_text)
+
+    def test_skill_declares_custom_review_profile_reference(self) -> None:
+        skill_text = (ROOT / "skills" / "e2e-dev-workflow" / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("references/review-profiles.md", skill_text)
+        self.assertIn("common-review-issues.md", skill_text)
+        self.assertIn("references/requirements-archive.md", skill_text)
+
+    def test_requirements_archive_reference_documents_completion_summary(self) -> None:
+        reference = ROOT / "skills" / "e2e-dev-workflow" / "references" / "requirements-archive.md"
+        text = reference.read_text(encoding="utf-8")
+
+        self.assertIn("docs/agent-runs/<run>/requirements-archive.md", text)
+        self.assertIn("Acceptance Criteria Status", text)
+        self.assertIn("Promoted Memory Entries", text)
+        self.assertIn("--requirements-archive", text)
+
+    def test_review_profile_reference_documents_project_discovery_and_extends(self) -> None:
+        reference = ROOT / "skills" / "e2e-dev-workflow" / "references" / "review-profiles.md"
+        text = reference.read_text(encoding="utf-8")
+
+        self.assertIn(".e2e/review-profile.json", text)
+        self.assertIn("docs/review-profile.json", text)
+        self.assertIn("extends", text)
+        self.assertIn("severity", text)
+        self.assertIn("security-heavy", text)
+        self.assertIn("api-first", text)
+
+    def test_common_review_issues_reference_exists(self) -> None:
+        reference = ROOT / "skills" / "e2e-dev-workflow" / "references" / "common-review-issues.md"
+        text = reference.read_text(encoding="utf-8")
+
+        self.assertIn("Issue ID", text)
+        self.assertIn("判定标准", text)
+        self.assertIn("示例", text)
+
+    def test_bundled_review_profiles_have_guidance_metadata(self) -> None:
+        for name in ("default", "security-heavy", "api-first"):
+            with self.subTest(profile=name):
+                profile, blocked, path, source, chain = reviewer_gate.load_review_profile(ROOT, name)
+
+                self.assertEqual([], blocked)
+                self.assertTrue(path and path.replace("\\", "/").endswith(f"{name}.json"))
+                self.assertEqual("explicit", source)
+                self.assertTrue(chain)
+                for phase, items in profile["required_checklist"].items():
+                    self.assertTrue(items, phase)
+                    for item in items:
+                        self.assertIn("description", item)
+                        self.assertIn("severity", item)
+                        self.assertIn("references", item)
+
     def test_skill_body_is_concise_for_progressive_disclosure(self) -> None:
         skill_text = (ROOT / "skills" / "e2e-dev-workflow" / "SKILL.md").read_text(encoding="utf-8")
         body = skill_text.split("---", 2)[-1]
@@ -3864,6 +4442,31 @@ class SkillDocumentationTests(unittest.TestCase):
         for term in required_terms:
             with self.subTest(term=term):
                 self.assertIn(term, skill_text)
+
+
+class SuperpowersProbeCompatibilityTests(unittest.TestCase):
+    def test_discovers_superpowers_in_claude_code_skills_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            skills = home / ".claude" / "skills"
+            for name in (
+                "using-superpowers",
+                "brainstorming",
+                "writing-plans",
+                "test-driven-development",
+            ):
+                path = skills / name / "SKILL.md"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"---\nname: {name}\ndescription: test\n---\n", encoding="utf-8")
+
+            with (
+                patch.dict(superpowers_probe.os.environ, {"SUPERPOWERS_SKILLS_DIR": "", "SUPERPOWERS_ROOT": ""}, clear=False),
+                patch.object(superpowers_probe.Path, "home", return_value=home),
+            ):
+                result = superpowers_probe.discover()
+
+        self.assertTrue(result["available"], result)
+        self.assertTrue(any(".claude" in path.replace("\\", "/") for path in result["found"].values()))
 
 
 class UnifiedCliTests(unittest.TestCase):

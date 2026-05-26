@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import re
 from pathlib import Path
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 REQUIRED_FIELDS = {
@@ -58,6 +62,16 @@ REQUEST_REQUIRED_FIELDS = {
 }
 FIELD_RE = re.compile(r"^\s*-?\s*([A-Za-z][A-Za-z _-]*):\s*(.*?)\s*$")
 PLACEHOLDER_RE = re.compile(r"^\s*(<[^>]+>|\[[^\]]+\]|todo|tbd|unknown|draft|placeholder)\s*$", re.IGNORECASE)
+CHECKED_ITEM_RE = re.compile(r"^\s*[-*]\s*\[[xX]\]\s*`?([A-Za-z0-9][A-Za-z0-9._/-]*)`?")
+PROJECT_REVIEW_PROFILE_CANDIDATES = [
+    Path(".e2e/review-profile.json"),
+    Path(".e2e/review-profiles/default.json"),
+    Path("docs/review-profile.json"),
+    Path("docs/review-profiles/default.json"),
+]
+PROFILE_DISABLE_VALUES = {"off", "none", "disabled", "false"}
+PROFILE_BLOCKING_SEVERITIES = {"blocker", "blocking", "required", "error", "critical"}
+PROFILE_WARNING_SEVERITIES = {"warning", "warn", "advisory", "advice", "info", "optional"}
 
 
 def normalize_key(value: str) -> str:
@@ -75,6 +89,258 @@ def normalize_phase(value: str) -> str:
 
 def is_none_value(value: str) -> bool:
     return normalize_value(value) in NONE_VALUES
+
+
+def checked_checklist_ids(text: str) -> set[str]:
+    ids: set[str] = set()
+    for line in text.splitlines():
+        match = CHECKED_ITEM_RE.match(line)
+        if match:
+            ids.add(normalize_value(match.group(1).strip("`")))
+    return ids
+
+
+def review_profile_candidates(repo: Path, profile_path: Path | str, base_dir: Path | None = None) -> list[Path]:
+    profile_path = Path(str(profile_path))
+    if profile_path.is_absolute():
+        return [profile_path]
+    candidates = []
+    if base_dir:
+        candidates.append(base_dir / profile_path)
+        if profile_path.suffix != ".json":
+            candidates.append(base_dir / f"{profile_path.name}.json")
+    candidates.append(repo / profile_path)
+    if profile_path.suffix != ".json":
+        candidates.append(repo / f"{profile_path.name}.json")
+    parts = list(profile_path.parts)
+    if "review-profiles" in parts:
+        index = parts.index("review-profiles")
+        candidates.append(SCRIPT_DIR.parent / Path(*parts[index:]))
+    if len(parts) == 1:
+        name = profile_path.name
+        if not name.endswith(".json"):
+            name = f"{name}.json"
+        candidates.append(SCRIPT_DIR.parent / "review-profiles" / name)
+    candidates.append(SCRIPT_DIR.parent / "review-profiles" / profile_path.name)
+    return list(dict.fromkeys(candidates))
+
+
+def resolve_review_profile_path(repo: Path, profile_ref: Path | str, base_dir: Path | None = None) -> Path:
+    candidates = review_profile_candidates(repo, profile_ref, base_dir=base_dir)
+    resolved = next((candidate for candidate in candidates if candidate.exists()), candidates[0])
+    return resolved
+
+
+def discover_project_review_profile(repo: Path) -> Path | None:
+    for relative in PROJECT_REVIEW_PROFILE_CANDIDATES:
+        candidate = repo / relative
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def normalize_profile_item(item: object) -> dict | None:
+    if isinstance(item, str):
+        return {"id": item, "title": item, "required": True}
+    if not isinstance(item, dict) or not item.get("id"):
+        return None
+    result = copy.deepcopy(item)
+    result["id"] = str(result["id"])
+    result["title"] = str(result.get("title") or result["id"])
+    return result
+
+
+def checklist_map(profile: dict | list | None) -> dict[str, list]:
+    raw = profile or {}
+    if isinstance(raw, list):
+        return {"all": raw}
+    if isinstance(raw, dict):
+        return {
+            str(key): value
+            for key, value in raw.items()
+            if isinstance(value, list)
+        }
+    return {}
+
+
+def profile_checklist_map(profile: dict) -> dict[str, list]:
+    return checklist_map(profile.get("required_checklist") or profile.get("checklist"))
+
+
+def merge_checklist_items(parent_items: list, child_items: list) -> list[dict]:
+    merged: list[dict] = []
+    positions: dict[str, int] = {}
+    for item in parent_items:
+        normalized = normalize_profile_item(item)
+        if not normalized:
+            continue
+        positions[normalize_value(normalized["id"])] = len(merged)
+        merged.append(normalized)
+    for item in child_items:
+        normalized = normalize_profile_item(item)
+        if not normalized:
+            continue
+        item_id = normalize_value(normalized["id"])
+        if item_id in positions:
+            existing = merged[positions[item_id]]
+            merged[positions[item_id]] = {**existing, **normalized}
+        else:
+            positions[item_id] = len(merged)
+            merged.append(normalized)
+    return merged
+
+
+def merge_checklists(parent: dict, child: dict) -> dict[str, list[dict]]:
+    merged: dict[str, list[dict]] = {}
+    parent_map = profile_checklist_map(parent)
+    child_map = profile_checklist_map(child)
+    for phase in list(parent_map) + [phase for phase in child_map if phase not in parent_map]:
+        merged[phase] = merge_checklist_items(parent_map.get(phase, []), child_map.get(phase, []))
+    return merged
+
+
+def merge_issue_collection(parent: object, child: object) -> object:
+    if child in (None, [], {}):
+        return copy.deepcopy(parent)
+    if isinstance(parent, dict) and isinstance(child, dict):
+        merged = copy.deepcopy(parent)
+        merged.update(copy.deepcopy(child))
+        return merged
+    if isinstance(parent, list) or isinstance(child, list):
+        merged_list: list = []
+        positions: dict[str, int] = {}
+        for source_item in issue_collection_items(parent) + issue_collection_items(child):
+            item = copy.deepcopy(source_item)
+            if isinstance(item, dict) and item.get("id"):
+                item_id = normalize_value(str(item["id"]))
+                if item_id in positions:
+                    merged_list[positions[item_id]] = {**merged_list[positions[item_id]], **item}
+                else:
+                    positions[item_id] = len(merged_list)
+                    merged_list.append(item)
+            else:
+                merged_list.append(item)
+        return merged_list
+    return copy.deepcopy(child)
+
+
+def issue_collection_items(value: object) -> list:
+    if value in (None, [], {}):
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        items: list = []
+        for key, item in value.items():
+            if isinstance(item, dict):
+                normalized = {"id": str(key), **copy.deepcopy(item)}
+                normalized["id"] = str(normalized.get("id") or key)
+                items.append(normalized)
+            else:
+                items.append({"id": str(key), "title": str(item)})
+        return items
+    return [value]
+
+
+def merge_profiles(parent: dict, child: dict) -> dict:
+    merged = copy.deepcopy(parent)
+    for key, value in child.items():
+        if key in {"extends", "required_checklist", "checklist", "common_issues", "issues"}:
+            continue
+        merged[key] = copy.deepcopy(value)
+    merged["required_checklist"] = merge_checklists(parent, child)
+    if "common_issues" in parent or "common_issues" in child:
+        merged["common_issues"] = merge_issue_collection(parent.get("common_issues"), child.get("common_issues"))
+    if "issues" in parent or "issues" in child:
+        merged["issues"] = merge_issue_collection(parent.get("issues"), child.get("issues"))
+    return merged
+
+
+def as_extends_list(value: object) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    return []
+
+
+def load_review_profile_file(repo: Path, profile_path: Path, stack: list[Path] | None = None) -> tuple[dict, list[str], list[str]]:
+    resolved = profile_path.resolve()
+    stack = stack or []
+    if resolved in stack:
+        chain = " -> ".join(str(path) for path in stack + [resolved])
+        return {}, [f"Review profile extends cycle detected: {chain}"], [str(resolved)]
+    if not resolved.exists():
+        return {}, [f"Review profile not found: {resolved}"], [str(resolved)]
+    try:
+        data = json.loads(resolved.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        return {}, [f"Review profile is not valid JSON: {resolved}: {error}"], [str(resolved)]
+    if not isinstance(data, dict):
+        return {}, [f"Review profile must be a JSON object: {resolved}"], [str(resolved)]
+
+    blocked: list[str] = []
+    merged: dict = {}
+    chain: list[str] = []
+    for parent_ref in as_extends_list(data.get("extends")):
+        parent_path = resolve_review_profile_path(repo, parent_ref, base_dir=resolved.parent)
+        parent_profile, parent_blocked, parent_chain = load_review_profile_file(repo, parent_path, stack + [resolved])
+        blocked.extend(parent_blocked)
+        chain.extend(parent_chain)
+        merged = merge_profiles(merged, parent_profile)
+    merged = merge_profiles(merged, data)
+    chain.append(str(resolved))
+    return merged, blocked, list(dict.fromkeys(chain))
+
+
+def load_review_profile(repo: Path, profile_path: Path | str | None) -> tuple[dict, list[str], str | None, str | None, list[str]]:
+    if profile_path and normalize_value(str(profile_path)) in PROFILE_DISABLE_VALUES:
+        return {}, [], None, "disabled", []
+    source = "explicit" if profile_path else None
+    resolved: Path | None = None
+    if profile_path:
+        resolved = resolve_review_profile_path(repo, profile_path)
+    else:
+        resolved = discover_project_review_profile(repo)
+        if resolved:
+            source = "project"
+    if not resolved:
+        return {}, [], None, None, []
+
+    profile, blocked, chain = load_review_profile_file(repo, resolved)
+    return profile, blocked, str(resolved.resolve()), source, chain
+
+
+def normalize_profile_severity(item: dict) -> str:
+    severity = normalize_value(str(item.get("severity", "")))
+    if not severity:
+        return "blocker" if item.get("required", True) is not False else "advisory"
+    if severity in PROFILE_BLOCKING_SEVERITIES:
+        return "blocker"
+    if severity in PROFILE_WARNING_SEVERITIES:
+        return "warning"
+    return severity
+
+
+def profile_required_items(profile: dict, phase: str) -> list[dict[str, str]]:
+    raw = profile.get("required_checklist") or profile.get("checklist") or {}
+    selected: list = []
+    if isinstance(raw, list):
+        selected.extend(raw)
+    elif isinstance(raw, dict):
+        for key in ("all", phase):
+            value = raw.get(key, [])
+            if isinstance(value, list):
+                selected.extend(value)
+    result: list[dict[str, str]] = []
+    for item in selected:
+        normalized = normalize_profile_item(item)
+        if normalized and normalized.get("required", True) is not False:
+            normalized["severity"] = normalize_profile_severity(normalized)
+            result.append(normalized)
+    return result
 
 
 def parse_item(path: Path) -> dict[str, str]:
@@ -226,14 +492,16 @@ def discovered_files(repo: Path, agent_run_dir: Path | None) -> list[Path]:
     return sorted(dict.fromkeys(candidates))
 
 
-def validate_item(repo: Path, path: Path, fields: dict[str, str]) -> tuple[dict, list[str]]:
+def validate_item(repo: Path, path: Path, fields: dict[str, str], review_profile: dict | None = None) -> tuple[dict, list[str], list[str]]:
     blocked: list[str] = []
+    warnings: list[str] = []
     missing = [label for key, label in REQUIRED_FIELDS.items() if not fields.get(key, "").strip()]
     if missing:
         blocked.append(f"Semantic review {path} missing required fields: {', '.join(missing)}")
 
     phase = normalize_phase(fields.get("phase", ""))
     status = normalize_value(fields.get("status", ""))
+    findings = fields.get("findings", "")
     required_rework = fields.get("required_rework", "")
     developer_agent = fields.get("developer_agent", "").strip()
     reviewer_agent = fields.get("reviewer_agent", "").strip()
@@ -362,6 +630,26 @@ def validate_item(repo: Path, path: Path, fields: dict[str, str]) -> tuple[dict,
         blocked.append(f"Semantic review {path} is {status} but Required Rework is empty.")
     elif status and status not in PASS_STATUSES and status not in PASS_WITH_REWORK_STATUSES:
         blocked.append(f"Semantic review {path} has unsupported Status: {fields.get('status')}")
+    if status in PASS_STATUSES and not is_none_value(findings) and is_none_value(required_rework):
+        blocked.append(f"Semantic review {path} has Findings but Required Rework is empty; route findings to rework or use a blocking/with-rework status.")
+
+    raw_text = path.read_text(encoding="utf-8", errors="replace")
+    checked_ids = checked_checklist_ids(raw_text)
+    missing_profile_items: list[str] = []
+    warning_profile_items: list[str] = []
+    for profile_item in profile_required_items(review_profile or {}, phase):
+        item_id = normalize_value(profile_item["id"])
+        if item_id not in checked_ids:
+            missing_profile_items.append(profile_item["id"])
+            message = f"Semantic review {path} missing required review profile checklist item: {profile_item['id']} ({profile_item['title']})."
+            description = str(profile_item.get("description", "")).strip()
+            if description:
+                message += f" Guidance: {description}"
+            if profile_item.get("severity") == "warning":
+                warning_profile_items.append(profile_item["id"])
+                warnings.append(message)
+            else:
+                blocked.append(message)
 
     item = dict(fields)
     item.update(
@@ -377,9 +665,12 @@ def validate_item(repo: Path, path: Path, fields: dict[str, str]) -> tuple[dict,
             "review_request": review_request,
             "request_hash": report_request_hash,
             "has_required_rework": not is_none_value(required_rework),
+            "checked_profile_items": sorted(checked_ids),
+            "missing_profile_items": missing_profile_items,
+            "warning_profile_items": warning_profile_items,
         }
     )
-    return item, blocked
+    return item, blocked, warnings
 
 
 def validate(
@@ -387,6 +678,7 @@ def validate(
     review_dirs: list[Path] | None = None,
     anchor_paths: list[Path | None] | None = None,
     require_phases: list[str] | None = None,
+    review_profile: Path | None = None,
 ) -> dict:
     repo = repo.resolve()
     files = explicit_files(repo, review_dirs)
@@ -398,18 +690,22 @@ def validate(
     required = [normalize_phase(phase) for phase in require_phases or []]
     services = expected_services(inferred_run_dir)
     blocked: list[str] = []
+    profile, profile_blocked, profile_path, profile_source, profile_chain = load_review_profile(repo, review_profile)
+    blocked.extend(profile_blocked)
+    warnings: list[str] = []
     items: list[dict] = []
     covered: set[str] = set()
     covered_service_reviews: dict[str, set[str]] = {service: set() for service in services}
     for path in files:
         fields = parse_item(path)
-        item, item_blocked = validate_item(repo, path, fields)
+        item, item_blocked, item_warnings = validate_item(repo, path, fields, profile)
         service = service_from_review_path(inferred_run_dir, path) or service_from_scope(fields.get("scope", ""), services)
         if service and item.get("phase") in {"test", "implementation"}:
             covered_service_reviews.setdefault(service, set()).add(item["phase"])
             item["service"] = service
         items.append(item)
         blocked.extend(item_blocked)
+        warnings.extend(item_warnings)
         if item.get("phase"):
             covered.add(item["phase"])
 
@@ -425,9 +721,12 @@ def validate(
         "repo": str(repo),
         "ready": not blocked,
         "blocked_reasons": blocked,
-        "warnings": [],
+        "warnings": warnings,
         "scanned_files": [str(path) for path in files],
         "inferred_agent_run_dir": str(inferred_run_dir) if inferred_run_dir else None,
+        "review_profile": profile_path,
+        "review_profile_source": profile_source,
+        "review_profile_chain": profile_chain,
         "covered_phases": sorted(covered),
         "expected_services": services,
         "covered_service_reviews": {
@@ -445,10 +744,11 @@ def main() -> int:
     parser.add_argument("--review-dir", action="append", type=Path)
     parser.add_argument("--anchor-path", action="append", type=Path)
     parser.add_argument("--require-phase", action="append", choices=["design", "test", "implementation"])
+    parser.add_argument("--review-profile", type=Path)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    result = validate(args.repo, args.review_dir, args.anchor_path, args.require_phase)
+    result = validate(args.repo, args.review_dir, args.anchor_path, args.require_phase, args.review_profile)
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:

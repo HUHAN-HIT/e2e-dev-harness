@@ -405,6 +405,7 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
         "knowledge_graph_status": f"{evidence}/knowledge-graph-refresh.json",
         "dependency_report": f"{evidence}/cross-service-dependencies.json",
         "implementation_manifest": f"{evidence}/implementation-manifest.md",
+        "requirements_archive": f"{base}/requirements-archive.md",
         "red_test_evidence": f"{evidence}/red-test.txt",
         "green_test_evidence": f"{evidence}/green-test.txt",
         "verification_evidence": f"{evidence}/verification.txt",
@@ -575,7 +576,13 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
             artifact_paths["dependency_report"],
             artifact_paths["implementation_manifest"],
         ],
-        "outputs": [artifact_paths["implementation_manifest"], artifact_paths["coverage_matrix"], artifact_paths["business_review"], artifact_paths["verification_evidence"]],
+        "outputs": [
+            artifact_paths["implementation_manifest"],
+            artifact_paths["coverage_matrix"],
+            artifact_paths["business_review"],
+            artifact_paths["verification_evidence"],
+            artifact_paths["requirements_archive"],
+        ],
         "gate": "Every acceptance criterion maps to use cases, required implementation artifacts, tests, code refs, and business review evidence.",
     })
     return agents

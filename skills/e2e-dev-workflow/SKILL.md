@@ -10,6 +10,12 @@ It is tuned for Java 21, Spring Framework 6.x, and Maven, but the workflow name 
 
 Governing rule: do not start implementation while behavior, use cases, APIs, data effects, service contracts, or test expectations are ambiguous.
 
+## Platform Compatibility
+
+This skill is agent-neutral. Use it from Codex, Claude Code, Gemini CLI, OpenCode,
+or any agent runtime that can read a `SKILL.md` plus bundled scripts.
+For runtime-specific invocation, install paths, and fallback behavior, read `references/platform-compatibility.md`.
+
 ## Fast Path
 
 Start every non-trivial run with the unified prepare command:
@@ -40,9 +46,15 @@ For command details, read `references/implementation-gates.md`.
 - Load project instructions before requirement clarification. Use discovery scope first; load affected service `AGENT.md` / `AGENTS.md` only after scope is known. Read `references/agent-instructions.md`.
 - Use Superpowers when available. `superpowers:brainstorming` owns clarification; `superpowers:test-driven-development` owns TDD. Read `references/superpowers-integration.md`.
 - Clarification is a hard gate. The design must state goals, non-goals, affected services/modules, use cases, contracts, acceptance criteria, test design, and resolved open questions. Read `references/clarification-gate.md`.
-- Prefer GitNexus for code-level cross-service evidence. Use Graphify for docs, ADRs, diagrams, and semantic context. Scanner facts seed both. Read `references/kg-tool-selection.md`.
+- Prefer GitNexus for code-level cross-service evidence and explicit impact artifacts.
+  Do not duplicate low-level `grep`/`rg` usage instructions just because GitNexus augments searches.
+  Use explicit GitNexus commands when a gate needs auditable evidence.
+  Use Graphify for docs, ADRs, diagrams, and semantic context. Scanner facts seed both. Read `references/kg-tool-selection.md`.
 - Memory is optional context, not authority. Capture only verified or user-approved facts; Obsidian tags and links help selection but never replace explicit text. Read `references/memory-integration.md`.
 - TDD is mandatory for production changes. Write a red test, observe the expected failure, implement minimally, then broaden Maven verification. Read `references/tdd-java-spring.md`.
+- Review profiles are portable project policy. Auto-discover project profiles and extend bundled profiles only when useful.
+  Use common issue guidance for reviewer focus. Read `references/review-profiles.md` and `references/common-review-issues.md`.
+- Archive the final requirement summary after completion so future analysis can read outcomes without replaying every run artifact. Read `references/requirements-archive.md`.
 - Completion requires evidence, not chat claims: semantic reviews, implementation manifest, coverage matrix, unit-test JSON, business review, dependency report when cross-service, closed rework, and passing guard.
 
 ## Workflow
@@ -54,7 +66,7 @@ For command details, read `references/implementation-gates.md`.
 5. TDD red: write the first failing test and capture failing evidence.
 6. R2 test review: independent reviewer checks happy/failure paths, security cases, and contract coverage before production code.
 7. TDD green/refactor: implement with the Superpowers Red-Green-Refactor cycle.
-8. R3 implementation review: independent reviewer checks completeness, tests, security, anti-patterns, and project-pattern consistency.
+8. R3 implementation review: independent reviewer checks completeness, tests, security, anti-patterns, and project-pattern consistency. Use a review profile when the project has required checklist items.
 9. Completion gate: prove every acceptance criterion and required artifact has use cases, service ownership, tests, code refs, business review, and closed rework.
 10. Rework loop: findings create rework items and return to the earliest required phase before more production-code edits.
 11. Strict guard/report: run `verify --strict-workflow` or `guard`, capture accepted memory updates, and report evidence plus residual risks.
@@ -99,6 +111,17 @@ python skills/e2e-dev-workflow/scripts/cross_service_dependency_scan.py . \
 
 For Java/Spring code dependencies, GitNexus is the primary evidence engine. Graphify can enrich design-document and architecture semantics, but inferred or ambiguous Graphify findings become clarification questions, not completion evidence.
 
+For changed requirements or code diffs, use GitNexus impact tooling explicitly:
+
+```bash
+gitnexus detect-changes --scope unstaged
+gitnexus detect-changes --scope staged
+gitnexus detect-changes --scope compare --base-ref main
+gitnexus impact "<symbol-or-path>" --include-tests
+```
+
+Do not require agents to call GitNexus for every `grep`/`rg` command when local GitNexus search augmentation is already installed. Treat that as exploration help, not completion evidence.
+
 When service A depends on service B through HTTP or DMQ, freeze the shared contract before parallel implementation.
 Use `docs/agent-runs/<run>/contracts/<contract-id>.md`.
 Missing producer/consumer ACKs, contract tests, or DMQ topic/tag/group details block the workflow.
@@ -110,7 +133,9 @@ Use `e2e_dev_workflow.py gate` at planning, implementation, and completion phase
 Gate details live in `references/implementation-gates.md`, including:
 
 - required review/request/invocation fields
+- review profiles, project discovery, inheritance, and required checklist coverage
 - completion manifest and coverage matrix rules
+- final requirements archive rules
 - unit-test evidence JSON format
 - dependency report and contract requirements
 - Spring static checks

@@ -133,13 +133,14 @@ Semantic Reviewers:
 - R2 Test Reviewer checks red-test depth, happy/failure coverage, security paths, and contract coverage before production code.
 - R3 Implementation Reviewer checks code/test completeness, security flaws, anti-patterns, and project-pattern consistency before completion.
 - In `single-review` mode, the same reviewer role family may cover R1/R2/R3, but only through separate phase-boundary review requests, outputs, invocation JSON files, and reviewer sessions. A single consolidated report does not satisfy the gate.
-- Review requests use fields: `Phase`, `Reviewer Role`, `Context Package`, `Allowed Inputs`, `Forbidden`, and `Output`.
+- Review requests use fields: `Phase`, `Reviewer Role`, `Review Profile`, `Context Package`, `Allowed Inputs`, `Forbidden`, and `Output`. Projects can pass the same profile to gates with `--review-profile <json-or-name>` or rely on project profile discovery under `.e2e/` or `docs/`.
 - Review reports use fields: `Phase`, `Reviewer`, `Review Request`, `Developer Agent`, `Reviewer Agent`, `Reviewer Session`, `Reviewer Invocation`, `Request Hash`, `Independence`, `Context Boundary`, `No Code Changes`, `Scope`, `Inputs Reviewed`, `Findings`, `Required Rework`, and `Status`.
 - `Developer Agent`, `Reviewer Agent`, and `Reviewer Session` must be concrete ids, not placeholders. `Developer Agent` and `Reviewer Agent` must be different. `Independence` must be exactly `independent-agent`. `Context Boundary` must be request-scoped with no inherited developer chat context. `No Code Changes` must be confirmed/read-only.
 - The `Review Request` file must exist, match the report phase, declare the report as its exact `Output`, assign the same Developer Agent and Reviewer Agent as the report, and hash to the report `Request Hash`.
 - The `Reviewer Invocation` JSON must match Developer Agent, Reviewer Agent, and Reviewer Session; point to the same review request and output; declare `fork_context: false`; use a request-only/no-inherited context policy; and be `status: completed`.
 - In multi-service runs, service-local R2 and R3 reviews are required for every `service-plans/<service>/` directory when those phases are required. A global R2/R3 report does not replace service-local review evidence.
 - Findings become rework items; reviewer agents do not patch implementation directly.
+- If `Findings` is not empty, `Required Rework` must name the rework or the report must use a blocking/with-rework status. Approved reports with findings and no rework are invalid.
 
 Code Developer:
 - Owns minimal implementation, red-green-refactor, service-local verification evidence, residual risk report.
@@ -148,8 +149,9 @@ Code Developer:
 - Does not write R1/R2/R3 semantic review reports.
 
 Coverage Reviewer:
-- Owns final design-to-code/test coverage and business logic review.
+- Owns final design-to-code/test coverage, business logic review, and requirements archive.
 - Builds a matrix with `id`, `acceptance`, `use_case`, `service`, `tests`, `code_refs`, `business_review`, and `status`.
+- Writes `docs/agent-runs/<run>/requirements-archive.md` as a concise final summary for future requirement analysis.
 - Blocks completion if any acceptance criterion lacks test evidence, code refs, or business review.
 - Accepts unit-test evidence only when it is structured command JSON with `exit_code: 0`.
 - Checks Spring static check results unless the run explicitly documents why the check was skipped.

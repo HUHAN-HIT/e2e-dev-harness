@@ -65,6 +65,21 @@ def validate_semantic_reviews(gate: dict, workflow: dict, strict: bool, completi
     return blocked
 
 
+def validate_requirements_archive(gate: dict, workflow: dict, strict: bool, completion_required: bool) -> list[str]:
+    if not strict or not completion_required:
+        return []
+    blocked: list[str] = []
+    if workflow.get("require_requirements_archive") is not True:
+        blocked.append("Strict completion requires requirements archive validation to be enabled.")
+    archive = gate.get("requirements_archive")
+    if not isinstance(archive, dict):
+        return blocked + ["Strict completion requires requirements archive gate evidence."]
+    if not archive.get("ready"):
+        blocked.append("Requirements archive gate is not ready.")
+        blocked.extend(str(reason) for reason in archive.get("blocked_reasons", []) or [])
+    return blocked
+
+
 def validate_prepare(prepare: dict | None, strict: bool, approval_text: str) -> tuple[list[str], list[str]]:
     blocked: list[str] = []
     warnings: list[str] = []
@@ -140,6 +155,7 @@ def validate_verify_result(
                 blocked.append("Completion gate is not ready.")
                 blocked.extend(str(reason) for reason in gate.get("blocked_reasons", []) or [])
             blocked.extend(validate_semantic_reviews(gate, workflow, strict, completion_required))
+            blocked.extend(validate_requirements_archive(gate, workflow, strict, completion_required))
     elif isinstance(gate, dict) and not gate.get("ready", True):
         blocked.append("Implementation gate is not ready.")
         blocked.extend(str(reason) for reason in gate.get("blocked_reasons", []) or [])

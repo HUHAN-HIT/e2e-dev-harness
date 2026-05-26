@@ -8,6 +8,7 @@ Use memory to preserve verified project knowledge across tasks while keeping age
 | --- | --- | --- | --- |
 | Project memory | `memory/*.md` | Usually yes | Durable decisions, boundaries, preferences, and validated facts. |
 | Graph memory | `graphify-out/memory/` | Usually no | Graphify query answers saved by `graphify save-result`. |
+| Requirements archive | `docs/agent-runs/<run>/requirements-archive.md` | Usually yes | Final feature-level summary, evidence index, and follow-up context. |
 | Refresh status | `knowledge-graph/knowledge-graph-refresh.json` | No | Per-machine tool availability and latest graph refresh metadata. |
 
 ## Files
@@ -137,6 +138,8 @@ Each agent should load only the memory files relevant to its phase:
 
 Agents write proposed memory updates in their handoff artifact first. The main agent appends to `memory/*.md` only after verification or user approval.
 For service-scoped agents, add `#service/<service-name>` and `[[services/<service-name>]]` so `memory_capture.py select --service ...` can load only relevant memory.
+
+The requirements archive is not durable memory by itself. Use it to summarize what was delivered and which memory entries were promoted; only verified or user-approved facts should move into `memory/*.md`.
 
 ## Validation Rules
 

@@ -19,6 +19,7 @@ import cross_service_dependency_scan  # noqa: E402
 import handoff_gate  # noqa: E402
 import implementation_manifest as implementation_manifest_gate  # noqa: E402
 import memory_capture  # noqa: E402
+import requirements_archive as requirements_archive_gate  # noqa: E402
 import reviewer_gate  # noqa: E402
 import rework_gate  # noqa: E402
 import spring_static_check  # noqa: E402
@@ -73,6 +74,9 @@ def validate_gate(
     contract_dirs: list[Path] | None = None,
     require_contracts: bool = False,
     require_semantic_reviews: bool = True,
+    review_profile: Path | None = None,
+    requirements_archive: Path | None = None,
+    require_requirements_archive: bool = False,
 ) -> dict:
     repo = repo.resolve()
     blocked_reasons: list[str] = []
@@ -119,6 +123,7 @@ def validate_gate(
     implementation_manifest_result = None
     handoff_result = None
     contract_result = None
+    requirements_archive_result = None
 
     required_review_phases = {
         "planning": ["design"],
@@ -130,6 +135,7 @@ def validate_gate(
         review_dirs,
         [red_test_evidence, coverage_matrix, unit_test_evidence, business_review, implementation_manifest, design_doc],
         required_review_phases,
+        review_profile,
     )
     if not semantic_review_result["ready"]:
         blocked_reasons.extend(semantic_review_result["blocked_reasons"])
@@ -184,6 +190,16 @@ def validate_gate(
         )
         if not rework_result["ready"]:
             blocked_reasons.extend(rework_result["blocked_reasons"])
+        if requirements_archive or require_requirements_archive:
+            if not requirements_archive:
+                blocked_reasons.append("Completion phase requires --requirements-archive when requirements archive is required.")
+            else:
+                requirements_archive_result = requirements_archive_gate.validate(repo, requirements_archive)
+                if not requirements_archive_result["ready"]:
+                    blocked_reasons.extend(
+                        "Requirements archive: " + reason
+                        for reason in requirements_archive_result["blocked_reasons"]
+                    )
         if not skip_spring_static_check:
             spring_result = spring_static_check.validate(repo)
             if not spring_result["ready"]:
@@ -203,6 +219,7 @@ def validate_gate(
         "implementation_manifest": implementation_manifest_result,
         "dependency_report": dependency_result,
         "memory_updates": memory_result,
+        "requirements_archive": requirements_archive_result,
         "rework": rework_result,
         "semantic_reviews": semantic_review_result,
         "handoffs": handoff_result,
@@ -222,10 +239,13 @@ def main() -> int:
     parser.add_argument("--unit-test-evidence", type=Path)
     parser.add_argument("--business-review", type=Path)
     parser.add_argument("--memory-updates", type=Path)
+    parser.add_argument("--requirements-archive", type=Path)
+    parser.add_argument("--require-requirements-archive", action="store_true")
     parser.add_argument("--dependency-report", type=Path)
     parser.add_argument("--implementation-manifest", type=Path)
     parser.add_argument("--rework-dir", action="append", type=Path)
     parser.add_argument("--review-dir", action="append", type=Path)
+    parser.add_argument("--review-profile", type=Path)
     parser.add_argument("--handoff-dir", action="append", type=Path)
     parser.add_argument("--contract-dir", action="append", type=Path)
     parser.add_argument("--require-contracts", action="store_true")
@@ -253,6 +273,9 @@ def main() -> int:
         args.contract_dir,
         args.require_contracts,
         args.require_semantic_reviews,
+        args.review_profile,
+        args.requirements_archive,
+        args.require_requirements_archive,
     )
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))

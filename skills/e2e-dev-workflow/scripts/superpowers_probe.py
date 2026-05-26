@@ -30,7 +30,12 @@ def candidate_skill_dirs() -> list[Path]:
     home = Path.home()
     candidates.extend(home.glob(".codex/plugins/cache/*/superpowers/*/skills"))
     candidates.extend(home.glob(".codex/plugins/cache/*/superpowers/*"))
+    candidates.extend(home.glob(".codex/skills"))
+    candidates.extend(home.glob(".agents/skills"))
+    candidates.extend(home.glob(".claude/skills"))
     candidates.extend(home.glob(".claude/plugins/*/superpowers/*/skills"))
+    candidates.extend(home.glob(".claude/plugins/*/superpowers/*"))
+    candidates.extend(home.glob(".gemini/skills"))
     candidates.extend(home.glob(".config/superpowers/skills"))
 
     unique: list[Path] = []

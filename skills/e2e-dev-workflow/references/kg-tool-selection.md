@@ -24,6 +24,23 @@ Use this matrix before each implementation.
 4. Save or note the graph refresh location in the design note before implementation.
 5. If Graphify is installed, prefer a fast local refresh when a graph already exists; use full extraction only when the graph is missing or stale.
 
+## GitNexus And Search Augmentation
+
+If GitNexus hooks augment `grep`, `rg`, or similar search commands locally, do not add repetitive skill instructions that tell agents to invoke GitNexus around every text search. Let search augmentation help exploration quietly.
+
+For workflow evidence, still run explicit GitNexus commands and record their output path or summary. Hidden search augmentation is not auditable enough for planning, implementation, or completion gates.
+
+Use GitNexus for requirements or diff impact analysis when scope is uncertain:
+
+```bash
+gitnexus detect-changes --scope unstaged
+gitnexus detect-changes --scope staged
+gitnexus detect-changes --scope compare --base-ref main
+gitnexus impact "<symbol-or-path>" --include-tests
+```
+
+Use `detect-changes` to map a concrete diff to indexed symbols and execution flows. Use `impact` when the requirement names a symbol, path, API, route, topic, or contract seed before code has changed.
+
 ## Cross-Service Dependency Protocol
 
 Use GitNexus-first evidence for hidden service dependencies:
@@ -59,6 +76,7 @@ gitnexus analyze .
 gitnexus status
 gitnexus query "<concept>"
 gitnexus impact "<symbol-or-path>"
+gitnexus detect-changes --scope unstaged
 ```
 
 Use `gitnexus analyze .` as the default refresh command when GitNexus is installed and the repo has no more specific script.

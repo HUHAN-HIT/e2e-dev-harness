@@ -1,6 +1,6 @@
 # E2E Dev Workflow Skill 与脚手架
 
-本仓库提供一个 Codex skill 和一个 Java 工程脚手架，用于在 Java 21 + Spring Framework 6.x + Maven 项目中执行“先加载项目指令、再澄清、再建图、再 TDD 实施”的工程流程。
+本仓库提供一个可在 Codex、Claude Code、Gemini CLI、OpenCode 等主要 agent 运行时使用的 skill，以及一个 Java 工程脚手架，用于在 Java 21 + Spring Framework 6.x + Maven 项目中执行“先加载项目指令、再澄清、再建图、再 TDD 实施”的工程流程。
 
 核心原则：
 
@@ -73,7 +73,7 @@
 
 ## 两个交付物
 
-`skills/e2e-dev-workflow/` 是 skill 本体，负责定义 AGENT 指令加载、Superpowers 适配、需求澄清、用例设计、知识图谱刷新、memory 和 TDD 门禁。
+`skills/e2e-dev-workflow/` 是 agent-neutral skill 本体，负责定义 AGENT 指令加载、Superpowers 适配、需求澄清、用例设计、知识图谱刷新、memory 和 TDD 门禁。核心入口是 `SKILL.md`、`references/` 和 `scripts/`；`agents/openai.yaml` 只是 Codex/OpenAI UI 元数据，不是运行前提。
 
 `java21-spring-tdd-kg-scaffold/` 是工程脚手架示例，基于 Java 21、Spring Framework 6.x、Maven。它不是 Spring Boot 工程。
 
@@ -350,6 +350,7 @@ docs/agent-runs/<YYYY-MM-DD-feature>/
     coverage-matrix.md
     business-review.md
     verification.txt
+  requirements-archive.md
   proposed-memory-updates.md
   rework/
     rework-NNN.md
@@ -378,6 +379,7 @@ python ..\skills\e2e-dev-workflow\scripts\cross_service_dependency_scan.py . `
 ```
 
 扫描器会抽取配置 URL、Spring route、`@Value`、`Environment.getProperty`、RestTemplate/WebClient 调用、DMQ producer/listener、topic 常量、tag/group 和 payload 线索，并用 GitNexus `analyze/context/impact` 补充代码级证据。Graphify 只作为文档、ADR、架构图和模糊语义关系的辅助来源；Graphify 推断出的不确定关系要进入澄清问题，不能直接作为 completion gate 的硬证据。
+如果本机 GitNexus 已经通过 hook/augment 自动增强 `grep`、`rg` 等搜索命令，skill 内不需要重复要求每次文本搜索都显式调用 GitNexus；这种增强只作为探索辅助。需求变更、diff 影响面、跨服务契约和 completion gate 仍应显式记录 GitNexus 证据，例如 `gitnexus detect-changes --scope staged`、`gitnexus detect-changes --scope compare --base-ref main` 或 `gitnexus impact "<symbol-or-path>" --include-tests`。
 
 只使用 Graphify：
 
@@ -453,6 +455,7 @@ python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . `
   --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json `
   --contract-dir docs\agent-runs\<run>\contracts `
   --memory-updates docs\agent-runs\<run>\proposed-memory-updates.md `
+  --requirements-archive docs\agent-runs\<run>\requirements-archive.md `
   --rework-dir docs\agent-runs\<run>\rework `
   --review-dir docs\agent-runs\<run>\reviews `
   --handoff-dir docs\agent-runs\<run>\handoffs
@@ -485,7 +488,7 @@ coverage matrix 需要逐项映射：
 id | acceptance | use_case | service | tests | code_refs | business_review | status
 ```
 
-只有每个必改产物都在 implementation manifest 中验证、每个验收项都关联到用例、服务、测试、代码引用和业务审查，且状态为通过状态，completion gate 才会放行。coverage gate 会对没有显式体现 happy/success 与 failure/edge 路径的行给出 warning；高风险业务逻辑需要把该 warning 转成 rework item，而不是只靠单个浅层 UT 放行。跨服务设计还必须传入 `--dependency-report`，且报告里不能存在未澄清的 URL、topic、tag、group 或服务映射问题；如果存在 HTTP/DMQ 契约变更，还要传入 `--contract-dir` 或使用 `--require-contracts`，确保 producer/consumer 双向 ACK 和 contract tests 已闭环。传入 `--memory-updates` 时，未标记处理状态的 proposed memory update 也会阻断完成。
+只有每个必改产物都在 implementation manifest 中验证、每个验收项都关联到用例、服务、测试、代码引用和业务审查，且状态为通过状态，completion gate 才会放行。coverage gate 会对没有显式体现 happy/success 与 failure/edge 路径的行给出 warning；高风险业务逻辑需要把该 warning 转成 rework item，而不是只靠单个浅层 UT 放行。跨服务设计还必须传入 `--dependency-report`，且报告里不能存在未澄清的 URL、topic、tag、group 或服务映射问题；如果存在 HTTP/DMQ 契约变更，还要传入 `--contract-dir` 或使用 `--require-contracts`，确保 producer/consumer 双向 ACK 和 contract tests 已闭环。传入 `--memory-updates` 时，未标记处理状态的 proposed memory update 也会阻断完成。`requirements-archive.md` 用于沉淀最终需求、AC 状态、影响面、证据链接、review/rework 结论和后续机会；strict completion 会要求通过 `--requirements-archive` 校验。
 
 严格 hook/CI 模式使用 `verify --strict-workflow` 或独立 `guard`。它会检查是否真的跑过 prepare、依赖扫描、completion gate、Maven、Spring 静态检查和独立 semantic review gate，并阻断 `--dependency-scan-mode off`、`--no-write-dependency-report`、`--skip-maven`、completion 阶段的 `--skip-spring-static-check`、缺失 R1/R2/R3 独立审查证据等绕过方式，除非提供包含 `Approval: user-approved` 的审批文件。
 
@@ -503,6 +506,7 @@ python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py verify . `
   --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json `
   --contract-dir docs\agent-runs\<run>\contracts `
   --memory-updates docs\agent-runs\<run>\proposed-memory-updates.md `
+  --requirements-archive docs\agent-runs\<run>\requirements-archive.md `
   --rework-dir docs\agent-runs\<run>\rework `
   --review-dir docs\agent-runs\<run>\reviews `
   --handoff-dir docs\agent-runs\<run>\handoffs `
@@ -536,6 +540,7 @@ python ..\skills\e2e-dev-workflow\scripts\reviewer_gate.py . `
 ```
 
 review artifact 必须包含 `Phase`、`Reviewer`、`Review Request`、`Developer Agent`、`Reviewer Agent`、`Reviewer Session`、`Reviewer Invocation`、`Request Hash`、`Independence`、`Context Boundary`、`No Code Changes`、`Scope`、`Inputs Reviewed`、`Findings`、`Required Rework`、`Status`。`Review Request` 必须存在，phase 必须一致，且 request 的 `Output` 必须指向当前 report；request/report 的 Developer/Reviewer 必须一致，`Developer Agent` 和 `Reviewer Agent` 不能相同，不能是 `<...>` 占位值；`Request Hash` 必须等于 request 文件当前 SHA-256；`Reviewer Invocation` JSON 必须匹配 Developer/Reviewer/Session、指向同一个 request 和 output、声明 `fork_context: false`、使用 request-only/no-inherited context policy 且 `status: completed`；`Independence` 必须是 `independent-agent`。`Status: approved` / `verified` / `clear` / `passed` 可放行；`blocked`、`changes-requested`、`needs-rework`、`open`、`in-progress` 会阻断。多服务任务中，每个 `service-plans/<service>/` 都必须有服务级 R2/R3 review；全局 R2/R3 不能替代服务级 review。若 review 发现问题，先生成 rework item，再按 Return Phase 回环。
+Reviewer gate 支持可插拔 review profile：显式 `--review-profile <json-or-name>` 优先；未传参时会自动发现 `.e2e/review-profile.json`、`.e2e/review-profiles/default.json`、`docs/review-profile.json`、`docs/review-profiles/default.json`。bundled profile 包括 `default`、`security-heavy`、`api-first`，项目 profile 可用 `extends` 继承并追加 checklist。review report 中必须用 `- [x] <check-id>: ...` 覆盖 blocker 项；warning 项缺失只进入 warnings。若 `Findings` 非空但 `Required Rework: None` 且状态仍是 `approved` / `verified` / `clear` / `passed`，gate 会阻断，避免“发现问题但无返工”的假通过。详情见 `skills/e2e-dev-workflow/references/review-profiles.md` 和 `common-review-issues.md`。
 
 contract artifact 放在 `docs/agent-runs/<run>/contracts/<contract-id>.md`。必须包含 `Contract ID`、`Kind`、`Producer Service`、`Consumer Services`、`Payload Schema`、`Compatibility Rule`、`Producer ACK`、`Consumer ACK`、`Contract Tests`、`Status`；HTTP 契约还要有 `Endpoint` 或 `Route`，DMQ 契约还要有 `Topic`、`Tag`、`Group`。缺少任一服务 ACK、缺少 contract tests、契约仍是 draft/open，都会被 `contract_gate.py` 阻断。
 
@@ -759,7 +764,7 @@ python skills\e2e-dev-workflow\scripts\clarification_gate.py <design-doc>
 python skills\e2e-dev-workflow\scripts\spring_static_check.py . --json
 python skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase planning --design-doc <design-doc>
 python skills\e2e-dev-workflow\scripts\implementation_manifest.py . --manifest <implementation-manifest.md> --design-doc <design-doc>
-python skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase completion --design-doc <design-doc> --red-test-evidence <red-test> --implementation-manifest <implementation-manifest.md> --coverage-matrix <coverage-matrix> --unit-test-evidence <unit-test-evidence> --business-review <business-review> --dependency-report <cross-service-dependencies.json> --contract-dir <contracts-dir> --memory-updates <proposed-memory-updates> --rework-dir <rework-dir> --review-dir <reviews-dir> --handoff-dir <handoffs-dir>
+python skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase completion --design-doc <design-doc> --red-test-evidence <red-test> --implementation-manifest <implementation-manifest.md> --coverage-matrix <coverage-matrix> --unit-test-evidence <unit-test-evidence> --business-review <business-review> --dependency-report <cross-service-dependencies.json> --contract-dir <contracts-dir> --memory-updates <proposed-memory-updates> --requirements-archive <requirements-archive.md> --rework-dir <rework-dir> --review-dir <reviews-dir> --handoff-dir <handoffs-dir>
 python skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py guard . --verify-status <verify.json> --strict --require-completion
 python -m unittest discover tests
 mvn -pl <changed-modules> -am test
@@ -800,7 +805,7 @@ skills/e2e-dev-workflow/assets/scaffold/
 
 因为它们是两个交付物：
 
-- `skills/` 是 Codex skill。
+- `skills/` 是 agent skill，可被 Codex、Claude Code、Gemini CLI、OpenCode 等运行时读取。
 - `java21-spring-tdd-kg-scaffold/` 是 Java/Spring/Maven 工程模板。
 
 ### `knowledge-graph-refresh.json` 需要手动改吗？

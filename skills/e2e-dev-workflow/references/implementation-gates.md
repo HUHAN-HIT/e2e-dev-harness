@@ -35,6 +35,7 @@ python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . \
   --dependency-report docs/agent-runs/<run>/evidence/cross-service-dependencies.json \
   --contract-dir docs/agent-runs/<run>/contracts \
   --memory-updates docs/agent-runs/<run>/proposed-memory-updates.md \
+  --requirements-archive docs/agent-runs/<run>/requirements-archive.md \
   --rework-dir docs/agent-runs/<run>/rework \
   --review-dir docs/agent-runs/<run>/reviews \
   --handoff-dir docs/agent-runs/<run>/handoffs
@@ -44,13 +45,29 @@ Planning checks clarification readiness, knowledge graph status, and R1 design r
 
 ## Semantic Reviews
 
-Review requests must include `Phase`, `Reviewer Role`, `Context Package`, `Forbidden`, `Output`, `Developer Agent`, `Reviewer Agent`, and `Reviewer Invocation`.
+Review requests must include `Phase`, `Reviewer Role`, `Context Package`, `Forbidden`, `Output`, `Developer Agent`, `Reviewer Agent`, and `Reviewer Invocation`. When a project uses a review profile, include `Review Profile` and a `Required Review Checklist` section.
 
 Review reports must include `Phase`, `Reviewer`, `Review Request`, `Developer Agent`, `Reviewer Agent`, `Reviewer Session`, `Reviewer Invocation`, `Request Hash`, `Independence`, `Context Boundary`, `No Code Changes`, `Scope`, `Inputs Reviewed`, `Findings`, `Required Rework`, and `Status`.
 
-Blocking conditions include missing request/report files, phase mismatch, output mismatch, request hash mismatch, invalid invocation JSON, placeholder IDs, same-agent IDs, non-independent context, self-review, unsupported statuses, and missing service-local R2/R3 phases.
+Blocking conditions include missing request/report files, phase mismatch, output mismatch, request hash mismatch, invalid invocation JSON, placeholder IDs, same-agent IDs, non-independent context, self-review, unsupported statuses, findings without required rework or a blocking/with-rework status, missing review-profile checklist items, and missing service-local R2/R3 phases.
 
 Allowed review statuses include `approved`, `verified`, `clear`, and `passed`. Blocking statuses include `blocked`, `changes-requested`, `needs-rework`, `open`, and `in-progress`.
+
+Review profile checks load from explicit `--review-profile <json-or-name>` first. If omitted, the gate auto-discovers the first project profile at `.e2e/review-profile.json`, `.e2e/review-profiles/default.json`, `docs/review-profile.json`, or `docs/review-profiles/default.json`. If none exists, no profile is enforced. Bundled profiles stay opt-in:
+
+```text
+skills/e2e-dev-workflow/review-profiles/default.json
+skills/e2e-dev-workflow/review-profiles/security-heavy.json
+skills/e2e-dev-workflow/review-profiles/api-first.json
+```
+
+Profiles may use `extends` to inherit bundled or project profiles. Checklist items support `description`, `severity`, and `references`; missing `severity: blocker` items block, while missing `severity: warning` items appear in gate warnings. For schema, discovery, and common issue guidance, read `review-profiles.md` and `common-review-issues.md`.
+
+Required checklist items must appear in the review report as checked Markdown items such as:
+
+```markdown
+- [x] security-negative-paths: Verified authorization and failure behavior.
+```
 
 Reviewer Invocation JSON must match Developer/Reviewer/Session, point to the same request and output, declare `fork_context: false`, use request-only/no-inherited context policy, and be `status: completed`.
 
@@ -61,6 +78,8 @@ Coverage matrix rows must map every acceptance criterion to use cases, service/m
 For multi-module or artifact-heavy designs, `implementation-manifest.md` must include `id`, `module`, `artifact`, `artifact_type`, `source`, `required`, `tests`, `status`, and `evidence`. Required rows must point to existing artifacts, real tests, and implemented or verified status.
 
 Unit-test evidence must be structured JSON with `command` and integer `exit_code`. Plain text such as `PASS` is not accepted.
+
+The requirements archive summarizes the final clarified requirement, acceptance-criteria status, use-case coverage, impacted services/contracts, evidence links, review/rework outcome, promoted memory entries, and follow-up opportunities. It is recommended for every completed run and required by strict completion workflows. Read `requirements-archive.md`.
 
 If the design is cross-service, completion requires the dependency report. Any unresolved URL/topic/tag/service mapping question blocks completion.
 
@@ -86,6 +105,7 @@ python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py verify . \
   --dependency-report docs/agent-runs/<run>/evidence/cross-service-dependencies.json \
   --contract-dir docs/agent-runs/<run>/contracts \
   --memory-updates docs/agent-runs/<run>/proposed-memory-updates.md \
+  --requirements-archive docs/agent-runs/<run>/requirements-archive.md \
   --rework-dir docs/agent-runs/<run>/rework \
   --review-dir docs/agent-runs/<run>/reviews \
   --handoff-dir docs/agent-runs/<run>/handoffs \

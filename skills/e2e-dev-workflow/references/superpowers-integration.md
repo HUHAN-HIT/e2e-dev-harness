@@ -35,8 +35,9 @@ The probe checks, in order:
 
 1. `SUPERPOWERS_SKILLS_DIR`
 2. `SUPERPOWERS_ROOT`
-3. Codex plugin cache under `.codex/plugins/cache/openai-curated/superpowers/*/skills`
-4. Common local plugin cache paths under the user's home directory
+3. Codex caches and skill directories: `.codex/plugins/...`, `.codex/skills`, `.agents/skills`
+4. Claude Code skill/plugin directories: `.claude/skills`, `.claude/plugins/...`
+5. Gemini/custom directories: `.gemini/skills`, `.config/superpowers/skills`
 
 Use explicit environment variables in CI or custom harnesses so the adapter does not depend on cache layout.
 

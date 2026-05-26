@@ -26,6 +26,26 @@ import superpowers_probe  # noqa: E402
 import workflow_guard  # noqa: E402
 
 
+DEFAULT_REVIEW_PROFILE = "skills/e2e-dev-workflow/review-profiles/default.json"
+DEFAULT_REVIEW_CHECKLIST = {
+    "design": [
+        ("ac-completeness", "Acceptance criteria cover goals, non-goals, affected modules, and open questions."),
+        ("dependency-impact", "GitNexus or dependency evidence supports the affected service/module list."),
+        ("security-sensitive-paths", "Security-sensitive behavior and failure paths are identified."),
+    ],
+    "test": [
+        ("happy-and-failure-paths", "Red tests cover meaningful happy and failure paths."),
+        ("contract-coverage", "Cross-service HTTP/DMQ contracts have tests or explicit non-applicability."),
+        ("security-negative-paths", "Security and permission negative paths are covered when relevant."),
+    ],
+    "implementation": [
+        ("implementation-completeness", "Implementation covers all required artifacts and acceptance criteria."),
+        ("security-negative-paths", "Security-sensitive happy/failure paths are implemented and tested."),
+        ("project-pattern-consistency", "Code follows existing project patterns and avoids local anti-patterns."),
+    ],
+}
+
+
 def as_repo(path: Path) -> Path:
     repo = path.resolve()
     if not repo.exists():
@@ -486,6 +506,7 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
             "all-services",
         ),
         artifacts["implementation_manifest"]: implementation_manifest_template("all-services"),
+        artifacts["requirements_archive"]: requirements_archive_template("all-services"),
         artifacts["green_test_evidence"]: unit_test_evidence_template("all-services"),
         artifacts["verification_evidence"]: handoff_text("verification-evidence"),
         artifacts["coverage_matrix"]: coverage_matrix_template("all-services"),
@@ -574,14 +595,66 @@ def unit_test_evidence_template(scope: str) -> str:
     ) + "\n"
 
 
+def requirements_archive_template(scope: str) -> str:
+    return f"""# Requirements Archive
+
+## Original Request
+
+## Final Clarified Requirement
+
+## Scope And Non-Goals
+Scope: {scope}
+
+## Acceptance Criteria Status
+| id | requirement | status | evidence |
+| --- | --- | --- | --- |
+| AC-1 |  |  |  |
+
+## Use Case Coverage
+
+## Impacted Services APIs And Contracts
+
+## Implementation Evidence
+- Implementation manifest:
+- Code references:
+
+## Test Evidence
+- Red test evidence:
+- Green test command JSON:
+- Coverage matrix:
+- Business review:
+
+## Review And Rework Summary
+- R1 design review:
+- R2 test review:
+- R3 implementation review:
+- Rework:
+
+## Deferred And Residual Risks
+
+## Promoted Memory Entries
+
+## Follow Up Opportunities
+"""
+
+
+def review_checklist_template(phase: str) -> str:
+    lines = []
+    for item_id, description in DEFAULT_REVIEW_CHECKLIST.get(phase, []):
+        lines.append(f"- [ ] {item_id}: {description}")
+    return "\n".join(lines) or "- [ ] phase-specific-review: Complete the phase-specific review focus."
+
+
 def review_request_template(phase: str, title: str, output_path: str, scope: str = "all-services") -> str:
     invocation_path = output_path.replace("/reviews/", "/review-invocations/").replace("\\reviews\\", "\\review-invocations\\")
     if invocation_path.endswith(".md"):
         invocation_path = invocation_path[:-3] + "-invocation.json"
+    checklist = review_checklist_template(phase)
     return f"""# {title}
 
 - Phase: {phase}
 - Reviewer Role: independent semantic reviewer
+- Review Profile: {DEFAULT_REVIEW_PROFILE}
 - Context Package: request-scoped; no inherited developer chat context
 - Allowed Inputs: design doc, AGENT.md files, requirements, use cases, test plan, implementation refs, dependency report, service plan for scope
 - Forbidden: inherited developer chat context; production-code edits; self-review; writing implementation artifacts
@@ -594,6 +667,12 @@ def review_request_template(phase: str, title: str, output_path: str, scope: str
 ## Review Assignment
 
 Run this review in an independent reviewer agent. The reviewer may read only the allowed inputs and must write only the declared output review report or rework items requested by the gate.
+
+## Required Review Checklist
+
+The report must include checked `- [x] <id>: ...` lines for each required item:
+
+{checklist}
 """
 
 
@@ -755,6 +834,12 @@ def gate(args) -> tuple[int, dict]:
         contract_dirs=getattr(args, "contract_dir", None),
         require_contracts=getattr(args, "require_contracts", False),
         require_semantic_reviews=getattr(args, "require_semantic_reviews", False),
+        review_profile=getattr(args, "review_profile", None),
+        requirements_archive=getattr(args, "requirements_archive", None),
+        require_requirements_archive=(
+            getattr(args, "require_requirements_archive", False)
+            or (getattr(args, "strict_workflow", False) and args.phase == "completion")
+        ),
     )
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
@@ -807,6 +892,10 @@ def verify(args) -> tuple[int, dict]:
             "implementation_manifest": str(getattr(args, "implementation_manifest", "") or ""),
             "require_semantic_reviews": args.phase == "completion" or getattr(args, "require_semantic_reviews", False),
             "require_contracts": getattr(args, "require_contracts", False),
+            "require_requirements_archive": (
+                getattr(args, "require_requirements_archive", False)
+                or (getattr(args, "strict_workflow", False) and args.phase == "completion")
+            ),
         },
         "prepare": prep,
         "clarification": clarify_result,
@@ -903,10 +992,13 @@ def main() -> int:
     gate_parser.add_argument("--unit-test-evidence", type=Path)
     gate_parser.add_argument("--business-review", type=Path)
     gate_parser.add_argument("--memory-updates", type=Path)
+    gate_parser.add_argument("--requirements-archive", type=Path)
+    gate_parser.add_argument("--require-requirements-archive", action="store_true")
     gate_parser.add_argument("--dependency-report", type=Path)
     gate_parser.add_argument("--implementation-manifest", type=Path)
     gate_parser.add_argument("--rework-dir", action="append", type=Path)
     gate_parser.add_argument("--review-dir", action="append", type=Path)
+    gate_parser.add_argument("--review-profile", type=Path)
     gate_parser.add_argument("--handoff-dir", action="append", type=Path)
     gate_parser.add_argument("--contract-dir", action="append", type=Path)
     gate_parser.add_argument("--require-contracts", action="store_true")
@@ -925,10 +1017,13 @@ def main() -> int:
     verify_parser.add_argument("--unit-test-evidence", type=Path)
     verify_parser.add_argument("--business-review", type=Path)
     verify_parser.add_argument("--memory-updates", type=Path)
+    verify_parser.add_argument("--requirements-archive", type=Path)
+    verify_parser.add_argument("--require-requirements-archive", action="store_true")
     verify_parser.add_argument("--dependency-report", type=Path)
     verify_parser.add_argument("--implementation-manifest", type=Path)
     verify_parser.add_argument("--rework-dir", action="append", type=Path)
     verify_parser.add_argument("--review-dir", action="append", type=Path)
+    verify_parser.add_argument("--review-profile", type=Path)
     verify_parser.add_argument("--handoff-dir", action="append", type=Path)
     verify_parser.add_argument("--contract-dir", action="append", type=Path)
     verify_parser.add_argument("--require-contracts", action="store_true")
