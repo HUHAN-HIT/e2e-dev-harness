@@ -404,6 +404,8 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
         "contract_pattern": f"{base}/contracts/<contract-id>.md",
         "knowledge_graph_status": f"{evidence}/knowledge-graph-refresh.json",
         "dependency_report": f"{evidence}/cross-service-dependencies.json",
+        "impact_summary": f"{evidence}/impact-summary.md",
+        "impact_evidence": f"{evidence}/impact-analysis.json",
         "implementation_manifest": f"{evidence}/implementation-manifest.md",
         "requirements_archive": f"{base}/requirements-archive.md",
         "red_test_evidence": f"{evidence}/red-test.txt",
@@ -424,11 +426,13 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
         agents.append(
             {
                 "name": "single-agent",
-                "owns": ["requirements", "use cases", "tests", "implementation"],
+                "owns": ["requirements", "impact summary", "use cases", "tests", "implementation"],
                 "inputs": ["user request", "knowledge graph summary", artifact_paths["dependency_report"]],
                 "outputs": [
                     artifact_paths["exec_plan"],
                     artifact_paths["requirements"],
+                    artifact_paths["impact_summary"],
+                    artifact_paths["impact_evidence"],
                     artifact_paths["use_cases"],
                     artifact_paths["test_plan"],
                     artifact_paths["implementation_plan"],
@@ -444,15 +448,20 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
         agents.extend([
         {
             "name": "requirements-clarifier",
-            "owns": ["goal", "non-goals", "constraints", "acceptance criteria", "open questions"],
-            "inputs": ["user request", "knowledge graph summary"],
-            "outputs": [artifact_paths["requirements"]],
-            "gate": "Behavior/API/data/test-impacting open questions must be resolved.",
+            "owns": ["goal", "non-goals", "constraints", "impact summary", "acceptance criteria", "open questions"],
+            "inputs": ["user request", "knowledge graph summary", artifact_paths["dependency_report"]],
+            "outputs": [artifact_paths["requirements"], artifact_paths["impact_summary"], artifact_paths["impact_evidence"]],
+            "gate": "Behavior/API/data/test-impacting open questions and bounded impact summary gaps must be resolved.",
         },
         {
             "name": "use-case-designer",
             "owns": ["happy paths", "failure paths", "cross-service flow", "contracts", "data effects"],
-            "inputs": [artifact_paths["requirements"], "knowledge graph summary", artifact_paths["dependency_report"]],
+            "inputs": [
+                artifact_paths["requirements"],
+                artifact_paths["impact_summary"],
+                "knowledge graph summary",
+                artifact_paths["dependency_report"],
+            ],
             "outputs": [artifact_paths["use_cases"]],
             "gate": "Every acceptance criterion maps to a use case or is explicitly deferred.",
         },
@@ -476,6 +485,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
             "inputs": [
                 artifact_paths["design_review_request"],
                 artifact_paths["requirements"],
+                artifact_paths["impact_summary"],
                 artifact_paths["use_cases"],
                 "task request",
                 "project reference patterns",
@@ -489,6 +499,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
             "inputs": [
                 artifact_paths["test_review_request"],
                 artifact_paths["requirements"],
+                artifact_paths["impact_summary"],
                 artifact_paths["use_cases"],
                 artifact_paths["test_plan"],
             ],
@@ -505,6 +516,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
                     "owns": [f"implementation for {service}", "service-local tests", "service-local verification evidence"],
                     "inputs": [
                         artifact_paths["requirements"],
+                        artifact_paths["impact_summary"],
                         artifact_paths["use_cases"],
                         artifact_paths["test_plan"],
                         paths["service_plan"],
@@ -532,6 +544,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
                     "inputs": [
                         paths["implementation_review_request"],
                         artifact_paths["requirements"],
+                        artifact_paths["impact_summary"],
                         artifact_paths["use_cases"],
                         artifact_paths["test_plan"],
                         paths["service_plan"],
@@ -557,6 +570,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
         "inputs": [
             artifact_paths["implementation_review_request"],
             artifact_paths["requirements"],
+            artifact_paths["impact_summary"],
             artifact_paths["use_cases"],
             artifact_paths["test_plan"],
             artifact_paths["dependency_report"],
@@ -570,6 +584,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
         "owns": ["design coverage matrix", "unit test evidence check", "business logic review"],
         "inputs": [
             artifact_paths["requirements"],
+            artifact_paths["impact_summary"],
             artifact_paths["use_cases"],
             artifact_paths["test_plan"],
             artifact_paths["implementation_plan"],

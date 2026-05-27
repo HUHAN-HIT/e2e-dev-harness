@@ -195,6 +195,14 @@ class ClarificationGateTests(unittest.TestCase):
             - PaymentController -> PaymentService -> PaymentCallbackDmqSender.send(topic, tag, payload).
             - Sender injection: PaymentService constructor injects PaymentCallbackDmqSender.
 
+            ## Impact Summary
+            - Source: GitNexus impact + dependency scanner
+            - Raw Evidence: docs/agent-runs/run/evidence/impact-analysis.json
+
+            | type | interface | affected callers/consumers | related AC | required tests/contracts | risk |
+            | --- | --- | --- | --- | --- | --- |
+            | MQ | topic=payment_callback, tag=success | settlement-service | AC-1 | sender payload test; consumer ACK | high |
+
             ## Test Design
             - Unit test first.
 
@@ -210,6 +218,166 @@ class ClarificationGateTests(unittest.TestCase):
 
         self.assertTrue(result["ready_for_implementation"], result)
         self.assertEqual([], result["integration_gaps"])
+
+    def test_interface_requirement_requires_bounded_impact_summary(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Add a refund callback API.
+
+            ## Scope
+            - services/payment-service
+
+            ## Use Cases
+            - Merchant calls HTTP refund callback endpoint.
+
+            ## Acceptance Criteria
+            - AC-1 POST /api/refunds/callback returns accepted status.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path)
+
+        self.assertFalse(result["ready_for_implementation"])
+        self.assertTrue(any("Impact Summary" in reason for reason in result["impact_gaps"]))
+
+    def test_impact_summary_requires_raw_evidence_reference_and_interface_rows(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Add a refund callback API.
+
+            ## Scope
+            - services/payment-service
+
+            ## Use Cases
+            - Merchant calls HTTP refund callback endpoint.
+
+            ## Acceptance Criteria
+            - AC-1 POST /api/refunds/callback returns accepted status.
+
+            ## Impact Summary
+            - Source: GitNexus impact
+
+            | type | interface | affected callers/consumers | related AC | required tests/contracts | risk |
+            | --- | --- | --- | --- | --- | --- |
+            | HTTP | POST /api/refunds/callback | merchant-admin | AC-1 | controller contract test | medium |
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path)
+
+        self.assertFalse(result["ready_for_implementation"])
+        self.assertTrue(any("Raw Evidence" in reason for reason in result["impact_gaps"]))
+
+    def test_impact_summary_allows_gitnexus_evidence_and_affected_interfaces(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Add a refund callback API.
+
+            ## Scope
+            - services/payment-service
+
+            ## Use Cases
+            - Merchant calls HTTP refund callback endpoint.
+
+            ## Acceptance Criteria
+            - AC-1 POST /api/refunds/callback returns accepted status.
+
+            ## Impact Summary
+            - Source: GitNexus impact + dependency scanner
+            - Raw Evidence: docs/agent-runs/run/evidence/impact-analysis.json
+
+            | type | interface | affected callers/consumers | related AC | required tests/contracts | risk |
+            | --- | --- | --- | --- | --- | --- |
+            | HTTP | POST /api/refunds/callback | merchant-admin | AC-1 | controller contract test | medium |
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path)
+
+        self.assertTrue(result["ready_for_implementation"], result)
+        self.assertEqual([], result["impact_gaps"])
+
+    def test_impact_summary_blocks_large_raw_gitnexus_dump(self) -> None:
+        rows = "\n".join(
+            f"| HTTP | GET /api/orders/{index} | caller-{index} | AC-1 | contract test | low |"
+            for index in range(1, 15)
+        )
+        rows = rows.replace("\n", "\n            ")
+        markdown = textwrap.dedent(
+            f"""
+            # Feature
+
+            ## Goal
+            - Add a refund callback API.
+
+            ## Scope
+            - services/payment-service
+
+            ## Use Cases
+            - Merchant calls HTTP refund callback endpoint.
+
+            ## Acceptance Criteria
+            - AC-1 POST /api/refunds/callback returns accepted status.
+
+            ## Impact Summary
+            - Source: GitNexus impact
+            - Raw Evidence: docs/agent-runs/run/evidence/impact-analysis.json
+
+            | type | interface | affected callers/consumers | related AC | required tests/contracts | risk |
+            | --- | --- | --- | --- | --- | --- |
+            {rows}
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path)
+
+        self.assertFalse(result["ready_for_implementation"])
+        self.assertTrue(any("bounded" in reason.lower() for reason in result["impact_gaps"]))
 
 
 class CommandSplitTests(unittest.TestCase):
@@ -3595,6 +3763,14 @@ class ImplementationGateTests(unittest.TestCase):
             ## Acceptance Criteria
             - AC-1 Billing service receives the callback.
 
+            ## Impact Summary
+            - Source: GitNexus impact + dependency scanner
+            - Raw Evidence: docs/agent-runs/run/evidence/impact-analysis.json
+
+            | type | interface | affected callers/consumers | related AC | required tests/contracts | risk |
+            | --- | --- | --- | --- | --- | --- |
+            | HTTP | quote-service -> billing-service callback | services/quote-service, services/billing-service | AC-1 | CallbackTest; contract ACK | high |
+
             ## Test Design
             - Unit test first.
 
@@ -3673,6 +3849,14 @@ class ImplementationGateTests(unittest.TestCase):
 
             ## Acceptance Criteria
             - AC-1 Billing service receives the callback.
+
+            ## Impact Summary
+            - Source: GitNexus impact + dependency scanner
+            - Raw Evidence: docs/agent-runs/run/evidence/impact-analysis.json
+
+            | type | interface | affected callers/consumers | related AC | required tests/contracts | risk |
+            | --- | --- | --- | --- | --- | --- |
+            | HTTP | quote-service -> billing-service callback | services/quote-service, services/billing-service | AC-1 | CallbackTest; contract ACK | high |
 
             ## Test Design
             - Unit test first.
@@ -4192,6 +4376,8 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertIn("design-reviewer", names)
         self.assertIn("test-reviewer", names)
         self.assertIn("implementation-reviewer", names)
+        self.assertIn(artifacts["impact_summary"], single["outputs"])
+        self.assertIn(artifacts["impact_evidence"], single["outputs"])
         self.assertNotIn(artifacts["design_review"], single["outputs"])
         self.assertNotIn(artifacts["implementation_review"], single["outputs"])
 
@@ -4366,9 +4552,14 @@ class OrchestrationArtifactTests(unittest.TestCase):
             self.assertFalse((repo / result["handoff_artifacts"]["test_review"]).exists())
             self.assertFalse((repo / result["handoff_artifacts"]["implementation_review"]).exists())
             self.assertTrue((repo / result["handoff_artifacts"]["requirements_archive"]).exists())
+            self.assertTrue((repo / result["handoff_artifacts"]["impact_summary"]).exists())
+            self.assertTrue((repo / result["handoff_artifacts"]["impact_evidence"]).exists())
             archive_text = (repo / result["handoff_artifacts"]["requirements_archive"]).read_text(encoding="utf-8")
             self.assertIn("Final Clarified Requirement", archive_text)
             self.assertIn("Acceptance Criteria Status", archive_text)
+            impact_text = (repo / result["handoff_artifacts"]["impact_summary"]).read_text(encoding="utf-8")
+            self.assertIn("Raw Evidence", impact_text)
+            self.assertIn("affected callers/consumers", impact_text)
             for module in ("jeepay-core", "jeepay-service", "jeepay-payment"):
                 paths = result["handoff_artifacts"]["service_plans"][module]
                 self.assertTrue((repo / paths["service_plan"]).exists())
@@ -4441,6 +4632,14 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(
             "docs/agent-runs/2026-05-23-checkout/evidence/coverage-matrix.md",
             result["coverage_matrix"],
+        )
+        self.assertEqual(
+            "docs/agent-runs/2026-05-23-checkout/evidence/impact-summary.md",
+            result["impact_summary"],
+        )
+        self.assertEqual(
+            "docs/agent-runs/2026-05-23-checkout/evidence/impact-analysis.json",
+            result["impact_evidence"],
         )
         self.assertEqual(
             "docs/agent-runs/2026-05-23-checkout/requirements-archive.md",
@@ -4727,6 +4926,7 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("示例", text)
         self.assertIn("code-path-trace-gap", text)
         self.assertIn("weak-completion-evidence", text)
+        self.assertIn("impact-summary-overload", text)
 
     def test_bundled_review_profiles_have_guidance_metadata(self) -> None:
         for name in ("default", "security-heavy", "api-first"):
@@ -5250,6 +5450,14 @@ class UnifiedCliTests(unittest.TestCase):
 
             ## Acceptance Criteria
             - AC-1 Payment callback is delivered.
+
+            ## Impact Summary
+            - Source: GitNexus impact + dependency scanner
+            - Raw Evidence: docs/agent-runs/run/evidence/impact-analysis.json
+
+            | type | interface | affected callers/consumers | related AC | required tests/contracts | risk |
+            | --- | --- | --- | --- | --- | --- |
+            | HTTP | order-service -> payment-service callback | services/order-service, services/payment-service | AC-1 | PaymentCallbackTest; contract ACK | high |
 
             ## Test Design
             - Unit test first.

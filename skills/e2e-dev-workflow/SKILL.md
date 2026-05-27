@@ -45,11 +45,14 @@ For command details, read `references/implementation-gates.md`.
 
 - Load project instructions before requirement clarification. Use discovery scope first; load affected service `AGENT.md` / `AGENTS.md` only after scope is known. Read `references/agent-instructions.md`.
 - Use Superpowers when available. `superpowers:brainstorming` owns clarification; `superpowers:test-driven-development` owns TDD. Read `references/superpowers-integration.md`.
-- Clarification is a hard gate. The design must state goals, non-goals, affected services/modules, use cases, contracts, acceptance criteria, test design, and resolved open questions. Read `references/clarification-gate.md`.
+- Clarification is a hard gate. The design must state goals, non-goals, affected services/modules, use cases,
+  bounded impact summary, contracts, acceptance criteria, test design, and resolved open questions.
+  Read `references/clarification-gate.md`.
   MQ/DMQ/Kafka requirements must name the cross-layer call chain and sender/producer injection point before implementation.
 - Prefer GitNexus for code-level cross-service evidence and explicit impact artifacts.
   Do not duplicate low-level `grep`/`rg` usage instructions just because GitNexus augments searches.
   Use explicit GitNexus commands when a gate needs auditable evidence.
+  Put raw impact output in evidence files; keep only a bounded affected-interface summary in agent context.
   Use Graphify for docs, ADRs, diagrams, and semantic context. Scanner facts seed both. Read `references/kg-tool-selection.md`.
 - Memory is optional context, not authority. Capture only verified or user-approved facts; Obsidian tags and links help selection but never replace explicit text. Read `references/memory-integration.md`.
 - TDD is mandatory for production changes. Write a red test, observe the expected failure, implement minimally, then broaden Maven verification. Read `references/tdd-java-spring.md`.
@@ -63,7 +66,7 @@ For command details, read `references/implementation-gates.md`.
 ## Workflow
 
 1. Prepare: load root instructions, scan memory, probe Superpowers, refresh GitNexus-first dependency evidence.
-2. Clarify: use Superpowers brainstorming and the Markdown clarification gate; stop on unresolved behavior/API/data/test questions.
+2. Clarify: use Superpowers brainstorming and the Markdown clarification gate; stop on unresolved behavior/API/data/test or impact-summary questions.
 3. R1 design review: independent semantic reviewer checks AC completeness, affected modules, security paths, and reference patterns.
 4. Plan: choose `single`, explicit `single-review`, or `multi`; write an ExecPlan for complex work. Read `references/exec-plan.md`.
 5. TDD red: write the first failing test and capture failing evidence.

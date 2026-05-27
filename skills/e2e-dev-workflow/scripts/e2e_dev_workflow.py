@@ -30,7 +30,7 @@ DEFAULT_REVIEW_PROFILE = "skills/e2e-dev-workflow/review-profiles/default.json"
 DEFAULT_REVIEW_CHECKLIST = {
     "design": [
         ("ac-completeness", "Acceptance criteria cover goals, non-goals, affected modules, and open questions."),
-        ("dependency-impact", "GitNexus or dependency evidence supports the affected service/module list."),
+        ("dependency-impact", "Bounded Impact Summary maps GitNexus/scanner evidence to affected interfaces, ACs, and test obligations."),
         ("security-sensitive-paths", "Security-sensitive behavior and failure paths are identified."),
     ],
     "test": [
@@ -390,6 +390,8 @@ This is a living plan. Keep it current while implementing the feature.
 
 - Agent run directory: {artifacts['agent_run_dir']}
 - Requirements: {artifacts['requirements']}
+- Impact summary: {artifacts['impact_summary']}
+- Raw impact evidence: {artifacts['impact_evidence']}
 - Use cases: {artifacts['use_cases']}
 - Test plan: {artifacts['test_plan']}
 - Implementation plan: {artifacts['implementation_plan']}
@@ -409,6 +411,8 @@ This is a living plan. Keep it current while implementing the feature.
 
 - Knowledge graph status: {artifacts['knowledge_graph_status']}
 - Dependency report: {artifacts['dependency_report']}
+- Impact summary: {artifacts['impact_summary']}
+- Raw impact evidence: {artifacts['impact_evidence']}
 - Implementation manifest: {artifacts['implementation_manifest']}
 - Red test: {artifacts['red_test_evidence']}
 - Green test: {artifacts['green_test_evidence']}
@@ -506,6 +510,8 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
             artifacts["implementation_review"],
             "all-services",
         ),
+        artifacts["impact_summary"]: impact_summary_template("all-services", artifacts["impact_evidence"]),
+        artifacts["impact_evidence"]: impact_evidence_template(),
         artifacts["implementation_manifest"]: implementation_manifest_template("all-services"),
         artifacts["requirements_archive"]: requirements_archive_template("all-services"),
         artifacts["green_test_evidence"]: unit_test_evidence_template("all-services"),
@@ -575,6 +581,32 @@ For MQ/DMQ/Kafka/event ACs, include sender/producer and send/publish/topic/paylo
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | AC-1 |  |  | {service} |  |  |  |  |
 """
+
+
+def impact_summary_template(scope: str, raw_evidence_path: str) -> str:
+    return f"""# Impact Summary: {scope}
+
+- Source: GitNexus impact + dependency scanner
+- Raw Evidence: {raw_evidence_path}
+
+Keep this summary bounded: list only direct callers/consumers and high-risk indirect effects.
+Put full GitNexus/scanner output in the raw evidence file.
+
+| type | interface | affected callers/consumers | related AC | required tests/contracts | risk |
+| --- | --- | --- | --- | --- | --- |
+| N/A | No public/cross-service/interface impact identified | N/A | AC-1 | N/A | low |
+"""
+
+
+def impact_evidence_template() -> str:
+    return json.dumps(
+        {
+            "source": "gitnexus impact + dependency scanner",
+            "commands": [],
+            "notes": "Store raw impact output here; keep design docs and handoffs to bounded summaries.",
+        },
+        indent=2,
+    ) + "\n"
 
 
 def implementation_manifest_template(scope: str) -> str:
@@ -661,7 +693,7 @@ def review_request_template(phase: str, title: str, output_path: str, scope: str
 - Reviewer Role: independent semantic reviewer
 - Review Profile: {DEFAULT_REVIEW_PROFILE}
 - Context Package: request-scoped; no inherited developer chat context
-- Allowed Inputs: design doc, AGENT.md files, requirements, use cases, test plan, implementation refs, dependency report, service plan for scope
+- Allowed Inputs: design doc, AGENT.md files, requirements, impact summary, use cases, test plan, implementation refs, dependency report, service plan for scope
 - Forbidden: inherited developer chat context; production-code edits; self-review; writing implementation artifacts
 - Output: {output_path}
 - Scope: {scope}

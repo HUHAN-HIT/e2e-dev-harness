@@ -34,6 +34,23 @@ Issue ID: `dependency-impact-gap`
 - Changed routes, clients, topics, tags, groups, payloads, configuration keys, and service references are scanned or marked non-applicable.
 - Cross-service findings are reflected in contracts, service plans, and dependency reports.
 
+## impact-summary-overload
+
+Issue ID: `impact-summary-overload`
+
+Problem: The design pastes raw GitNexus/scanner output into agent context, or omits the affected-interface summary needed to derive ACs and tests.
+
+Examples:
+
+- A design contains a long call graph but no `related AC` or `required tests/contracts` column.
+- The summary lists every transitive symbol instead of direct callers and high-risk indirect effects.
+
+Criteria:
+
+- Raw impact output is stored under `docs/agent-runs/<run>/evidence/`.
+- The design contains only a bounded affected-interface table with source, raw evidence path, AC mapping, and test/contract obligations.
+- Reviewer uses the summary to find missing ACs, not as a substitute for raw evidence when deeper investigation is needed.
+
 ## weak-completion-evidence
 
 Issue ID: `weak-completion-evidence`

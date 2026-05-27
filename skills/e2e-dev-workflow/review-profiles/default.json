@@ -13,6 +13,11 @@
       "reference": "references/common-review-issues.md#dependency-impact-gap"
     },
     {
+      "id": "impact-summary-overload",
+      "title": "Impact analysis is missing, unbounded, or not mapped to AC/test obligations.",
+      "reference": "references/common-review-issues.md#impact-summary-overload"
+    },
+    {
       "id": "findings-without-rework",
       "title": "Reviewer findings are approved without required rework routing.",
       "reference": "references/common-review-issues.md#findings-without-rework"
@@ -39,11 +44,12 @@
       {
         "id": "dependency-impact",
         "title": "Affected service/module impact evidence",
-        "description": "Verify that affected services, modules, contracts, routes, topics, and downstream dependencies are backed by GitNexus/scanner evidence or clearly marked non-applicable.",
+        "description": "Verify affected services, modules, contracts, routes, topics, and downstream dependencies have bounded Impact Summary rows backed by GitNexus/scanner evidence or clear non-applicability.",
         "severity": "blocker",
         "references": [
           "references/kg-tool-selection.md",
-          "references/common-review-issues.md#dependency-impact-gap"
+          "references/common-review-issues.md#dependency-impact-gap",
+          "references/common-review-issues.md#impact-summary-overload"
         ],
         "required": true
       },

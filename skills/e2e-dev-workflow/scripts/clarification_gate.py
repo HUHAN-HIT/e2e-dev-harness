@@ -84,6 +84,40 @@ SENDER_INJECTION_RE = re.compile(
 )
 
 
+IMPACT_REQUIRED_RE = re.compile(
+    r"\b("
+    r"api|http|https|rest|endpoint|route|controller|client|consumer|caller|public|"
+    r"dmq|mq|message queue|kafka|rocketmq|jms|topic|tag|producer|publish|event|"
+    r"database|schema|migration|table|column|cache|config|configuration|"
+    r"auth|authorization|authentication|tenant|security|payment|refund"
+    r")\b|接口|影响面|调用方|消费者|生产者|权限|支付|退款|数据库|配置",
+    re.IGNORECASE,
+)
+IMPACT_SECTION_PATTERNS = [
+    r"impact summary",
+    r"impact analysis",
+    r"affected interfaces?",
+    r"blast radius",
+    r"影响面",
+    r"影响接口",
+]
+IMPACT_SOURCE_RE = re.compile(r"\bsource\s*:\s*.*\b(gitnexus|scanner|dependency|manual)\b", re.IGNORECASE)
+RAW_EVIDENCE_RE = re.compile(
+    r"\b(raw\s+evidence|evidence)\s*:\s*(?:`)?(?:docs/|\.e2e/|evidence/|[A-Za-z0-9_.\-/\\]+\.json)",
+    re.IGNORECASE,
+)
+IMPACT_MAX_CHARS = 2400
+IMPACT_MAX_ROWS = 12
+IMPACT_REQUIRED_COLUMNS = {
+    "type",
+    "interface",
+    "affected_callers_consumers",
+    "related_ac",
+    "required_tests_contracts",
+    "risk",
+}
+
+
 def headings(markdown: str) -> list[tuple[str, int, int]]:
     found: list[tuple[str, int, int]] = []
     for match in re.finditer(r"(?m)^(#{1,6})\s+(.+?)\s*$", markdown):
@@ -103,6 +137,45 @@ def section_text(markdown: str, matching_patterns: list[str]) -> str | None:
             next_start = hs[index + 1][1] if index + 1 < len(hs) else len(markdown)
             return markdown[end:next_start].strip()
     return None
+
+
+def normalize_table_header(value: str) -> str:
+    value = value.strip().lower().replace("/", "_").replace("-", "_")
+    value = re.sub(r"[^a-z0-9]+", "_", value)
+    value = re.sub(r"_+", "_", value).strip("_")
+    aliases = {
+        "affected_callers": "affected_callers_consumers",
+        "affected_consumers": "affected_callers_consumers",
+        "affected_callers_consumers": "affected_callers_consumers",
+        "affected_callers_or_consumers": "affected_callers_consumers",
+        "callers_consumers": "affected_callers_consumers",
+        "related_acceptance": "related_ac",
+        "related_acceptance_criteria": "related_ac",
+        "ac": "related_ac",
+        "required_tests": "required_tests_contracts",
+        "tests_contracts": "required_tests_contracts",
+        "required_tests_contracts": "required_tests_contracts",
+    }
+    return aliases.get(value, value)
+
+
+def parse_first_markdown_table(text: str) -> tuple[list[str], list[dict[str, str]]]:
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if not line.strip().startswith("|") or index + 1 >= len(lines):
+            continue
+        separator = lines[index + 1].strip()
+        if not separator.startswith("|") or not re.fullmatch(r"[|:\-\s]+", separator):
+            continue
+        headers = [normalize_table_header(part) for part in line.strip().strip("|").split("|")]
+        rows: list[dict[str, str]] = []
+        cursor = index + 2
+        while cursor < len(lines) and lines[cursor].strip().startswith("|"):
+            values = [part.strip() for part in lines[cursor].strip().strip("|").split("|")]
+            rows.append({header: values[pos] if pos < len(values) else "" for pos, header in enumerate(headers)})
+            cursor += 1
+        return headers, rows
+    return [], []
 
 
 def normalize_acceptance_id(value: str) -> str:
@@ -210,6 +283,51 @@ def integration_gaps(markdown: str) -> list[str]:
     return gaps
 
 
+def impact_summary_gaps(markdown: str) -> list[str]:
+    behavior_text = "\n\n".join(
+        text
+        for text in (
+            section_text(markdown, REQUIRED["acceptance"]),
+            section_text(markdown, REQUIRED["use_cases"]),
+            section_text(markdown, REQUIRED["scope"]),
+        )
+        if text
+    )
+    if not IMPACT_REQUIRED_RE.search(behavior_text):
+        return []
+
+    summary = section_text(markdown, IMPACT_SECTION_PATTERNS)
+    if summary is None:
+        return ["Impact Summary is required for public API, messaging, data, auth, payment, or cross-service requirements."]
+
+    gaps: list[str] = []
+    if len(summary) > IMPACT_MAX_CHARS:
+        gaps.append("Impact Summary must stay bounded; put raw GitNexus/scanner output in an evidence file.")
+    if not IMPACT_SOURCE_RE.search(summary):
+        gaps.append("Impact Summary must include Source: GitNexus impact, dependency scanner, or manual non-applicability evidence.")
+    if not RAW_EVIDENCE_RE.search(summary):
+        gaps.append("Impact Summary must include Raw Evidence: <repo-relative evidence path> instead of pasting full output.")
+
+    headers, rows = parse_first_markdown_table(summary)
+    if not rows:
+        gaps.append("Impact Summary must include an affected interfaces table.")
+        return gaps
+
+    if len(rows) > IMPACT_MAX_ROWS:
+        gaps.append("Impact Summary table must stay bounded to at most 12 high-signal affected interface rows.")
+    missing_columns = sorted(IMPACT_REQUIRED_COLUMNS - set(headers))
+    if missing_columns:
+        gaps.append("Impact Summary table missing columns: " + ", ".join(missing_columns))
+    for index, row in enumerate(rows, start=1):
+        row_label = row.get("interface") or f"row {index}"
+        for column in sorted(IMPACT_REQUIRED_COLUMNS):
+            if not row.get(column, "").strip():
+                gaps.append(f"Impact Summary {row_label} missing {column}.")
+        if not re.search(r"\bAC-?\d+\b", row.get("related_ac", ""), re.IGNORECASE):
+            gaps.append(f"Impact Summary {row_label} must map the interface to an AC id.")
+    return gaps
+
+
 def validate(path: Path) -> dict:
     markdown = path.read_text(encoding="utf-8")
     titles = [title for title, _start, _end in headings(markdown)]
@@ -226,7 +344,8 @@ def validate(path: Path) -> dict:
     oq_text = section_text(markdown, REQUIRED["open_questions"])
     oq_clear, unresolved = open_questions_clear(oq_text)
     gaps = integration_gaps(markdown)
-    ready = not missing and not empty_sections and oq_clear and not gaps
+    impact_gaps = impact_summary_gaps(markdown)
+    ready = not missing and not empty_sections and oq_clear and not gaps and not impact_gaps
     return {
         "path": str(path),
         "ready_for_implementation": ready,
@@ -235,6 +354,7 @@ def validate(path: Path) -> dict:
         "open_questions_clear": oq_clear,
         "unresolved_open_questions": unresolved,
         "integration_gaps": gaps,
+        "impact_gaps": impact_gaps,
     }
 
 
@@ -262,6 +382,10 @@ def main() -> int:
             print("Unresolved open questions:")
             for question in result["unresolved_open_questions"]:
                 print(f"- {question}")
+        if result.get("impact_gaps"):
+            print("Impact summary gaps:")
+            for gap in result["impact_gaps"]:
+                print(f"- {gap}")
 
     return 0 if result["ready_for_implementation"] else 2
 
