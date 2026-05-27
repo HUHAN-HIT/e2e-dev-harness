@@ -74,12 +74,16 @@ Reviewer Invocation JSON must match Developer/Reviewer/Session, point to the sam
 ## Completion Evidence
 
 Coverage matrix rows must map every acceptance criterion to use cases, service/module ownership, tests, code refs, business review, and accepted status such as `implemented`, `covered`, `done`, `pass`, `passed`, or `verified`.
+The `tests` and `code_refs` cells must be concrete evidence, not generic status text:
+name a test file/class/command and a production code path such as `PaymentService#complete -> PaymentCallbackDmqSender.send`.
+For messaging/event ACs, coverage must name the sender/producer/publisher path and send/publish/topic/payload test evidence.
+For audit or null-safety ACs, coverage must name the audit fields or null/missing/empty tests that prove the behavior.
 
 For multi-module or artifact-heavy designs, `implementation-manifest.md` must include `id`, `module`, `artifact`, `artifact_type`, `source`, `required`, `tests`, `status`, and `evidence`. Required rows must point to existing artifacts, real tests, and implemented or verified status.
 
 Unit-test evidence must be structured JSON with `command` and integer `exit_code`. Plain text such as `PASS` is not accepted.
 
-The requirements archive summarizes the final clarified requirement, acceptance-criteria status, use-case coverage, impacted services/contracts, evidence links, review/rework outcome, promoted memory entries, and follow-up opportunities. It is recommended for every completed run and required by strict completion workflows. Read `requirements-archive.md`.
+The requirements archive summarizes the final clarified requirement, acceptance-criteria status, use-case coverage, impacted services/contracts, evidence links, review/rework outcome, promoted memory entries, and follow-up opportunities. It is recommended for every completed run and required by strict completion workflows. When `--requirements-archive` is omitted, the gate auto-discovers `docs/agent-runs/<run>/requirements-archive.md` from other artifacts in the same run. Read `requirements-archive.md`.
 
 If the design is cross-service, completion requires the dependency report. Any unresolved URL/topic/tag/service mapping question blocks completion.
 

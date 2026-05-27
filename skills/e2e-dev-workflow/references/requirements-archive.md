@@ -16,6 +16,8 @@ python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . \
 
 Use `--require-requirements-archive` when a local gate should block missing archives. `verify --strict-workflow --phase completion --run-gate` also treats the archive as required.
 
+When the archive path is omitted but an anchor artifact is inside `docs/agent-runs/<run>/`, the gate auto-discovers `docs/agent-runs/<run>/requirements-archive.md`. Pass `--requirements-archive` explicitly to override discovery.
+
 ## Required Sections
 
 The archive must include:
@@ -37,7 +39,8 @@ Use links or repo-relative paths to point at design docs, handoffs, implementati
 
 ## What To Record
 
-`Acceptance Criteria Status` should map each AC to implemented/deferred status and evidence.
+`Acceptance Criteria Status` should map each AC to implemented/deferred status and concrete evidence.
+Use the coverage matrix as the source of truth: every completed AC needs a named test reference and a named production code reference, not `done` or `implemented` text alone.
 
 `Impacted Services APIs And Contracts` should summarize affected services, public APIs, data ownership, HTTP contracts, DMQ topic/tag/group details, and non-applicability decisions.
 

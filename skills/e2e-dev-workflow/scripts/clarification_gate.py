@@ -70,6 +70,18 @@ PLACEHOLDER_MARKERS = {
     "unclear",
     "pending",
 }
+MESSAGING_RE = re.compile(
+    r"\b(dmq|mq|message queue|kafka|rocketmq|jms|topic|tag|producer|consumer|publish|publisher|send|notification|event)\b",
+    re.IGNORECASE,
+)
+CALL_CHAIN_RE = re.compile(
+    r"(->|\bcall chain\b|\bentry point\b|\bcontroller\b|\bhandler\b|\bservice\b|\borchestration\b|\bworkflow\b|调用链|入口|编排)",
+    re.IGNORECASE,
+)
+SENDER_INJECTION_RE = re.compile(
+    r"\b(sender|producer|publisher|template|kafkaTemplate|rocketMQTemplate|jmsTemplate|inject|injection|constructor)\b|注入|发送器|生产者",
+    re.IGNORECASE,
+)
 
 
 def headings(markdown: str) -> list[tuple[str, int, int]]:
@@ -143,38 +155,59 @@ def open_questions_clear(text: str | None) -> tuple[bool, list[str]]:
     return False, lines
 
 
-def extract_acceptance_criteria(path: Path) -> list[str]:
-    markdown = path.read_text(encoding="utf-8")
+def extract_acceptance_items(path: Path) -> list[dict[str, str]]:
+    markdown = path.read_text(encoding="utf-8", errors="replace")
     text = section_text(markdown, REQUIRED["acceptance"])
     if text is None:
         return []
-    results: list[str] = []
+    results: list[dict[str, str]] = []
     used: set[str] = set()
     next_index = 1
     for line in text.splitlines():
         stripped = line.strip()
-        match = ACCEPTANCE_ID_RE.match(stripped)
-        if match:
-            ac_id = normalize_acceptance_id(stripped)
-            if ac_id not in used:
-                results.append(ac_id)
-                used.add(ac_id)
-            continue
         content = ACCEPTANCE_LINE_RE.match(line)
-        if content:
-            body = content.group(1).strip()
-            id_match = ACCEPTANCE_ID_RE.match(body)
-            if id_match:
-                ac_id = normalize_acceptance_id(body)
-            else:
-                while f"AC-{next_index}" in used:
-                    next_index += 1
-                ac_id = f"AC-{next_index}"
+        body = content.group(1).strip() if content else stripped
+        id_match = ACCEPTANCE_ID_RE.match(body)
+        if id_match:
+            ac_id = normalize_acceptance_id(body)
+            description = body[id_match.end() :].strip(" :-\t")
+        elif body:
+            while f"AC-{next_index}" in used:
                 next_index += 1
-            if ac_id not in used:
-                results.append(ac_id)
-                used.add(ac_id)
+            ac_id = f"AC-{next_index}"
+            next_index += 1
+            description = body
+        else:
+            continue
+        if ac_id not in used:
+            results.append({"id": ac_id, "text": description or body})
+            used.add(ac_id)
     return results
+
+
+def extract_acceptance_criteria(path: Path) -> list[str]:
+    return [item["id"] for item in extract_acceptance_items(path)]
+
+
+def integration_gaps(markdown: str) -> list[str]:
+    behavior_text = "\n\n".join(
+        text
+        for text in (
+            section_text(markdown, REQUIRED["acceptance"]),
+            section_text(markdown, REQUIRED["use_cases"]),
+            section_text(markdown, REQUIRED["scope"]),
+        )
+        if text
+    )
+    if not MESSAGING_RE.search(behavior_text):
+        return []
+
+    gaps: list[str] = []
+    if not CALL_CHAIN_RE.search(markdown):
+        gaps.append("Messaging/MQ requirements must declare the cross-layer call chain from entry point to sender/producer.")
+    if not SENDER_INJECTION_RE.search(markdown):
+        gaps.append("Messaging/MQ requirements must declare the sender/producer injection or construction point.")
+    return gaps
 
 
 def validate(path: Path) -> dict:
@@ -192,7 +225,8 @@ def validate(path: Path) -> dict:
     ]
     oq_text = section_text(markdown, REQUIRED["open_questions"])
     oq_clear, unresolved = open_questions_clear(oq_text)
-    ready = not missing and not empty_sections and oq_clear
+    gaps = integration_gaps(markdown)
+    ready = not missing and not empty_sections and oq_clear and not gaps
     return {
         "path": str(path),
         "ready_for_implementation": ready,
@@ -200,6 +234,7 @@ def validate(path: Path) -> dict:
         "empty_sections": empty_sections,
         "open_questions_clear": oq_clear,
         "unresolved_open_questions": unresolved,
+        "integration_gaps": gaps,
     }
 
 

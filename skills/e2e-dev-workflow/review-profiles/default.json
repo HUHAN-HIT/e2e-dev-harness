@@ -16,6 +16,11 @@
       "id": "findings-without-rework",
       "title": "Reviewer findings are approved without required rework routing.",
       "reference": "references/common-review-issues.md#findings-without-rework"
+    },
+    {
+      "id": "weak-completion-evidence",
+      "title": "Completion evidence uses generic status text instead of concrete code/test proof.",
+      "reference": "references/common-review-issues.md#weak-completion-evidence"
     }
   ],
   "required_checklist": {
@@ -89,13 +94,25 @@
     ],
     "implementation": [
       {
+        "id": "ac-code-path-trace",
+        "title": "Acceptance criteria code path trace",
+        "description": "For each acceptance criterion, trace the concrete runtime path from entry point through service/repository/client/sender to the response, persistence change, or emitted event.",
+        "severity": "blocker",
+        "references": [
+          "references/agent-orchestration.md",
+          "references/common-review-issues.md#code-path-trace-gap"
+        ],
+        "required": true
+      },
+      {
         "id": "implementation-completeness",
         "title": "Implementation completeness",
-        "description": "Verify all acceptance criteria, required artifacts, migrations/config, service ownership, and manifest rows are implemented or explicitly deferred with approval.",
+        "description": "Verify all acceptance criteria, required artifacts, migrations/config, service ownership, and manifest rows use concrete code/test evidence or explicit approved deferral.",
         "severity": "blocker",
         "references": [
           "references/implementation-gates.md",
-          "references/common-review-issues.md#missing-acceptance-coverage"
+          "references/common-review-issues.md#missing-acceptance-coverage",
+          "references/common-review-issues.md#weak-completion-evidence"
         ],
         "required": true
       },

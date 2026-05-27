@@ -38,6 +38,49 @@ REVIEW_RE = re.compile(
 )
 SUCCESS_PATH_RE = re.compile(r"\b(success|successful|happy|valid|positive|normal)\b|\u6210\u529f|\u6b63\u5e38", re.IGNORECASE)
 FAILURE_PATH_RE = re.compile(r"\b(fail|failure|failed|invalid|negative|error|exception|missing|reject|denied)\b|\u5931\u8d25|\u5f02\u5e38|\u7f3a\u5931|\u62d2\u7edd", re.IGNORECASE)
+GENERIC_EVIDENCE_VALUES = {
+    "done",
+    "covered",
+    "implemented",
+    "verified",
+    "reviewed",
+    "pass",
+    "passed",
+    "ok",
+    "yes",
+    "y",
+    "true",
+}
+CONCRETE_TEST_REF_RE = re.compile(
+    r"(\b[A-Z][A-Za-z0-9_]*(?:Test|Tests|IT|Spec)\b|"
+    r"\bsrc/test\b|\btest[s]?\b|junit|assert|mvn|gradle|pytest|verify|verifies)",
+    re.IGNORECASE,
+)
+CONCRETE_CODE_REF_RE = re.compile(
+    r"(\b[A-Z][A-Za-z0-9_]*(?:Controller|Service|Repository|Client|Sender|Producer|"
+    r"Publisher|Listener|Consumer|Mapper|Entity|Config|Handler)\b|"
+    r"[A-Za-z0-9_./\\-]+\.(?:java|kt|py|ts|tsx|js|jsx|go|cs|xml|ya?ml)(?::\d+)?|"
+    r"#\w+|\.\w+\()",
+    re.IGNORECASE,
+)
+MESSAGING_CODE_EVIDENCE_RE = re.compile(
+    r"\b(sender|producer|publisher|template|send|publish|topic|tag|payload|event|message)\b",
+    re.IGNORECASE,
+)
+MESSAGING_TEST_EVIDENCE_RE = re.compile(
+    r"\b(sender|producer|publisher|send|publish|topic|tag|payload|event|message)\b",
+    re.IGNORECASE,
+)
+AUDIT_RE = re.compile(
+    r"\b(audit|createdAt|updatedAt|created_at|updated_at|createdBy|updatedBy|timestamp)\b",
+    re.IGNORECASE,
+)
+AUDIT_EVIDENCE_RE = re.compile(
+    r"\b(createdAt|updatedAt|created_at|updated_at|createdBy|updatedBy|audit)\b",
+    re.IGNORECASE,
+)
+NULL_SAFETY_RE = re.compile(r"\b(null|nullable|missing|absent|empty|optional|refundAmount)\b", re.IGNORECASE)
+NULL_TEST_EVIDENCE_RE = re.compile(r"\b(null|nullable|missing|absent|empty|optional)\b", re.IGNORECASE)
 
 
 def strip_bom(text: str) -> str:
@@ -152,6 +195,54 @@ def validate_command_evidence(text: str, label: str, blocked: list[str]) -> list
     return normalized
 
 
+def evidence_is_concrete(value: str, pattern: re.Pattern[str]) -> bool:
+    normalized = value.strip().strip("`").lower()
+    if normalized in GENERIC_EVIDENCE_VALUES:
+        return False
+    return bool(pattern.search(value))
+
+
+def validate_row_completion_evidence(
+    row: dict[str, str],
+    ac_text: str,
+    blocked: list[str],
+) -> None:
+    row_id = row.get("id") or "row"
+    tests = row.get("tests", "")
+    code_refs = row.get("code_refs", "")
+    if tests.strip() and not evidence_is_concrete(tests, CONCRETE_TEST_REF_RE):
+        blocked.append(f"Coverage matrix {row_id} must include a concrete test reference, not generic status text.")
+    if code_refs.strip() and not evidence_is_concrete(code_refs, CONCRETE_CODE_REF_RE):
+        blocked.append(f"Coverage matrix {row_id} must include a concrete code reference, not generic status text.")
+
+    behavior_text = " ".join(
+        value
+        for value in (
+            ac_text,
+            row.get("acceptance", ""),
+            row.get("use_case", ""),
+        )
+        if value
+    )
+    if clarification_gate.MESSAGING_RE.search(behavior_text):
+        if not MESSAGING_CODE_EVIDENCE_RE.search(code_refs):
+            blocked.append(
+                f"Coverage matrix messaging AC {row_id} must name sender/producer/publisher "
+                "or send/publish/topic code evidence."
+            )
+        if not MESSAGING_TEST_EVIDENCE_RE.search(tests):
+            blocked.append(
+                f"Coverage matrix messaging AC {row_id} must name send/publish/topic/payload "
+                "test evidence."
+            )
+    if AUDIT_RE.search(behavior_text):
+        evidence_text = " ".join(str(value) for value in row.values())
+        if not AUDIT_EVIDENCE_RE.search(evidence_text):
+            blocked.append(f"Coverage matrix audit AC {row_id} must name audit fields such as createdAt/updatedAt.")
+    if NULL_SAFETY_RE.search(behavior_text) and not NULL_TEST_EVIDENCE_RE.search(tests):
+        blocked.append(f"Coverage matrix null-safety AC {row_id} must name null/missing/empty test evidence.")
+
+
 def validate(
     repo: Path,
     coverage_matrix: Path | None,
@@ -166,7 +257,16 @@ def validate(
     matrix_path = coverage_matrix if coverage_matrix and coverage_matrix.is_absolute() else (repo / coverage_matrix if coverage_matrix else None)
     rows: list[dict[str, str]] = []
     expected_acs: list[str] = []
+    ac_text_by_id: dict[str, str] = {}
     missing_acs: list[str] = []
+    if design_doc:
+        design_path = design_doc if design_doc.is_absolute() else repo / design_doc
+        if not design_path.exists():
+            blocked.append(f"Design document not found for acceptance coverage check: {design_path}")
+        else:
+            acceptance_items = clarification_gate.extract_acceptance_items(design_path)
+            expected_acs = [item["id"] for item in acceptance_items]
+            ac_text_by_id = {item["id"]: item["text"] for item in acceptance_items}
     if not matrix_path:
         blocked.append("Coverage matrix is required.")
     elif not matrix_path.exists():
@@ -193,6 +293,8 @@ def validate(
                     value = row.get(column, "")
                     if TODO_RE.search(value):
                         blocked.append(f"Coverage matrix {row_id} has unresolved marker in {column}.")
+                normalized_ac_id = clarification_gate.normalize_acceptance_id(row.get("id", ""))
+                validate_row_completion_evidence(row, ac_text_by_id.get(normalized_ac_id, ""), blocked)
                 path_text = " ".join(
                     row.get(column, "")
                     for column in ("acceptance", "use_case", "tests", "business_review")
@@ -202,23 +304,17 @@ def validate(
                         f"Coverage matrix {row_id} should explicitly show happy/success and failure/edge-path test coverage."
                     )
 
-    if design_doc:
-        design_path = design_doc if design_doc.is_absolute() else repo / design_doc
-        if not design_path.exists():
-            blocked.append(f"Design document not found for acceptance coverage check: {design_path}")
-        else:
-            expected_acs = clarification_gate.extract_acceptance_criteria(design_path)
-            if expected_acs:
-                matrix_acs = {
-                    clarification_gate.normalize_acceptance_id(row.get("id", ""))
-                    for row in rows
-                    if row.get("id", "").strip()
-                }
-                missing_acs = [ac for ac in expected_acs if ac not in matrix_acs]
-                if missing_acs:
-                    blocked.append(
-                        "Coverage matrix missing acceptance criteria from design: " + ", ".join(missing_acs)
-                    )
+    if expected_acs:
+        matrix_acs = {
+            clarification_gate.normalize_acceptance_id(row.get("id", ""))
+            for row in rows
+            if row.get("id", "").strip()
+        }
+        missing_acs = [ac for ac in expected_acs if ac not in matrix_acs]
+        if missing_acs:
+            blocked.append(
+                "Coverage matrix missing acceptance criteria from design: " + ", ".join(missing_acs)
+            )
 
     unit_test_commands: list[dict] = []
     unit_test_path, unit_text = file_ok(unit_test_evidence, repo, "Unit test", blocked)

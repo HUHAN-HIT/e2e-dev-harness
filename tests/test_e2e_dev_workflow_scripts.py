@@ -141,6 +141,76 @@ class ClarificationGateTests(unittest.TestCase):
         self.assertFalse(result["ready_for_implementation"])
         self.assertIn("goal", result["empty_sections"])
 
+    def test_mq_requirement_requires_cross_layer_sender_call_chain(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Publish a payment callback event.
+
+            ## Scope
+            - services/payment-service
+
+            ## Use Cases
+            - Payment succeeds and publishes a DMQ notification.
+
+            ## Acceptance Criteria
+            - AC-1 Publish DMQ callback notification after payment succeeds.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path)
+
+        self.assertFalse(result["ready_for_implementation"])
+        self.assertTrue(any("sender" in reason.lower() or "call chain" in reason.lower() for reason in result["integration_gaps"]))
+
+    def test_mq_requirement_allows_explicit_sender_call_chain(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Publish a payment callback event.
+
+            ## Scope
+            - services/payment-service
+
+            ## Use Cases
+            - Payment succeeds and publishes a DMQ notification.
+
+            ## Acceptance Criteria
+            - AC-1 Publish DMQ callback notification after payment succeeds.
+
+            ## Integration Call Chain
+            - PaymentController -> PaymentService -> PaymentCallbackDmqSender.send(topic, tag, payload).
+            - Sender injection: PaymentService constructor injects PaymentCallbackDmqSender.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path)
+
+        self.assertTrue(result["ready_for_implementation"], result)
+        self.assertEqual([], result["integration_gaps"])
+
 
 class CommandSplitTests(unittest.TestCase):
     def test_simple_graph_command_splits_without_shell(self) -> None:
@@ -346,6 +416,29 @@ class CoverageGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("code_refs" in reason for reason in result["blocked_reasons"]))
+
+    def test_coverage_gate_blocks_generic_completion_evidence(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Quote returned | Create quote | services/a | done | implemented | reviewed | covered |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            matrix = repo / "coverage.md"
+            unit = repo / "unit.txt"
+            review = repo / "business.md"
+            matrix.write_text(markdown, encoding="utf-8")
+            write_command_evidence(unit)
+            review.write_text("Reviewed.\n", encoding="utf-8")
+
+            result = coverage_gate.validate(repo, matrix, unit, review)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("concrete test reference" in reason.lower() for reason in result["blocked_reasons"]))
+        self.assertTrue(any("concrete code reference" in reason.lower() for reason in result["blocked_reasons"]))
 
     def test_coverage_gate_accepts_utf8_bom_evidence(self) -> None:
         markdown = textwrap.dedent(
@@ -1322,6 +1415,8 @@ class ContractGateTests(unittest.TestCase):
         )
 
         self.assertIn("Review Profile: skills/e2e-dev-workflow/review-profiles/default.json", text)
+        self.assertIn("Code Path Trace", text)
+        self.assertIn("ac-code-path-trace", text)
         self.assertIn("security-negative-paths", text)
         self.assertIn("project-pattern-consistency", text)
 
@@ -1700,6 +1795,7 @@ class ReviewerGateTests(unittest.TestCase):
                         """
                         ## Review Checklist
 
+                        - [x] ac-code-path-trace: checked
                         - [x] implementation-completeness: checked
                         - [x] security-negative-paths: checked
                         - [x] project-pattern-consistency: checked
@@ -1840,6 +1936,7 @@ class ReviewerGateTests(unittest.TestCase):
                         """
                         ## Review Checklist
 
+                        - [x] ac-code-path-trace: checked
                         - [x] implementation-completeness: checked
                         - [x] security-negative-paths: checked
                         - [x] project-pattern-consistency: checked
@@ -2102,6 +2199,104 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertIn("jeepay-core", result["expected_services"])
         self.assertEqual(["implementation", "test"], sorted(result["covered_service_reviews"]["jeepay-core"]))
 
+    def test_reviewer_gate_requires_r3_code_path_trace_for_each_acceptance_criterion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Goal
+                    - Return a quote.
+
+                    ## Scope
+                    - services/sample-service
+
+                    ## Use Cases
+                    - Create quote.
+
+                    ## Acceptance Criteria
+                    - AC-1 Quote is returned.
+                    - AC-2 Invalid input is rejected.
+
+                    ## Test Design
+                    - Unit test first.
+
+                    ## Open Questions
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc("implementation", request=request, request_hash=self.request_hash(repo, request)),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], [design], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("code path trace" in reason.lower() and "AC-1" in reason for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_allows_r3_code_path_trace_for_each_acceptance_criterion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Goal
+                    - Return a quote.
+
+                    ## Scope
+                    - services/sample-service
+
+                    ## Use Cases
+                    - Create quote.
+
+                    ## Acceptance Criteria
+                    - AC-1 Quote is returned.
+                    - AC-2 Invalid input is rejected.
+
+                    ## Test Design
+                    - Unit test first.
+
+                    ## Open Questions
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            trace = textwrap.dedent(
+                """
+                ## Code Path Trace
+
+                - AC-1: QuoteController -> QuoteService.create -> QuoteRepository.save -> QuoteResponse.
+                - AC-2: QuoteController -> QuoteRequestValidator.rejects invalid input -> error response.
+                """
+            ).strip()
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc("implementation", request=request, request_hash=self.request_hash(repo, request), checklist=trace),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], [design], require_phases=["implementation"])
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual([], result["items"][0]["missing_code_path_trace_acs"])
+
 
 class RequirementsArchiveTests(unittest.TestCase):
     def archive_doc(self) -> str:
@@ -2186,6 +2381,19 @@ class RequirementsArchiveTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("placeholder" in reason.lower() for reason in result["blocked_reasons"]))
 
+    def test_requirements_archive_discovers_archive_from_agent_run_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            archive = repo / "docs" / "agent-runs" / "run" / "requirements-archive.md"
+            red = repo / "docs" / "agent-runs" / "run" / "evidence" / "red-test.txt"
+            red.parent.mkdir(parents=True)
+            archive.write_text(self.archive_doc(), encoding="utf-8")
+            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+
+            discovered = requirements_archive.discover(repo, [red])
+
+        self.assertEqual(archive.resolve(), discovered.resolve())
+
 
 class ImplementationGateTests(unittest.TestCase):
     def write_semantic_reviews(self, repo: Path, phases: tuple[str, ...] = ("design", "test", "implementation")) -> Path:
@@ -2239,6 +2447,20 @@ class ImplementationGateTests(unittest.TestCase):
                 encoding="utf-8",
             )
             request_hash = hashlib.sha256(request_path.read_bytes()).hexdigest()
+            code_path_trace = ""
+            if phase == "implementation":
+                code_path_trace = textwrap.dedent(
+                    """
+
+                    ## Code Path Trace
+
+                    - AC-1: Controller -> ApplicationService -> Repository/Client/Sender -> response or event.
+                    - AC-2: Controller -> ApplicationService -> Validator/Repository -> error or state update.
+                    - AC-3: Controller -> ApplicationService -> Repository/Client/Sender -> verified behavior.
+                    - AC-4: Controller -> ApplicationService -> Repository/Client/Sender -> verified behavior.
+                    - AC-5: Controller -> ApplicationService -> Repository/Client/Sender -> verified behavior.
+                    """
+                )
             (review_dir / review_name).write_text(
                 textwrap.dedent(
                     f"""
@@ -2260,6 +2482,7 @@ class ImplementationGateTests(unittest.TestCase):
                     - Findings: None
                     - Required Rework: None
                     - Status: approved
+                    {code_path_trace}
                     """
                 ).strip(),
                 encoding="utf-8",
@@ -2572,6 +2795,119 @@ class ImplementationGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("--requirements-archive" in reason for reason in result["blocked_reasons"]))
+
+    def test_completion_gate_auto_discovers_required_archive_from_agent_run(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Return a quote.
+
+            ## Scope
+            - sample-service
+
+            ## Use Cases
+            - Create quote.
+
+            ## Acceptance Criteria
+            - Quote is returned.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        coverage = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Quote is returned | Create quote | services/sample-service | QuoteTest | QuoteService | reviewed | covered |
+            """
+        ).strip()
+        archive_doc = textwrap.dedent(
+            """
+            # Requirements Archive
+
+            ## Original Request
+            Build quote creation.
+
+            ## Final Clarified Requirement
+            Return a quote for valid input.
+
+            ## Scope And Non-Goals
+            Scope: services/sample-service. Non-goals: billing.
+
+            ## Acceptance Criteria Status
+            | id | requirement | status | evidence |
+            | --- | --- | --- | --- |
+            | AC-1 | Quote is returned | verified | docs/agent-runs/run/evidence/coverage-matrix.md |
+
+            ## Use Case Coverage
+            UC-1 covers AC-1.
+
+            ## Impacted Services APIs And Contracts
+            services/sample-service; no contract change.
+
+            ## Implementation Evidence
+            docs/agent-runs/run/evidence/implementation-manifest.md
+
+            ## Test Evidence
+            docs/agent-runs/run/evidence/green-test.txt
+
+            ## Review And Rework Summary
+            R1/R2/R3 approved; no open rework.
+
+            ## Deferred And Residual Risks
+            None.
+
+            ## Promoted Memory Entries
+            None.
+
+            ## Follow Up Opportunities
+            None.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            run = repo / "docs" / "agent-runs" / "run"
+            red = run / "evidence" / "red-test.txt"
+            matrix = run / "evidence" / "coverage-matrix.md"
+            unit = run / "evidence" / "green-test.txt"
+            review = run / "evidence" / "business-review.md"
+            archive = run / "requirements-archive.md"
+            design.parent.mkdir(parents=True)
+            kg.parent.mkdir(parents=True)
+            red.parent.mkdir(parents=True)
+            design.write_text(markdown, encoding="utf-8")
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            matrix.write_text(coverage, encoding="utf-8")
+            write_command_evidence(unit, "mvn -pl services/sample-service -am test")
+            review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
+            archive.write_text(archive_doc, encoding="utf-8")
+            review_dir = self.write_semantic_reviews(repo)
+
+            result = implementation_gate.validate_gate(
+                repo,
+                design,
+                kg,
+                "completion",
+                red,
+                matrix,
+                unit,
+                review,
+                review_dirs=[review_dir],
+                require_requirements_archive=True,
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertTrue(result["requirements_archive"]["path"].replace("\\", "/").endswith("docs/agent-runs/run/requirements-archive.md"))
+        self.assertEqual("auto", result["requirements_archive"]["source"])
 
     def test_unified_gate_requires_archive_for_strict_completion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4389,6 +4725,8 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("Issue ID", text)
         self.assertIn("判定标准", text)
         self.assertIn("示例", text)
+        self.assertIn("code-path-trace-gap", text)
+        self.assertIn("weak-completion-evidence", text)
 
     def test_bundled_review_profiles_have_guidance_metadata(self) -> None:
         for name in ("default", "security-heavy", "api-first"):
@@ -4405,6 +4743,13 @@ class SkillDocumentationTests(unittest.TestCase):
                         self.assertIn("description", item)
                         self.assertIn("severity", item)
                         self.assertIn("references", item)
+
+    def test_tdd_reference_documents_audit_field_template(self) -> None:
+        text = (ROOT / "skills" / "e2e-dev-workflow" / "references" / "tdd-java-spring.md").read_text(encoding="utf-8")
+
+        self.assertIn("createdAt", text)
+        self.assertIn("updatedAt", text)
+        self.assertIn("createdBy", text)
 
     def test_skill_body_is_concise_for_progressive_disclosure(self) -> None:
         skill_text = (ROOT / "skills" / "e2e-dev-workflow" / "SKILL.md").read_text(encoding="utf-8")
@@ -4519,6 +4864,20 @@ class UnifiedCliTests(unittest.TestCase):
                 encoding="utf-8",
             )
             request_hash = hashlib.sha256(request_path.read_bytes()).hexdigest()
+            code_path_trace = ""
+            if phase == "implementation":
+                code_path_trace = textwrap.dedent(
+                    """
+
+                    ## Code Path Trace
+
+                    - AC-1: Controller -> ApplicationService -> Repository/Client/Sender -> response or event.
+                    - AC-2: Controller -> ApplicationService -> Validator/Repository -> error or state update.
+                    - AC-3: Controller -> ApplicationService -> Repository/Client/Sender -> verified behavior.
+                    - AC-4: Controller -> ApplicationService -> Repository/Client/Sender -> verified behavior.
+                    - AC-5: Controller -> ApplicationService -> Repository/Client/Sender -> verified behavior.
+                    """
+                )
             (review_dir / review_name).write_text(
                 textwrap.dedent(
                     f"""
@@ -4540,6 +4899,7 @@ class UnifiedCliTests(unittest.TestCase):
                     - Findings: None
                     - Required Rework: None
                     - Status: approved
+                    {code_path_trace}
                     """
                 ).strip(),
                 encoding="utf-8",
@@ -5405,6 +5765,73 @@ class CoverageGateAcCheckTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("AC-2" in reason for reason in result["blocked_reasons"]))
+
+    def test_blocks_messaging_ac_without_sender_completion_evidence(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Publish DMQ callback notification | Payment succeeds | services/payment-service | PaymentServiceTest | PaymentService | reviewed | covered |
+            """
+        ).strip()
+        design = textwrap.dedent(
+            """
+            # Feature
+
+            ## Acceptance Criteria
+
+            - AC-1 Publish DMQ callback notification after payment succeeds.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            matrix = repo / "coverage.md"
+            unit = repo / "unit.txt"
+            review = repo / "business.md"
+            design_path = repo / "design.md"
+            matrix.write_text(markdown, encoding="utf-8")
+            write_command_evidence(unit)
+            review.write_text("Reviewed.\n", encoding="utf-8")
+            design_path.write_text(design, encoding="utf-8")
+
+            result = coverage_gate.validate(repo, matrix, unit, review, design_path)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("messaging AC AC-1" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any("sender" in reason.lower() for reason in result["blocked_reasons"]))
+        self.assertTrue(any("payload" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_passes_messaging_ac_with_sender_and_payload_evidence(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Publish DMQ callback notification | Payment succeeds | services/payment-service | PaymentCallbackDmqSenderTest verifies topic tag payload publish | PaymentService#complete -> PaymentCallbackDmqSender.send | reviewed | covered |
+            """
+        ).strip()
+        design = textwrap.dedent(
+            """
+            # Feature
+
+            ## Acceptance Criteria
+
+            - AC-1 Publish DMQ callback notification after payment succeeds.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            matrix = repo / "coverage.md"
+            unit = repo / "unit.txt"
+            review = repo / "business.md"
+            design_path = repo / "design.md"
+            matrix.write_text(markdown, encoding="utf-8")
+            write_command_evidence(unit)
+            review.write_text("Reviewed.\n", encoding="utf-8")
+            design_path.write_text(design, encoding="utf-8")
+
+            result = coverage_gate.validate(repo, matrix, unit, review, design_path)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
 
     def test_passes_when_all_acs_covered(self) -> None:
         markdown = textwrap.dedent(

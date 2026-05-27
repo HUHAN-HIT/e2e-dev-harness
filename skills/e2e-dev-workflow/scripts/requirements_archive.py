@@ -60,6 +60,29 @@ def inside_repo(repo: Path, path: Path) -> bool:
         return False
 
 
+def agent_run_dir_from_path(repo: Path, path: Path | None) -> Path | None:
+    if not path:
+        return None
+    resolved = path if path.is_absolute() else repo / path
+    parts = resolved.resolve().parts
+    for index in range(len(parts) - 2):
+        if parts[index] == "docs" and parts[index + 1] == "agent-runs":
+            return Path(*parts[: index + 3])
+    return None
+
+
+def discover(repo: Path, anchor_paths: list[Path | None] | None = None) -> Path | None:
+    repo = repo.resolve()
+    for anchor in anchor_paths or []:
+        run_dir = agent_run_dir_from_path(repo, anchor)
+        if not run_dir:
+            continue
+        candidate = run_dir / "requirements-archive.md"
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def validate(repo: Path, archive: Path | None) -> dict:
     repo = repo.resolve()
     blocked: list[str] = []

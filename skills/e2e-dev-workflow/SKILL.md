@@ -46,6 +46,7 @@ For command details, read `references/implementation-gates.md`.
 - Load project instructions before requirement clarification. Use discovery scope first; load affected service `AGENT.md` / `AGENTS.md` only after scope is known. Read `references/agent-instructions.md`.
 - Use Superpowers when available. `superpowers:brainstorming` owns clarification; `superpowers:test-driven-development` owns TDD. Read `references/superpowers-integration.md`.
 - Clarification is a hard gate. The design must state goals, non-goals, affected services/modules, use cases, contracts, acceptance criteria, test design, and resolved open questions. Read `references/clarification-gate.md`.
+  MQ/DMQ/Kafka requirements must name the cross-layer call chain and sender/producer injection point before implementation.
 - Prefer GitNexus for code-level cross-service evidence and explicit impact artifacts.
   Do not duplicate low-level `grep`/`rg` usage instructions just because GitNexus augments searches.
   Use explicit GitNexus commands when a gate needs auditable evidence.
@@ -55,7 +56,9 @@ For command details, read `references/implementation-gates.md`.
 - Review profiles are portable project policy. Auto-discover project profiles and extend bundled profiles only when useful.
   Use common issue guidance for reviewer focus. Read `references/review-profiles.md` and `references/common-review-issues.md`.
 - Archive the final requirement summary after completion so future analysis can read outcomes without replaying every run artifact. Read `references/requirements-archive.md`.
-- Completion requires evidence, not chat claims: semantic reviews, implementation manifest, coverage matrix, unit-test JSON, business review, dependency report when cross-service, closed rework, and passing guard.
+- Completion requires task-completion proof, not chat claims: every AC has concrete code refs and concrete test refs.
+  Semantic reviews, implementation manifest, coverage matrix, unit-test JSON, business review, dependency report when cross-service,
+  closed rework, and passing guard are completion evidence.
 
 ## Workflow
 
@@ -66,8 +69,9 @@ For command details, read `references/implementation-gates.md`.
 5. TDD red: write the first failing test and capture failing evidence.
 6. R2 test review: independent reviewer checks happy/failure paths, security cases, and contract coverage before production code.
 7. TDD green/refactor: implement with the Superpowers Red-Green-Refactor cycle.
-8. R3 implementation review: independent reviewer checks completeness, tests, security, anti-patterns, and project-pattern consistency. Use a review profile when the project has required checklist items.
-9. Completion gate: prove every acceptance criterion and required artifact has use cases, service ownership, tests, code refs, business review, and closed rework.
+8. R3 implementation review: independent reviewer traces every AC through the concrete code path.
+   Then check completeness, tests, security, anti-patterns, and project-pattern consistency. Use a review profile when the project has required checklist items.
+9. Completion gate: prove every acceptance criterion and required artifact has use cases, service ownership, concrete tests, concrete code refs, business review, and closed rework.
 10. Rework loop: findings create rework items and return to the earliest required phase before more production-code edits.
 11. Strict guard/report: run `verify --strict-workflow` or `guard`, capture accepted memory updates, and report evidence plus residual risks.
 

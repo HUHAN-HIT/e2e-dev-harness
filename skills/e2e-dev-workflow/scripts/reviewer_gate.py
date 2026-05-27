@@ -8,10 +8,15 @@ import copy
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import clarification_gate  # noqa: E402
 
 
 REQUIRED_FIELDS = {
@@ -63,6 +68,11 @@ REQUEST_REQUIRED_FIELDS = {
 FIELD_RE = re.compile(r"^\s*-?\s*([A-Za-z][A-Za-z _-]*):\s*(.*?)\s*$")
 PLACEHOLDER_RE = re.compile(r"^\s*(<[^>]+>|\[[^\]]+\]|todo|tbd|unknown|draft|placeholder)\s*$", re.IGNORECASE)
 CHECKED_ITEM_RE = re.compile(r"^\s*[-*]\s*\[[xX]\]\s*`?([A-Za-z0-9][A-Za-z0-9._/-]*)`?")
+CODE_PATH_HEADING_RE = re.compile(r"(?im)^\s*#{2,4}\s+code path trace\s*$")
+TRACE_EVIDENCE_RE = re.compile(
+    r"(->|\bcalls?\b|\binvokes?\b|\bsends?\b|\bpublishes?\b|\bpersists?\b|\breturns?\b|\brejects?\b|\bvalidates?\b|\bupdates?\b|\bcontroller\b|\bservice\b|\brepository\b|\bsender\b|\bproducer\b)",
+    re.IGNORECASE,
+)
 PROJECT_REVIEW_PROFILE_CANDIDATES = [
     Path(".e2e/review-profile.json"),
     Path(".e2e/review-profiles/default.json"),
@@ -98,6 +108,52 @@ def checked_checklist_ids(text: str) -> set[str]:
         if match:
             ids.add(normalize_value(match.group(1).strip("`")))
     return ids
+
+
+def markdown_section(text: str, heading_re: re.Pattern) -> str:
+    match = heading_re.search(text)
+    if not match:
+        return ""
+    next_heading = re.search(r"(?m)^\s*#{1,4}\s+\S", text[match.end():])
+    end = match.end() + next_heading.start() if next_heading else len(text)
+    return text[match.end():end].strip()
+
+
+def expected_acceptance_ids(repo: Path, anchor_paths: list[Path | None] | None) -> list[str]:
+    results: list[str] = []
+    for anchor in anchor_paths or []:
+        if not anchor:
+            continue
+        path = anchor if anchor.is_absolute() else repo / anchor
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            ids = clarification_gate.extract_acceptance_criteria(path)
+        except (OSError, UnicodeDecodeError):
+            ids = []
+        for ac_id in ids:
+            if ac_id not in results:
+                results.append(ac_id)
+    return results
+
+
+def missing_code_path_trace_acs(text: str, ac_ids: list[str]) -> list[str]:
+    if not ac_ids:
+        return []
+    section = markdown_section(text, CODE_PATH_HEADING_RE)
+    if not section:
+        return ac_ids
+    missing: list[str] = []
+    lines = section.splitlines()
+    for ac_id in ac_ids:
+        matched = False
+        for line in lines:
+            if ac_id in line and TRACE_EVIDENCE_RE.search(line):
+                matched = True
+                break
+        if not matched:
+            missing.append(ac_id)
+    return missing
 
 
 def review_profile_candidates(repo: Path, profile_path: Path | str, base_dir: Path | None = None) -> list[Path]:
@@ -492,7 +548,13 @@ def discovered_files(repo: Path, agent_run_dir: Path | None) -> list[Path]:
     return sorted(dict.fromkeys(candidates))
 
 
-def validate_item(repo: Path, path: Path, fields: dict[str, str], review_profile: dict | None = None) -> tuple[dict, list[str], list[str]]:
+def validate_item(
+    repo: Path,
+    path: Path,
+    fields: dict[str, str],
+    review_profile: dict | None = None,
+    expected_acs: list[str] | None = None,
+) -> tuple[dict, list[str], list[str]]:
     blocked: list[str] = []
     warnings: list[str] = []
     missing = [label for key, label in REQUIRED_FIELDS.items() if not fields.get(key, "").strip()]
@@ -634,6 +696,14 @@ def validate_item(repo: Path, path: Path, fields: dict[str, str], review_profile
         blocked.append(f"Semantic review {path} has Findings but Required Rework is empty; route findings to rework or use a blocking/with-rework status.")
 
     raw_text = path.read_text(encoding="utf-8", errors="replace")
+    missing_trace_acs: list[str] = []
+    if phase == "implementation" and expected_acs:
+        missing_trace_acs = missing_code_path_trace_acs(raw_text, expected_acs)
+        if missing_trace_acs:
+            blocked.append(
+                f"Semantic review {path} missing Code Path Trace coverage for acceptance criteria: "
+                + ", ".join(missing_trace_acs)
+            )
     checked_ids = checked_checklist_ids(raw_text)
     missing_profile_items: list[str] = []
     warning_profile_items: list[str] = []
@@ -668,6 +738,7 @@ def validate_item(repo: Path, path: Path, fields: dict[str, str], review_profile
             "checked_profile_items": sorted(checked_ids),
             "missing_profile_items": missing_profile_items,
             "warning_profile_items": warning_profile_items,
+            "missing_code_path_trace_acs": missing_trace_acs,
         }
     )
     return item, blocked, warnings
@@ -694,11 +765,12 @@ def validate(
     blocked.extend(profile_blocked)
     warnings: list[str] = []
     items: list[dict] = []
+    expected_acs = expected_acceptance_ids(repo, anchor_paths)
     covered: set[str] = set()
     covered_service_reviews: dict[str, set[str]] = {service: set() for service in services}
     for path in files:
         fields = parse_item(path)
-        item, item_blocked, item_warnings = validate_item(repo, path, fields, profile)
+        item, item_blocked, item_warnings = validate_item(repo, path, fields, profile, expected_acs)
         service = service_from_review_path(inferred_run_dir, path) or service_from_scope(fields.get("scope", ""), services)
         if service and item.get("phase") in {"test", "implementation"}:
             covered_service_reviews.setdefault(service, set()).add(item["phase"])
@@ -734,6 +806,7 @@ def validate(
             for service, phases in covered_service_reviews.items()
         },
         "required_phases": required,
+        "expected_acceptance_ids": expected_acs,
         "items": items,
     }
 

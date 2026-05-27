@@ -488,7 +488,7 @@ coverage matrix 需要逐项映射：
 id | acceptance | use_case | service | tests | code_refs | business_review | status
 ```
 
-只有每个必改产物都在 implementation manifest 中验证、每个验收项都关联到用例、服务、测试、代码引用和业务审查，且状态为通过状态，completion gate 才会放行。coverage gate 会对没有显式体现 happy/success 与 failure/edge 路径的行给出 warning；高风险业务逻辑需要把该 warning 转成 rework item，而不是只靠单个浅层 UT 放行。跨服务设计还必须传入 `--dependency-report`，且报告里不能存在未澄清的 URL、topic、tag、group 或服务映射问题；如果存在 HTTP/DMQ 契约变更，还要传入 `--contract-dir` 或使用 `--require-contracts`，确保 producer/consumer 双向 ACK 和 contract tests 已闭环。传入 `--memory-updates` 时，未标记处理状态的 proposed memory update 也会阻断完成。`requirements-archive.md` 用于沉淀最终需求、AC 状态、影响面、证据链接、review/rework 结论和后续机会；strict completion 会要求通过 `--requirements-archive` 校验。
+只有每个必改产物都在 implementation manifest 中验证、每个验收项都关联到用例、服务、测试、代码引用和业务审查，且状态为通过状态，completion gate 才会放行。coverage gate 会对没有显式体现 happy/success 与 failure/edge 路径的行给出 warning；高风险业务逻辑需要把该 warning 转成 rework item，而不是只靠单个浅层 UT 放行。跨服务设计还必须传入 `--dependency-report`，且报告里不能存在未澄清的 URL、topic、tag、group 或服务映射问题；如果存在 HTTP/DMQ 契约变更，还要传入 `--contract-dir` 或使用 `--require-contracts`，确保 producer/consumer 双向 ACK 和 contract tests 已闭环。传入 `--memory-updates` 时，未标记处理状态的 proposed memory update 也会阻断完成。`requirements-archive.md` 用于沉淀最终需求、AC 状态、影响面、证据链接、review/rework 结论和后续机会；strict completion 会要求归档校验，并可从同一个 `docs/agent-runs/<run>/` 自动发现。
 
 严格 hook/CI 模式使用 `verify --strict-workflow` 或独立 `guard`。它会检查是否真的跑过 prepare、依赖扫描、completion gate、Maven、Spring 静态检查和独立 semantic review gate，并阻断 `--dependency-scan-mode off`、`--no-write-dependency-report`、`--skip-maven`、completion 阶段的 `--skip-spring-static-check`、缺失 R1/R2/R3 独立审查证据等绕过方式，除非提供包含 `Approval: user-approved` 的审批文件。
 

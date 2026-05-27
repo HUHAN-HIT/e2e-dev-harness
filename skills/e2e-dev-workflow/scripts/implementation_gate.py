@@ -191,10 +191,24 @@ def validate_gate(
         if not rework_result["ready"]:
             blocked_reasons.extend(rework_result["blocked_reasons"])
         if requirements_archive or require_requirements_archive:
-            if not requirements_archive:
+            resolved_archive = requirements_archive or requirements_archive_gate.discover(
+                repo,
+                [
+                    red_test_evidence,
+                    coverage_matrix,
+                    unit_test_evidence,
+                    business_review,
+                    memory_updates,
+                    implementation_manifest,
+                    dependency_report,
+                    design_doc,
+                ] + list(review_dirs or []) + list(handoff_dirs or []) + list(contract_dirs or []) + list(rework_dirs or []),
+            )
+            if not resolved_archive:
                 blocked_reasons.append("Completion phase requires --requirements-archive when requirements archive is required.")
             else:
-                requirements_archive_result = requirements_archive_gate.validate(repo, requirements_archive)
+                requirements_archive_result = requirements_archive_gate.validate(repo, resolved_archive)
+                requirements_archive_result["source"] = "explicit" if requirements_archive else "auto"
                 if not requirements_archive_result["ready"]:
                     blocked_reasons.extend(
                         "Requirements archive: " + reason

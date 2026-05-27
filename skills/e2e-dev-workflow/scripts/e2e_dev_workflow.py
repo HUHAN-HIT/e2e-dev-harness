@@ -39,7 +39,8 @@ DEFAULT_REVIEW_CHECKLIST = {
         ("security-negative-paths", "Security and permission negative paths are covered when relevant."),
     ],
     "implementation": [
-        ("implementation-completeness", "Implementation covers all required artifacts and acceptance criteria."),
+        ("ac-code-path-trace", "For every AC, trace the concrete runtime path from entry point through service/repository/client/sender to output or side effect."),
+        ("implementation-completeness", "Implementation covers every AC with concrete code refs, concrete tests, and approved deferrals only."),
         ("security-negative-paths", "Security-sensitive happy/failure paths are implemented and tested."),
         ("project-pattern-consistency", "Code follows existing project patterns and avoids local anti-patterns."),
     ],
@@ -567,6 +568,9 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
 def coverage_matrix_template(service: str) -> str:
     return f"""# Coverage Matrix: {service}
 
+Each completed row must name concrete test references and concrete production code references.
+For MQ/DMQ/Kafka/event ACs, include sender/producer and send/publish/topic/payload evidence.
+
 | id | acceptance | use_case | service | tests | code_refs | business_review | status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | AC-1 |  |  | {service} |  |  |  |  |
@@ -617,6 +621,7 @@ Scope: {scope}
 ## Implementation Evidence
 - Implementation manifest:
 - Code references:
+- AC completion proof:
 
 ## Test Evidence
 - Red test evidence:
@@ -673,6 +678,12 @@ Run this review in an independent reviewer agent. The reviewer may read only the
 The report must include checked `- [x] <id>: ...` lines for each required item:
 
 {checklist}
+
+For implementation reviews, also include:
+
+## Code Path Trace
+
+- AC-1: <entry point> -> <application service> -> <repository/client/sender> -> <response, persistence, or emitted event>.
 """
 
 

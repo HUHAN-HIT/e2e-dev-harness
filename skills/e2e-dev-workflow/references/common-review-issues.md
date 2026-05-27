@@ -34,6 +34,24 @@ Issue ID: `dependency-impact-gap`
 - Changed routes, clients, topics, tags, groups, payloads, configuration keys, and service references are scanned or marked non-applicable.
 - Cross-service findings are reflected in contracts, service plans, and dependency reports.
 
+## weak-completion-evidence
+
+Issue ID: `weak-completion-evidence`
+
+Problem: Completion artifacts claim an AC is done, but the evidence is generic status text instead of concrete code and test references.
+
+Examples:
+
+- Coverage matrix `tests` says `done` instead of naming `PaymentCallbackDmqSenderTest` or an equivalent test file/class.
+- Coverage matrix `code_refs` says `implemented` instead of naming `PaymentService#complete -> PaymentCallbackDmqSender.send`.
+- A messaging AC says "publish DMQ callback" but no evidence names the sender/producer, topic/tag/payload, or send/publish test.
+
+Criteria:
+
+- Each coverage row names a concrete test reference and concrete production code reference.
+- Messaging/event AC rows name the sender/producer/publisher path and send/publish/topic/payload test evidence.
+- Audit or null-safety AC rows name the audit fields or null/missing/empty tests that prove the behavior.
+
 ## contract-coverage-gap
 
 Issue ID: `contract-coverage-gap`
@@ -97,6 +115,23 @@ Issue ID: `project-pattern-drift`
 
 - Code matches nearby module patterns unless the design explicitly approved a new pattern.
 - Divergence has a concrete reason, tests, and migration guidance.
+
+## code-path-trace-gap
+
+Issue ID: `code-path-trace-gap`
+
+问题描述: R3 review says implementation is complete without tracing each acceptance criterion through the actual runtime code path.
+
+示例:
+
+- AC says "publish MQ callback", tests pass, but no review line proves the application service injects and calls the sender.
+- AC says "write updatedAt", review checks the DTO and test file but not the persistence/update path.
+
+判定标准:
+
+- R3 includes `## Code Path Trace`.
+- Every AC has a line that names the entry point, orchestration/service method, repository/client/sender, and final response, persistence change, or emitted event.
+- Missing links become rework items instead of approved findings.
 
 ## api-contract-drift
 

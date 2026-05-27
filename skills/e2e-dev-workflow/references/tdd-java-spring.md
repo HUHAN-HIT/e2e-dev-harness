@@ -57,3 +57,14 @@ Record each passing command as JSON evidence for the completion gate:
 - Prefer explicit validation and error tests over snapshot-style assertions.
 - Refactor only while green, as required by Superpowers TDD.
 - For Spring-managed constructor dependencies declared in this repository, register the injected type with a component stereotype or an explicit `@Bean`; `spring_static_check.py` is the completion safety net for this.
+
+## Audit Field Template
+
+When an acceptance criterion creates or updates persisted business data, tests should name the expected audit behavior. Use the project convention when one exists; otherwise start with:
+
+| Operation | Required audit fields |
+| --- | --- |
+| Create | `createdAt`, `createdBy`, and `updatedAt` when the row is immediately current. |
+| Update/refund/callback status change | `updatedAt` plus the actor/source field used by the project. |
+
+For update-like flows such as refunds, callbacks, status transitions, or MQ-consumer side effects, add at least one red test that fails when `updatedAt` is not changed. If `createdBy` is system-derived, assert the system actor or explicitly document why the project does not store it.

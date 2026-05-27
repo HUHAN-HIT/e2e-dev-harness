@@ -171,6 +171,7 @@ Inputs:
 - Production diff or listed code refs
 - Tests, green command evidence, implementation manifest, service plans, dependency report
 - Existing same-domain implementation patterns selected with GitNexus, Graphify, `rg`, or memory
+- Design acceptance criteria and use cases, used to build a per-AC code path trace
 
 Outputs:
 
@@ -179,6 +180,12 @@ Outputs:
 - Service-local R3 review requests under `service-plans/<service>/review-requests/`
 - Service-local R3 reviews under `service-plans/<service>/reviews/`
 - Rework items for missing code, missing tests, security flaws, anti-patterns, or project-pattern drift
+
+Required review content:
+
+- `## Code Path Trace`
+- One line per AC: `AC-n: <entry point> -> <service/orchestration> -> <repository/client/sender> -> <response, persistence change, or emitted event>`.
+- For MQ/DMQ/Kafka work, the trace must name the sender/producer injection point and the method that calls `send`/`publish`.
 
 Gate:
 
