@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-"""Unified CLI for the e2e-dev-workflow workflow."""
+﻿#!/usr/bin/env python3
+"""Unified CLI for the e2e-dev-harness workflow."""
 
 from __future__ import annotations
 
@@ -21,14 +21,16 @@ import cross_service_dependency_scan  # noqa: E402
 import implementation_gate  # noqa: E402
 import kg_refresh  # noqa: E402
 import handoff_gate  # noqa: E402
+import harness_verify  # noqa: E402
 import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
 import run_state  # noqa: E402
 import superpowers_probe  # noqa: E402
+import task_tier  # noqa: E402
 import workflow_guard  # noqa: E402
 
 
-DEFAULT_REVIEW_PROFILE = "skills/e2e-dev-workflow/review-profiles/default.json"
+DEFAULT_REVIEW_PROFILE = "skills/e2e-dev-harness/review-profiles/default.json"
 DEFAULT_REVIEW_CHECKLIST = {
     "design": [
         ("ac-completeness", "Acceptance criteria cover goals, non-goals, affected modules, and open questions."),
@@ -85,7 +87,10 @@ def write_status(path: Path | None, result: dict) -> None:
 def optional_text(path: Path | None) -> str:
     if not path:
         return ""
-    return path.read_text(encoding="utf-8", errors="replace")
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 def without_status_file(args):
@@ -167,6 +172,16 @@ def dependency_scan_status(repo: Path, args) -> dict:
         graphify_mode="auxiliary",
         write_reports=getattr(args, "write_dependency_report", True),
         output_dir=output_dir,
+    )
+
+
+def workflow_tier_status(repo: Path, args, facts: dict, dependency_scan: dict) -> dict:
+    design_text = optional_text(resolve_repo_path(repo, getattr(args, "design_doc", None)))
+    return task_tier.evaluate(
+        getattr(args, "workflow_tier", "auto"),
+        design_text,
+        facts,
+        dependency_scan,
     )
 
 
@@ -333,6 +348,7 @@ def prepare(args) -> tuple[int, dict]:
         ),
         "knowledge_graph": kg_status(repo, args.kg_mode, kg_facts),
         "cross_service_dependencies": dependency_scan,
+        "workflow_tier": workflow_tier_status(repo, args, kg_facts, dependency_scan),
     }
     blocked = [
         name
@@ -351,6 +367,16 @@ def clarify(args) -> tuple[int, dict]:
     if not design_path or not design_path.exists():
         return 2, {"ready_for_implementation": False, "error": f"Design doc not found: {design_path}"}
     result = clarification_gate.validate(design_path)
+    run_state_path = getattr(args, "run_state", None)
+    if run_state_path and result.get("ready_for_implementation"):
+        result["run_state_transition"] = run_state.transition_state(
+            repo,
+            run_state_path,
+            "CLARIFIED",
+            gate="clarification",
+            gate_status="passed",
+            evidence=design_path,
+        )
     write_status(args.status_file, result)
     return (0 if result["ready_for_implementation"] else 2), result
 
@@ -884,10 +910,13 @@ def plan(args) -> tuple[int, dict]:
         target.write_text(exec_plan_text(repo, args.design_doc, result), encoding="utf-8")
         result["exec_plan_written"] = str(target)
     if args.create_archive:
+        registry_artifacts = dict(result["handoff_artifacts"])
+        if args.design_doc:
+            registry_artifacts["design_doc"] = str(args.design_doc).replace("\\", "/")
         registry = artifact_registry.build_registry(
             repo,
             result["agent_run_dir"],
-            result["handoff_artifacts"],
+            registry_artifacts,
             result.get("selected_mode", ""),
             result.get("selected_services", []),
         )
@@ -979,6 +1008,8 @@ def verify(args) -> tuple[int, dict]:
     result = {
         "workflow": {
             "strict": getattr(args, "strict_workflow", False),
+            "tier": getattr(args, "workflow_tier", "auto"),
+            "harness": getattr(args, "harness", False),
             "phase": args.phase,
             "run_gate": args.run_gate,
             "skip_maven": args.skip_maven,
@@ -1010,6 +1041,35 @@ def verify(args) -> tuple[int, dict]:
         )
         result["workflow_guard"] = guard_result
         if not guard_result["ready"]:
+            exit_code = max(exit_code, 2)
+    if getattr(args, "harness", False):
+        state_path = getattr(args, "state", None)
+        if not state_path:
+            harness_result = {
+                "ready": False,
+                "blocked_reasons": ["--harness requires --state docs/agent-runs/<run>/run-state.json."],
+                "warnings": [],
+            }
+        else:
+            repo = as_repo(args.repo)
+            harness_result = harness_verify.validate(
+                repo,
+                state_path,
+                getattr(args, "policy", None),
+                getattr(args, "strict_artifacts", False),
+                getattr(args, "run_completion_gate", False),
+            )
+            summary = harness_verify.write_summary_outputs(
+                repo,
+                state_path,
+                harness_result,
+                getattr(args, "summary_json", None),
+                getattr(args, "summary_md", None),
+            )
+            if summary:
+                harness_result["run_summary"] = summary
+        result["harness"] = harness_result
+        if not harness_result["ready"]:
             exit_code = max(exit_code, 2)
     write_status(args.status_file, result)
     return exit_code, result
@@ -1047,6 +1107,7 @@ def add_prepare_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--kg-mode", choices=["auto", "gitnexus", "graphify", "both"], default="auto")
     parser.add_argument("--dependency-scan-mode", choices=["auto", "strict", "optional", "off"], default="auto")
     parser.add_argument("--dependency-output-dir", type=Path)
+    parser.add_argument("--workflow-tier", choices=task_tier.TIERS, default="auto")
     parser.add_argument("--no-write-dependency-report", dest="write_dependency_report", action="store_false")
     parser.set_defaults(write_dependency_report=True)
     parser.add_argument("--status-file", type=Path)
@@ -1063,6 +1124,7 @@ def main() -> int:
     clarify_parser = subparsers.add_parser("clarify", help="Run the clarification gate.")
     clarify_parser.add_argument("repo", nargs="?", default=".", type=Path)
     clarify_parser.add_argument("--design-doc", required=True, type=Path)
+    clarify_parser.add_argument("--run-state", type=Path)
     clarify_parser.add_argument("--status-file", type=Path)
 
     plan_parser = subparsers.add_parser("plan", help="Plan agent orchestration and optionally write an ExecPlan.")
@@ -1075,6 +1137,7 @@ def main() -> int:
     plan_parser.add_argument("--service", action="append", help="Affected service directory or service name; can be repeated.")
     plan_parser.add_argument("--service-scope", choices=["auto", "discovery", "affected", "all"], default="auto")
     plan_parser.add_argument("--dependency-report", type=Path)
+    plan_parser.add_argument("--workflow-tier", choices=task_tier.TIERS, default="auto")
     plan_parser.add_argument("--create-archive", action="store_true", help="Create agent run archive directories and starter files.")
     plan_parser.add_argument("--write-exec-plan", type=Path)
     plan_parser.add_argument("--status-file", type=Path)
@@ -1131,6 +1194,13 @@ def main() -> int:
     verify_parser.add_argument("--skip-maven", action="store_true")
     verify_parser.add_argument("--strict-workflow", action="store_true")
     verify_parser.add_argument("--workflow-approval", type=Path)
+    verify_parser.add_argument("--harness", action="store_true")
+    verify_parser.add_argument("--state", type=Path)
+    verify_parser.add_argument("--policy", type=Path)
+    verify_parser.add_argument("--strict-artifacts", action="store_true")
+    verify_parser.add_argument("--run-completion-gate", action="store_true")
+    verify_parser.add_argument("--summary-json", type=Path)
+    verify_parser.add_argument("--summary-md", type=Path)
 
     guard_parser = subparsers.add_parser("guard", help="Run strict workflow guard against a verify status artifact.")
     guard_parser.add_argument("repo", nargs="?", default=".", type=Path)
@@ -1155,7 +1225,7 @@ def main() -> int:
         else:
             exit_code, result = verify(args)
     except (FileNotFoundError, ValueError) as error:
-        print(f"e2e-dev-workflow error: {error}", file=sys.stderr)
+        print(f"e2e-dev-harness error: {error}", file=sys.stderr)
         return 2
 
     print(json.dumps(result, indent=2, ensure_ascii=False))

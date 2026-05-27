@@ -1,4 +1,4 @@
-display_name: E2E Dev Workflow
+﻿display_name: E2E Dev Harness
 short_description: End-to-end clarified TDD delivery workflow.
 default_prompt: >-
   Use this skill to drive governed delivery from clarified requirements to verified code.

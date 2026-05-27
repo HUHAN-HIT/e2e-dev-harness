@@ -1,4 +1,4 @@
-# Java 21 Spring 6 TDD KG Scaffold
+﻿# Java 21 Spring 6 TDD KG Scaffold
 
 This scaffold uses Spring Framework 6.x directly, not Spring Boot. It supports both a single Spring MVC service and a Maven monorepo with multiple services. Start with `services/sample-service`; add more services under `services/*` and register each module in the root `pom.xml`.
 
@@ -25,15 +25,15 @@ Prerequisites: Java 21 and Maven 3.9+ available on `PATH`.
 ## Commands
 
 ```powershell
-python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py prepare . --design-doc docs\design\feature-design-template.md --agent-mode strict --agent-scope discovery --service-scope discovery --include-agent-content
-python ..\skills\e2e-dev-workflow\scripts\agent_instructions.py . --mode strict --scope discovery --include-content
-python ..\skills\e2e-dev-workflow\scripts\agent_instructions.py . --mode strict --scope affected --service services/sample-service --include-content
-python ..\skills\e2e-dev-workflow\scripts\superpowers_probe.py --mode auto
-python ..\skills\e2e-dev-workflow\scripts\superpowers_probe.py --mode strict --phase implementation
-python ..\skills\e2e-dev-workflow\scripts\memory_capture.py scan .
-python ..\skills\e2e-dev-workflow\scripts\memory_capture.py validate .
-python ..\skills\e2e-dev-workflow\scripts\cross_service_dependency_scan.py . --gitnexus-mode auto --json
-python ..\skills\e2e-dev-workflow\scripts\spring_static_check.py . --json
+python ..\skills\e2e-dev-harness\scripts\e2e_dev_workflow.py prepare . --design-doc docs\design\feature-design-template.md --agent-mode strict --agent-scope discovery --service-scope discovery --include-agent-content
+python ..\skills\e2e-dev-harness\scripts\agent_instructions.py . --mode strict --scope discovery --include-content
+python ..\skills\e2e-dev-harness\scripts\agent_instructions.py . --mode strict --scope affected --service services/sample-service --include-content
+python ..\skills\e2e-dev-harness\scripts\superpowers_probe.py --mode auto
+python ..\skills\e2e-dev-harness\scripts\superpowers_probe.py --mode strict --phase implementation
+python ..\skills\e2e-dev-harness\scripts\memory_capture.py scan .
+python ..\skills\e2e-dev-harness\scripts\memory_capture.py validate .
+python ..\skills\e2e-dev-harness\scripts\cross_service_dependency_scan.py . --gitnexus-mode auto --json
+python ..\skills\e2e-dev-harness\scripts\spring_static_check.py . --json
 .\scripts\update-knowledge-graph.ps1
 .\scripts\verify.ps1 -DesignDoc docs\design\feature-design-template.md -AgentInstructionsMode strict -AgentInstructionsScope affected -AgentService services/sample-service -Module services/sample-service
 ```
@@ -65,11 +65,11 @@ To skip the cross-service dependency scan for a single local run:
 For multi-agent planning:
 
 ```powershell
-python ..\skills\e2e-dev-workflow\scripts\orchestration_plan.py . --mode auto --service-scope discovery --design-doc docs\design\feature-design-template.md
-python ..\skills\e2e-dev-workflow\scripts\orchestration_plan.py . --mode auto --design-doc docs\design\feature-design-template.md
-python ..\skills\e2e-dev-workflow\scripts\orchestration_plan.py . --mode auto --service-scope affected --service services/sample-service --design-doc docs\design\feature-design-template.md
-python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py plan . --design-doc docs\design\feature-design-template.md --create-archive
-python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py plan . --design-doc docs\design\feature-design-template.md --service-scope affected --service services/sample-service --create-archive
+python ..\skills\e2e-dev-harness\scripts\orchestration_plan.py . --mode auto --service-scope discovery --design-doc docs\design\feature-design-template.md
+python ..\skills\e2e-dev-harness\scripts\orchestration_plan.py . --mode auto --design-doc docs\design\feature-design-template.md
+python ..\skills\e2e-dev-harness\scripts\orchestration_plan.py . --mode auto --service-scope affected --service services/sample-service --design-doc docs\design\feature-design-template.md
+python ..\skills\e2e-dev-harness\scripts\e2e_dev_workflow.py plan . --design-doc docs\design\feature-design-template.md --create-archive
+python ..\skills\e2e-dev-harness\scripts\e2e_dev_workflow.py plan . --design-doc docs\design\feature-design-template.md --service-scope affected --service services/sample-service --create-archive
 ```
 
 Generated agent process files go under `docs/agent-runs/<date-feature>/`. Keep durable design docs and templates under `docs/design/`. When the design lists affected services/modules that match discovered candidates, auto planning creates one service plan, one code-agent handoff, and one implementation manifest per service/module; explicit `--service` is only needed to override or disambiguate.
@@ -77,15 +77,15 @@ Generated agent process files go under `docs/agent-runs/<date-feature>/`. Keep d
 For hook-like gates:
 
 ```powershell
-python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase planning --design-doc docs\design\feature-design-template.md
-python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase implementation --design-doc docs\design\feature-design-template.md --red-test-evidence docs\design\feature-red-test.txt
-python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py gate . --phase completion --design-doc docs\design\feature-design-template.md --red-test-evidence docs\agent-runs\<run>\evidence\red-test.txt --implementation-manifest docs\agent-runs\<run>\evidence\implementation-manifest.md --coverage-matrix docs\agent-runs\<run>\evidence\coverage-matrix.md --unit-test-evidence docs\agent-runs\<run>\evidence\green-test.txt --business-review docs\agent-runs\<run>\evidence\business-review.md --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json --contract-dir docs\agent-runs\<run>\contracts --memory-updates docs\agent-runs\<run>\proposed-memory-updates.md --rework-dir docs\agent-runs\<run>\rework --review-dir docs\agent-runs\<run>\reviews --handoff-dir docs\agent-runs\<run>\handoffs
+python ..\skills\e2e-dev-harness\scripts\e2e_dev_workflow.py gate . --phase planning --design-doc docs\design\feature-design-template.md
+python ..\skills\e2e-dev-harness\scripts\e2e_dev_workflow.py gate . --phase implementation --design-doc docs\design\feature-design-template.md --red-test-evidence docs\design\feature-red-test.txt
+python ..\skills\e2e-dev-harness\scripts\e2e_dev_workflow.py gate . --phase completion --design-doc docs\design\feature-design-template.md --red-test-evidence docs\agent-runs\<run>\evidence\red-test.txt --implementation-manifest docs\agent-runs\<run>\evidence\implementation-manifest.md --coverage-matrix docs\agent-runs\<run>\evidence\coverage-matrix.md --unit-test-evidence docs\agent-runs\<run>\evidence\green-test.txt --business-review docs\agent-runs\<run>\evidence\business-review.md --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json --contract-dir docs\agent-runs\<run>\contracts --memory-updates docs\agent-runs\<run>\proposed-memory-updates.md --rework-dir docs\agent-runs\<run>\rework --review-dir docs\agent-runs\<run>\reviews --handoff-dir docs\agent-runs\<run>\handoffs
 ```
 
 For strict hook/CI usage, save a verify status and run the guard:
 
 ```powershell
-python ..\skills\e2e-dev-workflow\scripts\e2e_dev_workflow.py verify . --strict-workflow --run-gate --phase completion --design-doc docs\design\feature-design-template.md --red-test-evidence docs\agent-runs\<run>\evidence\red-test.txt --implementation-manifest docs\agent-runs\<run>\evidence\implementation-manifest.md --coverage-matrix docs\agent-runs\<run>\evidence\coverage-matrix.md --unit-test-evidence docs\agent-runs\<run>\evidence\green-test.txt --business-review docs\agent-runs\<run>\evidence\business-review.md --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json --contract-dir docs\agent-runs\<run>\contracts --memory-updates docs\agent-runs\<run>\proposed-memory-updates.md --rework-dir docs\agent-runs\<run>\rework --review-dir docs\agent-runs\<run>\reviews --handoff-dir docs\agent-runs\<run>\handoffs --status-file docs\agent-runs\<run>\evidence\verify.json
+python ..\skills\e2e-dev-harness\scripts\e2e_dev_workflow.py verify . --strict-workflow --run-gate --phase completion --design-doc docs\design\feature-design-template.md --red-test-evidence docs\agent-runs\<run>\evidence\red-test.txt --implementation-manifest docs\agent-runs\<run>\evidence\implementation-manifest.md --coverage-matrix docs\agent-runs\<run>\evidence\coverage-matrix.md --unit-test-evidence docs\agent-runs\<run>\evidence\green-test.txt --business-review docs\agent-runs\<run>\evidence\business-review.md --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json --contract-dir docs\agent-runs\<run>\contracts --memory-updates docs\agent-runs\<run>\proposed-memory-updates.md --rework-dir docs\agent-runs\<run>\rework --review-dir docs\agent-runs\<run>\reviews --handoff-dir docs\agent-runs\<run>\handoffs --status-file docs\agent-runs\<run>\evidence\verify.json
 .\scripts\workflow-guard.ps1 -VerifyStatus docs\agent-runs\<run>\evidence\verify.json -Strict -RequireCompletion
 ```
 
@@ -138,10 +138,10 @@ docs/agent-runs/<date-feature>/service-plans/<service>/
 For first-time memory setup or appending verified decisions:
 
 ```powershell
-python ..\skills\e2e-dev-workflow\scripts\memory_capture.py init .
-python ..\skills\e2e-dev-workflow\scripts\memory_capture.py add . --type decision --source user-approved --confidence approved --tag decision --tag service/sample-service --link services/sample-service --link AC-1 --text "Use Spring Framework 6.x directly rather than Spring Boot."
-python ..\skills\e2e-dev-workflow\scripts\memory_capture.py select . --phase code --service services/sample-service
-python ..\skills\e2e-dev-workflow\scripts\memory_capture.py promote . --from-file docs\agent-runs\<run>\proposed-memory-updates.md
+python ..\skills\e2e-dev-harness\scripts\memory_capture.py init .
+python ..\skills\e2e-dev-harness\scripts\memory_capture.py add . --type decision --source user-approved --confidence approved --tag decision --tag service/sample-service --link services/sample-service --link AC-1 --text "Use Spring Framework 6.x directly rather than Spring Boot."
+python ..\skills\e2e-dev-harness\scripts\memory_capture.py select . --phase code --service services/sample-service
+python ..\skills\e2e-dev-harness\scripts\memory_capture.py promote . --from-file docs\agent-runs\<run>\proposed-memory-updates.md
 ```
 
 Memory entries may include controlled Obsidian metadata:

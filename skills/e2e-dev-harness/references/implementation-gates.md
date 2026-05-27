@@ -1,4 +1,4 @@
-# Implementation Gates
+﻿# Implementation Gates
 
 Use this reference when running `gate`, `verify`, `guard`, completion checks, or rework loops.
 
@@ -7,7 +7,7 @@ Use this reference when running `gate`, `verify`, `guard`, completion checks, or
 Planning gate:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . \
+python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py gate . \
   --phase planning \
   --design-doc docs/design/<feature>.md
 ```
@@ -15,7 +15,7 @@ python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . \
 Implementation gate:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . \
+python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py gate . \
   --phase implementation \
   --design-doc docs/design/<feature>.md \
   --red-test-evidence docs/agent-runs/<run>/evidence/red-test.txt
@@ -24,7 +24,7 @@ python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . \
 Completion gate:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . \
+python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py gate . \
   --phase completion \
   --design-doc docs/design/<feature>.md \
   --red-test-evidence docs/agent-runs/<run>/evidence/red-test.txt \
@@ -52,15 +52,16 @@ Planning checks clarification readiness, knowledge graph status, and R1 design r
 
 The run state records lifecycle, selected mode, services, gate status placeholders, and the artifact registry path.
 The registry records every planned artifact with type, owner, path, completion requirement, status, and SHA-256 when the file exists.
+`run_state.py` also writes `.phase-lock` beside `run-state.json`; hook integrations use it to block code writes before the implementation phase.
 
 Validate them with:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/run_state.py . \
+python skills/e2e-dev-harness/scripts/run_state.py . \
   --state docs/agent-runs/<run>/run-state.json \
   --json
 
-python skills/e2e-dev-workflow/scripts/artifact_registry.py . \
+python skills/e2e-dev-harness/scripts/artifact_registry.py . \
   --registry docs/agent-runs/<run>/artifact-registry.json \
   --strict \
   --json
@@ -68,22 +69,111 @@ python skills/e2e-dev-workflow/scripts/artifact_registry.py . \
 
 Use non-strict registry validation during planning because review reports and final evidence may still be planned. Use strict validation in CI/completion when all required artifacts should exist.
 
+Refresh the registry after planned artifacts are written:
+
+```bash
+python skills/e2e-dev-harness/scripts/artifact_registry.py . \
+  --registry docs/agent-runs/<run>/artifact-registry.json \
+  --refresh \
+  --json
+```
+
+Advance run lifecycle with evidence:
+
+```bash
+python skills/e2e-dev-harness/scripts/run_state.py . \
+  --state docs/agent-runs/<run>/run-state.json \
+  --transition REVIEWED \
+  --gate r3-review \
+  --gate-status passed \
+  --evidence docs/agent-runs/<run>/reviews/R3-implementation-review.md \
+  --json
+```
+
+`clarify --run-state docs/agent-runs/<run>/run-state.json` automatically transitions a ready clarification result to `CLARIFIED`.
+`plan --create-archive` creates `run-state.json`, `.phase-lock`, and `artifact-registry.json` at `PLANNED`.
+
+## Workflow Tiers
+
+Use `--workflow-tier auto|basic|standard|critical|audited`.
+All tiers preserve auditable evidence, test proof, and replayable run records; tiers decide required evidence depth and orchestration strength.
+
+- `basic`: clarification, bounded impact summary, test evidence, completion proof, run-state, artifact registry, run summary.
+- `standard`: `basic` plus R1/R2/R3 reviews, coverage matrix, requirements archive.
+- `critical`: `standard` plus GitNexus impact artifact, contracts, service plans, handoffs, strict guard.
+- `audited`: `critical` plus harness policy, harness replay, completion replay, state history.
+
+## Harness Policy And Replay
+
+Project policy can live at `.e2e/harness-policy.json` or `docs/harness-policy.json`.
+If absent, default policy requires run-state, artifact registry, GitNexus-style raw impact evidence for cross-service runs, contracts for cross-service runs, handoffs for multi-agent runs, requirements archive on completion, and R1/R2/R3 reviews on completion.
+
+Validate policy directly:
+
+```bash
+python skills/e2e-dev-harness/scripts/harness_policy.py . \
+  --run-state docs/agent-runs/<run>/run-state.json \
+  --registry docs/agent-runs/<run>/artifact-registry.json \
+  --json
+```
+
+Replay a run from state and registered artifacts:
+
+```bash
+python skills/e2e-dev-harness/scripts/harness_verify.py . \
+  --state docs/agent-runs/<run>/run-state.json \
+  --strict-artifacts \
+  --summary-json docs/agent-runs/<run>/run-summary.json \
+  --summary-md docs/agent-runs/<run>/run-summary.md \
+  --json
+```
+
+Use `--run-completion-gate` when the registry includes all completion inputs and the run should be independently rechecked from disk.
+
+The unified verify command can run replay and write summaries:
+
+```bash
+python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py verify . \
+  --harness \
+  --workflow-tier critical \
+  --state docs/agent-runs/<run>/run-state.json \
+  --strict-workflow \
+  --summary-json docs/agent-runs/<run>/run-summary.json \
+  --summary-md docs/agent-runs/<run>/run-summary.md \
+  --json
+```
+
+## Run Summary
+
+`run-summary.json` and `run-summary.md` are the portable run record.
+They compress run-state, artifact registry, semantic review status, missing completion artifacts, blockers, warnings, and next actions into one artifact that CI, reviewer agents, evaluation harnesses, and later requirement analysis can consume without replaying the whole archive.
+
+Generate a summary directly when replay is not needed:
+
+```bash
+python skills/e2e-dev-harness/scripts/run_summary.py . \
+  --state docs/agent-runs/<run>/run-state.json \
+  --out-json docs/agent-runs/<run>/run-summary.json \
+  --out-md docs/agent-runs/<run>/run-summary.md \
+  --json
+```
+
 ## Semantic Reviews
 
 Review requests must include `Phase`, `Reviewer Role`, `Context Package`, `Forbidden`, `Output`, `Developer Agent`, `Reviewer Agent`, and `Reviewer Invocation`. When a project uses a review profile, include `Review Profile` and a `Required Review Checklist` section.
 
 Review reports must include `Phase`, `Reviewer`, `Review Request`, `Developer Agent`, `Reviewer Agent`, `Reviewer Session`, `Reviewer Invocation`, `Request Hash`, `Independence`, `Context Boundary`, `No Code Changes`, `Scope`, `Inputs Reviewed`, `Findings`, `Required Rework`, and `Status`.
 
-Blocking conditions include missing request/report files, phase mismatch, output mismatch, request hash mismatch, invalid invocation JSON, placeholder IDs, same-agent IDs, non-independent context, self-review, unsupported statuses, findings without required rework or a blocking/with-rework status, missing review-profile checklist items, and missing service-local R2/R3 phases.
+Blocking conditions include missing request/report files, phase mismatch, output mismatch, request hash mismatch, invalid invocation JSON, placeholder IDs, same-agent IDs, non-independent context, self-review, unsupported statuses, findings without required rework or a blocking/with-rework status, missing review-profile checklist items, missing R3 code-path trace, missing messaging path trace for MQ/DMQ/Kafka acceptance criteria, and missing service-local R2/R3 phases.
 
 Allowed review statuses include `approved`, `verified`, `clear`, and `passed`. Blocking statuses include `blocked`, `changes-requested`, `needs-rework`, `open`, and `in-progress`.
 
 Review profile checks load from explicit `--review-profile <json-or-name>` first. If omitted, the gate auto-discovers the first project profile at `.e2e/review-profile.json`, `.e2e/review-profiles/default.json`, `docs/review-profile.json`, or `docs/review-profiles/default.json`. If none exists, no profile is enforced. Bundled profiles stay opt-in:
 
 ```text
-skills/e2e-dev-workflow/review-profiles/default.json
-skills/e2e-dev-workflow/review-profiles/security-heavy.json
-skills/e2e-dev-workflow/review-profiles/api-first.json
+skills/e2e-dev-harness/review-profiles/default.json
+skills/e2e-dev-harness/review-profiles/security-heavy.json
+skills/e2e-dev-harness/review-profiles/api-first.json
 ```
 
 Profiles may use `extends` to inherit bundled or project profiles. Checklist items support `description`, `severity`, and `references`; missing `severity: blocker` items block, while missing `severity: warning` items appear in gate warnings. For schema, discovery, and common issue guidance, read `review-profiles.md` and `common-review-issues.md`.
@@ -95,6 +185,8 @@ Required checklist items must appear in the review report as checked Markdown it
 ```
 
 Reviewer Invocation JSON must match Developer/Reviewer/Session, point to the same request and output, declare `fork_context: false`, use request-only/no-inherited context policy, and be `status: completed`.
+
+R3 implementation reviews must include per-AC code path trace. Messaging ACs must also include a `Messaging Path Trace` with sender/producer injection point, actual send/publish call, topic/tag/group, payload fields, and test evidence.
 
 ## Completion Evidence
 
@@ -121,7 +213,7 @@ The Spring static check runs by default. It catches repository-local constructor
 Use the guard when the model must not skip scripts:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py verify . \
+python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py verify . \
   --strict-workflow \
   --run-gate \
   --phase completion \
@@ -140,7 +232,7 @@ python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py verify . \
   --handoff-dir docs/agent-runs/<run>/handoffs \
   --status-file docs/agent-runs/<run>/evidence/verify.json
 
-python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py guard . \
+python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py guard . \
   --verify-status docs/agent-runs/<run>/evidence/verify.json \
   --strict \
   --require-completion

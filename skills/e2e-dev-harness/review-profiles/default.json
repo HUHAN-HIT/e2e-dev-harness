@@ -1,6 +1,6 @@
 {
   "name": "default",
-  "description": "Common required semantic review checks for e2e-dev-workflow R1/R2/R3 reviews.",
+  "description": "Common required semantic review checks for e2e-dev-harness R1/R2/R3 reviews.",
   "common_issues": [
     {
       "id": "missing-acceptance-coverage",

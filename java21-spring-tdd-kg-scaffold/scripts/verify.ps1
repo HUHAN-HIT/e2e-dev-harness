@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$DesignDoc,
     [string]$Module,
     [ValidateSet("auto", "strict", "optional", "off")]
@@ -25,9 +25,9 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 if ($AgentInstructionsMode -ne "off") {
     $AgentInstructionCandidates = @(
-        (Join-Path $RepoRoot "skills\e2e-dev-workflow\scripts\agent_instructions.py"),
-        (Join-Path $RepoRoot ".agents\skills\e2e-dev-workflow\scripts\agent_instructions.py"),
-        (Join-Path $RepoRoot "..\skills\e2e-dev-workflow\scripts\agent_instructions.py")
+        (Join-Path $RepoRoot "skills\e2e-dev-harness\scripts\agent_instructions.py"),
+        (Join-Path $RepoRoot ".agents\skills\e2e-dev-harness\scripts\agent_instructions.py"),
+        (Join-Path $RepoRoot "..\skills\e2e-dev-harness\scripts\agent_instructions.py")
     )
     $AgentInstructionScript = $AgentInstructionCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $AgentInstructionScript) {
@@ -41,9 +41,9 @@ if ($AgentInstructionsMode -ne "off") {
 }
 
 $SuperpowersCandidates = @(
-    (Join-Path $RepoRoot "skills\e2e-dev-workflow\scripts\superpowers_probe.py"),
-    (Join-Path $RepoRoot ".agents\skills\e2e-dev-workflow\scripts\superpowers_probe.py"),
-    (Join-Path $RepoRoot "..\skills\e2e-dev-workflow\scripts\superpowers_probe.py")
+    (Join-Path $RepoRoot "skills\e2e-dev-harness\scripts\superpowers_probe.py"),
+    (Join-Path $RepoRoot ".agents\skills\e2e-dev-harness\scripts\superpowers_probe.py"),
+    (Join-Path $RepoRoot "..\skills\e2e-dev-harness\scripts\superpowers_probe.py")
 )
 $SuperpowersScript = $SuperpowersCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 if ($SuperpowersScript) {
@@ -54,9 +54,9 @@ if ($SuperpowersScript) {
 
 if ($AgentMode -ne "off") {
     $OrchestrationCandidates = @(
-        (Join-Path $RepoRoot "skills\e2e-dev-workflow\scripts\orchestration_plan.py"),
-        (Join-Path $RepoRoot ".agents\skills\e2e-dev-workflow\scripts\orchestration_plan.py"),
-        (Join-Path $RepoRoot "..\skills\e2e-dev-workflow\scripts\orchestration_plan.py")
+        (Join-Path $RepoRoot "skills\e2e-dev-harness\scripts\orchestration_plan.py"),
+        (Join-Path $RepoRoot ".agents\skills\e2e-dev-harness\scripts\orchestration_plan.py"),
+        (Join-Path $RepoRoot "..\skills\e2e-dev-harness\scripts\orchestration_plan.py")
     )
     $OrchestrationScript = $OrchestrationCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $OrchestrationScript) {
@@ -71,9 +71,9 @@ if ($AgentMode -ne "off") {
 
 if ($MemoryMode -ne "off") {
     $MemoryCandidates = @(
-        (Join-Path $RepoRoot "skills\e2e-dev-workflow\scripts\memory_capture.py"),
-        (Join-Path $RepoRoot ".agents\skills\e2e-dev-workflow\scripts\memory_capture.py"),
-        (Join-Path $RepoRoot "..\skills\e2e-dev-workflow\scripts\memory_capture.py")
+        (Join-Path $RepoRoot "skills\e2e-dev-harness\scripts\memory_capture.py"),
+        (Join-Path $RepoRoot ".agents\skills\e2e-dev-harness\scripts\memory_capture.py"),
+        (Join-Path $RepoRoot "..\skills\e2e-dev-harness\scripts\memory_capture.py")
     )
     $MemoryScript = $MemoryCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $MemoryScript) {
@@ -85,9 +85,9 @@ if ($MemoryMode -ne "off") {
 
 if ($DependencyScanMode -ne "off") {
     $DependencyScanCandidates = @(
-        (Join-Path $RepoRoot "skills\e2e-dev-workflow\scripts\cross_service_dependency_scan.py"),
-        (Join-Path $RepoRoot ".agents\skills\e2e-dev-workflow\scripts\cross_service_dependency_scan.py"),
-        (Join-Path $RepoRoot "..\skills\e2e-dev-workflow\scripts\cross_service_dependency_scan.py")
+        (Join-Path $RepoRoot "skills\e2e-dev-harness\scripts\cross_service_dependency_scan.py"),
+        (Join-Path $RepoRoot ".agents\skills\e2e-dev-harness\scripts\cross_service_dependency_scan.py"),
+        (Join-Path $RepoRoot "..\skills\e2e-dev-harness\scripts\cross_service_dependency_scan.py")
     )
     $DependencyScanScript = $DependencyScanCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
     if ($DependencyScanScript) {
@@ -103,13 +103,13 @@ if ($DependencyScanMode -ne "off") {
 
 if ($DesignDoc) {
     $Candidates = @(
-        (Join-Path $RepoRoot "skills\e2e-dev-workflow\scripts\clarification_gate.py"),
-        (Join-Path $RepoRoot ".agents\skills\e2e-dev-workflow\scripts\clarification_gate.py"),
-        (Join-Path $RepoRoot "..\skills\e2e-dev-workflow\scripts\clarification_gate.py")
+        (Join-Path $RepoRoot "skills\e2e-dev-harness\scripts\clarification_gate.py"),
+        (Join-Path $RepoRoot ".agents\skills\e2e-dev-harness\scripts\clarification_gate.py"),
+        (Join-Path $RepoRoot "..\skills\e2e-dev-harness\scripts\clarification_gate.py")
     )
     $GateScript = $Candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $GateScript) {
-        throw "clarification_gate.py not found. Install or copy the e2e-dev-workflow skill into skills/ or .agents/skills/."
+        throw "clarification_gate.py not found. Install or copy the e2e-dev-harness skill into skills/ or .agents/skills/."
     }
     $DesignPath = Join-Path $RepoRoot $DesignDoc
     python $GateScript $DesignPath
@@ -117,9 +117,9 @@ if ($DesignDoc) {
 
 if (-not $SkipSpringStaticCheck) {
     $SpringCheckCandidates = @(
-        (Join-Path $RepoRoot "skills\e2e-dev-workflow\scripts\spring_static_check.py"),
-        (Join-Path $RepoRoot ".agents\skills\e2e-dev-workflow\scripts\spring_static_check.py"),
-        (Join-Path $RepoRoot "..\skills\e2e-dev-workflow\scripts\spring_static_check.py")
+        (Join-Path $RepoRoot "skills\e2e-dev-harness\scripts\spring_static_check.py"),
+        (Join-Path $RepoRoot ".agents\skills\e2e-dev-harness\scripts\spring_static_check.py"),
+        (Join-Path $RepoRoot "..\skills\e2e-dev-harness\scripts\spring_static_check.py")
     )
     $SpringCheckScript = $SpringCheckCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
     if ($SpringCheckScript) {

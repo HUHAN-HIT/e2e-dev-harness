@@ -1,4 +1,4 @@
-# Review Profiles
+﻿# Review Profiles
 
 Use review profiles when a project needs repeatable semantic-review expectations across Codex, Claude Code, Gemini CLI, CI, or any other agent runtime.
 
@@ -9,7 +9,7 @@ Profiles are plain JSON. They guide reviewer agents and let `reviewer_gate.py` e
 Explicit CLI input wins:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/reviewer_gate.py . \
+python skills/e2e-dev-harness/scripts/reviewer_gate.py . \
   --review-dir docs/agent-runs/<run>/reviews \
   --review-profile .e2e/review-profile.json
 ```
@@ -24,9 +24,9 @@ When `--review-profile` is omitted, the gate auto-discovers the first project pr
 If none exists, no profile is enforced. Bundled profiles are never auto-enabled for a project; use them explicitly by path or name.
 
 ```bash
-python skills/e2e-dev-workflow/scripts/reviewer_gate.py . --review-profile default
-python skills/e2e-dev-workflow/scripts/reviewer_gate.py . --review-profile security-heavy
-python skills/e2e-dev-workflow/scripts/reviewer_gate.py . --review-profile api-first
+python skills/e2e-dev-harness/scripts/reviewer_gate.py . --review-profile default
+python skills/e2e-dev-harness/scripts/reviewer_gate.py . --review-profile security-heavy
+python skills/e2e-dev-harness/scripts/reviewer_gate.py . --review-profile api-first
 ```
 
 Use `--review-profile off` to disable profile loading in custom harnesses.
@@ -83,4 +83,4 @@ Reviewer reports satisfy a profile item with checked Markdown:
 - `security-heavy`: extends `default` for authorization, sensitive data, and abuse-path work.
 - `api-first`: extends `default` for API compatibility, contract tests, and error-model work.
 
-For issue descriptions, examples, and 判定标准, read `references/common-review-issues.md`.
+For issue descriptions, examples, and criteria, read `references/common-review-issues.md`.

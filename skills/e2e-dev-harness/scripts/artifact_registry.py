@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Create and validate agent-run artifact registries."""
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ PATTERN_KEYS = {
     "contract_pattern",
 }
 REQUIRED_BY_COMPLETION = {
+    "design_doc",
     "exec_plan",
     "requirements",
     "use_cases",
@@ -87,7 +88,7 @@ def flatten_artifacts(repo: Path, artifacts: dict) -> list[dict]:
 
 def build_registry(repo: Path, run_id: str, artifacts: dict, selected_mode: str = "", services: list[str] | None = None) -> dict:
     return {
-        "schema": "e2e-dev-workflow.artifact-registry.v1",
+        "schema": "e2e-dev-harness.artifact-registry.v1",
         "run_id": run_id,
         "selected_mode": selected_mode,
         "services": services or [],
@@ -126,8 +127,8 @@ def validate_registry(repo: Path, registry_path: Path, strict: bool = False) -> 
             "registry": str(path),
             "artifact_count": 0,
         }
-    if data.get("schema") != "e2e-dev-workflow.artifact-registry.v1":
-        blocked.append("Artifact registry schema must be e2e-dev-workflow.artifact-registry.v1.")
+    if data.get("schema") != "e2e-dev-harness.artifact-registry.v1":
+        blocked.append("Artifact registry schema must be e2e-dev-harness.artifact-registry.v1.")
     artifacts = data.get("artifacts", [])
     if not isinstance(artifacts, list) or not artifacts:
         blocked.append("Artifact registry must include at least one artifact entry.")
@@ -159,15 +160,78 @@ def validate_registry(repo: Path, registry_path: Path, strict: bool = False) -> 
     }
 
 
+def refresh_registry(repo: Path, registry_path: Path) -> dict:
+    repo = repo.resolve()
+    path = registry_path if registry_path.is_absolute() else repo / registry_path
+    blocked: list[str] = []
+    warnings: list[str] = []
+    if not path.exists():
+        return {
+            "repo": str(repo),
+            "ready": False,
+            "blocked_reasons": [f"Artifact registry not found: {path}"],
+            "warnings": warnings,
+            "registry": str(path),
+            "changed": [],
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        return {
+            "repo": str(repo),
+            "ready": False,
+            "blocked_reasons": [f"Artifact registry is invalid JSON: {error}"],
+            "warnings": warnings,
+            "registry": str(path),
+            "changed": [],
+        }
+    artifacts = data.get("artifacts", [])
+    if not isinstance(artifacts, list):
+        blocked.append("Artifact registry artifacts must be a list.")
+        artifacts = []
+    changed: list[str] = []
+    for item in artifacts:
+        if not isinstance(item, dict):
+            continue
+        if item.get("kind") == "pattern":
+            continue
+        item_path = str(item.get("path", ""))
+        if not item_path:
+            continue
+        resolved = resolve(repo, item_path)
+        old_status = item.get("status")
+        old_hash = item.get("sha256", "")
+        if resolved.exists():
+            item["status"] = "present"
+            item["sha256"] = sha256(resolved) if resolved.is_file() else ""
+        else:
+            item["status"] = "planned"
+            item["sha256"] = ""
+        if item.get("status") != old_status or item.get("sha256", "") != old_hash:
+            changed.append(str(item.get("id") or item_path))
+    if not blocked:
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return {
+        "repo": str(repo),
+        "ready": not blocked,
+        "blocked_reasons": blocked,
+        "warnings": warnings,
+        "registry": str(path),
+        "changed": changed,
+        "artifact_count": len(artifacts),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", nargs="?", default=".", type=Path)
     parser.add_argument("--registry", required=True, type=Path)
     parser.add_argument("--strict", action="store_true")
+    parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    result = validate_registry(args.repo, args.registry, args.strict)
+    result = refresh_registry(args.repo, args.registry) if args.refresh else validate_registry(args.repo, args.registry, args.strict)
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:

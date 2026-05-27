@@ -1,9 +1,9 @@
----
-name: e2e-dev-workflow
+﻿---
+name: e2e-dev-harness
 description: Use when a feature, bugfix, refactor, or design-doc task needs strict requirements, TDD, service isolation, knowledge graph evidence, memory capture, and completion verification across single-service or multi-service repositories.
 ---
 
-# E2E Dev Workflow
+# E2E Dev Harness
 
 Use this skill to turn a request or design document into a clarified, tested, verified code change.
 It is tuned for Java 21, Spring Framework 6.x, and Maven, but the workflow name is intentionally stack-neutral.
@@ -21,8 +21,9 @@ For runtime-specific invocation, install paths, and fallback behavior, read `ref
 Start every non-trivial run with the unified prepare command:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py prepare . \
+python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py prepare . \
   --design-doc docs/design/<feature>.md \
+  --workflow-tier auto \
   --agent-mode strict \
   --agent-scope discovery \
   --service-scope discovery \
@@ -30,6 +31,8 @@ python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py prepare . \
 ```
 
 After clarification identifies affected services or paths, rerun prepare or plan with `--service-scope affected` plus explicit `--service` or `--path` when names are ambiguous.
+Workflow tiers are `basic`, `standard`, `critical`, and `audited`; all preserve auditable evidence, test proof, and replayable run records.
+Tiers decide evidence depth and orchestration strength, not whether the run is rigorous.
 
 Use focused subcommands only when needed:
 
@@ -64,6 +67,10 @@ For command details, read `references/implementation-gates.md`.
   closed rework, and passing guard are completion evidence.
 - Every created agent run has `run-state.json` and `artifact-registry.json`.
   Treat them as the portable harness state for Codex, Claude Code, or generic CLI agents.
+- Runtime hooks can enforce phase locks before code-writing tools run.
+  Use `phase_guard.py` and hook examples when the agent runtime supports pre-action checks. Read `references/execution-control.md`.
+- Harness verification can replay a run from state and policy with `harness_verify.py` or `verify --harness`.
+  Emit `run-summary.json` / `run-summary.md` for CI, reviewer agents, evaluation, and later requirement analysis.
 
 ## Workflow
 
@@ -87,7 +94,7 @@ Use explicit `single-review` only for single-service medium work where one devel
 Use `multi` for cross-service, contract/data-risk, design-heavy, or user-requested context isolation.
 
 ```bash
-python skills/e2e-dev-workflow/scripts/orchestration_plan.py . \
+python skills/e2e-dev-harness/scripts/orchestration_plan.py . \
   --mode auto \
   --service-scope discovery \
   --design-doc docs/design/<feature>.md
@@ -115,7 +122,7 @@ Run dependency discovery before planning implementation.
 The deterministic scanner extracts HTTP/DMQ seeds: routes, configured URLs, `@Value`, `Environment.getProperty`, client calls, producer/listener annotations, topic constants, tags, groups, and payload hints.
 
 ```bash
-python skills/e2e-dev-workflow/scripts/cross_service_dependency_scan.py . \
+python skills/e2e-dev-harness/scripts/cross_service_dependency_scan.py . \
   --gitnexus-mode auto \
   --json
 ```
@@ -144,6 +151,9 @@ Use `e2e_dev_workflow.py gate` at planning, implementation, and completion phase
 Gate details live in `references/implementation-gates.md`, including:
 
 - run-state and artifact registry validation
+- phase-lock execution control
+- harness policy and replay verification
+- run summary reporting
 - required review/request/invocation fields
 - review profiles, project discovery, inheritance, and required checklist coverage
 - completion manifest and coverage matrix rules
@@ -162,7 +172,7 @@ If a reviewer, test, business review, completion gate, or user review finds miss
 Before dispatching phase-specific or service-scoped agents, select only relevant memory:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/memory_capture.py select . \
+python skills/e2e-dev-harness/scripts/memory_capture.py select . \
   --phase code \
   --service services/<service>
 ```

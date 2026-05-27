@@ -1,4 +1,4 @@
-# Memory Integration
+﻿# Memory Integration
 
 Use memory to preserve verified project knowledge across tasks while keeping agent context small.
 
@@ -59,20 +59,20 @@ Rules:
 Before clarification:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/memory_capture.py scan .
-python skills/e2e-dev-workflow/scripts/memory_capture.py validate .
+python skills/e2e-dev-harness/scripts/memory_capture.py scan .
+python skills/e2e-dev-harness/scripts/memory_capture.py validate .
 ```
 
 For a new repo:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/memory_capture.py init .
+python skills/e2e-dev-harness/scripts/memory_capture.py init .
 ```
 
 After a verified decision or finding:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/memory_capture.py add . \
+python skills/e2e-dev-harness/scripts/memory_capture.py add . \
   --type decision \
   --source user-approved \
   --confidence approved \
@@ -86,8 +86,8 @@ python skills/e2e-dev-workflow/scripts/memory_capture.py add . \
 Before dispatching an agent, select the smallest useful memory context:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/memory_capture.py select . --phase requirements
-python skills/e2e-dev-workflow/scripts/memory_capture.py select . --phase code --service services/<service>
+python skills/e2e-dev-harness/scripts/memory_capture.py select . --phase requirements
+python skills/e2e-dev-harness/scripts/memory_capture.py select . --phase code --service services/<service>
 ```
 
 After Graphify answers a useful question, also consider:
@@ -120,7 +120,7 @@ Valid statuses are:
 Promote handled entries after verification or user approval:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/memory_capture.py promote . --from-file docs/agent-runs/<run>/proposed-memory-updates.md
+python skills/e2e-dev-harness/scripts/memory_capture.py promote . --from-file docs/agent-runs/<run>/proposed-memory-updates.md
 ```
 
 Run the completion gate with `--memory-updates` to block unhandled entries before reporting done.

@@ -1,4 +1,4 @@
-# Platform Compatibility
+﻿# Platform Compatibility
 
 Use this skill as an agent-neutral workflow package. The stable contract is the `SKILL.md`, `references/`, `scripts/`, and `review-profiles/` directory structure; Codex-specific UI metadata under `agents/openai.yaml` is optional.
 
@@ -31,9 +31,9 @@ Use this skill as an agent-neutral workflow package. The stable contract is the 
 Review profiles are plain JSON and portable across runtimes:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/reviewer_gate.py . \
+python skills/e2e-dev-harness/scripts/reviewer_gate.py . \
   --review-dir docs/agent-runs/<run>/reviews \
-  --review-profile skills/e2e-dev-workflow/review-profiles/default.json
+  --review-profile skills/e2e-dev-harness/review-profiles/default.json
 ```
 
 If `--review-profile` is omitted, the gate discovers project profiles under `.e2e/` or `docs/`. If the target repo is a generated scaffold and the skill lives outside it, the gate also resolves explicit bundled profile names from the skill directory. For profile inheritance, severities, and common review issue guidance, read `review-profiles.md` and `common-review-issues.md`.

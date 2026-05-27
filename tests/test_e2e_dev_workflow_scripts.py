@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import io
 import importlib
@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ROOT / "skills" / "e2e-dev-workflow" / "scripts"
+SCRIPTS = ROOT / "skills" / "e2e-dev-harness" / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
@@ -25,15 +25,20 @@ import coverage_gate  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import e2e_dev_workflow  # noqa: E402
 import handoff_gate  # noqa: E402
+import harness_policy  # noqa: E402
+import harness_verify  # noqa: E402
 import contract_gate  # noqa: E402
 import implementation_gate  # noqa: E402
 import implementation_manifest  # noqa: E402
 import kg_refresh  # noqa: E402
 import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
+import phase_guard  # noqa: E402
+import run_summary  # noqa: E402
 import run_state  # noqa: E402
 import requirements_archive  # noqa: E402
 import superpowers_probe  # noqa: E402
+import task_tier  # noqa: E402
 import reviewer_gate  # noqa: E402
 import rework_gate  # noqa: E402
 import workflow_guard  # noqa: E402
@@ -1648,7 +1653,7 @@ class ContractGateTests(unittest.TestCase):
             "docs/agent-runs/run/reviews/R3-implementation-review.md",
         )
 
-        self.assertIn("Review Profile: skills/e2e-dev-workflow/review-profiles/default.json", text)
+        self.assertIn("Review Profile: skills/e2e-dev-harness/review-profiles/default.json", text)
         self.assertIn("Code Path Trace", text)
         self.assertIn("ac-code-path-trace", text)
         self.assertIn("security-negative-paths", text)
@@ -2043,11 +2048,11 @@ class ReviewerGateTests(unittest.TestCase):
                 repo,
                 [review_dir],
                 require_phases=["implementation"],
-                review_profile=Path("skills/e2e-dev-workflow/review-profiles/default.json"),
+                review_profile=Path("skills/e2e-dev-harness/review-profiles/default.json"),
         )
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
-        self.assertTrue(result["review_profile"].replace("\\", "/").endswith("skills/e2e-dev-workflow/review-profiles/default.json"))
+        self.assertTrue(result["review_profile"].replace("\\", "/").endswith("skills/e2e-dev-harness/review-profiles/default.json"))
 
     def test_reviewer_gate_auto_discovers_project_review_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2519,6 +2524,115 @@ class ReviewerGateTests(unittest.TestCase):
 
                 - AC-1: QuoteController -> QuoteService.create -> QuoteRepository.save -> QuoteResponse.
                 - AC-2: QuoteController -> QuoteRequestValidator.rejects invalid input -> error response.
+                """
+            ).strip()
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc("implementation", request=request, request_hash=self.request_hash(repo, request), checklist=trace),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], [design], require_phases=["implementation"])
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_reviewer_gate_blocks_messaging_ac_without_sender_path_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Goal
+                    - Publish refund callback.
+
+                    ## Scope
+                    - services/payment-service
+
+                    ## Use Cases
+                    - Refund succeeds.
+
+                    ## Acceptance Criteria
+                    - AC-1 Publish DMQ refund callback with topic, tag, group, and payload fields.
+
+                    ## Test Design
+                    - Unit test first.
+
+                    ## Open Questions
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            trace = textwrap.dedent(
+                """
+                ## Code Path Trace
+
+                - AC-1: RefundController -> RefundService.complete -> success response.
+                """
+            ).strip()
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc("implementation", request=request, request_hash=self.request_hash(repo, request), checklist=trace),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], [design], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("messaging path trace" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_allows_messaging_ac_with_sender_path_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Goal
+                    - Publish refund callback.
+
+                    ## Scope
+                    - services/payment-service
+
+                    ## Use Cases
+                    - Refund succeeds.
+
+                    ## Acceptance Criteria
+                    - AC-1 Publish DMQ refund callback with topic, tag, group, and payload fields.
+
+                    ## Test Design
+                    - Unit test first.
+
+                    ## Open Questions
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            trace = textwrap.dedent(
+                """
+                ## Code Path Trace
+
+                - AC-1: RefundController -> RefundService.complete -> RefundCallbackDmqSender.send(topic, tag, group, payload) -> PaymentCallbackDmqSenderTest verifies payload fields.
+
+                ## Messaging Path Trace
+
+                - AC-1 sender/producer injection point: RefundService constructor injects RefundCallbackDmqSender.
+                - AC-1 actual send call: RefundCallbackDmqSender.send(topic, tag, group, payload).
+                - AC-1 topic/tag/group: refund.callback / success / payment-service.
+                - AC-1 payload fields: refundId, status, amount, updatedAt.
+                - AC-1 test evidence: PaymentCallbackDmqSenderTest verifies topic, tag, group, and payload.
                 """
             ).strip()
             (review_dir / "R3-implementation-review.md").write_text(
@@ -4707,10 +4821,11 @@ class OrchestrationArtifactTests(unittest.TestCase):
             self.assertTrue((repo / result["handoff_artifacts"]["run_state"]).exists())
             registry = json.loads((repo / result["handoff_artifacts"]["artifact_registry"]).read_text(encoding="utf-8"))
             state = json.loads((repo / result["handoff_artifacts"]["run_state"]).read_text(encoding="utf-8"))
-            self.assertEqual("e2e-dev-workflow.artifact-registry.v1", registry["schema"])
-            self.assertEqual("e2e-dev-workflow.run-state.v1", state["schema"])
+            self.assertEqual("e2e-dev-harness.artifact-registry.v1", registry["schema"])
+            self.assertEqual("e2e-dev-harness.run-state.v1", state["schema"])
             self.assertEqual("PLANNED", state["lifecycle"])
             self.assertEqual(result["handoff_artifacts"]["artifact_registry"], state["artifact_registry"])
+            self.assertTrue(any(item["type"] == "design_doc" for item in registry["artifacts"]))
             archive_text = (repo / result["handoff_artifacts"]["requirements_archive"]).read_text(encoding="utf-8")
             self.assertIn("Final Clarified Requirement", archive_text)
             self.assertIn("Acceptance Criteria Status", archive_text)
@@ -4878,6 +4993,12 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("docs/agent-runs/2026-05-23-checkout/contracts", result["contracts_dir"])
         self.assertEqual("docs/agent-runs/2026-05-23-checkout/contracts/<contract-id>.md", result["contract_pattern"])
 
+    def test_plan_artifacts_include_run_summary_paths(self) -> None:
+        result = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
+
+        self.assertEqual("docs/agent-runs/2026-05-23-checkout/run-summary.json", result["run_summary"])
+        self.assertEqual("docs/agent-runs/2026-05-23-checkout/run-summary.md", result["run_summary_md"])
+
     def test_plan_artifacts_include_implementation_manifest_path(self) -> None:
         result = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
 
@@ -4929,6 +5050,30 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("stale" in reason.lower() for reason in result["blocked_reasons"]))
 
+    def test_artifact_registry_refresh_updates_status_and_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            artifact = repo / "docs" / "agent-runs" / "run" / "exec-plan.md"
+            artifact.parent.mkdir(parents=True)
+            registry = artifact_registry.build_registry(
+                repo,
+                "run",
+                {"exec_plan": "docs/agent-runs/run/exec-plan.md"},
+                "single",
+                [],
+            )
+            registry_path = repo / "docs" / "agent-runs" / "run" / "artifact-registry.json"
+            artifact_registry.write_registry(repo, registry_path, registry)
+            artifact.write_text("plan\n", encoding="utf-8")
+
+            result = artifact_registry.refresh_registry(repo, registry_path)
+            refreshed = json.loads(registry_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(["global:exec_plan"], result["changed"])
+        self.assertEqual("present", refreshed["artifacts"][0]["status"])
+        self.assertTrue(refreshed["artifacts"][0]["sha256"])
+
     def test_run_state_validates_artifact_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -4952,6 +5097,442 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
         self.assertEqual("PLANNED", result["lifecycle"])
+
+    def test_run_state_transition_records_history_and_gate_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            evidence = repo / "docs" / "agent-runs" / "run" / "reviews" / "R3-implementation-review.md"
+            evidence.parent.mkdir(parents=True)
+            evidence.write_text("approved\n", encoding="utf-8")
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json")
+            run_state.write_state(repo, state_path, state)
+
+            result = run_state.transition_state(
+                repo,
+                state_path,
+                "IMPLEMENTED",
+                gate="implementation",
+                gate_status="passed",
+                evidence=evidence,
+            )
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+            lock_exists = (state_path.parent / ".phase-lock").exists()
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("IMPLEMENTED", updated["lifecycle"])
+        self.assertEqual("passed", updated["gates"]["implementation"])
+        self.assertEqual("PLANNED", updated["history"][0]["from"])
+        self.assertEqual("IMPLEMENTED", updated["history"][0]["to"])
+        self.assertTrue(lock_exists)
+
+    def test_run_state_transition_blocks_regression_without_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "VERIFIED")
+            run_state.write_state(repo, state_path, state)
+
+            result = run_state.transition_state(repo, state_path, "PLANNED")
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("regression" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_clarify_auto_transitions_run_state_when_supplied(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Goal
+                    - Return a quote.
+
+                    ## Scope
+                    - services/sample-service
+
+                    ## Use Cases
+                    - Create quote.
+
+                    ## Acceptance Criteria
+                    - AC-1 Quote is returned.
+
+                    ## Test Design
+                    - Unit test first.
+
+                    ## Open Questions
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=Path("docs/design/feature.md"),
+                run_state=state_path,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_workflow.clarify(args)
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code, result)
+        self.assertEqual("CLARIFIED", updated["lifecycle"])
+        self.assertEqual("passed", updated["gates"]["clarification"])
+        self.assertTrue(result["run_state_transition"]["ready"])
+
+    def test_phase_guard_blocks_code_write_before_implementation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Edit",
+                [Path("services/payment-service/src/main/java/PaymentService.java")],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Code write blocked" in reason for reason in result["blocked_reasons"]))
+
+    def test_phase_guard_allows_code_write_in_implementation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "IMPLEMENTED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Edit",
+                [Path("services/payment-service/src/main/java/PaymentService.java")],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_phase_guard_allows_run_artifact_writes_before_implementation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Write",
+                [Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_hook_examples_call_phase_guard(self) -> None:
+        hook_dir = ROOT / "skills" / "e2e-dev-harness" / "hooks"
+
+        for name in (
+            "claude-code-settings.example.json",
+            "codex-pre-action.example.json",
+            "gemini-pre-action.example.json",
+        ):
+            with self.subTest(name=name):
+                text = (hook_dir / name).read_text(encoding="utf-8")
+                self.assertIn("phase_guard.py", text)
+                self.assertIn("blocking", text.lower() if "claude" not in name else "blocking")
+
+    def test_harness_policy_blocks_completed_run_without_reviews(self) -> None:
+        registry = {
+            "schema": "e2e-dev-harness.artifact-registry.v1",
+            "selected_mode": "single",
+            "services": ["services/order-service"],
+            "artifacts": [
+                {
+                    "type": "requirements_archive",
+                    "owner": "global",
+                    "path": "docs/agent-runs/run/requirements-archive.md",
+                    "status": "present",
+                }
+            ],
+        }
+        state = {
+            "schema": "e2e-dev-harness.run-state.v1",
+            "run_id": "run",
+            "lifecycle": "VERIFIED",
+            "selected_mode": "single",
+            "services": ["services/order-service"],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+
+            result = harness_policy.validate_policy(repo, None, state, registry)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("R1 design review" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any("R2 test review" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any("R3 implementation review" in reason for reason in result["blocked_reasons"]))
+
+    def test_harness_verify_replays_state_registry_and_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            artifact = repo / "docs" / "agent-runs" / "run" / "exec-plan.md"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("plan\n", encoding="utf-8")
+            registry = artifact_registry.build_registry(
+                repo,
+                "run",
+                {"exec_plan": "docs/agent-runs/run/exec-plan.md"},
+                "single",
+                [],
+            )
+            registry_path = repo / "docs" / "agent-runs" / "run" / "artifact-registry.json"
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            artifact_registry.write_registry(repo, registry_path, registry)
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json")
+            run_state.write_state(repo, state_path, state)
+
+            result = harness_verify.validate(repo, state_path)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_run_summary_reports_missing_required_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            artifact = repo / "docs" / "agent-runs" / "run" / "exec-plan.md"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("plan\n", encoding="utf-8")
+            registry = artifact_registry.build_registry(
+                repo,
+                "run",
+                {
+                    "exec_plan": "docs/agent-runs/run/exec-plan.md",
+                    "requirements": "docs/agent-runs/run/handoffs/01-requirements-clarifier.md",
+                    "design_review": "docs/agent-runs/run/reviews/R1-design-review.md",
+                },
+                "single",
+                [],
+            )
+            registry_path = repo / "docs" / "agent-runs" / "run" / "artifact-registry.json"
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            artifact_registry.write_registry(repo, registry_path, registry)
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json")
+            run_state.write_state(repo, state_path, state)
+
+            summary = run_summary.build_summary(
+                repo,
+                state_path,
+                {"ready": False, "blocked_reasons": ["R3 missing"], "warnings": ["hash warning"]},
+            )
+
+        self.assertEqual("e2e-dev-harness.run-summary.v1", summary["schema"])
+        self.assertEqual(3, summary["artifact_count"])
+        self.assertEqual(1, summary["blocked_count"])
+        self.assertEqual(1, summary["warning_count"])
+        self.assertIn("docs/agent-runs/run/handoffs/01-requirements-clarifier.md", summary["required_missing"])
+        self.assertEqual("planned", summary["semantic_reviews"]["R1"])
+        self.assertIn("Resolve harness verification blockers.", summary["next_actions"])
+
+    def test_harness_verify_writes_run_summary_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            artifact = repo / "docs" / "agent-runs" / "run" / "exec-plan.md"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("plan\n", encoding="utf-8")
+            registry = artifact_registry.build_registry(
+                repo,
+                "run",
+                {"exec_plan": "docs/agent-runs/run/exec-plan.md"},
+                "single",
+                [],
+            )
+            registry_path = repo / "docs" / "agent-runs" / "run" / "artifact-registry.json"
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            summary_json = Path("docs/agent-runs/run/run-summary.json")
+            summary_md = Path("docs/agent-runs/run/run-summary.md")
+            artifact_registry.write_registry(repo, registry_path, registry)
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json")
+            run_state.write_state(repo, state_path, state)
+            result = harness_verify.validate(repo, state_path)
+
+            summary = harness_verify.write_summary_outputs(repo, state_path, result, summary_json, summary_md)
+
+            written = json.loads((repo / summary_json).read_text(encoding="utf-8"))
+            markdown_text = (repo / summary_md).read_text(encoding="utf-8")
+
+        self.assertTrue(summary["ready"])
+        self.assertEqual("run", written["run_id"])
+        self.assertIn("# Run Summary: run", markdown_text)
+
+    def test_workflow_tier_auto_marks_messaging_cross_service_as_critical(self) -> None:
+        design_text = "Publish a DMQ refund callback with topic, tag, group, and payload contract."
+        facts = {"service_candidates": ["services/refund-service", "services/ledger-service"], "multi_service": True}
+        dependency_report = {"dependencies": [{"kind": "dmq"}], "unresolved_questions": []}
+
+        result = task_tier.evaluate("auto", design_text, facts, dependency_report)
+
+        self.assertEqual("critical", result["tier"])
+        self.assertIn("gitnexus-impact", result["required_gates"])
+        self.assertIn("contracts", result["required_gates"])
+        self.assertIn("strict-guard", result["required_gates"])
+
+    def test_workflow_tier_basic_still_keeps_harness_record(self) -> None:
+        result = task_tier.evaluate("basic", "Update validation message.", {}, {})
+
+        self.assertEqual("basic", result["tier"])
+        self.assertIn("clarification", result["required_gates"])
+        self.assertIn("impact-summary", result["required_gates"])
+        self.assertIn("test-evidence", result["required_gates"])
+        self.assertIn("run-state", result["required_gates"])
+        self.assertIn("artifact-registry", result["required_gates"])
+        self.assertIn("run-summary", result["required_gates"])
+        self.assertNotIn("r1-review", result["required_gates"])
+
+    def test_prepare_reports_workflow_tier(self) -> None:
+        facts = {
+            "poms": ["pom.xml"],
+            "root_modules": [],
+            "spring_entrypoints": [],
+            "spring_configs": [],
+            "design_docs_or_media_count": 0,
+            "design_docs_or_media_sample": [],
+            "graphify_graph": "graphify-out/graph.json",
+            "graphify_graph_exists": False,
+            "service_candidates": ["services/payment-service", "services/ledger-service"],
+            "multi_service": True,
+        }
+        dependency_result = {
+            "ready": True,
+            "tool_priority": ["gitnexus", "deterministic-scan", "graphify"],
+            "dependencies": [{"kind": "http", "source_service": "services/payment-service"}],
+            "unresolved_questions": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "refund.md"
+            design.parent.mkdir(parents=True)
+            design.write_text("Refund API updates payment state and calls ledger-service.", encoding="utf-8")
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=Path("docs/design/refund.md"),
+                path=None,
+                service=None,
+                agent_mode="off",
+                agent_scope="auto",
+                include_agent_content=False,
+                max_agent_chars=12000,
+                max_discovered_services=agent_instructions.DEFAULT_DISCOVERED_SERVICE_LIMIT,
+                superpowers_mode="off",
+                memory_mode="off",
+                agent_orchestration_mode="off",
+                service_scope="discovery",
+                agent_run_dir=None,
+                run_date="2026-05-23",
+                kg_mode="auto",
+                dependency_scan_mode="strict",
+                write_dependency_report=False,
+                dependency_output_dir=None,
+                workflow_tier="auto",
+                status_file=None,
+            )
+            with (
+                patch.object(e2e_dev_workflow.kg_refresh, "detect", return_value=facts),
+                patch.object(e2e_dev_workflow.cross_service_dependency_scan, "scan", return_value=dependency_result),
+            ):
+                code, result = e2e_dev_workflow.prepare(args)
+
+        self.assertEqual(0, code)
+        self.assertEqual("critical", result["workflow_tier"]["tier"])
+        self.assertIn("contracts", result["workflow_tier"]["required_gates"])
+
+    def test_verify_harness_replays_state_and_writes_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            artifact = repo / "docs" / "agent-runs" / "run" / "exec-plan.md"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("plan\n", encoding="utf-8")
+            registry = artifact_registry.build_registry(
+                repo,
+                "run",
+                {"exec_plan": "docs/agent-runs/run/exec-plan.md"},
+                "single",
+                [],
+            )
+            registry_path = repo / "docs" / "agent-runs" / "run" / "artifact-registry.json"
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            summary_path = repo / "docs" / "agent-runs" / "run" / "run-summary.json"
+            artifact_registry.write_registry(repo, registry_path, registry)
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json")
+            run_state.write_state(repo, state_path, state)
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=None,
+                path=None,
+                service=None,
+                agent_mode="off",
+                agent_scope="auto",
+                include_agent_content=False,
+                max_agent_chars=12000,
+                max_discovered_services=agent_instructions.DEFAULT_DISCOVERED_SERVICE_LIMIT,
+                superpowers_mode="off",
+                memory_mode="off",
+                agent_orchestration_mode="off",
+                service_scope="discovery",
+                agent_run_dir=None,
+                run_date="2026-05-23",
+                kg_mode="auto",
+                dependency_scan_mode="off",
+                write_dependency_report=False,
+                dependency_output_dir=None,
+                workflow_tier="basic",
+                module=None,
+                run_gate=False,
+                phase="planning",
+                kg_status_file=None,
+                red_test_evidence=None,
+                coverage_matrix=None,
+                unit_test_evidence=None,
+                business_review=None,
+                memory_updates=None,
+                requirements_archive=None,
+                require_requirements_archive=False,
+                dependency_report=None,
+                implementation_manifest=None,
+                rework_dir=None,
+                review_dir=None,
+                review_profile=None,
+                handoff_dir=None,
+                contract_dir=None,
+                require_contracts=False,
+                require_handoffs=False,
+                require_semantic_reviews=False,
+                skip_spring_static_check=False,
+                skip_maven=True,
+                strict_workflow=False,
+                workflow_approval=None,
+                harness=True,
+                state=state_path,
+                policy=None,
+                strict_artifacts=False,
+                run_completion_gate=False,
+                summary_json=summary_path,
+                summary_md=None,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_workflow.verify(args)
+            summary_exists = summary_path.exists()
+
+        self.assertEqual(0, code, result)
+        self.assertTrue(result["harness"]["ready"], result["harness"]["blocked_reasons"])
+        self.assertTrue(summary_exists)
 
     def test_multi_agent_plan_splits_code_developers_by_service(self) -> None:
         artifacts = orchestration_plan.artifacts(
@@ -5083,7 +5664,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
 class SkillDocumentationTests(unittest.TestCase):
     def test_skill_points_non_codex_agents_to_platform_compatibility_reference(self) -> None:
-        skill_text = (ROOT / "skills" / "e2e-dev-workflow" / "SKILL.md").read_text(encoding="utf-8")
+        skill_text = (ROOT / "skills" / "e2e-dev-harness" / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("Claude Code", skill_text)
         self.assertIn("Codex", skill_text)
@@ -5091,14 +5672,14 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("references/platform-compatibility.md", skill_text)
 
     def test_skill_declares_custom_review_profile_reference(self) -> None:
-        skill_text = (ROOT / "skills" / "e2e-dev-workflow" / "SKILL.md").read_text(encoding="utf-8")
+        skill_text = (ROOT / "skills" / "e2e-dev-harness" / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("references/review-profiles.md", skill_text)
         self.assertIn("common-review-issues.md", skill_text)
         self.assertIn("references/requirements-archive.md", skill_text)
 
     def test_requirements_archive_reference_documents_completion_summary(self) -> None:
-        reference = ROOT / "skills" / "e2e-dev-workflow" / "references" / "requirements-archive.md"
+        reference = ROOT / "skills" / "e2e-dev-harness" / "references" / "requirements-archive.md"
         text = reference.read_text(encoding="utf-8")
 
         self.assertIn("docs/agent-runs/<run>/requirements-archive.md", text)
@@ -5107,7 +5688,7 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("--requirements-archive", text)
 
     def test_review_profile_reference_documents_project_discovery_and_extends(self) -> None:
-        reference = ROOT / "skills" / "e2e-dev-workflow" / "references" / "review-profiles.md"
+        reference = ROOT / "skills" / "e2e-dev-harness" / "references" / "review-profiles.md"
         text = reference.read_text(encoding="utf-8")
 
         self.assertIn(".e2e/review-profile.json", text)
@@ -5118,15 +5699,26 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("api-first", text)
 
     def test_common_review_issues_reference_exists(self) -> None:
-        reference = ROOT / "skills" / "e2e-dev-workflow" / "references" / "common-review-issues.md"
+        reference = ROOT / "skills" / "e2e-dev-harness" / "references" / "common-review-issues.md"
         text = reference.read_text(encoding="utf-8")
 
         self.assertIn("Issue ID", text)
-        self.assertIn("判定标准", text)
-        self.assertIn("示例", text)
+        self.assertIn("Criteria", text)
+        self.assertIn("Examples", text)
         self.assertIn("code-path-trace-gap", text)
         self.assertIn("weak-completion-evidence", text)
         self.assertIn("impact-summary-overload", text)
+        self.assertNotRegex(text, r"[\u4e00-\u9fff]")
+
+    def test_readme_documents_hook_configuration(self) -> None:
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("Hook Configuration", text)
+        self.assertIn("claude-code-settings.example.json", text)
+        self.assertIn("codex-pre-action.example.json", text)
+        self.assertIn("gemini-pre-action.example.json", text)
+        self.assertIn("phase_guard.py", text)
+        self.assertIn(".phase-lock", text)
 
     def test_bundled_review_profiles_have_guidance_metadata(self) -> None:
         for name in ("default", "security-heavy", "api-first"):
@@ -5145,14 +5737,14 @@ class SkillDocumentationTests(unittest.TestCase):
                         self.assertIn("references", item)
 
     def test_tdd_reference_documents_audit_field_template(self) -> None:
-        text = (ROOT / "skills" / "e2e-dev-workflow" / "references" / "tdd-java-spring.md").read_text(encoding="utf-8")
+        text = (ROOT / "skills" / "e2e-dev-harness" / "references" / "tdd-java-spring.md").read_text(encoding="utf-8")
 
         self.assertIn("createdAt", text)
         self.assertIn("updatedAt", text)
         self.assertIn("createdBy", text)
 
     def test_skill_body_is_concise_for_progressive_disclosure(self) -> None:
-        skill_text = (ROOT / "skills" / "e2e-dev-workflow" / "SKILL.md").read_text(encoding="utf-8")
+        skill_text = (ROOT / "skills" / "e2e-dev-harness" / "SKILL.md").read_text(encoding="utf-8")
         body = skill_text.split("---", 2)[-1]
         words = body.split()
         long_lines = [
@@ -5165,7 +5757,7 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertEqual([], long_lines)
 
     def test_compacted_skill_keeps_hard_gate_navigation(self) -> None:
-        skill_text = (ROOT / "skills" / "e2e-dev-workflow" / "SKILL.md").read_text(encoding="utf-8")
+        skill_text = (ROOT / "skills" / "e2e-dev-harness" / "SKILL.md").read_text(encoding="utf-8")
 
         required_terms = [
             "Superpowers",

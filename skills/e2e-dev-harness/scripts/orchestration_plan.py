@@ -385,6 +385,8 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
         "agent_run_dir": base,
         "run_state": f"{base}/run-state.json",
         "artifact_registry": f"{base}/artifact-registry.json",
+        "run_summary": f"{base}/run-summary.json",
+        "run_summary_md": f"{base}/run-summary.md",
         "exec_plan": f"{base}/exec-plan.md",
         "prepare_status": f"{base}/prepare.json",
         "requirements": f"{handoffs}/01-requirements-clarifier.md",

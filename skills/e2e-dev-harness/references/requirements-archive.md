@@ -1,4 +1,4 @@
-# Requirements Archive
+﻿# Requirements Archive
 
 Use `docs/agent-runs/<run>/requirements-archive.md` as the final feature-level summary after implementation is complete. It sits between noisy run evidence and durable `memory/*.md`: detailed enough for future requirement analysis, concise enough to read before related follow-up work.
 
@@ -9,7 +9,7 @@ Create the archive in the agent-run directory when `plan --create-archive` write
 Run completion validation with:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . \
+python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py gate . \
   --phase completion \
   --requirements-archive docs/agent-runs/<run>/requirements-archive.md
 ```
@@ -55,7 +55,7 @@ Use the coverage matrix as the source of truth: every completed AC needs a named
 Validate directly:
 
 ```bash
-python skills/e2e-dev-workflow/scripts/requirements_archive.py . \
+python skills/e2e-dev-harness/scripts/requirements_archive.py . \
   --archive docs/agent-runs/<run>/requirements-archive.md \
   --json
 ```

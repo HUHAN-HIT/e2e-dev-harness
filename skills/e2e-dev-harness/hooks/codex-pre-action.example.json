@@ -1,0 +1,7 @@
+﻿{
+  "name": "e2e-dev-harness-phase-guard",
+  "event": "pre-action",
+  "tools": ["Write", "Edit", "MultiEdit", "NotebookEdit"],
+  "command": "python skills/e2e-dev-harness/scripts/phase_guard.py . --hook-input - --json",
+  "blocking": true
+}

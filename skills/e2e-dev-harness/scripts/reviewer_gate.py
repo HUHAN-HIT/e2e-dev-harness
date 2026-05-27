@@ -69,10 +69,22 @@ FIELD_RE = re.compile(r"^\s*-?\s*([A-Za-z][A-Za-z _-]*):\s*(.*?)\s*$")
 PLACEHOLDER_RE = re.compile(r"^\s*(<[^>]+>|\[[^\]]+\]|todo|tbd|unknown|draft|placeholder)\s*$", re.IGNORECASE)
 CHECKED_ITEM_RE = re.compile(r"^\s*[-*]\s*\[[xX]\]\s*`?([A-Za-z0-9][A-Za-z0-9._/-]*)`?")
 CODE_PATH_HEADING_RE = re.compile(r"(?im)^\s*#{2,4}\s+code path trace\s*$")
+MESSAGING_PATH_HEADING_RE = re.compile(r"(?im)^\s*#{2,4}\s+messaging path trace\s*$")
 TRACE_EVIDENCE_RE = re.compile(
     r"(->|\bcalls?\b|\binvokes?\b|\bsends?\b|\bpublishes?\b|\bpersists?\b|\breturns?\b|\brejects?\b|\bvalidates?\b|\bupdates?\b|\bcontroller\b|\bservice\b|\brepository\b|\bsender\b|\bproducer\b)",
     re.IGNORECASE,
 )
+MESSAGING_AC_RE = re.compile(
+    r"\b(mq|dmq|kafka|rocketmq|rabbitmq|topic|tag|group|payload|producer|consumer|sender|publish|message)\b|消息|队列|生产者|消费者",
+    re.IGNORECASE,
+)
+MESSAGING_TRACE_REQUIREMENTS = {
+    "sender/producer injection point": re.compile(r"\b(sender|producer|inject|constructor|bean|component)\b", re.IGNORECASE),
+    "actual send call": re.compile(r"\b(send|publish|emit|produce)\b", re.IGNORECASE),
+    "topic/tag/group": re.compile(r"\b(topic|tag|group)\b", re.IGNORECASE),
+    "payload fields": re.compile(r"\bpayload|field", re.IGNORECASE),
+    "test evidence": re.compile(r"\btest|spec|verify|assert", re.IGNORECASE),
+}
 PROJECT_REVIEW_PROFILE_CANDIDATES = [
     Path(".e2e/review-profile.json"),
     Path(".e2e/review-profiles/default.json"),
@@ -137,6 +149,27 @@ def expected_acceptance_ids(repo: Path, anchor_paths: list[Path | None] | None) 
     return results
 
 
+def expected_acceptance_items(repo: Path, anchor_paths: list[Path | None] | None) -> list[dict[str, str]]:
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for anchor in anchor_paths or []:
+        if not anchor:
+            continue
+        path = anchor if anchor.is_absolute() else repo / anchor
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            items = clarification_gate.extract_acceptance_items(path)
+        except (OSError, UnicodeDecodeError):
+            items = []
+        for item in items:
+            item_id = item.get("id", "")
+            if item_id and item_id not in seen:
+                seen.add(item_id)
+                results.append(item)
+    return results
+
+
 def missing_code_path_trace_acs(text: str, ac_ids: list[str]) -> list[str]:
     if not ac_ids:
         return []
@@ -153,6 +186,29 @@ def missing_code_path_trace_acs(text: str, ac_ids: list[str]) -> list[str]:
                 break
         if not matched:
             missing.append(ac_id)
+    return missing
+
+
+def missing_messaging_path_trace(text: str, acceptance_items: list[dict[str, str]]) -> dict[str, list[str]]:
+    messaging_items = [
+        item
+        for item in acceptance_items
+        if MESSAGING_AC_RE.search(item.get("text", ""))
+    ]
+    if not messaging_items:
+        return {}
+    section = markdown_section(text, MESSAGING_PATH_HEADING_RE) or markdown_section(text, CODE_PATH_HEADING_RE)
+    missing: dict[str, list[str]] = {}
+    for item in messaging_items:
+        ac_id = item.get("id", "")
+        ac_lines = "\n".join(line for line in section.splitlines() if ac_id and ac_id in line)
+        item_missing = [
+            label
+            for label, pattern in MESSAGING_TRACE_REQUIREMENTS.items()
+            if not pattern.search(ac_lines)
+        ]
+        if item_missing:
+            missing[ac_id] = item_missing
     return missing
 
 
@@ -554,6 +610,7 @@ def validate_item(
     fields: dict[str, str],
     review_profile: dict | None = None,
     expected_acs: list[str] | None = None,
+    expected_ac_items: list[dict[str, str]] | None = None,
 ) -> tuple[dict, list[str], list[str]]:
     blocked: list[str] = []
     warnings: list[str] = []
@@ -697,12 +754,19 @@ def validate_item(
 
     raw_text = path.read_text(encoding="utf-8", errors="replace")
     missing_trace_acs: list[str] = []
+    missing_messaging_trace: dict[str, list[str]] = {}
     if phase == "implementation" and expected_acs:
         missing_trace_acs = missing_code_path_trace_acs(raw_text, expected_acs)
         if missing_trace_acs:
             blocked.append(
                 f"Semantic review {path} missing Code Path Trace coverage for acceptance criteria: "
                 + ", ".join(missing_trace_acs)
+            )
+        missing_messaging_trace = missing_messaging_path_trace(raw_text, expected_ac_items or [])
+        for ac_id, labels in missing_messaging_trace.items():
+            blocked.append(
+                f"Semantic review {path} missing Messaging Path Trace for {ac_id}: "
+                + ", ".join(labels)
             )
     checked_ids = checked_checklist_ids(raw_text)
     missing_profile_items: list[str] = []
@@ -739,6 +803,7 @@ def validate_item(
             "missing_profile_items": missing_profile_items,
             "warning_profile_items": warning_profile_items,
             "missing_code_path_trace_acs": missing_trace_acs,
+            "missing_messaging_path_trace": missing_messaging_trace,
         }
     )
     return item, blocked, warnings
@@ -765,12 +830,13 @@ def validate(
     blocked.extend(profile_blocked)
     warnings: list[str] = []
     items: list[dict] = []
-    expected_acs = expected_acceptance_ids(repo, anchor_paths)
+    expected_ac_items = expected_acceptance_items(repo, anchor_paths)
+    expected_acs = [item["id"] for item in expected_ac_items]
     covered: set[str] = set()
     covered_service_reviews: dict[str, set[str]] = {service: set() for service in services}
     for path in files:
         fields = parse_item(path)
-        item, item_blocked, item_warnings = validate_item(repo, path, fields, profile, expected_acs)
+        item, item_blocked, item_warnings = validate_item(repo, path, fields, profile, expected_acs, expected_ac_items)
         service = service_from_review_path(inferred_run_dir, path) or service_from_scope(fields.get("scope", ""), services)
         if service and item.get("phase") in {"test", "implementation"}:
             covered_service_reviews.setdefault(service, set()).add(item["phase"])

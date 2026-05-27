@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-"""Discover Superpowers skills and enforce the e2e-dev-workflow adapter policy."""
+﻿#!/usr/bin/env python3
+"""Discover Superpowers skills and enforce the e2e-dev-harness adapter policy."""
 
 from __future__ import annotations
 

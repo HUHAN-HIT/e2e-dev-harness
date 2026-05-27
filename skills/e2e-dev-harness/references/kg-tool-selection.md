@@ -1,4 +1,4 @@
-# Knowledge Graph Tool Selection
+﻿# Knowledge Graph Tool Selection
 
 Use this matrix before each implementation.
 
@@ -16,7 +16,7 @@ Use this matrix before each implementation.
 1. Run the dry-run helper:
 
    ```bash
-   python skills/e2e-dev-workflow/scripts/kg_refresh.py .
+   python skills/e2e-dev-harness/scripts/kg_refresh.py .
    ```
 
 2. Inspect the recommended tools and detected service/module list.
@@ -48,7 +48,7 @@ Use GitNexus-first evidence for hidden service dependencies:
 1. Run the deterministic scanner:
 
    ```bash
-   python skills/e2e-dev-workflow/scripts/cross_service_dependency_scan.py . --gitnexus-mode auto --json
+   python skills/e2e-dev-harness/scripts/cross_service_dependency_scan.py . --gitnexus-mode auto --json
    ```
 
 2. Inspect `knowledge-graph/cross-service-dependencies.json` and `.md`.

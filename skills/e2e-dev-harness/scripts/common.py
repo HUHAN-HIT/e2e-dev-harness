@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-"""Shared helpers for e2e-dev-workflow scripts."""
+﻿#!/usr/bin/env python3
+"""Shared helpers for e2e-dev-harness scripts."""
 
 from __future__ import annotations
 
