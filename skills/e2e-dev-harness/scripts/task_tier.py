@@ -15,6 +15,7 @@ BASE_GATES = [
     "impact-summary",
     "test-evidence",
     "completion-proof",
+    "task-alignment",
     "run-state",
     "artifact-registry",
     "run-summary",

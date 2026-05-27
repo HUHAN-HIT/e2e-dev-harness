@@ -1,4 +1,4 @@
-# Project Agent Instructions
+﻿# Project Agent Instructions
 
 These instructions apply to the whole repository.
 
@@ -14,7 +14,7 @@ These instructions apply to the whole repository.
 - Load this file before requirement clarification.
 - Use discovery scope before affected services are known; do not load every service `AGENT.md` into context.
 - Load only affected service `AGENT.md` files before asking service-specific clarification questions or implementing.
-- Prefer the unified `e2e_dev_workflow.py prepare` command when the skill is available.
+- Prefer the unified `e2e_dev_harness.py prepare` command when the skill is available.
 - Clarify requirements and use cases before implementation.
 - Refresh the knowledge graph before implementation.
 - For complex or cross-service work, maintain an ExecPlan under `docs/design/`.

@@ -23,6 +23,7 @@ import requirements_archive as requirements_archive_gate  # noqa: E402
 import reviewer_gate  # noqa: E402
 import rework_gate  # noqa: E402
 import spring_static_check  # noqa: E402
+import task_alignment_guard  # noqa: E402
 
 
 def read_json(path: Path) -> dict | None:
@@ -78,6 +79,8 @@ def validate_gate(
     review_profile: Path | None = None,
     requirements_archive: Path | None = None,
     require_requirements_archive: bool = False,
+    changed_files: Path | None = None,
+    base_ref: str | None = None,
 ) -> dict:
     repo = repo.resolve()
     blocked_reasons: list[str] = []
@@ -122,6 +125,7 @@ def validate_gate(
     semantic_review_result = None
     dependency_result = None
     implementation_manifest_result = None
+    task_alignment_result = None
     handoff_result = None
     contract_result = None
     requirements_archive_result = None
@@ -179,6 +183,17 @@ def validate_gate(
         )
         if not implementation_manifest_result["ready"]:
             blocked_reasons.extend(implementation_manifest_result["blocked_reasons"])
+        task_alignment_result = task_alignment_guard.validate(
+            repo,
+            design_doc,
+            implementation_manifest,
+            coverage_matrix,
+            changed_files,
+            base_ref,
+        )
+        if not task_alignment_result["ready"]:
+            blocked_reasons.extend(task_alignment_result["blocked_reasons"])
+        warnings.extend(task_alignment_result["warnings"])
         dependency_result = cross_service_dependency_scan.validate_dependency_report(repo, dependency_report, design_doc)
         if not dependency_result["ready"]:
             blocked_reasons.extend(dependency_result["blocked_reasons"])
@@ -235,6 +250,7 @@ def validate_gate(
         "red_test_evidence": red_test_result,
         "coverage": coverage_result,
         "implementation_manifest": implementation_manifest_result,
+        "task_alignment": task_alignment_result,
         "dependency_report": dependency_result,
         "memory_updates": memory_result,
         "requirements_archive": requirements_archive_result,
@@ -261,6 +277,8 @@ def main() -> int:
     parser.add_argument("--require-requirements-archive", action="store_true")
     parser.add_argument("--dependency-report", type=Path)
     parser.add_argument("--implementation-manifest", type=Path)
+    parser.add_argument("--changed-files", type=Path)
+    parser.add_argument("--base-ref")
     parser.add_argument("--rework-dir", action="append", type=Path)
     parser.add_argument("--review-dir", action="append", type=Path)
     parser.add_argument("--review-profile", type=Path)
@@ -296,6 +314,8 @@ def main() -> int:
         args.review_profile,
         args.requirements_archive,
         args.require_requirements_archive,
+        args.changed_files,
+        args.base_ref,
     )
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))

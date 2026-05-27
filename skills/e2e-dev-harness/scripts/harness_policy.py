@@ -18,6 +18,9 @@ DEFAULT_POLICY = {
     "require_requirements_archive_on_completion": True,
     "require_semantic_reviews_on_completion": True,
 }
+IMMUTABLE_TRUE_POLICY_FIELDS = frozenset(
+    key for key, value in DEFAULT_POLICY.items() if key.startswith("require_") and value is True
+)
 
 
 def load_json(path: Path | None) -> dict:
@@ -26,24 +29,28 @@ def load_json(path: Path | None) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return {}
+
+
+def merge_policy(overrides: dict) -> dict:
+    policy = dict(DEFAULT_POLICY)
+    policy.update(overrides)
+    for field in IMMUTABLE_TRUE_POLICY_FIELDS:
+        policy[field] = DEFAULT_POLICY[field]
+    return policy
 
 
 def discover_policy(repo: Path, explicit: Path | None = None) -> tuple[dict, str]:
     if explicit:
         path = explicit if explicit.is_absolute() else repo / explicit
-        policy = dict(DEFAULT_POLICY)
-        policy.update(load_json(path))
-        return policy, str(path)
+        return merge_policy(load_json(path)), str(path)
     for candidate in (
         repo / ".e2e" / "harness-policy.json",
         repo / "docs" / "harness-policy.json",
     ):
         if candidate.exists():
-            policy = dict(DEFAULT_POLICY)
-            policy.update(load_json(candidate))
-            return policy, str(candidate)
+            return merge_policy(load_json(candidate)), str(candidate)
     return dict(DEFAULT_POLICY), "default"
 
 

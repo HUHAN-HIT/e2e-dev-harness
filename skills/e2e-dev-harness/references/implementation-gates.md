@@ -7,7 +7,7 @@ Use this reference when running `gate`, `verify`, `guard`, completion checks, or
 Planning gate:
 
 ```bash
-python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py gate . \
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py gate . \
   --phase planning \
   --design-doc docs/design/<feature>.md
 ```
@@ -15,7 +15,7 @@ python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py gate . \
 Implementation gate:
 
 ```bash
-python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py gate . \
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py gate . \
   --phase implementation \
   --design-doc docs/design/<feature>.md \
   --red-test-evidence docs/agent-runs/<run>/evidence/red-test.txt
@@ -24,7 +24,7 @@ python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py gate . \
 Completion gate:
 
 ```bash
-python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py gate . \
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py gate . \
   --phase completion \
   --design-doc docs/design/<feature>.md \
   --red-test-evidence docs/agent-runs/<run>/evidence/red-test.txt \
@@ -133,7 +133,7 @@ Use `--run-completion-gate` when the registry includes all completion inputs and
 The unified verify command can run replay and write summaries:
 
 ```bash
-python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py verify . \
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py verify . \
   --harness \
   --workflow-tier critical \
   --state docs/agent-runs/<run>/run-state.json \
@@ -200,6 +200,28 @@ For multi-module or artifact-heavy designs, `implementation-manifest.md` must in
 
 Unit-test evidence must be structured JSON with `command` and integer `exit_code`. Plain text such as `PASS` is not accepted.
 
+## Task Alignment And Drift Correction
+
+`task_alignment_guard.py` checks whether actual changed files stay inside the declared task scope and whether every design AC appears in both the coverage matrix and implementation manifest.
+It is wired into the completion gate. Supply changed-file evidence when available:
+
+```bash
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py gate . \
+  --phase completion \
+  --design-doc docs/design/<feature>.md \
+  --implementation-manifest docs/agent-runs/<run>/evidence/implementation-manifest.md \
+  --coverage-matrix docs/agent-runs/<run>/evidence/coverage-matrix.md \
+  --changed-files docs/agent-runs/<run>/evidence/changed-files.txt
+```
+
+The guard emits `correction_actions`:
+
+- outside declared scope -> return to `plan` or `clarify`
+- missing coverage AC -> return to `tdd-red`
+- missing manifest AC -> return to `implementation`
+
+Do not paper over drift in the completion report. Either update the design/plan before implementation continues, or remove the unrelated change.
+
 The requirements archive summarizes the final clarified requirement, acceptance-criteria status, use-case coverage, impacted services/contracts, evidence links, review/rework outcome, promoted memory entries, and follow-up opportunities. It is recommended for every completed run and required by strict completion workflows. When `--requirements-archive` is omitted, the gate auto-discovers `docs/agent-runs/<run>/requirements-archive.md` from other artifacts in the same run. Read `requirements-archive.md`.
 
 If the design is cross-service, completion requires the dependency report. Any unresolved URL/topic/tag/service mapping question blocks completion.
@@ -213,7 +235,7 @@ The Spring static check runs by default. It catches repository-local constructor
 Use the guard when the model must not skip scripts:
 
 ```bash
-python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py verify . \
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py verify . \
   --strict-workflow \
   --run-gate \
   --phase completion \
@@ -232,13 +254,33 @@ python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py verify . \
   --handoff-dir docs/agent-runs/<run>/handoffs \
   --status-file docs/agent-runs/<run>/evidence/verify.json
 
-python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py guard . \
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py guard . \
   --verify-status docs/agent-runs/<run>/evidence/verify.json \
   --strict \
   --require-completion
 ```
 
 Strict guard blocks missing prepare, disabled dependency scan, disabled dependency report writing, skipped Maven, skipped Spring static check during completion, missing clarification status, missing completion gate, failed completion gate, missing independent semantic review evidence, failed Maven, and unresolved dependency questions. For multi-service, contract/data-risk, or split-agent runs, also pass `--require-handoffs`; an empty `handoffs/` directory is acceptable only when the run explicitly stayed single-agent and no downstream handoff was consumed. A skip can pass only with an approval file containing `Approval: user-approved`.
+
+## Execution Trace
+
+Use `--trace-file docs/agent-runs/<run>/execution-trace.json` with `verify` to record phase timing. Use `execution_trace.py` directly when reviewer agents, CI jobs, or external wrappers can provide token counts or decisions:
+
+```bash
+python skills/e2e-dev-harness/scripts/execution_trace.py . \
+  --trace docs/agent-runs/<run>/execution-trace.json \
+  --phase r3-review \
+  --event finish \
+  --status ready \
+  --elapsed-ms 1200 \
+  --input-tokens 4000 \
+  --output-tokens 900 \
+  --agent reviewer-r3 \
+  --decision approved \
+  --json
+```
+
+Token counts are optional because agent runtimes expose them differently. Do not invent token numbers; record them only when the runtime reports them.
 
 ## Rework Protocol
 

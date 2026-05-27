@@ -22,7 +22,7 @@ import run_state  # noqa: E402
 def load_json(path: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return {}
 
 
@@ -30,7 +30,13 @@ def resolve(repo: Path, path: str | None) -> Path | None:
     if not path:
         return None
     value = Path(path)
-    return value if value.is_absolute() else repo / value
+    repo_root = repo.resolve()
+    resolved = (value if value.is_absolute() else repo_root / value).resolve()
+    try:
+        resolved.relative_to(repo_root)
+    except ValueError as error:
+        raise ValueError(f"Harness path resolves outside repository: {path}") from error
+    return resolved
 
 
 def registry_entry(registry: dict, artifact_type: str, owner: str = "global") -> Path | None:
@@ -60,7 +66,22 @@ def validate(
     warnings.extend("Run state: " + warning for warning in state_result["warnings"])
 
     state_data = load_json(state_path if state_path.is_absolute() else repo / state_path)
-    registry_path = resolve(repo, state_data.get("artifact_registry"))
+    if not state_data:
+        return {
+            "repo": str(repo),
+            "ready": False,
+            "blocked_reasons": blocked or ["Run state could not be loaded."],
+            "warnings": warnings,
+            "run_state": state_result,
+            "artifact_registry": None,
+            "policy": None,
+            "completion_gate": None,
+        }
+    try:
+        registry_path = resolve(repo, state_data.get("artifact_registry"))
+    except ValueError as error:
+        registry_path = None
+        blocked.append(str(error))
     registry_data = load_json(registry_path) if registry_path else {}
     registry_result = None
     if registry_path:

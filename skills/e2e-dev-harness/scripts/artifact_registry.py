@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from common import posix
@@ -50,9 +52,31 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def atomic_write_text(target: Path, text: str) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+        os.replace(tmp_name, target)
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+
+
 def resolve(repo: Path, value: str) -> Path:
+    repo_root = repo.resolve()
     path = Path(value)
-    return path if path.is_absolute() else repo / path
+    resolved = (path if path.is_absolute() else repo_root / path).resolve()
+    try:
+        resolved.relative_to(repo_root)
+    except ValueError as error:
+        raise ValueError(f"Artifact path resolves outside repository: {value}") from error
+    return resolved
 
 
 def artifact_entry(repo: Path, key: str, value: str, owner: str = "global") -> dict:
@@ -97,16 +121,25 @@ def build_registry(repo: Path, run_id: str, artifacts: dict, selected_mode: str 
 
 
 def write_registry(repo: Path, path: Path, registry: dict) -> None:
-    target = path if path.is_absolute() else repo / path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(registry, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    target = resolve(repo, str(path))
+    atomic_write_text(target, json.dumps(registry, indent=2, ensure_ascii=False) + "\n")
 
 
 def validate_registry(repo: Path, registry_path: Path, strict: bool = False) -> dict:
     repo = repo.resolve()
-    path = registry_path if registry_path.is_absolute() else repo / registry_path
     blocked: list[str] = []
     warnings: list[str] = []
+    try:
+        path = resolve(repo, str(registry_path))
+    except ValueError as error:
+        return {
+            "repo": str(repo),
+            "ready": False,
+            "blocked_reasons": [str(error)],
+            "warnings": warnings,
+            "registry": str(registry_path),
+            "artifact_count": 0,
+        }
     if not path.exists():
         return {
             "repo": str(repo),
@@ -140,7 +173,11 @@ def validate_registry(repo: Path, registry_path: Path, strict: bool = False) -> 
             continue
         if item.get("kind") == "pattern":
             continue
-        resolved = resolve(repo, item_path)
+        try:
+            resolved = resolve(repo, item_path)
+        except ValueError as error:
+            blocked.append(str(error))
+            continue
         if item.get("required_by_completion") and strict and not resolved.exists():
             blocked.append(f"Required completion artifact is missing: {item_path}")
         if resolved.exists() and resolved.is_file():
@@ -149,7 +186,10 @@ def validate_registry(repo: Path, registry_path: Path, strict: bool = False) -> 
             if recorded_hash and recorded_hash != current_hash:
                 blocked.append(f"Artifact hash is stale: {item_path}")
             elif not recorded_hash:
-                warnings.append(f"Artifact hash is missing: {item_path}")
+                if strict:
+                    blocked.append(f"Artifact hash is missing (strict mode): {item_path}")
+                else:
+                    warnings.append(f"Artifact hash is missing: {item_path}")
     return {
         "repo": str(repo),
         "ready": not blocked,
@@ -162,9 +202,19 @@ def validate_registry(repo: Path, registry_path: Path, strict: bool = False) -> 
 
 def refresh_registry(repo: Path, registry_path: Path) -> dict:
     repo = repo.resolve()
-    path = registry_path if registry_path.is_absolute() else repo / registry_path
     blocked: list[str] = []
     warnings: list[str] = []
+    try:
+        path = resolve(repo, str(registry_path))
+    except ValueError as error:
+        return {
+            "repo": str(repo),
+            "ready": False,
+            "blocked_reasons": [str(error)],
+            "warnings": warnings,
+            "registry": str(registry_path),
+            "changed": [],
+        }
     if not path.exists():
         return {
             "repo": str(repo),
@@ -198,7 +248,11 @@ def refresh_registry(repo: Path, registry_path: Path) -> dict:
         item_path = str(item.get("path", ""))
         if not item_path:
             continue
-        resolved = resolve(repo, item_path)
+        try:
+            resolved = resolve(repo, item_path)
+        except ValueError as error:
+            blocked.append(str(error))
+            continue
         old_status = item.get("status")
         old_hash = item.get("sha256", "")
         if resolved.exists():
@@ -210,7 +264,7 @@ def refresh_registry(repo: Path, registry_path: Path) -> dict:
         if item.get("status") != old_status or item.get("sha256", "") != old_hash:
             changed.append(str(item.get("id") or item_path))
     if not blocked:
-        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     return {
         "repo": str(repo),
         "ready": not blocked,

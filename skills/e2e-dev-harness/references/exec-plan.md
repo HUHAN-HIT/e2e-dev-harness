@@ -44,7 +44,7 @@ Use `docs/design/` for durable human-facing design docs and templates. Use `docs
 Generate a starter plan:
 
 ```bash
-python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py plan . \
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py plan . \
   --design-doc docs/design/<feature>.md \
   --create-archive
 ```

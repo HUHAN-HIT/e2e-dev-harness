@@ -42,7 +42,7 @@ DOC_PREFIXES = ("docs/design/", "docs/requirements/", "docs/review-profiles/", "
 def load_json(path: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return {}
 
 

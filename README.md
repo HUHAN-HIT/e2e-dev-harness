@@ -13,6 +13,8 @@ skills/e2e-dev-harness/
     claude-code-settings.example.json
     codex-pre-action.example.json
     gemini-pre-action.example.json
+  ci/
+    github-actions-harness.yml
   references/
     execution-control.md
     implementation-gates.md
@@ -20,16 +22,20 @@ skills/e2e-dev-harness/
     ...
   review-profiles/
   scripts/
-    e2e_dev_workflow.py
+    e2e_dev_harness.py
+    install_hooks.py
     phase_guard.py
+    auto_transition.py
     run_state.py
     artifact_registry.py
     harness_verify.py
     run_summary.py
+    execution_trace.py
     task_tier.py
+    task_alignment_guard.py
     ...
 tests/
-  test_e2e_dev_workflow_scripts.py
+  test_e2e_dev_harness_scripts.py
 ```
 
 ## Quick Start
@@ -37,7 +43,7 @@ tests/
 Run discovery before implementation:
 
 ```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_workflow.py prepare . `
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py prepare . `
   --design-doc docs\design\<feature>.md `
   --workflow-tier auto `
   --agent-mode strict `
@@ -49,7 +55,7 @@ python skills\e2e-dev-harness\scripts\e2e_dev_workflow.py prepare . `
 After affected services or paths are known, create an agent-run archive:
 
 ```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_workflow.py plan . `
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py plan . `
   --design-doc docs\design\<feature>.md `
   --service-scope affected `
   --service services\<service> `
@@ -80,14 +86,24 @@ All tiers keep auditable evidence, test proof, and replayable run records. The t
 
 | Tier | Use When | Required Evidence |
 | --- | --- | --- |
-| `basic` | Small scoped delivery work | clarification, bounded impact summary, test evidence, completion proof, run-state, artifact registry, run summary |
+| `basic` | Small scoped delivery work | clarification, bounded impact summary, test evidence, completion proof, task alignment, run-state, artifact registry, run summary |
 | `standard` | Normal requirement implementation | `basic` plus R1/R2/R3 reviews, coverage matrix, requirements archive |
 | `critical` | MQ/HTTP/DB/security/payment/refund/cross-service work | `standard` plus GitNexus impact artifact, contracts, service plans, handoffs, strict guard |
 | `audited` | Audit, compliance, incident, or production-critical work | `critical` plus harness policy, harness replay, completion replay, state history |
 
+## Dependency Scan Parser
+
+`cross_service_dependency_scan.py` reports `java_parser.backend`. When `tree_sitter` and `tree_sitter_java` are unavailable it uses `regex-fallback` and emits a warning, because silently claiming AST precision would hide missed Java call paths. Treat `regex-fallback` as acceptable for lightweight discovery, but require GitNexus evidence or a bundled tree-sitter runtime before depending on it for high-risk Java impact decisions.
+
 ## Hook Configuration
 
 The hook examples are templates. To enforce them, copy or merge the matching file into the target runtime's project hook configuration.
+You can also install or check project-local hook configuration with:
+
+```powershell
+python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime claude --json
+python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime claude --check --json
+```
 
 All examples call the same guard:
 
@@ -148,7 +164,7 @@ The intended mapping is:
 }
 ```
 
-If the Codex host does not expose pre-action hooks, use `phase_guard.py` in the local wrapper or CI before allowing file-write steps, and always run `e2e_dev_workflow.py guard` over the saved verify result.
+If the Codex host does not expose pre-action hooks, use `phase_guard.py` in the local wrapper or CI before allowing file-write steps, and always run `e2e_dev_harness.py guard` over the saved verify result.
 
 ### Gemini CLI
 
@@ -171,6 +187,17 @@ The intended mapping is:
 
 If the runner uses different tool names, keep the command and update only the tool matcher list.
 
+### Post-Gate Transition Adapter
+
+When a runtime can run post-tool hooks, use `auto_transition.py` after a gate status file is written. It advances state only from a ready gate status artifact; it does not bypass `gate`.
+
+```powershell
+python skills\e2e-dev-harness\scripts\auto_transition.py . `
+  --status-file docs\agent-runs\<run>\evidence\implementation-gate.json `
+  --state docs\agent-runs\<run>\run-state.json `
+  --json
+```
+
 ## Verify Hook Behavior
 
 Create or locate a run archive, then check a code write before implementation:
@@ -191,17 +218,20 @@ Expected before implementation:
 }
 ```
 
-Move the run into implementation phase after required planning/red-test evidence exists:
+Open the implementation phase through the implementation gate after required planning/red-test evidence exists. The gate updates `run-state.json` and `.phase-lock` automatically when it passes:
 
 ```powershell
-python skills\e2e-dev-harness\scripts\run_state.py . `
-  --state docs\agent-runs\<run>\run-state.json `
-  --transition IMPLEMENTED `
-  --gate implementation `
-  --gate-status started `
-  --evidence docs\agent-runs\<run>\evidence\red-test.txt `
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py gate . `
+  --phase implementation `
+  --run-state docs\agent-runs\<run>\run-state.json `
+  --design-doc docs\design\<feature>.md `
+  --kg-status-file docs\agent-runs\<run>\evidence\knowledge-graph-refresh.json `
+  --review-dir docs\agent-runs\<run>\reviews `
+  --red-test-evidence docs\agent-runs\<run>\evidence\red-test.txt `
   --json
 ```
+
+Use `run_state.py --transition IMPLEMENTED` only as an explicit repair command when a previously successful gate did not write the transition.
 
 Run the same `phase_guard.py` command again. Expected:
 
@@ -216,13 +246,22 @@ Run the same `phase_guard.py` command again. Expected:
 Replay a run and write summary artifacts:
 
 ```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_workflow.py verify . `
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py verify . `
   --harness `
   --workflow-tier critical `
   --state docs\agent-runs\<run>\run-state.json `
   --strict-workflow `
   --summary-json docs\agent-runs\<run>\run-summary.json `
   --summary-md docs\agent-runs\<run>\run-summary.md `
+  --json
+```
+
+Record phase timing and optional token usage during `verify`:
+
+```powershell
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py verify . `
+  --skip-maven `
+  --trace-file docs\agent-runs\<run>\execution-trace.json `
   --json
 ```
 
@@ -237,10 +276,10 @@ python skills\e2e-dev-harness\scripts\artifact_registry.py . `
 
 ## CI Guard
 
-`workflow_guard.py` and `e2e_dev_workflow.py guard` return exit code `0` when ready and `2` when blocked.
+`workflow_guard.py` and `e2e_dev_harness.py guard` return exit code `0` when ready and `2` when blocked.
 
 ```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_workflow.py guard . `
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py guard . `
   --verify-status docs\agent-runs\<run>\evidence\verify.json `
   --strict `
   --require-completion `
@@ -248,6 +287,11 @@ python skills\e2e-dev-harness\scripts\e2e_dev_workflow.py guard . `
 ```
 
 Use this in pre-push or CI after the implementation gate writes a verify status artifact.
+For GitHub Actions, copy and edit:
+
+```text
+skills/e2e-dev-harness/ci/github-actions-harness.yml
+```
 
 ## Development Checks
 

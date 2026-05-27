@@ -31,6 +31,23 @@ CROSS_SERVICE_RE = re.compile(
 )
 
 
+def java_parser_backend() -> dict:
+    try:
+        import tree_sitter  # type: ignore  # noqa: F401
+        import tree_sitter_java  # type: ignore  # noqa: F401
+    except Exception:
+        return {
+            "backend": "regex-fallback",
+            "tree_sitter_available": False,
+            "warning": "tree-sitter Java parser is unavailable; deterministic scan uses regex fallback and may miss nested Java syntax.",
+        }
+    return {
+        "backend": "tree-sitter-java-available",
+        "tree_sitter_available": True,
+        "warning": "",
+    }
+
+
 def walk_files(root: Path):
     for current, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
@@ -524,6 +541,7 @@ def scan(
     dmq_edges, dmq_questions = dmq_dependencies(producers, consumers)
     dependencies = http_edges + dmq_edges
     unresolved = sorted(dict.fromkeys(http_questions + dmq_questions))
+    parser_backend = java_parser_backend()
     gitnexus, gitnexus_warnings = gitnexus_evidence(
         repo,
         dependencies or [{"source_service": service} for service in services],
@@ -531,12 +549,15 @@ def scan(
         command_runner,
         gitnexus_available,
     )
-    warnings = gitnexus_warnings
+    warnings = list(gitnexus_warnings)
+    if parser_backend.get("warning"):
+        warnings.append(str(parser_backend["warning"]))
     result = {
         "repo": str(repo),
         "ready": not unresolved,
         "services": services,
         "tool_priority": ["gitnexus", "deterministic-scan", "graphify"],
+        "java_parser": parser_backend,
         "gitnexus": gitnexus,
         "graphify": {
             "mode": graphify_mode,

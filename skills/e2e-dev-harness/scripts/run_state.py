@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -73,10 +75,25 @@ def build_state(
     }
 
 
+def atomic_write_text(target: Path, text: str) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+        os.replace(tmp_name, target)
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+
+
 def write_state(repo: Path, path: Path, state: dict) -> None:
     target = path if path.is_absolute() else repo / path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    atomic_write_text(target, json.dumps(state, indent=2, ensure_ascii=False) + "\n")
     write_phase_lock(repo, target, state)
 
 
@@ -94,7 +111,7 @@ def phase_lock_payload(state: dict) -> dict:
 def write_phase_lock(repo: Path, state_path: Path, state: dict) -> Path:
     target = state_path if state_path.is_absolute() else repo / state_path
     lock = target.parent / PHASE_LOCK
-    lock.write_text(json.dumps(phase_lock_payload(state), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    atomic_write_text(lock, json.dumps(phase_lock_payload(state), indent=2, ensure_ascii=False) + "\n")
     return lock
 
 

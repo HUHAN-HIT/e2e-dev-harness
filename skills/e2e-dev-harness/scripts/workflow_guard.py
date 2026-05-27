@@ -85,7 +85,7 @@ def validate_prepare(prepare: dict | None, strict: bool, approval_text: str) -> 
     warnings: list[str] = []
     approved = has_approval(approval_text)
     if not isinstance(prepare, dict):
-        return ["Prepare status is missing; run e2e_dev_workflow.py prepare before later phases."], warnings
+        return ["Prepare status is missing; run e2e_dev_harness.py prepare before later phases."], warnings
     if prepare.get("blocked"):
         blocked.append("Prepare phase is blocked.")
     for component in ("agent_instructions", "superpowers", "memory", "orchestration"):

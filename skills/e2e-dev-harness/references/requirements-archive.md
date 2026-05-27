@@ -9,7 +9,7 @@ Create the archive in the agent-run directory when `plan --create-archive` write
 Run completion validation with:
 
 ```bash
-python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py gate . \
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py gate . \
   --phase completion \
   --requirements-archive docs/agent-runs/<run>/requirements-archive.md
 ```

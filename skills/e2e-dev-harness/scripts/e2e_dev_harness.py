@@ -8,6 +8,7 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -18,6 +19,7 @@ import agent_instructions  # noqa: E402
 import artifact_registry  # noqa: E402
 import clarification_gate  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
+import execution_trace  # noqa: E402
 import implementation_gate  # noqa: E402
 import kg_refresh  # noqa: E402
 import handoff_gate  # noqa: E402
@@ -97,6 +99,35 @@ def without_status_file(args):
     values = vars(args).copy()
     values["status_file"] = None
     return argparse.Namespace(**values)
+
+
+def trace_event(
+    args,
+    phase: str,
+    event: str,
+    status: str = "",
+    elapsed_ms: int | None = None,
+    artifacts: list[str] | None = None,
+) -> None:
+    trace_file = getattr(args, "trace_file", None)
+    if not trace_file:
+        return
+    execution_trace.append_event(
+        as_repo(args.repo),
+        trace_file,
+        phase,
+        event,
+        status=status,
+        elapsed_ms=elapsed_ms,
+        artifacts=artifacts,
+    )
+
+
+def timed_phase(args, phase: str, func, *call_args):
+    started = time.perf_counter()
+    code, result = func(*call_args)
+    trace_event(args, phase, "finish", "ready" if code == 0 else "blocked", int((time.perf_counter() - started) * 1000))
+    return code, result
 
 
 def superpowers_status(mode: str, phase: str) -> dict:
@@ -965,24 +996,50 @@ def gate(args) -> tuple[int, dict]:
             getattr(args, "require_requirements_archive", False)
             or (getattr(args, "strict_workflow", False) and args.phase == "completion")
         ),
+        changed_files=getattr(args, "changed_files", None),
+        base_ref=getattr(args, "base_ref", None),
     )
+    if result.get("ready"):
+        transition_target = {
+            "implementation": "IMPLEMENTED",
+            "completion": "VERIFIED",
+        }.get(args.phase)
+        run_state_path = getattr(args, "run_state", None) or getattr(args, "state", None)
+        if transition_target and run_state_path:
+            evidence = args.red_test_evidence if args.phase == "implementation" else (
+                args.unit_test_evidence or args.implementation_manifest or args.red_test_evidence
+            )
+            transition = run_state.transition_state(
+                repo,
+                run_state_path,
+                transition_target,
+                gate=args.phase,
+                gate_status="passed",
+                evidence=resolve_repo_path(repo, evidence),
+            )
+            result["run_state_transition"] = transition
+            if not transition["ready"]:
+                result["ready"] = False
+                result["blocked_reasons"].extend("Run state transition: " + reason for reason in transition["blocked_reasons"])
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
 
 
 def verify(args) -> tuple[int, dict]:
     phase_args = without_status_file(args)
-    prepare_code, prep = prepare(phase_args)
+    total_started = time.perf_counter()
+    prepare_code, prep = timed_phase(args, "prepare", prepare, phase_args)
     clarify_code = 0
     clarify_result = None
     if args.design_doc:
-        clarify_code, clarify_result = clarify(phase_args)
+        clarify_code, clarify_result = timed_phase(args, "clarify", clarify, phase_args)
     gate_result = None
     gate_code = 0
     if args.run_gate:
-        gate_code, gate_result = gate(phase_args)
+        gate_code, gate_result = timed_phase(args, f"gate:{args.phase}", gate, phase_args)
 
     maven_result = {"skipped": True}
+    maven_started = time.perf_counter()
     if not args.skip_maven:
         command = ["mvn", "test"] if not args.module else ["mvn", "-pl", args.module, "-am", "test"]
         maven_executable = shutil.which("mvn") or shutil.which("mvn.cmd")
@@ -1005,6 +1062,13 @@ def verify(args) -> tuple[int, dict]:
                 "stdout_tail": completed.stdout[-4000:],
                 "stderr_tail": completed.stderr[-4000:],
             }
+    trace_event(
+        args,
+        "maven",
+        "finish",
+        "skipped" if maven_result.get("skipped") else ("ready" if maven_result.get("exit_code") == 0 else "blocked"),
+        int((time.perf_counter() - maven_started) * 1000),
+    )
     result = {
         "workflow": {
             "strict": getattr(args, "strict_workflow", False),
@@ -1071,6 +1135,14 @@ def verify(args) -> tuple[int, dict]:
         result["harness"] = harness_result
         if not harness_result["ready"]:
             exit_code = max(exit_code, 2)
+    trace_event(
+        args,
+        "verify",
+        "finish",
+        "ready" if exit_code == 0 else "blocked",
+        int((time.perf_counter() - total_started) * 1000),
+        [str(args.status_file)] if args.status_file else None,
+    )
     write_status(args.status_file, result)
     return exit_code, result
 
@@ -1156,6 +1228,8 @@ def main() -> int:
     gate_parser.add_argument("--require-requirements-archive", action="store_true")
     gate_parser.add_argument("--dependency-report", type=Path)
     gate_parser.add_argument("--implementation-manifest", type=Path)
+    gate_parser.add_argument("--changed-files", type=Path)
+    gate_parser.add_argument("--base-ref")
     gate_parser.add_argument("--rework-dir", action="append", type=Path)
     gate_parser.add_argument("--review-dir", action="append", type=Path)
     gate_parser.add_argument("--review-profile", type=Path)
@@ -1165,6 +1239,7 @@ def main() -> int:
     gate_parser.add_argument("--require-handoffs", action="store_true")
     gate_parser.add_argument("--require-semantic-reviews", action="store_true")
     gate_parser.add_argument("--skip-spring-static-check", action="store_true")
+    gate_parser.add_argument("--run-state", type=Path)
     gate_parser.add_argument("--status-file", type=Path)
 
     verify_parser = subparsers.add_parser("verify", help="Run prepare, clarification, optional gate, and optional Maven.")
@@ -1182,6 +1257,8 @@ def main() -> int:
     verify_parser.add_argument("--require-requirements-archive", action="store_true")
     verify_parser.add_argument("--dependency-report", type=Path)
     verify_parser.add_argument("--implementation-manifest", type=Path)
+    verify_parser.add_argument("--changed-files", type=Path)
+    verify_parser.add_argument("--base-ref")
     verify_parser.add_argument("--rework-dir", action="append", type=Path)
     verify_parser.add_argument("--review-dir", action="append", type=Path)
     verify_parser.add_argument("--review-profile", type=Path)
@@ -1191,6 +1268,7 @@ def main() -> int:
     verify_parser.add_argument("--require-handoffs", action="store_true")
     verify_parser.add_argument("--require-semantic-reviews", action="store_true")
     verify_parser.add_argument("--skip-spring-static-check", action="store_true")
+    verify_parser.add_argument("--run-state", type=Path)
     verify_parser.add_argument("--skip-maven", action="store_true")
     verify_parser.add_argument("--strict-workflow", action="store_true")
     verify_parser.add_argument("--workflow-approval", type=Path)
@@ -1201,6 +1279,7 @@ def main() -> int:
     verify_parser.add_argument("--run-completion-gate", action="store_true")
     verify_parser.add_argument("--summary-json", type=Path)
     verify_parser.add_argument("--summary-md", type=Path)
+    verify_parser.add_argument("--trace-file", type=Path)
 
     guard_parser = subparsers.add_parser("guard", help="Run strict workflow guard against a verify status artifact.")
     guard_parser.add_argument("repo", nargs="?", default=".", type=Path)

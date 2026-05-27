@@ -13,15 +13,21 @@ def load_json(path: Path | None) -> dict:
         return {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return {}
 
 
 def resolve(repo: Path, value: str | None) -> Path | None:
     if not value:
         return None
+    repo_root = repo.resolve()
     path = Path(value)
-    return path if path.is_absolute() else repo / path
+    resolved = (path if path.is_absolute() else repo_root / path).resolve()
+    try:
+        resolved.relative_to(repo_root)
+    except ValueError:
+        return None
+    return resolved
 
 
 def status_counts(artifacts: list[dict]) -> dict[str, int]:
@@ -35,9 +41,13 @@ def status_counts(artifacts: list[dict]) -> dict[str, int]:
 def required_missing(repo: Path, artifacts: list[dict]) -> list[str]:
     missing: list[str] = []
     for item in artifacts:
-        if not item.get("required_by_completion") or item.get("kind") == "pattern":
+        if not item.get("required_by_completion"):
             continue
         item_path = str(item.get("path") or "")
+        if item.get("kind") == "pattern":
+            if item_path:
+                missing.append(item_path)
+            continue
         resolved = resolve(repo, item_path)
         if item_path and resolved and not resolved.exists():
             missing.append(item_path)
@@ -61,6 +71,13 @@ def review_artifacts(artifacts: list[dict]) -> dict[str, str]:
     return found
 
 
+def artifact_path(artifacts: list[dict], artifact_type: str) -> str:
+    for item in artifacts:
+        if item.get("type") == artifact_type and item.get("path"):
+            return str(item["path"])
+    return ""
+
+
 def next_actions(summary: dict) -> list[str]:
     actions: list[str] = []
     if summary["required_missing_count"]:
@@ -81,6 +98,8 @@ def build_summary(repo: Path, state_path: Path, verify_result: dict | None = Non
     registry_path = resolve(repo, state_data.get("artifact_registry"))
     registry_data = load_json(registry_path)
     artifacts = [item for item in registry_data.get("artifacts", []) if isinstance(item, dict)]
+    trace_path = resolve(repo, artifact_path(artifacts, "execution_trace")) or (resolved_state.parent / "execution-trace.json")
+    trace_data = load_json(trace_path)
     verify = verify_result or {}
     blocked = verify.get("blocked_reasons", []) if isinstance(verify.get("blocked_reasons", []), list) else []
     warnings = verify.get("warnings", []) if isinstance(verify.get("warnings", []), list) else []
@@ -104,6 +123,7 @@ def build_summary(repo: Path, state_path: Path, verify_result: dict | None = Non
         "warnings": warnings,
         "run_state": str(resolved_state),
         "artifact_registry": str(registry_path) if registry_path else "",
+        "execution_trace": trace_data.get("summary", {}) if isinstance(trace_data.get("summary"), dict) else {},
     }
     summary["next_actions"] = next_actions(summary)
     return summary
@@ -124,6 +144,7 @@ def markdown(summary: dict) -> str:
         f"- Required missing: {summary.get('required_missing_count', 0)}",
         f"- Blockers: {summary.get('blocked_count', 0)}",
         f"- Warnings: {summary.get('warning_count', 0)}",
+        f"- Trace elapsed ms: {summary.get('execution_trace', {}).get('elapsed_ms_total', 0)}",
         "",
         "## Semantic Reviews",
     ]

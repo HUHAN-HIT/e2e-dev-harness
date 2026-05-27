@@ -21,7 +21,7 @@ For runtime-specific invocation, install paths, and fallback behavior, read `ref
 Start every non-trivial run with the unified prepare command:
 
 ```bash
-python skills/e2e-dev-harness/scripts/e2e_dev_workflow.py prepare . \
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py prepare . \
   --design-doc docs/design/<feature>.md \
   --workflow-tier auto \
   --agent-mode strict \
@@ -64,13 +64,20 @@ For command details, read `references/implementation-gates.md`.
 - Archive the final requirement summary after completion so future analysis can read outcomes without replaying every run artifact. Read `references/requirements-archive.md`.
 - Completion requires task-completion proof, not chat claims: every AC has concrete code refs and concrete test refs.
   Semantic reviews, implementation manifest, coverage matrix, unit-test JSON, business review, dependency report when cross-service,
-  closed rework, and passing guard are completion evidence.
+  task-alignment evidence, closed rework, and passing guard are completion evidence.
+- Task drift is a blocker. Changed production files must stay inside declared design/manifest/coverage scope.
+  If a change is outside scope, return to `plan` or `clarify`; do not normalize the drift in the final report.
 - Every created agent run has `run-state.json` and `artifact-registry.json`.
   Treat them as the portable harness state for Codex, Claude Code, or generic CLI agents.
 - Runtime hooks can enforce phase locks before code-writing tools run.
-  Use `phase_guard.py` and hook examples when the agent runtime supports pre-action checks. Read `references/execution-control.md`.
+  Use `install_hooks.py`, `phase_guard.py`, and hook examples when the agent runtime supports pre-action checks.
+  Read `references/execution-control.md`.
+  After red-test evidence exists, run `e2e_dev_harness.py gate --phase implementation --run-state docs/agent-runs/<run>/run-state.json`;
+  a passing gate opens the `IMPLEMENTED` phase automatically.
 - Harness verification can replay a run from state and policy with `harness_verify.py` or `verify --harness`.
   Emit `run-summary.json` / `run-summary.md` for CI, reviewer agents, evaluation, and later requirement analysis.
+- Use `execution_trace.py` or `verify --trace-file` to record phase timing, decisions, artifacts, and optional token counts.
+  Agent start/stop is runtime-specific; this harness enforces portable state, hooks, gates, and rework routing instead of claiming non-portable process control.
 
 ## Workflow
 
@@ -83,9 +90,10 @@ For command details, read `references/implementation-gates.md`.
 7. TDD green/refactor: implement with the Superpowers Red-Green-Refactor cycle.
 8. R3 implementation review: independent reviewer traces every AC through the concrete code path.
    Then check completeness, tests, security, anti-patterns, and project-pattern consistency. Use a review profile when the project has required checklist items.
-9. Completion gate: prove every acceptance criterion and required artifact has use cases, service ownership, concrete tests, concrete code refs, business review, and closed rework.
+9. Completion gate: prove every acceptance criterion and required artifact has use cases, service ownership, concrete tests, concrete code refs, business review, task alignment, and closed rework.
 10. Rework loop: findings create rework items and return to the earliest required phase before more production-code edits.
 11. Strict guard/report: run `verify --strict-workflow` or `guard`, capture accepted memory updates, and report evidence plus residual risks.
+12. Trace/archive: attach `execution-trace.json` and summaries when reporting or evaluating the run.
 
 ## Agent Orchestration
 
@@ -146,7 +154,7 @@ Missing producer/consumer ACKs, contract tests, or DMQ topic/tag/group details b
 
 ## Gates And Rework
 
-Use `e2e_dev_workflow.py gate` at planning, implementation, and completion phases. Use `verify --strict-workflow` plus `guard` when scripts must be enforceable in pre-push or CI.
+Use `e2e_dev_harness.py gate` at planning, implementation, and completion phases. Use `verify --strict-workflow` plus `guard` when scripts must be enforceable in pre-push or CI.
 
 Gate details live in `references/implementation-gates.md`, including:
 

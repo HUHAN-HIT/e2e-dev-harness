@@ -1,4 +1,4 @@
-# Agent Orchestration
+﻿# Agent Orchestration
 
 Use this reference when a Java/Spring 6/Maven change benefits from smaller, isolated agent contexts.
 
@@ -12,6 +12,8 @@ Use this reference when a Java/Spring 6/Maven change benefits from smaller, isol
 | `auto` | Default recommendation mode | The helper chooses `single` or `multi` based on repo shape, design doc size, services, and risk keywords; `single-review` is explicit only. |
 
 The orchestration result includes `multi_agent_decision`. Treat it as the audit record for why multi-agent development was or was not used. The decision checks affected service count, HTTP/DMQ/shared contracts, data/schema/config/security/payment/refund risk, design size, and explicit user requests.
+
+Agent start/stop and scheduler APIs are runtime-specific. The portable harness control plane is phase locks, blocking hooks, handoff ready markers, state transitions, rework routing, and execution traces. Do not claim that the harness can launch or terminate agents unless the active runtime provides that integration; instead, record which runtime/session owns each role and block unsafe next actions through gates.
 
 Do not let an implementation agent review its own work. If the runtime cannot spawn subagents, use a separate reviewer session with only the review request and allowed artifact inputs. Same-chat/self-review is not an acceptable fallback for R1/R2/R3.
 
@@ -221,6 +223,7 @@ Gate:
 - Confirm every module/service listed in the design appears in the implementation manifest. Missing modules become `missing-code` rework.
 - Confirm design-named artifacts such as response objects, config services, listeners, clients, DTOs, or utility classes appear in the manifest and exist in the repo.
 - Every acceptance criterion extracted from the design document maps to a use case, service plan, tests, code refs, and business review evidence before completion.
+- Run task alignment with changed-file evidence when available. If changed files are outside declared scope, return to `plan` or `clarify` before allowing more production-code edits.
 - Confirm the global `green-test.txt` or service `unit-test-evidence.txt` files contain structured command JSON with `exit_code: 0`.
 - Confirm cross-service designs have `cross-service-dependencies.json` and that it has no unresolved URL/topic/tag/service mapping questions.
 - Confirm Spring static check is clean or an explicit `--skip-spring-static-check` exception is justified.
@@ -241,6 +244,7 @@ Route by problem type:
 | `missing-use-case`, `business-logic-risk` | `use-case-design` |
 | `missing-test` | `test-case-design` |
 | `missing-code`, `test-failure` | `tdd-implement` |
+| `scope-drift`, `task-drift` | `plan` or `clarify` |
 | `multi-service-contract` | `plan` |
 
 The receiving agent must load only the relevant design, handoff, service plan, AGENT files, graph status, memory, and rework item. For `tdd-implement`, the first action is to add or update the required red test and observe it failing for the expected reason.
@@ -285,8 +289,8 @@ Parallel work is useful only after requirements are stable:
 3. Run `memory_capture.py scan .`.
 4. Run `orchestration_plan.py . --mode auto --service-scope discovery --design-doc <doc>` to get service candidates and next steps only.
 5. After affected services are clear, run `orchestration_plan.py . --mode auto --design-doc <doc>`; if the design names affected modules, auto mode selects them. Use `--service-scope affected --service services/<service>` only when you need to override or disambiguate.
-6. Create an archive with `e2e_dev_workflow.py plan . --design-doc <doc> --create-archive`; verify the archive contains one `service-plans/<service>/code-agent.md` per affected service/module.
+6. Create an archive with `e2e_dev_harness.py plan . --design-doc <doc> --create-archive`; verify the archive contains one `service-plans/<service>/code-agent.md` per affected service/module.
 7. In `multi` mode, update the handoff artifacts under `docs/agent-runs/<date-feature>/handoffs/` and the service plans under `docs/agent-runs/<date-feature>/service-plans/<service>/`.
 8. Run R1/R2/R3 semantic reviews at the phase boundaries and convert findings into rework items.
 9. Gate each phase with review before passing work forward.
-10. Run `e2e_dev_workflow.py gate . --phase completion ... --review-dir docs/agent-runs/<run>/reviews --handoff-dir docs/agent-runs/<run>/handoffs --require-handoffs --contract-dir docs/agent-runs/<run>/contracts` before reporting done for multi-service/split-agent work; explicit review dirs are merged with inferred service-local reviews from the same agent run. Include additional service-local `--review-dir` values, `--implementation-manifest`, and `--rework-dir` when the run uses non-standard locations.
+10. Run `e2e_dev_harness.py gate . --phase completion ... --review-dir docs/agent-runs/<run>/reviews --handoff-dir docs/agent-runs/<run>/handoffs --require-handoffs --contract-dir docs/agent-runs/<run>/contracts` before reporting done for multi-service/split-agent work; explicit review dirs are merged with inferred service-local reviews from the same agent run. Include additional service-local `--review-dir` values, `--implementation-manifest`, and `--rework-dir` when the run uses non-standard locations.
