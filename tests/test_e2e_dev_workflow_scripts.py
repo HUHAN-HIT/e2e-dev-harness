@@ -20,6 +20,7 @@ if str(SCRIPTS) not in sys.path:
 
 import clarification_gate  # noqa: E402
 import agent_instructions  # noqa: E402
+import artifact_registry  # noqa: E402
 import coverage_gate  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import e2e_dev_workflow  # noqa: E402
@@ -30,6 +31,7 @@ import implementation_manifest  # noqa: E402
 import kg_refresh  # noqa: E402
 import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
+import run_state  # noqa: E402
 import requirements_archive  # noqa: E402
 import superpowers_probe  # noqa: E402
 import reviewer_gate  # noqa: E402
@@ -4701,6 +4703,14 @@ class OrchestrationArtifactTests(unittest.TestCase):
             self.assertTrue((repo / result["handoff_artifacts"]["requirements_archive"]).exists())
             self.assertTrue((repo / result["handoff_artifacts"]["impact_summary"]).exists())
             self.assertTrue((repo / result["handoff_artifacts"]["impact_evidence"]).exists())
+            self.assertTrue((repo / result["handoff_artifacts"]["artifact_registry"]).exists())
+            self.assertTrue((repo / result["handoff_artifacts"]["run_state"]).exists())
+            registry = json.loads((repo / result["handoff_artifacts"]["artifact_registry"]).read_text(encoding="utf-8"))
+            state = json.loads((repo / result["handoff_artifacts"]["run_state"]).read_text(encoding="utf-8"))
+            self.assertEqual("e2e-dev-workflow.artifact-registry.v1", registry["schema"])
+            self.assertEqual("e2e-dev-workflow.run-state.v1", state["schema"])
+            self.assertEqual("PLANNED", state["lifecycle"])
+            self.assertEqual(result["handoff_artifacts"]["artifact_registry"], state["artifact_registry"])
             archive_text = (repo / result["handoff_artifacts"]["requirements_archive"]).read_text(encoding="utf-8")
             self.assertIn("Final Clarified Requirement", archive_text)
             self.assertIn("Acceptance Criteria Status", archive_text)
@@ -4901,6 +4911,47 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertIn("Reviewer Agent:", request_text)
         self.assertIn("Forbidden:", request_text)
         self.assertIn("Output:", request_text)
+
+    def test_artifact_registry_detects_stale_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            artifact = repo / "docs" / "agent-runs" / "run" / "exec-plan.md"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("initial\n", encoding="utf-8")
+            artifacts = {"exec_plan": "docs/agent-runs/run/exec-plan.md"}
+            registry = artifact_registry.build_registry(repo, "run", artifacts, "single", [])
+            registry_path = repo / "docs" / "agent-runs" / "run" / "artifact-registry.json"
+            artifact_registry.write_registry(repo, registry_path, registry)
+            artifact.write_text("changed\n", encoding="utf-8")
+
+            result = artifact_registry.validate_registry(repo, registry_path)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("stale" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_run_state_validates_artifact_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            artifact = repo / "docs" / "agent-runs" / "run" / "exec-plan.md"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("plan\n", encoding="utf-8")
+            registry = artifact_registry.build_registry(
+                repo,
+                "run",
+                {"exec_plan": "docs/agent-runs/run/exec-plan.md"},
+                "single",
+                [],
+            )
+            registry_path = repo / "docs" / "agent-runs" / "run" / "artifact-registry.json"
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            artifact_registry.write_registry(repo, registry_path, registry)
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json")
+            run_state.write_state(repo, state_path, state)
+
+            result = run_state.validate_state(repo, state_path)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("PLANNED", result["lifecycle"])
 
     def test_multi_agent_plan_splits_code_developers_by_service(self) -> None:
         artifacts = orchestration_plan.artifacts(

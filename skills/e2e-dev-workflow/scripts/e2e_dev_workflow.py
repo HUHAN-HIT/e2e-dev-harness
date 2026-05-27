@@ -15,6 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import agent_instructions  # noqa: E402
+import artifact_registry  # noqa: E402
 import clarification_gate  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import implementation_gate  # noqa: E402
@@ -22,6 +23,7 @@ import kg_refresh  # noqa: E402
 import handoff_gate  # noqa: E402
 import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
+import run_state  # noqa: E402
 import superpowers_probe  # noqa: E402
 import workflow_guard  # noqa: E402
 
@@ -391,6 +393,8 @@ This is a living plan. Keep it current while implementing the feature.
 ## Handoff Artifacts
 
 - Agent run directory: {artifacts['agent_run_dir']}
+- Run state: {artifacts['run_state']}
+- Artifact registry: {artifacts['artifact_registry']}
 - Requirements: {artifacts['requirements']}
 - Impact summary: {artifacts['impact_summary']}
 - Raw impact evidence: {artifacts['impact_evidence']}
@@ -879,6 +883,27 @@ def plan(args) -> tuple[int, dict]:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(exec_plan_text(repo, args.design_doc, result), encoding="utf-8")
         result["exec_plan_written"] = str(target)
+    if args.create_archive:
+        registry = artifact_registry.build_registry(
+            repo,
+            result["agent_run_dir"],
+            result["handoff_artifacts"],
+            result.get("selected_mode", ""),
+            result.get("selected_services", []),
+        )
+        registry_path = require_repo_path(repo, Path(result["handoff_artifacts"]["artifact_registry"]), "artifact registry")
+        artifact_registry.write_registry(repo, registry_path, registry)
+        state = run_state.build_state(
+            result["agent_run_dir"],
+            result.get("selected_mode", ""),
+            result.get("selected_services", []),
+            result["handoff_artifacts"]["artifact_registry"],
+            lifecycle="PLANNED",
+        )
+        state_path = require_repo_path(repo, Path(result["handoff_artifacts"]["run_state"]), "run state")
+        run_state.write_state(repo, state_path, state)
+        result["artifact_registry_written"] = str(registry_path)
+        result["run_state_written"] = str(state_path)
     write_status(args.status_file, result)
     return 0, result
 

@@ -62,6 +62,8 @@ For command details, read `references/implementation-gates.md`.
 - Completion requires task-completion proof, not chat claims: every AC has concrete code refs and concrete test refs.
   Semantic reviews, implementation manifest, coverage matrix, unit-test JSON, business review, dependency report when cross-service,
   closed rework, and passing guard are completion evidence.
+- Every created agent run has `run-state.json` and `artifact-registry.json`.
+  Treat them as the portable harness state for Codex, Claude Code, or generic CLI agents.
 
 ## Workflow
 
@@ -141,6 +143,7 @@ Use `e2e_dev_workflow.py gate` at planning, implementation, and completion phase
 
 Gate details live in `references/implementation-gates.md`, including:
 
+- run-state and artifact registry validation
 - required review/request/invocation fields
 - review profiles, project discovery, inheritance, and required checklist coverage
 - completion manifest and coverage matrix rules

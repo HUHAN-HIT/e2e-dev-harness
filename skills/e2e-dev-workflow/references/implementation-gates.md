@@ -43,6 +43,31 @@ python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . \
 
 Planning checks clarification readiness, knowledge graph status, and R1 design review. Implementation additionally requires red-test evidence and R1+R2 reviews. Completion requires design doc, red-test evidence, unit-test command evidence, business review, R1+R2+R3 reviews, coverage matrix, implementation manifest, dependency report when cross-service, closed rework, and Spring static check unless explicitly skipped. Add `--require-handoffs` for multi-service, contract/data-risk, or split-agent runs.
 
+## Run State And Artifact Registry
+
+`plan --create-archive` writes:
+
+- `docs/agent-runs/<run>/run-state.json`
+- `docs/agent-runs/<run>/artifact-registry.json`
+
+The run state records lifecycle, selected mode, services, gate status placeholders, and the artifact registry path.
+The registry records every planned artifact with type, owner, path, completion requirement, status, and SHA-256 when the file exists.
+
+Validate them with:
+
+```bash
+python skills/e2e-dev-workflow/scripts/run_state.py . \
+  --state docs/agent-runs/<run>/run-state.json \
+  --json
+
+python skills/e2e-dev-workflow/scripts/artifact_registry.py . \
+  --registry docs/agent-runs/<run>/artifact-registry.json \
+  --strict \
+  --json
+```
+
+Use non-strict registry validation during planning because review reports and final evidence may still be planned. Use strict validation in CI/completion when all required artifacts should exist.
+
 ## Semantic Reviews
 
 Review requests must include `Phase`, `Reviewer Role`, `Context Package`, `Forbidden`, `Output`, `Developer Agent`, `Reviewer Agent`, and `Reviewer Invocation`. When a project uses a review profile, include `Review Profile` and a `Required Review Checklist` section.

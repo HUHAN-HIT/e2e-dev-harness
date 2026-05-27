@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Create and validate agent-run artifact registries."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+from common import posix
+
+
+DIRECTORY_KEYS = {
+    "agent_run_dir",
+    "review_requests_dir",
+    "reviews_dir",
+    "rework_dir",
+    "contracts_dir",
+}
+PATTERN_KEYS = {
+    "rework_pattern",
+    "contract_pattern",
+}
+REQUIRED_BY_COMPLETION = {
+    "exec_plan",
+    "requirements",
+    "use_cases",
+    "test_plan",
+    "implementation_plan",
+    "knowledge_graph_status",
+    "dependency_report",
+    "impact_summary",
+    "impact_evidence",
+    "implementation_manifest",
+    "requirements_archive",
+    "red_test_evidence",
+    "green_test_evidence",
+    "coverage_matrix",
+    "business_review",
+}
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def resolve(repo: Path, value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else repo / path
+
+
+def artifact_entry(repo: Path, key: str, value: str, owner: str = "global") -> dict:
+    resolved = resolve(repo, value)
+    is_pattern = key in PATTERN_KEYS or "<" in value
+    is_dir = key in DIRECTORY_KEYS
+    exists = resolved.exists() if not is_pattern else False
+    entry = {
+        "id": f"{owner}:{key}",
+        "type": key,
+        "owner": owner,
+        "path": posix(value),
+        "kind": "pattern" if is_pattern else ("directory" if is_dir else "file"),
+        "required_by_completion": key in REQUIRED_BY_COMPLETION,
+        "status": "pattern" if is_pattern else ("present" if exists else "planned"),
+        "sha256": sha256(resolved) if exists and resolved.is_file() else "",
+    }
+    return entry
+
+
+def flatten_artifacts(repo: Path, artifacts: dict) -> list[dict]:
+    entries: list[dict] = []
+    for key, value in artifacts.items():
+        if key == "service_plans" or not isinstance(value, str):
+            continue
+        entries.append(artifact_entry(repo, key, value))
+    for service, paths in artifacts.get("service_plans", {}).items():
+        for key, value in paths.items():
+            if isinstance(value, str):
+                entries.append(artifact_entry(repo, key, value, owner=service))
+    return entries
+
+
+def build_registry(repo: Path, run_id: str, artifacts: dict, selected_mode: str = "", services: list[str] | None = None) -> dict:
+    return {
+        "schema": "e2e-dev-workflow.artifact-registry.v1",
+        "run_id": run_id,
+        "selected_mode": selected_mode,
+        "services": services or [],
+        "artifacts": flatten_artifacts(repo, artifacts),
+    }
+
+
+def write_registry(repo: Path, path: Path, registry: dict) -> None:
+    target = path if path.is_absolute() else repo / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(registry, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def validate_registry(repo: Path, registry_path: Path, strict: bool = False) -> dict:
+    repo = repo.resolve()
+    path = registry_path if registry_path.is_absolute() else repo / registry_path
+    blocked: list[str] = []
+    warnings: list[str] = []
+    if not path.exists():
+        return {
+            "repo": str(repo),
+            "ready": False,
+            "blocked_reasons": [f"Artifact registry not found: {path}"],
+            "warnings": warnings,
+            "registry": str(path),
+            "artifact_count": 0,
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        return {
+            "repo": str(repo),
+            "ready": False,
+            "blocked_reasons": [f"Artifact registry is invalid JSON: {error}"],
+            "warnings": warnings,
+            "registry": str(path),
+            "artifact_count": 0,
+        }
+    if data.get("schema") != "e2e-dev-workflow.artifact-registry.v1":
+        blocked.append("Artifact registry schema must be e2e-dev-workflow.artifact-registry.v1.")
+    artifacts = data.get("artifacts", [])
+    if not isinstance(artifacts, list) or not artifacts:
+        blocked.append("Artifact registry must include at least one artifact entry.")
+        artifacts = []
+    for item in artifacts:
+        item_path = str(item.get("path", ""))
+        if not item_path:
+            blocked.append("Artifact registry entry is missing path.")
+            continue
+        if item.get("kind") == "pattern":
+            continue
+        resolved = resolve(repo, item_path)
+        if item.get("required_by_completion") and strict and not resolved.exists():
+            blocked.append(f"Required completion artifact is missing: {item_path}")
+        if resolved.exists() and resolved.is_file():
+            current_hash = sha256(resolved)
+            recorded_hash = str(item.get("sha256", ""))
+            if recorded_hash and recorded_hash != current_hash:
+                blocked.append(f"Artifact hash is stale: {item_path}")
+            elif not recorded_hash:
+                warnings.append(f"Artifact hash is missing: {item_path}")
+    return {
+        "repo": str(repo),
+        "ready": not blocked,
+        "blocked_reasons": blocked,
+        "warnings": warnings,
+        "registry": str(path),
+        "artifact_count": len(artifacts),
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("repo", nargs="?", default=".", type=Path)
+    parser.add_argument("--registry", required=True, type=Path)
+    parser.add_argument("--strict", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+
+    result = validate_registry(args.repo, args.registry, args.strict)
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print("Artifact registry: " + ("READY" if result["ready"] else "BLOCKED"))
+        for reason in result["blocked_reasons"]:
+            print(f"- {reason}")
+        for warning in result["warnings"]:
+            print(f"warning: {warning}")
+    return 0 if result["ready"] else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
