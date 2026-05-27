@@ -18,6 +18,11 @@
       "reference": "references/common-review-issues.md#impact-summary-overload"
     },
     {
+      "id": "missing-change-logic",
+      "title": "Design does not explain current-to-target behavior changes.",
+      "reference": "references/common-review-issues.md#missing-change-logic"
+    },
+    {
       "id": "findings-without-rework",
       "title": "Reviewer findings are approved without required rework routing.",
       "reference": "references/common-review-issues.md#findings-without-rework"
@@ -26,6 +31,11 @@
       "id": "weak-completion-evidence",
       "title": "Completion evidence uses generic status text instead of concrete code/test proof.",
       "reference": "references/common-review-issues.md#weak-completion-evidence"
+    },
+    {
+      "id": "mq-sender-misrouting",
+      "title": "A messaging payload is sent through the wrong sender/producer.",
+      "reference": "references/common-review-issues.md#mq-sender-misrouting"
     }
   ],
   "required_checklist": {

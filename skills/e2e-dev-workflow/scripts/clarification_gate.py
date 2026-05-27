@@ -116,6 +116,35 @@ IMPACT_REQUIRED_COLUMNS = {
     "required_tests_contracts",
     "risk",
 }
+CHANGE_LOGIC_SECTION_PATTERNS = [
+    r"change logic",
+    r"implementation logic",
+    r"logic changes?",
+    r"behavior changes?",
+    r"\u6539\u52a8\u903b\u8f91",
+    r"\u53d8\u66f4\u903b\u8f91",
+    r"\u5b9e\u73b0\u903b\u8f91",
+]
+CURRENT_BEHAVIOR_RE = re.compile(
+    r"\b(current|existing|before|today|as-is|baseline)\b|"
+    r"\u73b0\u72b6|\u5f53\u524d|\u6539\u524d|\u5df2\u6709",
+    re.IGNORECASE,
+)
+TARGET_BEHAVIOR_RE = re.compile(
+    r"\b(target|after|new|to-be|expected|desired)\b|"
+    r"\u76ee\u6807|\u6539\u540e|\u65b0\u589e|\u9884\u671f",
+    re.IGNORECASE,
+)
+RUNTIME_PATH_RE = re.compile(
+    r"(->|\bentry\b|\bcontroller\b|\bhandler\b|\bservice\b|\brepository\b|\bclient\b|\bsender\b|\bproducer\b|"
+    r"\u5165\u53e3|\u8c03\u7528\u94fe|\u6d41\u7a0b|\u7f16\u6392)",
+    re.IGNORECASE,
+)
+STATE_DATA_EFFECT_RE = re.compile(
+    r"\b(state|status|database|table|column|cache|config|payload|response|request|field|audit)\b|"
+    r"\u72b6\u6001|\u6570\u636e|\u8868|\u5b57\u6bb5|\u914d\u7f6e|\u8bf7\u6c42|\u54cd\u5e94|\u8f7d\u8377|\u5ba1\u8ba1",
+    re.IGNORECASE,
+)
 
 
 def headings(markdown: str) -> list[tuple[str, int, int]]:
@@ -328,6 +357,35 @@ def impact_summary_gaps(markdown: str) -> list[str]:
     return gaps
 
 
+def change_logic_gaps(markdown: str) -> list[str]:
+    behavior_text = "\n\n".join(
+        text
+        for text in (
+            section_text(markdown, REQUIRED["acceptance"]),
+            section_text(markdown, REQUIRED["use_cases"]),
+            section_text(markdown, REQUIRED["scope"]),
+        )
+        if text
+    )
+    if not IMPACT_REQUIRED_RE.search(behavior_text):
+        return []
+
+    text = section_text(markdown, CHANGE_LOGIC_SECTION_PATTERNS)
+    if text is None:
+        return ["Change Logic is required for public API, messaging, data, auth, payment, refund, or cross-service requirements."]
+
+    gaps: list[str] = []
+    if not CURRENT_BEHAVIOR_RE.search(text):
+        gaps.append("Change Logic must describe the current/before behavior being changed.")
+    if not TARGET_BEHAVIOR_RE.search(text):
+        gaps.append("Change Logic must describe the target/after behavior.")
+    if not RUNTIME_PATH_RE.search(text):
+        gaps.append("Change Logic must trace the runtime path from entry point through service/client/sender/repository.")
+    if not STATE_DATA_EFFECT_RE.search(text):
+        gaps.append("Change Logic must name state, data, config, request/response, payload, or audit effects.")
+    return gaps
+
+
 def validate(path: Path) -> dict:
     markdown = path.read_text(encoding="utf-8")
     titles = [title for title, _start, _end in headings(markdown)]
@@ -345,7 +403,8 @@ def validate(path: Path) -> dict:
     oq_clear, unresolved = open_questions_clear(oq_text)
     gaps = integration_gaps(markdown)
     impact_gaps = impact_summary_gaps(markdown)
-    ready = not missing and not empty_sections and oq_clear and not gaps and not impact_gaps
+    logic_gaps = change_logic_gaps(markdown)
+    ready = not missing and not empty_sections and oq_clear and not gaps and not impact_gaps and not logic_gaps
     return {
         "path": str(path),
         "ready_for_implementation": ready,
@@ -355,6 +414,7 @@ def validate(path: Path) -> dict:
         "unresolved_open_questions": unresolved,
         "integration_gaps": gaps,
         "impact_gaps": impact_gaps,
+        "change_logic_gaps": logic_gaps,
     }
 
 
@@ -385,6 +445,10 @@ def main() -> int:
         if result.get("impact_gaps"):
             print("Impact summary gaps:")
             for gap in result["impact_gaps"]:
+                print(f"- {gap}")
+        if result.get("change_logic_gaps"):
+            print("Change logic gaps:")
+            for gap in result["change_logic_gaps"]:
                 print(f"- {gap}")
 
     return 0 if result["ready_for_implementation"] else 2

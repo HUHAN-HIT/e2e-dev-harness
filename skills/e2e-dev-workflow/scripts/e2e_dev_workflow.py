@@ -251,6 +251,7 @@ def orchestration_status(
         "reasons": reasons,
         "agent_run_dir": artifacts["agent_run_dir"],
         "handoff_artifacts": artifacts,
+        "multi_agent_decision": orchestration_plan.multi_agent_decision(selected, services, reasons),
         "agents": orchestration_plan.agent_plan(selected, artifacts, services),
     }
 
@@ -354,6 +355,7 @@ def clarify(args) -> tuple[int, dict]:
 
 def exec_plan_text(repo: Path, design_doc: Path | None, plan: dict) -> str:
     artifacts = plan["handoff_artifacts"]
+    decision = plan.get("multi_agent_decision", {})
     agents = "\n".join(
         f"- {agent['name']}: owns {', '.join(agent['owns'])}; gate: {agent['gate']}"
         for agent in plan["agents"]
@@ -406,6 +408,15 @@ This is a living plan. Keep it current while implementing the feature.
 ## Service Implementation Plans
 
 {service_plans}
+
+## Multi-Agent Decision
+
+- Use multi-agent: {decision.get('use_multi_agent', False)}
+- Selected mode: {decision.get('selected_mode', plan.get('selected_mode'))}
+- Evidence:
+{chr(10).join(f"  - {item}" for item in decision.get('evidence', [])) or "  - None"}
+- Required when multi:
+{chr(10).join(f"  - {item}" for item in decision.get('required_when_multi', [])) or "  - None"}
 
 ## Evidence Paths
 
@@ -750,6 +761,14 @@ def semantic_review_template(phase: str, title: str, scope: str = "all-services"
 def service_plan_template(service: str) -> str:
     return f"""# Service Implementation Plan: {service}
 
+## Agent Assignment
+
+- Code agent:
+- Reviewer agents:
+- Mode decision evidence:
+- Upstream handoffs consumed:
+- Downstream artifacts produced:
+
 ## Scope
 
 - Service/module:
@@ -762,6 +781,14 @@ def service_plan_template(service: str) -> str:
 | path | planned change | reason | acceptance/use case |
 | --- | --- | --- | --- |
 |  |  |  |  |
+
+## Change Logic
+
+- Current behavior:
+- Target behavior:
+- Runtime path:
+- State/data/API/event effects:
+- Compatibility or migration notes:
 
 ## Implementation Manifest
 
@@ -876,6 +903,7 @@ def gate(args) -> tuple[int, dict]:
         handoff_dirs=getattr(args, "handoff_dir", None),
         contract_dirs=getattr(args, "contract_dir", None),
         require_contracts=getattr(args, "require_contracts", False),
+        require_handoffs=getattr(args, "require_handoffs", False),
         require_semantic_reviews=getattr(args, "require_semantic_reviews", False),
         review_profile=getattr(args, "review_profile", None),
         requirements_archive=getattr(args, "requirements_archive", None),
@@ -935,6 +963,7 @@ def verify(args) -> tuple[int, dict]:
             "implementation_manifest": str(getattr(args, "implementation_manifest", "") or ""),
             "require_semantic_reviews": args.phase == "completion" or getattr(args, "require_semantic_reviews", False),
             "require_contracts": getattr(args, "require_contracts", False),
+            "require_handoffs": getattr(args, "require_handoffs", False),
             "require_requirements_archive": (
                 getattr(args, "require_requirements_archive", False)
                 or (getattr(args, "strict_workflow", False) and args.phase == "completion")
@@ -1045,6 +1074,7 @@ def main() -> int:
     gate_parser.add_argument("--handoff-dir", action="append", type=Path)
     gate_parser.add_argument("--contract-dir", action="append", type=Path)
     gate_parser.add_argument("--require-contracts", action="store_true")
+    gate_parser.add_argument("--require-handoffs", action="store_true")
     gate_parser.add_argument("--require-semantic-reviews", action="store_true")
     gate_parser.add_argument("--skip-spring-static-check", action="store_true")
     gate_parser.add_argument("--status-file", type=Path)
@@ -1070,6 +1100,7 @@ def main() -> int:
     verify_parser.add_argument("--handoff-dir", action="append", type=Path)
     verify_parser.add_argument("--contract-dir", action="append", type=Path)
     verify_parser.add_argument("--require-contracts", action="store_true")
+    verify_parser.add_argument("--require-handoffs", action="store_true")
     verify_parser.add_argument("--require-semantic-reviews", action="store_true")
     verify_parser.add_argument("--skip-spring-static-check", action="store_true")
     verify_parser.add_argument("--skip-maven", action="store_true")

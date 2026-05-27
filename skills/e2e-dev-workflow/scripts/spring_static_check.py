@@ -45,6 +45,15 @@ SIMPLE_DATE_FORMAT_FIELD_RE = re.compile(
     r"(?m)^\s*(?:(?:public|protected|private|static|final|volatile)\s+)*"
     r"(?:java\.text\.)?SimpleDateFormat\s+[A-Za-z_][A-Za-z0-9_]*\s*(?:=|;)"
 )
+MQ_MESSAGE_ASSIGN_RE = re.compile(
+    r"\b(?P<msg_type>[A-Z][A-Za-z0-9_]*MQ)\s+(?P<var>[a-z][A-Za-z0-9_]*)\s*=",
+    re.MULTILINE,
+)
+MQ_SEND_RE = re.compile(
+    r"\b(?P<sender>[a-z][A-Za-z0-9_]*Sender)\s*\.\s*send\s*\(\s*(?P<var>[a-z][A-Za-z0-9_]*)\s*\)",
+    re.MULTILINE,
+)
+COMMON_MQ_TOKENS = {"mq", "message", "msg", "notify", "notification", "event", "sender", "producer", "publisher"}
 
 
 @dataclass
@@ -153,6 +162,45 @@ def shared_simple_date_format_fields(text: str, class_name: str) -> bool:
     return bool(SIMPLE_DATE_FORMAT_FIELD_RE.search(top_level_member_lines(text, class_name)))
 
 
+def camel_tokens(value: str) -> set[str]:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+    raw = re.split(r"[^A-Za-z0-9]+", spaced)
+    return {token.lower() for token in raw if token and token.lower() not in COMMON_MQ_TOKENS}
+
+
+def mq_sender_misroutes(text: str, path: Path, repo: Path) -> list[str]:
+    blocked: list[str] = []
+    assignments = [
+        (match.start(), match.group("var"), match.group("msg_type"))
+        for match in MQ_MESSAGE_ASSIGN_RE.finditer(text)
+    ]
+    if not assignments:
+        return blocked
+    for match in MQ_SEND_RE.finditer(text):
+        sender = match.group("sender")
+        var_name = match.group("var")
+        msg_type = next(
+            (
+                assigned_type
+                for position, assigned_var, assigned_type in reversed(assignments)
+                if assigned_var == var_name and position < match.start()
+            ),
+            None,
+        )
+        if not msg_type:
+            continue
+        sender_tokens = camel_tokens(sender)
+        message_tokens = camel_tokens(msg_type)
+        if not sender_tokens or not message_tokens:
+            continue
+        if sender_tokens.isdisjoint(message_tokens):
+            blocked.append(
+                f"MQ message {msg_type} is sent through mismatched sender {sender} in "
+                f"{posix(path.relative_to(repo))}; use the sender that matches the message/contract."
+            )
+    return blocked
+
+
 def collect_types(repo: Path) -> tuple[dict[str, JavaType], set[str], dict[Path, str]]:
     types: dict[str, JavaType] = {}
     bean_types: set[str] = set()
@@ -204,6 +252,8 @@ def validate(repo: Path) -> dict:
                     f"Injected type {param_type} used by {java_type.name} is declared in "
                     f"{posix(injected.path.relative_to(repo))} but is not a Spring component or @Bean."
                 )
+    for path, text in sorted(texts.items(), key=lambda item: posix(item[0])):
+        blocked.extend(mq_sender_misroutes(text, path, repo))
 
     return {
         "repo": str(repo),

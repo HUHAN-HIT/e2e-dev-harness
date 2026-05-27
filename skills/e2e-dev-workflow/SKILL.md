@@ -46,7 +46,7 @@ For command details, read `references/implementation-gates.md`.
 - Load project instructions before requirement clarification. Use discovery scope first; load affected service `AGENT.md` / `AGENTS.md` only after scope is known. Read `references/agent-instructions.md`.
 - Use Superpowers when available. `superpowers:brainstorming` owns clarification; `superpowers:test-driven-development` owns TDD. Read `references/superpowers-integration.md`.
 - Clarification is a hard gate. The design must state goals, non-goals, affected services/modules, use cases,
-  bounded impact summary, contracts, acceptance criteria, test design, and resolved open questions.
+  change logic, bounded impact summary, contracts, acceptance criteria, test design, and resolved open questions.
   Read `references/clarification-gate.md`.
   MQ/DMQ/Kafka requirements must name the cross-layer call chain and sender/producer injection point before implementation.
 - Prefer GitNexus for code-level cross-service evidence and explicit impact artifacts.
@@ -98,10 +98,12 @@ Important boundaries:
 - Discovery scope lists service candidates but does not create service plans.
 - Affected scope creates service plans only from explicit `--service` / `--path` or design-declared affected modules.
 - Multi-service work keeps each service plan and code-agent handoff under `docs/agent-runs/<run>/service-plans/<service>/`.
+- The orchestration result records `multi_agent_decision` with criteria, evidence, and required artifacts.
 - R1/R2/R3 reviews must be independent agents or separate reviewer sessions; one consolidated after-the-fact review is invalid.
 - Coverage Reviewer always runs before completion.
 - Service-local R2/R3 reviews are required for every generated service plan.
 - Handoffs are file boundaries with ready markers and hashes; do not rely on chat memory.
+- For multi-service, contract/data-risk, or split-agent work, completion must pass `--require-handoffs` so empty `handoffs/` cannot masquerade as a completed archive.
 
 For role contracts, handoff schema, atomic handoff, and reviewer invocation details, read `references/agent-orchestration.md` and `references/agent-handoff-schema.md`.
 
@@ -145,6 +147,7 @@ Gate details live in `references/implementation-gates.md`, including:
 - final requirements archive rules
 - unit-test evidence JSON format
 - dependency report and contract requirements
+- required handoffs for multi-service/split-agent runs
 - Spring static checks
 - strict guard skip approvals
 - rework item schema and return-phase routing

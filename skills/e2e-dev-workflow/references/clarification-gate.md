@@ -10,6 +10,7 @@ The gate prevents coding before the problem is testable.
 - Actors or callers
 - Use cases with happy and failure paths
 - API, message, database, cache, or configuration changes
+- Change Logic for public API, messaging, data, auth, payment, refund, or cross-service changes
 - Impact Summary for public API, messaging, data, auth, payment, or cross-service changes
 - Acceptance criteria
 - Test design
@@ -26,6 +27,23 @@ When an acceptance criterion or use case declares MQ/DMQ/Kafka/JMS notification 
 ```
 
 This prevents a design from saying "publish MQ notification" while leaving the implementation agent to guess where orchestration and sender wiring belong.
+
+## Change Logic
+
+For public API, HTTP, MQ/DMQ/Kafka/JMS, database/schema, configuration, auth/security, payment, refund, or cross-service changes, include a compact `Change Logic` section before implementation.
+
+Required shape:
+
+```markdown
+## Change Logic
+- Current behavior: refund reconciliation records differences but does not emit auto-handle result notifications.
+- Target behavior: long-pending differences update local state and emit AutoHandleResultNotifyMQ.
+- Runtime path: ReconcileController -> ReconciliationTaskExecutor -> ReconcileAutoHandler -> AutoHandleResultNotifySender.send.
+- State/data/API/event effects: updates refund status, writes audit fields, publishes MQ payload, returns batch id.
+- Compatibility or migration notes: existing diff-found topic remains unchanged.
+```
+
+The section should explain what logic changes, not only list files. It gives R1/R3 reviewers a path to verify implementation completeness.
 
 ## Bounded Impact Summary
 

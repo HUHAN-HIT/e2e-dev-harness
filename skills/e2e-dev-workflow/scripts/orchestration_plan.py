@@ -603,6 +603,32 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
     return agents
 
 
+def multi_agent_decision(selected_mode: str, services: list[str], reasons: list[str]) -> dict:
+    criteria = [
+        "multiple affected services/modules",
+        "HTTP/DMQ/shared contract boundary",
+        "database/schema/config/security/payment/refund risk",
+        "large or design-heavy implementation context",
+        "user explicitly requested split agents",
+    ]
+    evidence = list(reasons)
+    if services:
+        evidence.append("selected services/modules: " + ", ".join(services))
+    return {
+        "use_multi_agent": selected_mode == "multi",
+        "selected_mode": selected_mode,
+        "criteria": criteria,
+        "evidence": evidence,
+        "required_when_multi": [
+            "one service-plans/<service>/implementation-plan.md per affected service/module",
+            "one service-plans/<service>/code-agent.md handoff per code agent",
+            "service-local implementation manifest, tests, coverage, business review",
+            "service-local R2/R3 reviews plus global R1/R2/R3 review requests",
+            "completion gate passes --require-handoffs for multi-service/split-agent runs",
+        ],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", nargs="?", default=".", type=Path)
@@ -712,6 +738,7 @@ def main() -> int:
             "spring_entrypoints": facts.get("spring_entrypoints", []),
         },
         "handoff_artifacts": artifact_paths,
+        "multi_agent_decision": multi_agent_decision(selected, services, reasons),
         "agents": agent_plan(selected, artifact_paths, services),
         "notes": [
             "Use files as handoff boundaries; do not rely on chat memory.",

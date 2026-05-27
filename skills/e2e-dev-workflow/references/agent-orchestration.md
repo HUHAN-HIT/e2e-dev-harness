@@ -11,9 +11,13 @@ Use this reference when a Java/Spring 6/Maven change benefits from smaller, isol
 | `multi` | User asks for split agents, cross-service work, contract/data changes, or high risk | Separate agents own requirements, use cases, tests, service-scoped code, and coverage review. |
 | `auto` | Default recommendation mode | The helper chooses `single` or `multi` based on repo shape, design doc size, services, and risk keywords; `single-review` is explicit only. |
 
+The orchestration result includes `multi_agent_decision`. Treat it as the audit record for why multi-agent development was or was not used. The decision checks affected service count, HTTP/DMQ/shared contracts, data/schema/config/security/payment/refund risk, design size, and explicit user requests.
+
 Do not let an implementation agent review its own work. If the runtime cannot spawn subagents, use a separate reviewer session with only the review request and allowed artifact inputs. Same-chat/self-review is not an acceptable fallback for R1/R2/R3.
 
 Do not use `single-review` to collapse the three reviews into one after-the-fact report. It only compresses the developer side of the workflow; review timing, reviewer independence, request hashes, invocation JSON, and Coverage Reviewer remain unchanged.
+
+For `multi` and any contract/data-risk run, empty `handoffs/` or missing `service-plans/` is not a valid completed archive. Either populate the role/service handoffs with ready markers or document an explicit single-agent exception and do not pass `--require-handoffs`.
 
 ## Service Scope
 
@@ -27,6 +31,8 @@ This mirrors AGENT loading: first discover services, then narrow the implementat
 If `--service` does not match a discovered service path or service directory name, the helper blocks instead of silently planning no service work.
 
 When `--service-scope auto` and no explicit service/path is supplied, the helper first uses verified dependency-report services. If none exist, it reads `Scope`, `Affected services/modules`, `Affected modules`, or equivalent Chinese headings from the design document and matches bullet items against discovered candidates. This includes root Maven modules such as `jeepay-core`, `jeepay-service`, and `jeepay-payment`, not only `services/*` directories. A matching design must generate one service plan, one code-agent handoff, and one service-local implementation manifest per affected module.
+
+Every generated `service-plans/<service>/implementation-plan.md` must include agent assignment, allowed change scope, modification points, service-local change logic, TDD plan, contracts, data/transaction effects, risks, and completion evidence. The code agent owns that plan; reviewer agents validate it independently.
 
 ## Agent Roles
 
@@ -283,4 +289,4 @@ Parallel work is useful only after requirements are stable:
 7. In `multi` mode, update the handoff artifacts under `docs/agent-runs/<date-feature>/handoffs/` and the service plans under `docs/agent-runs/<date-feature>/service-plans/<service>/`.
 8. Run R1/R2/R3 semantic reviews at the phase boundaries and convert findings into rework items.
 9. Gate each phase with review before passing work forward.
-10. Run `e2e_dev_workflow.py gate . --phase completion ... --review-dir docs/agent-runs/<run>/reviews --handoff-dir docs/agent-runs/<run>/handoffs --contract-dir docs/agent-runs/<run>/contracts` before reporting done; explicit review dirs are merged with inferred service-local reviews from the same agent run. Include additional service-local `--review-dir` values, `--implementation-manifest`, and `--rework-dir` when the run uses non-standard locations.
+10. Run `e2e_dev_workflow.py gate . --phase completion ... --review-dir docs/agent-runs/<run>/reviews --handoff-dir docs/agent-runs/<run>/handoffs --require-handoffs --contract-dir docs/agent-runs/<run>/contracts` before reporting done for multi-service/split-agent work; explicit review dirs are merged with inferred service-local reviews from the same agent run. Include additional service-local `--review-dir` values, `--implementation-manifest`, and `--rework-dir` when the run uses non-standard locations.

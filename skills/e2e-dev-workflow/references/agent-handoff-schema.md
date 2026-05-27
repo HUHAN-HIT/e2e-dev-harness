@@ -42,7 +42,7 @@ memory_updates_proposed: []
 
 Each role owns a narrow context boundary and writes only its promised outputs. Later roles consume the previous files as artifacts instead of reloading the whole conversation.
 
-Run `scripts/handoff_gate.py` before a downstream agent consumes a handoff. The gate requires a concrete `agent_id`, a pass status, non-empty inputs/outputs, input/output SHA-256 entries, `consumed_by`, and `open_questions: None`. Draft starter files are intentionally not ready until the owning agent fills them.
+Run `scripts/handoff_gate.py` before a downstream agent consumes a handoff. Use `--require-handoffs` for multi-service, contract/data-risk, or split-agent completion gates so an empty `handoffs/` directory blocks. The gate requires a concrete `agent_id`, a pass status, non-empty inputs/outputs, input/output SHA-256 entries, `consumed_by`, and `open_questions: None`. Draft starter files are intentionally not ready until the owning agent fills them.
 
 Handoff writes must be atomic:
 

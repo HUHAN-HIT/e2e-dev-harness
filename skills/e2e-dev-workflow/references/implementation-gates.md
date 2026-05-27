@@ -41,7 +41,7 @@ python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py gate . \
   --handoff-dir docs/agent-runs/<run>/handoffs
 ```
 
-Planning checks clarification readiness, knowledge graph status, and R1 design review. Implementation additionally requires red-test evidence and R1+R2 reviews. Completion requires design doc, red-test evidence, unit-test command evidence, business review, R1+R2+R3 reviews, coverage matrix, implementation manifest, dependency report when cross-service, closed rework, and Spring static check unless explicitly skipped.
+Planning checks clarification readiness, knowledge graph status, and R1 design review. Implementation additionally requires red-test evidence and R1+R2 reviews. Completion requires design doc, red-test evidence, unit-test command evidence, business review, R1+R2+R3 reviews, coverage matrix, implementation manifest, dependency report when cross-service, closed rework, and Spring static check unless explicitly skipped. Add `--require-handoffs` for multi-service, contract/data-risk, or split-agent runs.
 
 ## Semantic Reviews
 
@@ -121,7 +121,7 @@ python skills/e2e-dev-workflow/scripts/e2e_dev_workflow.py guard . \
   --require-completion
 ```
 
-Strict guard blocks missing prepare, disabled dependency scan, disabled dependency report writing, skipped Maven, skipped Spring static check during completion, missing clarification status, missing completion gate, failed completion gate, missing independent semantic review evidence, failed Maven, and unresolved dependency questions. A skip can pass only with an approval file containing `Approval: user-approved`.
+Strict guard blocks missing prepare, disabled dependency scan, disabled dependency report writing, skipped Maven, skipped Spring static check during completion, missing clarification status, missing completion gate, failed completion gate, missing independent semantic review evidence, failed Maven, and unresolved dependency questions. For multi-service, contract/data-risk, or split-agent runs, also pass `--require-handoffs`; an empty `handoffs/` directory is acceptable only when the run explicitly stayed single-agent and no downstream handoff was consumed. A skip can pass only with an approval file containing `Approval: user-approved`.
 
 ## Rework Protocol
 

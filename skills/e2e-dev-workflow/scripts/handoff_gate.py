@@ -285,6 +285,7 @@ def validate(
     repo: Path,
     handoff_dirs: list[Path] | None = None,
     anchor_paths: list[Path | None] | None = None,
+    require_files: bool = False,
 ) -> dict:
     repo = repo.resolve()
     files = explicit_files(repo, handoff_dirs)
@@ -296,6 +297,8 @@ def validate(
     blocked: list[str] = []
     for partial in partials:
         blocked.append(f"Partial handoff exists and must not be consumed yet: {partial}")
+    if require_files and not files:
+        blocked.append("Required handoff artifacts are missing; populate handoffs/ or service-plans/ before completion.")
     items: list[dict] = []
     for path in files:
         fields, body = parse_frontmatter(path)
@@ -319,10 +322,11 @@ def main() -> int:
     parser.add_argument("repo", nargs="?", default=".", type=Path)
     parser.add_argument("--handoff-dir", action="append", type=Path)
     parser.add_argument("--anchor-path", action="append", type=Path)
+    parser.add_argument("--require-handoffs", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    result = validate(args.repo, args.handoff_dir, args.anchor_path)
+    result = validate(args.repo, args.handoff_dir, args.anchor_path, args.require_handoffs)
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:

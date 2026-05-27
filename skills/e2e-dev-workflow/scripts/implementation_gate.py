@@ -73,6 +73,7 @@ def validate_gate(
     handoff_dirs: list[Path] | None = None,
     contract_dirs: list[Path] | None = None,
     require_contracts: bool = False,
+    require_handoffs: bool = False,
     require_semantic_reviews: bool = True,
     review_profile: Path | None = None,
     requirements_archive: Path | None = None,
@@ -144,9 +145,12 @@ def validate_gate(
             repo,
             handoff_dirs,
             [red_test_evidence, coverage_matrix, unit_test_evidence, business_review, implementation_manifest, design_doc],
+            require_handoffs,
         )
         if not handoff_result["ready"]:
             blocked_reasons.extend(handoff_result["blocked_reasons"])
+    elif require_handoffs:
+        blocked_reasons.append("Required handoff artifacts are missing; pass --handoff-dir for multi-service or split-agent work.")
     contract_result = contract_gate.validate(
         repo,
         contract_dirs,
@@ -263,6 +267,7 @@ def main() -> int:
     parser.add_argument("--handoff-dir", action="append", type=Path)
     parser.add_argument("--contract-dir", action="append", type=Path)
     parser.add_argument("--require-contracts", action="store_true")
+    parser.add_argument("--require-handoffs", action="store_true")
     parser.add_argument("--require-semantic-reviews", action="store_true")
     parser.add_argument("--skip-spring-static-check", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -286,6 +291,7 @@ def main() -> int:
         args.handoff_dir,
         args.contract_dir,
         args.require_contracts,
+        args.require_handoffs,
         args.require_semantic_reviews,
         args.review_profile,
         args.requirements_archive,

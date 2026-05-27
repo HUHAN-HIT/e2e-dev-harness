@@ -195,6 +195,12 @@ class ClarificationGateTests(unittest.TestCase):
             - PaymentController -> PaymentService -> PaymentCallbackDmqSender.send(topic, tag, payload).
             - Sender injection: PaymentService constructor injects PaymentCallbackDmqSender.
 
+            ## Change Logic
+            - Current behavior: payment success has no callback notification.
+            - Target behavior: payment success publishes a DMQ callback.
+            - Runtime path: PaymentController -> PaymentService -> PaymentCallbackDmqSender.send(topic, tag, payload).
+            - State/data effect: emits payload fields for payment id, status, and callback timestamp.
+
             ## Impact Summary
             - Source: GitNexus impact + dependency scanner
             - Raw Evidence: docs/agent-runs/run/evidence/impact-analysis.json
@@ -252,6 +258,47 @@ class ClarificationGateTests(unittest.TestCase):
         self.assertFalse(result["ready_for_implementation"])
         self.assertTrue(any("Impact Summary" in reason for reason in result["impact_gaps"]))
 
+    def test_interface_requirement_requires_change_logic(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Add a refund callback API.
+
+            ## Scope
+            - services/payment-service
+
+            ## Use Cases
+            - Merchant calls HTTP refund callback endpoint.
+
+            ## Acceptance Criteria
+            - AC-1 POST /api/refunds/callback returns accepted status.
+
+            ## Impact Summary
+            - Source: GitNexus impact + dependency scanner
+            - Raw Evidence: docs/agent-runs/run/evidence/impact-analysis.json
+
+            | type | interface | affected callers/consumers | related AC | required tests/contracts | risk |
+            | --- | --- | --- | --- | --- | --- |
+            | HTTP | POST /api/refunds/callback | merchant-admin | AC-1 | controller contract test | medium |
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path)
+
+        self.assertFalse(result["ready_for_implementation"])
+        self.assertTrue(any("Change Logic" in reason for reason in result["change_logic_gaps"]))
+
     def test_impact_summary_requires_raw_evidence_reference_and_interface_rows(self) -> None:
         markdown = textwrap.dedent(
             """
@@ -308,6 +355,12 @@ class ClarificationGateTests(unittest.TestCase):
 
             ## Acceptance Criteria
             - AC-1 POST /api/refunds/callback returns accepted status.
+
+            ## Change Logic
+            - Current behavior: no public refund callback endpoint exists.
+            - Target behavior: POST /api/refunds/callback accepts merchant refund callback requests.
+            - Runtime path: RefundCallbackController -> RefundCallbackService -> RefundRepository.
+            - State/data effect: persists refund status field and response body.
 
             ## Impact Summary
             - Source: GitNexus impact + dependency scanner
@@ -1296,6 +1349,17 @@ class HandoffGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("partial" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_handoff_gate_can_require_non_empty_handoff_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+
+            result = handoff_gate.validate(repo, [handoff_dir], require_files=True)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("handoff artifacts are missing" in reason.lower() for reason in result["blocked_reasons"]))
 
     def test_handoff_gate_allows_ready_handoff_with_hashes_and_no_open_questions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3763,6 +3827,12 @@ class ImplementationGateTests(unittest.TestCase):
             ## Acceptance Criteria
             - AC-1 Billing service receives the callback.
 
+            ## Change Logic
+            - Current behavior: quote creation does not call billing.
+            - Target behavior: quote creation invokes the billing callback.
+            - Runtime path: QuoteController -> QuoteService -> BillingClient -> BillingController.
+            - State/data effect: sends callback request and updates billing callback status.
+
             ## Impact Summary
             - Source: GitNexus impact + dependency scanner
             - Raw Evidence: docs/agent-runs/run/evidence/impact-analysis.json
@@ -3849,6 +3919,12 @@ class ImplementationGateTests(unittest.TestCase):
 
             ## Acceptance Criteria
             - AC-1 Billing service receives the callback.
+
+            ## Change Logic
+            - Current behavior: quote creation does not call billing.
+            - Target behavior: quote creation invokes the billing callback.
+            - Runtime path: QuoteController -> QuoteService -> BillingClient -> BillingController.
+            - State/data effect: sends callback request and updates billing callback status.
 
             ## Impact Summary
             - Source: GitNexus impact + dependency scanner
@@ -4099,6 +4175,75 @@ class SpringStaticCheckTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("SimpleDateFormat" in reason for reason in result["blocked_reasons"]))
+
+    def test_blocks_mq_message_sent_through_mismatched_sender(self) -> None:
+        spring_static_check = importlib.import_module("spring_static_check")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            source = repo / "services" / "payment-service" / "src" / "main" / "java" / "com" / "example"
+            source.mkdir(parents=True)
+            (source / "ReconcileAutoHandler.java").write_text(
+                textwrap.dedent(
+                    """
+                    package com.example;
+
+                    import org.springframework.stereotype.Component;
+
+                    @Component
+                    public class ReconcileAutoHandler {
+                        private final IMQSender diffFoundNotifySender;
+                        private final IMQSender autoHandleResultNotifySender;
+
+                        public ReconcileAutoHandler(IMQSender diffFoundNotifySender,
+                                                    IMQSender autoHandleResultNotifySender) {
+                            this.diffFoundNotifySender = diffFoundNotifySender;
+                            this.autoHandleResultNotifySender = autoHandleResultNotifySender;
+                        }
+
+                        public void handle() {
+                            AutoHandleResultNotifyMQ mqMsg = AutoHandleResultNotifyMQ.build();
+                            diffFoundNotifySender.send(mqMsg);
+                        }
+                    }
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            result = spring_static_check.validate(repo)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("AutoHandleResultNotifyMQ" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any("diffFoundNotifySender" in reason for reason in result["blocked_reasons"]))
+
+    def test_allows_generic_mq_sender_for_specific_message(self) -> None:
+        spring_static_check = importlib.import_module("spring_static_check")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            source = repo / "services" / "payment-service" / "src" / "main" / "java" / "com" / "example"
+            source.mkdir(parents=True)
+            (source / "ReconcileAutoHandler.java").write_text(
+                textwrap.dedent(
+                    """
+                    package com.example;
+
+                    import org.springframework.stereotype.Component;
+
+                    @Component
+                    public class ReconcileAutoHandler {
+                        public void handle(IMQSender mqSender) {
+                            AutoHandleResultNotifyMQ mqMsg = AutoHandleResultNotifyMQ.build();
+                            mqSender.send(mqMsg);
+                        }
+                    }
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            result = spring_static_check.validate(repo)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
 
 
 class MemoryCaptureTests(unittest.TestCase):
@@ -4473,6 +4618,8 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertEqual("affected", result["resolved_service_scope"])
         self.assertEqual(["jeepay-core", "jeepay-service", "jeepay-payment"], result["selected_services"])
+        self.assertTrue(result["multi_agent_decision"]["use_multi_agent"])
+        self.assertIn("multiple affected services/modules", result["multi_agent_decision"]["criteria"])
         self.assertIn("jeepay-service", result["handoff_artifacts"]["service_plans"])
         self.assertIn("code-developer-jeepay-service", [agent["name"] for agent in result["agents"]])
 
@@ -4745,7 +4892,9 @@ class OrchestrationArtifactTests(unittest.TestCase):
             request_text = (repo / artifacts["implementation_review_request"]).read_text(encoding="utf-8")
 
         self.assertIn("# Service Implementation Plan: services/order-service", text)
+        self.assertIn("## Agent Assignment", text)
         self.assertIn("## Modification Points", text)
+        self.assertIn("## Change Logic", text)
         self.assertIn("## Service-local TDD Plan", text)
         self.assertIn("## Implementation Manifest", text)
         self.assertIn("## Cross-service Contracts", text)
@@ -5450,6 +5599,12 @@ class UnifiedCliTests(unittest.TestCase):
 
             ## Acceptance Criteria
             - AC-1 Payment callback is delivered.
+
+            ## Change Logic
+            - Current behavior: order creation does not call payment.
+            - Target behavior: order creation invokes payment callback flow.
+            - Runtime path: OrderController -> OrderService -> PaymentClient -> PaymentController.
+            - State/data effect: sends payment request payload and stores callback status.
 
             ## Impact Summary
             - Source: GitNexus impact + dependency scanner

@@ -51,6 +51,23 @@ Criteria:
 - The design contains only a bounded affected-interface table with source, raw evidence path, AC mapping, and test/contract obligations.
 - Reviewer uses the summary to find missing ACs, not as a substitute for raw evidence when deeper investigation is needed.
 
+## missing-change-logic
+
+Issue ID: `missing-change-logic`
+
+Problem: The design lists files, ACs, or interfaces but does not explain how behavior changes from current to target logic.
+
+Examples:
+
+- A refund reconciliation design lists controllers and MQ messages but never states the runtime path that updates refund state and emits events.
+- A migration design names a table but does not describe how read/write logic changes.
+
+Criteria:
+
+- Design has `Change Logic` with current behavior, target behavior, runtime path, and state/data/API/event effects.
+- R1 uses the section to find missing ACs, tests, or contracts.
+- R3 traces implementation against the same runtime path instead of only checking that files exist.
+
 ## weak-completion-evidence
 
 Issue ID: `weak-completion-evidence`
@@ -68,6 +85,23 @@ Criteria:
 - Each coverage row names a concrete test reference and concrete production code reference.
 - Messaging/event AC rows name the sender/producer/publisher path and send/publish/topic/payload test evidence.
 - Audit or null-safety AC rows name the audit fields or null/missing/empty tests that prove the behavior.
+
+## mq-sender-misrouting
+
+Issue ID: `mq-sender-misrouting`
+
+Problem: A message payload is built for one contract but is sent through a different sender, producer, publisher, topic, or queue.
+
+Examples:
+
+- `AutoHandleResultNotifyMQ` is built, but `diffFoundNotifySender.send(mqMsg)` is called.
+- A completion event is published through the retry/dead-letter producer because both are typed as a generic `IMQSender`.
+
+Criteria:
+
+- Every messaging AC traces payload type, sender/producer bean, topic/tag/group or queue, and send/publish call.
+- Sender names and contract names are intentionally aligned, or the review explains why a generic shared sender is correct.
+- Tests verify the sender/producer invocation and payload contract, not only payload `parse` or DTO construction.
 
 ## contract-coverage-gap
 
