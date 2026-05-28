@@ -1,4 +1,4 @@
-﻿# Agent Orchestration
+# Agent Orchestration
 
 Use this reference when a Java/Spring 6/Maven change benefits from smaller, isolated agent contexts.
 

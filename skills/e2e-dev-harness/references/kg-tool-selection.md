@@ -1,4 +1,4 @@
-﻿# Knowledge Graph Tool Selection
+# Knowledge Graph Tool Selection
 
 Use this matrix before each implementation.
 
@@ -44,6 +44,13 @@ Use `detect-changes` to map a concrete diff to indexed symbols and execution flo
 ## Cross-Service Dependency Protocol
 
 Use GitNexus-first evidence for hidden service dependencies:
+
+The bundled deterministic Java scanner reports `java_parser.backend: regex-fallback`
+and `ast_parser_active: false` until `tree_sitter_java` is actually wired into
+the scan logic. For high-risk Java call-path decisions, use GitNexus evidence as
+the authoritative code-graph source. If a project policy requires AST-backed
+deterministic scanning, run the scanner with `--require-tree-sitter-ast` so the
+gate blocks until an active AST parser exists.
 
 1. Run the deterministic scanner:
 

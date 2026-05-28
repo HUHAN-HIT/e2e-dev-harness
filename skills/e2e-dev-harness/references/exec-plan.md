@@ -1,4 +1,4 @@
-﻿# ExecPlan Guidance
+# ExecPlan Guidance
 
 Use an ExecPlan for complex features, significant refactors, cross-service changes, migrations, or work likely to span multiple agent turns.
 
@@ -13,6 +13,7 @@ An ExecPlan is a living document. Keep it updated as facts change. It is not a o
 - Agent protocol: role ownership, inputs, outputs, stop conditions.
 - Milestones: small verifiable implementation steps.
 - Evidence: commands, graph status, GitNexus-first dependency report, implementation manifest, red test output, green/unit test output, coverage matrix, business review, residual risks.
+- Confirmations: user-intent confirmation after clarify, direction confirmation after R1, and test-scenario confirmation after TDD Red when `--checkpoint-mode required` is used.
 - Rework log: missed requirements, missing tests/code, business review issues, return phase, status, and approval when deferred.
 
 ## Archive Location

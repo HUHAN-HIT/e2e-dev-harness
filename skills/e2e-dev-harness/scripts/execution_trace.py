@@ -44,19 +44,30 @@ def repo_path(repo: Path, path: Path) -> Path:
     return resolved
 
 
-def load_trace(path: Path) -> dict:
+def empty_trace() -> dict:
+    return {"schema": SCHEMA, "events": [], "summary": {}}
+
+
+def read_trace(path: Path) -> tuple[dict, str]:
     if not path.exists():
-        return {"schema": SCHEMA, "events": [], "summary": {}}
+        return empty_trace(), ""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-        return {"schema": SCHEMA, "events": [], "summary": {}}
+    except json.JSONDecodeError as error:
+        return empty_trace(), f"Execution trace is invalid JSON and was not modified: {path}: {error}"
+    except (OSError, UnicodeDecodeError) as error:
+        return empty_trace(), f"Execution trace could not be read and was not modified: {path}: {error}"
     if not isinstance(data, dict):
-        return {"schema": SCHEMA, "events": [], "summary": {}}
+        return empty_trace(), f"Execution trace root must be a JSON object and was not modified: {path}"
     data.setdefault("schema", SCHEMA)
     data.setdefault("events", [])
     data.setdefault("summary", {})
-    return data
+    return data, ""
+
+
+def load_trace(path: Path) -> dict:
+    trace, _error = read_trace(path)
+    return trace
 
 
 def summarize(events: list[dict]) -> dict:
@@ -104,7 +115,25 @@ def append_event(
     artifacts: list[str] | None = None,
 ) -> dict:
     target = repo_path(repo, trace_path)
-    trace = load_trace(target)
+    trace, error = read_trace(target)
+    if error:
+        return {"ready": False, "blocked_reasons": [error], "warnings": [], "trace": str(target), "summary": {}}
+    if trace.get("schema") != SCHEMA:
+        return {
+            "ready": False,
+            "blocked_reasons": [f"Execution trace schema must be {SCHEMA}; existing trace was not modified: {target}"],
+            "warnings": [],
+            "trace": str(target),
+            "summary": trace.get("summary", {}),
+        }
+    if not isinstance(trace.get("events"), list):
+        return {
+            "ready": False,
+            "blocked_reasons": [f"Execution trace events must be a list; existing trace was not modified: {target}"],
+            "warnings": [],
+            "trace": str(target),
+            "summary": trace.get("summary", {}),
+        }
     entry = {
         "timestamp": now_iso(),
         "phase": phase,
@@ -131,9 +160,11 @@ def validate_trace(repo: Path, trace_path: Path, required_phases: list[str] | No
     target = repo_path(repo, trace_path)
     blocked: list[str] = []
     warnings: list[str] = []
-    trace = load_trace(target)
+    trace, error = read_trace(target)
     if not target.exists():
         blocked.append(f"Execution trace not found: {target}")
+    if error:
+        blocked.append(error)
     if trace.get("schema") != SCHEMA:
         blocked.append(f"Execution trace schema must be {SCHEMA}.")
     events = trace.get("events", [])

@@ -2,7 +2,7 @@
 
 This repository contains an agent-neutral delivery harness for serious Java/Spring/Maven requirement implementation. It is designed for Codex, Claude Code, Gemini CLI, OpenCode, CI jobs, and any runtime that can read `SKILL.md` and execute the bundled Python scripts.
 
-The harness is not just process documentation. It provides machine-checkable gates, run-state files, artifact registries, replay verification, workflow tiers, review profiles, and optional pre-action hooks that can block code writes before the implementation phase.
+The harness is not just process documentation. It provides machine-checkable gates, run-state files, artifact registries, replay verification, workflow tiers, review profiles, and optional pre-action hook templates that can block code writes before the implementation phase when the active agent runtime actually supports blocking hooks.
 
 ## Layout
 
@@ -31,6 +31,8 @@ skills/e2e-dev-harness/
     harness_verify.py
     run_summary.py
     execution_trace.py
+    checkpoint_gate.py
+    command_evidence.py
     task_tier.py
     task_alignment_guard.py
     ...
@@ -93,11 +95,11 @@ All tiers keep auditable evidence, test proof, and replayable run records. The t
 
 ## Dependency Scan Parser
 
-`cross_service_dependency_scan.py` reports `java_parser.backend`. When `tree_sitter` and `tree_sitter_java` are unavailable it uses `regex-fallback` and emits a warning, because silently claiming AST precision would hide missed Java call paths. Treat `regex-fallback` as acceptable for lightweight discovery, but require GitNexus evidence or a bundled tree-sitter runtime before depending on it for high-risk Java impact decisions.
+`cross_service_dependency_scan.py` reports `java_parser.backend`. The current scanner uses `regex-fallback` even when `tree_sitter` packages are installed, and reports `ast_parser_active: false`, because silently claiming AST precision would hide missed Java call paths. Treat `regex-fallback` as acceptable for lightweight discovery; for high-risk Java impact decisions, require GitNexus evidence and use `--require-tree-sitter-ast` if the run policy demands an active AST parser.
 
 ## Hook Configuration
 
-The hook examples are templates. To enforce them, copy or merge the matching file into the target runtime's project hook configuration.
+The hook examples are templates. To enforce them, copy or merge the matching file into the target runtime's project hook configuration. `install_hooks.py` can place or validate project-local files, but Codex and Gemini enforcement still depends on whether the host runner exposes a blocking pre-action/pre-tool hook.
 You can also install or check project-local hook configuration with:
 
 ```powershell
@@ -241,6 +243,37 @@ Run the same `phase_guard.py` command again. Expected:
 }
 ```
 
+## Intent And Checkpoints
+
+For high-risk work, require user-intent anchoring before planning:
+
+```powershell
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py clarify . `
+  --design-doc docs\design\<feature>.md `
+  --require-intent
+```
+
+The design must include `Restated Intent`, written in the agent's own words, before the user confirms it. Store phase confirmations under `docs\agent-runs\<run>\confirmations\` and require them at gates:
+
+```powershell
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py gate . `
+  --phase implementation `
+  --checkpoint-mode required `
+  --confirmation-dir docs\agent-runs\<run>\confirmations
+```
+
+Use `--checkpoint-mode advisory` when non-interactive CI should report missing confirmations without blocking.
+
+## Command Evidence
+
+Use `command_evidence.py` for Maven, GitNexus, security, or custom verification commands when evidence must include command, exit code, elapsed time, output hashes, and environment metadata:
+
+```powershell
+python skills\e2e-dev-harness\scripts\command_evidence.py . `
+  --command "mvn test" `
+  --output docs\agent-runs\<run>\evidence\maven-test.json
+```
+
 ## Harness Replay
 
 Replay a run and write summary artifacts:
@@ -292,6 +325,8 @@ For GitHub Actions, copy and edit:
 ```text
 skills/e2e-dev-harness/ci/github-actions-harness.yml
 ```
+
+The bundled workflow targets `windows-latest` because this harness is maintained for Windows-first Java/Maven projects.
 
 ## Development Checks
 

@@ -1,4 +1,4 @@
-﻿# AGENT Instruction Loading
+# AGENT Instruction Loading
 
 Load repository instructions in phases. Keep root project rules ahead of generic skill defaults, but avoid loading every service instruction file before affected services are known.
 

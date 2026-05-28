@@ -15,7 +15,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from common import SKIP_DIRS, parse_modules, posix, split_command  # noqa: E402
+from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, SKIP_DIRS, parse_modules, posix, split_command  # noqa: E402
 
 
 DOC_SUFFIXES = {".md", ".adoc", ".rst", ".pdf", ".docx", ".pptx", ".drawio", ".puml", ".plantuml", ".mmd", ".png", ".jpg", ".jpeg"}
@@ -116,13 +116,27 @@ def run_command(command: str, repo: Path) -> dict:
             "stderr_tail": str(error),
         }
     try:
-        completed = subprocess.run(args, cwd=repo, shell=False, text=True, capture_output=True)
+        completed = subprocess.run(
+            args,
+            cwd=repo,
+            shell=False,
+            text=True,
+            capture_output=True,
+            timeout=DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
+        )
     except FileNotFoundError as error:
         return {
             "command": command,
             "exit_code": 127,
             "stdout_tail": "",
             "stderr_tail": str(error),
+        }
+    except subprocess.TimeoutExpired as error:
+        return {
+            "command": command,
+            "exit_code": 124,
+            "stdout_tail": (error.stdout or "")[-4000:] if isinstance(error.stdout, str) else "",
+            "stderr_tail": f"Command timed out after {DEFAULT_SUBPROCESS_TIMEOUT_SECONDS} seconds.",
         }
     return {
         "command": command,

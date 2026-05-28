@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 REQUIRED = {
+    "restated_intent": [r"restated intent", r"user intent", r"intent confirmation", r"\u610f\u56fe\u56de\u663e", r"\u7528\u6237\u610f\u56fe"],
     "goal": [r"^(?!non[-\s])goals?\b", r"\bobjective\b", r"(?<!非)目标"],
     "scope": [r"\bscope\b", r"\bnon[-\s]?goals?\b", r"范围", r"非目标"],
     "use_cases": [r"use cases?", r"用例", r"场景"],
@@ -386,18 +387,19 @@ def change_logic_gaps(markdown: str) -> list[str]:
     return gaps
 
 
-def validate(path: Path) -> dict:
+def validate(path: Path, require_intent: bool = False) -> dict:
     markdown = path.read_text(encoding="utf-8")
     titles = [title for title, _start, _end in headings(markdown)]
+    required_items = REQUIRED if require_intent else {key: value for key, value in REQUIRED.items() if key != "restated_intent"}
     missing = [
         key
-        for key, patterns in REQUIRED.items()
+        for key, patterns in required_items.items()
         if not any(has_heading(title, patterns) for title in titles)
     ]
     empty_sections = [
         key
         for key in CONTENT_REQUIRED_SECTIONS
-        if key not in missing and not section_has_content(section_text(markdown, REQUIRED[key]))
+        if key in required_items and key not in missing and not section_has_content(section_text(markdown, REQUIRED[key]))
     ]
     oq_text = section_text(markdown, REQUIRED["open_questions"])
     oq_clear, unresolved = open_questions_clear(oq_text)
@@ -415,12 +417,14 @@ def validate(path: Path) -> dict:
         "integration_gaps": gaps,
         "impact_gaps": impact_gaps,
         "change_logic_gaps": logic_gaps,
+        "intent_required": require_intent,
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("design_doc", type=Path)
+    parser.add_argument("--require-intent", action="store_true", help="Require a Restated Intent/User Intent section.")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON only.")
     args = parser.parse_args()
 
@@ -428,7 +432,7 @@ def main() -> int:
         print(f"Design doc not found: {args.design_doc}", file=sys.stderr)
         return 2
 
-    result = validate(args.design_doc)
+    result = validate(args.design_doc, require_intent=args.require_intent)
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:

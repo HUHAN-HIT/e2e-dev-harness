@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Validate harness policy for an e2e-dev-harness run."""
 
 from __future__ import annotations

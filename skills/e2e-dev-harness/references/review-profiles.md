@@ -1,4 +1,4 @@
-﻿# Review Profiles
+# Review Profiles
 
 Use review profiles when a project needs repeatable semantic-review expectations across Codex, Claude Code, Gemini CLI, CI, or any other agent runtime.
 

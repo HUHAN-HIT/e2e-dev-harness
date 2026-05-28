@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Create a compact summary for an e2e-dev-harness run."""
 
 from __future__ import annotations

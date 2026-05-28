@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "e2e-dev-harness-phase-guard",
   "event": "pre-action",
   "tools": ["Write", "Edit", "MultiEdit", "NotebookEdit"],

@@ -1,4 +1,4 @@
-﻿name: E2E Dev Harness
+name: E2E Dev Harness
 
 on:
   pull_request:
@@ -6,7 +6,7 @@ on:
 
 jobs:
   harness-verify:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -16,15 +16,16 @@ jobs:
           python-version: "3.11"
 
       - name: Replay harness run
+        shell: pwsh
         run: |
-          python skills/e2e-dev-harness/scripts/e2e_dev_harness.py verify . \
-            --harness \
-            --strict-workflow \
-            --workflow-tier critical \
-            --state "${HARNESS_RUN_STATE}" \
-            --strict-artifacts \
-            --summary-json "${HARNESS_RUN_SUMMARY_JSON}" \
-            --summary-md "${HARNESS_RUN_SUMMARY_MD}" \
+          python skills/e2e-dev-harness/scripts/e2e_dev_harness.py verify . `
+            --harness `
+            --strict-workflow `
+            --workflow-tier critical `
+            --state "$env:HARNESS_RUN_STATE" `
+            --strict-artifacts `
+            --summary-json "$env:HARNESS_RUN_SUMMARY_JSON" `
+            --summary-md "$env:HARNESS_RUN_SUMMARY_MD" `
             --json
         env:
           HARNESS_RUN_STATE: docs/agent-runs/<run>/run-state.json

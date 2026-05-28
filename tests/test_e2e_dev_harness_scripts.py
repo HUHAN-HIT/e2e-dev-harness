@@ -4,6 +4,7 @@ import io
 import importlib
 import hashlib
 import json
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -21,6 +22,8 @@ if str(SCRIPTS) not in sys.path:
 import clarification_gate  # noqa: E402
 import agent_instructions  # noqa: E402
 import artifact_registry  # noqa: E402
+import checkpoint_gate  # noqa: E402
+import command_evidence  # noqa: E402
 import coverage_gate  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import e2e_dev_harness  # noqa: E402
@@ -151,6 +154,74 @@ class ClarificationGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready_for_implementation"])
         self.assertIn("goal", result["empty_sections"])
+
+    def test_require_intent_blocks_missing_restated_intent(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Return checkout quotes.
+
+            ## Scope
+            - services/checkout-service
+
+            ## Use Cases
+            - Customer requests a checkout quote.
+
+            ## Acceptance Criteria
+            - AC-1 Checkout quote is returned.
+
+            ## Test Design
+            - CheckoutServiceTest covers quote creation.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path, require_intent=True)
+
+        self.assertFalse(result["ready_for_implementation"])
+        self.assertIn("restated_intent", result["missing_sections"])
+
+    def test_require_intent_accepts_restated_intent(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Restated Intent
+            - The user wants checkout quotes to be returned without changing payment capture.
+
+            ## Goal
+            - Return checkout quotes.
+
+            ## Scope
+            - services/checkout-service
+
+            ## Use Cases
+            - Customer requests a checkout quote.
+
+            ## Acceptance Criteria
+            - AC-1 Checkout quote is returned.
+
+            ## Test Design
+            - CheckoutServiceTest covers quote creation.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path, require_intent=True)
+
+        self.assertTrue(result["ready_for_implementation"], result)
 
     def test_mq_requirement_requires_cross_layer_sender_call_chain(self) -> None:
         markdown = textwrap.dedent(
@@ -453,6 +524,65 @@ class CommandSplitTests(unittest.TestCase):
             split_command("graphify update . && echo unsafe")
 
 
+class CommandEvidenceTests(unittest.TestCase):
+    def test_command_evidence_captures_exit_code_and_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = command_evidence.run_command(Path(tmp), f"{sys.executable} -c \"print('ok')\"", timeout_seconds=30)
+
+        self.assertEqual(0, result["exit_code"])
+        self.assertEqual("e2e-dev-harness.command-evidence.v1", result["schema"])
+        self.assertIn("ok", result["stdout_tail"])
+        self.assertEqual(64, len(result["stdout_sha256"]))
+
+    def test_command_evidence_rejects_shell_control_operators(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = command_evidence.run_command(Path(tmp), "python -V && echo unsafe", timeout_seconds=30)
+
+        self.assertEqual(2, result["exit_code"])
+        self.assertIn("Shell control operators", result["stderr_tail"])
+
+
+class CheckpointGateTests(unittest.TestCase):
+    def test_checkpoint_gate_blocks_missing_required_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            result = checkpoint_gate.validate(repo, None, ["clarify"], "required")
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("clarify" in reason for reason in result["blocked_reasons"]))
+
+    def test_checkpoint_gate_accepts_approved_markdown_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            confirmation = repo / "docs" / "agent-runs" / "run" / "confirmations" / "clarify.md"
+            confirmation.parent.mkdir(parents=True)
+            confirmation.write_text(
+                textwrap.dedent(
+                    """
+                    # Clarify Confirmation
+
+                    - Phase: clarify
+                    - Status: approved
+                    - Confirmed By: user
+                    - Decision: continue
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            result = checkpoint_gate.validate(repo, [confirmation.parent], ["clarify"], "required")
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(["clarify"], [item["phase"] for item in result["confirmations"]])
+
+    def test_checkpoint_gate_advisory_downgrades_missing_confirmation_to_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = checkpoint_gate.validate(Path(tmp), None, ["clarify"], "advisory")
+
+        self.assertTrue(result["ready"])
+        self.assertTrue(any("clarify" in warning for warning in result["warnings"]))
+
+
 class KnowledgeGraphRefreshTests(unittest.TestCase):
     def test_detect_finds_maven_service_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -489,6 +619,17 @@ class KnowledgeGraphRefreshTests(unittest.TestCase):
 
         self.assertEqual(2, result["exit_code"])
         self.assertIn("Shell control operators", result["stderr_tail"])
+
+    def test_run_command_reports_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            kg_refresh.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(["gitnexus", "analyze", "."], 600, output="partial"),
+        ):
+            result = kg_refresh.run_command("gitnexus analyze .", Path(tmp))
+
+        self.assertEqual(124, result["exit_code"])
+        self.assertIn("timed out", result["stderr_tail"])
 
 
 class AgentInstructionScopeTests(unittest.TestCase):
@@ -931,6 +1072,17 @@ class TaskAlignmentGuardTests(unittest.TestCase):
             path.write_text(text, encoding="utf-8")
         return design_path, coverage_path, manifest_path
 
+    def test_git_diff_timeout_is_reported_as_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            task_alignment_guard.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(["git", "diff"], 600),
+        ):
+            files, warnings = task_alignment_guard.changed_files_from_git(Path(tmp), "main")
+
+        self.assertEqual([], files)
+        self.assertTrue(any("timed out" in warning for warning in warnings))
+
     def test_task_alignment_blocks_changed_files_outside_declared_scope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -993,8 +1145,59 @@ class TaskAlignmentGuardTests(unittest.TestCase):
         self.assertTrue(result["ready"], result["blocked_reasons"])
         self.assertEqual([], result["correction_actions"])
 
+    def test_task_alignment_blocks_undeclared_acceptance_in_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design_path, coverage_path, manifest_path = self.write_alignment_artifacts(repo)
+            manifest_path.write_text(
+                textwrap.dedent(
+                    """
+                    | id | module | artifact | artifact_type | source | required | tests | status | evidence |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | AC-3 | services/checkout-service | services/checkout-service/src/main/java/com/example/CheckoutBonusService.java | service | AC-3 | yes | CheckoutBonusTest | verified | code path |
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            result = task_alignment_guard.validate(repo, design_path, manifest_path, coverage_path)
+
+        self.assertFalse(result["ready"])
+        self.assertIn("AC-3", result["deviation"]["undeclared_acceptance_ids"])
+        self.assertTrue(any(action["return_phase"] == "clarify" for action in result["correction_actions"]))
+
+    def test_task_alignment_blocks_interface_file_without_impact_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design_path, coverage_path, manifest_path = self.write_alignment_artifacts(repo)
+            changed = repo / "docs" / "agent-runs" / "run" / "evidence" / "changed-files.txt"
+            changed.parent.mkdir(parents=True, exist_ok=True)
+            changed.write_text(
+                "services/checkout-service/src/main/java/com/example/CheckoutController.java\n",
+                encoding="utf-8",
+            )
+
+            result = task_alignment_guard.validate(repo, design_path, manifest_path, coverage_path, changed)
+
+        self.assertFalse(result["ready"])
+        self.assertIn(
+            "services/checkout-service/src/main/java/com/example/CheckoutController.java",
+            result["deviation"]["undeclared_interface_files"],
+        )
+
 
 class CrossServiceDependencyScanTests(unittest.TestCase):
+    def test_run_command_reports_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            cross_service_dependency_scan.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(["gitnexus", "impact", "QuoteService"], 600, output="partial"),
+        ):
+            result = cross_service_dependency_scan.run_command(["gitnexus", "impact", "QuoteService"], Path(tmp))
+
+        self.assertEqual(124, result["exit_code"])
+        self.assertIn("timed out", result["stderr_tail"])
+
     def test_http_configured_url_matches_controller_route(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -1060,7 +1263,30 @@ class CrossServiceDependencyScanTests(unittest.TestCase):
         self.assertEqual("services/inventory-service", dependency["target_service"])
         self.assertEqual("/api/quotes", dependency["target_route"])
         self.assertIn("java_parser", result)
-        self.assertIn(result["java_parser"]["backend"], {"regex-fallback", "tree-sitter-java-available"})
+        self.assertEqual("regex-fallback", result["java_parser"]["backend"])
+        self.assertFalse(result["java_parser"]["ast_parser_active"])
+
+    def test_scan_can_require_active_tree_sitter_ast(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            cross_service_dependency_scan,
+            "java_parser_backend",
+            return_value={
+                "backend": "regex-fallback",
+                "tree_sitter_available": False,
+                "ast_parser_active": False,
+                "warning": "tree-sitter unavailable",
+            },
+        ):
+            repo = Path(tmp)
+            result = cross_service_dependency_scan.scan(
+                repo,
+                write_reports=False,
+                gitnexus_mode="off",
+                require_tree_sitter_ast=True,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("tree-sitter AST" in reason for reason in result["blocked_reasons"]))
 
     def test_scan_writes_reports_without_globals_indirection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2982,6 +3208,18 @@ class ImplementationGateTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("Knowledge graph status" in reason for reason in result["blocked_reasons"]))
 
+    def test_gate_request_dataclass_matches_legacy_validate_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            request = implementation_gate.GateRequest(repo=repo, phase="planning")
+
+            result = implementation_gate.validate_gate_request(request)
+            legacy = implementation_gate.validate_gate(repo, None, None, "planning", None)
+
+        self.assertEqual(legacy["ready"], result["ready"])
+        self.assertEqual(legacy["blocked_reasons"], result["blocked_reasons"])
+        self.assertEqual(legacy["phase"], result["phase"])
+
     def test_implementation_gate_passes_review_profile_to_reviewer_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -3397,12 +3635,12 @@ class ImplementationGateTests(unittest.TestCase):
                 status_file=None,
             )
 
-            with patch.object(e2e_dev_harness.implementation_gate, "validate_gate", return_value=gate_result) as validate:
+            with patch.object(e2e_dev_harness.implementation_gate, "validate_gate_request", return_value=gate_result) as validate:
                 code, result = e2e_dev_harness.gate(args)
 
         self.assertEqual(2, code)
         self.assertEqual(gate_result, result)
-        self.assertTrue(validate.call_args.kwargs["require_requirements_archive"])
+        self.assertTrue(validate.call_args.args[0].require_requirements_archive)
 
     def test_completion_gate_blocks_missing_semantic_reviews_when_required(self) -> None:
         design_text = textwrap.dedent(
@@ -5627,7 +5865,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
             with patch.object(
                 e2e_dev_harness.implementation_gate,
-                "validate_gate",
+                "validate_gate_request",
                 return_value={"ready": True, "blocked_reasons": [], "warnings": []},
             ):
                 code, result = e2e_dev_harness.gate(args)
@@ -6154,6 +6392,95 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(120, result["summary"]["elapsed_ms_total"])
         self.assertEqual(1250, result["summary"]["tokens"]["total"])
 
+    def test_execution_trace_blocks_corrupt_json_without_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            trace = repo / "docs" / "agent-runs" / "run" / "execution-trace.json"
+            trace.parent.mkdir(parents=True)
+            trace.write_text("{not-json", encoding="utf-8")
+
+            result = execution_trace.append_event(repo, trace.relative_to(repo), "verify", "finish")
+            validation = execution_trace.validate_trace(repo, trace.relative_to(repo))
+            trace_text = trace.read_text(encoding="utf-8")
+
+        self.assertFalse(result["ready"])
+        self.assertFalse(validation["ready"])
+        self.assertIn("{not-json", trace_text)
+        self.assertTrue(any("invalid JSON" in reason for reason in result["blocked_reasons"]))
+
+    def test_verify_blocks_when_trace_file_is_corrupt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            trace_path = repo / "docs" / "agent-runs" / "run" / "execution-trace.json"
+            trace_path.parent.mkdir(parents=True)
+            trace_path.write_text("{not-json", encoding="utf-8")
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=None,
+                path=None,
+                service=None,
+                agent_mode="off",
+                agent_scope="auto",
+                include_agent_content=False,
+                max_agent_chars=12000,
+                max_discovered_services=agent_instructions.DEFAULT_DISCOVERED_SERVICE_LIMIT,
+                superpowers_mode="off",
+                memory_mode="off",
+                agent_orchestration_mode="off",
+                service_scope="discovery",
+                agent_run_dir=None,
+                run_date="2026-05-23",
+                kg_mode="auto",
+                dependency_scan_mode="off",
+                write_dependency_report=False,
+                dependency_output_dir=None,
+                workflow_tier="basic",
+                module=None,
+                run_gate=False,
+                phase="planning",
+                kg_status_file=None,
+                red_test_evidence=None,
+                coverage_matrix=None,
+                unit_test_evidence=None,
+                business_review=None,
+                memory_updates=None,
+                requirements_archive=None,
+                require_requirements_archive=False,
+                dependency_report=None,
+                implementation_manifest=None,
+                changed_files=None,
+                base_ref=None,
+                rework_dir=None,
+                review_dir=None,
+                review_profile=None,
+                handoff_dir=None,
+                contract_dir=None,
+                require_contracts=False,
+                require_handoffs=False,
+                require_semantic_reviews=False,
+                skip_spring_static_check=False,
+                run_state=None,
+                skip_maven=True,
+                strict_workflow=False,
+                workflow_approval=None,
+                harness=False,
+                state=None,
+                policy=None,
+                strict_artifacts=False,
+                run_completion_gate=False,
+                summary_json=None,
+                summary_md=None,
+                status_file=None,
+                trace_file=trace_path,
+            )
+
+            code, result = e2e_dev_harness.verify(args)
+            trace_text = trace_path.read_text(encoding="utf-8")
+
+        self.assertEqual(2, code)
+        self.assertFalse(result["execution_trace"]["ready"])
+        self.assertIn("{not-json", trace_text)
+
     def test_verify_writes_execution_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -6354,6 +6681,16 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
 
 class SkillDocumentationTests(unittest.TestCase):
+    def test_skill_files_do_not_use_utf8_bom(self) -> None:
+        skill_dir = ROOT / "skills" / "e2e-dev-harness"
+        offenders = [
+            str(path.relative_to(ROOT)).replace("\\", "/")
+            for path in skill_dir.rglob("*")
+            if path.is_file() and path.read_bytes().startswith(b"\xef\xbb\xbf")
+        ]
+
+        self.assertEqual([], offenders)
+
     def test_skill_points_non_codex_agents_to_platform_compatibility_reference(self) -> None:
         skill_text = (ROOT / "skills" / "e2e-dev-harness" / "SKILL.md").read_text(encoding="utf-8")
 
@@ -6410,6 +6747,14 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("gemini-pre-action.example.json", text)
         self.assertIn("phase_guard.py", text)
         self.assertIn(".phase-lock", text)
+        self.assertIn("templates", text)
+
+    def test_github_actions_harness_is_windows_first(self) -> None:
+        text = (ROOT / "skills" / "e2e-dev-harness" / "ci" / "github-actions-harness.yml").read_text(encoding="utf-8")
+
+        self.assertIn("runs-on: windows-latest", text)
+        self.assertIn("shell: pwsh", text)
+        self.assertNotIn("ubuntu-latest", text)
 
     def test_bundled_review_profiles_have_guidance_metadata(self) -> None:
         for name in ("default", "security-heavy", "api-first"):
@@ -7140,6 +7485,61 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertEqual(127, result["maven"]["exit_code"])
         self.assertIn("Maven executable not found", result["maven"]["stderr_tail"])
         subprocess_run.assert_not_called()
+
+    def test_verify_reports_maven_timeout_without_hanging(self) -> None:
+        args = SimpleNamespace(
+            repo=Path("."),
+            design_doc=None,
+            path=None,
+            service=None,
+            agent_mode="off",
+            agent_scope="auto",
+            include_agent_content=False,
+            max_agent_chars=12000,
+            max_discovered_services=agent_instructions.DEFAULT_DISCOVERED_SERVICE_LIMIT,
+            superpowers_mode="auto",
+            memory_mode="off",
+            agent_orchestration_mode="off",
+            service_scope="discovery",
+            agent_run_dir=None,
+            run_date="2026-05-23",
+            kg_mode="auto",
+            dependency_scan_mode="auto",
+            write_dependency_report=True,
+            dependency_output_dir=None,
+            run_gate=False,
+            phase="planning",
+            kg_status_file=None,
+            red_test_evidence=None,
+            coverage_matrix=None,
+            unit_test_evidence=None,
+            business_review=None,
+            memory_updates=None,
+            dependency_report=None,
+            implementation_manifest=None,
+            rework_dir=None,
+            skip_spring_static_check=False,
+            skip_maven=False,
+            strict_workflow=False,
+            workflow_approval=None,
+            status_file=None,
+            module=None,
+        )
+
+        with (
+            patch.object(e2e_dev_harness, "prepare", return_value=(0, {"blocked": False})),
+            patch.object(e2e_dev_harness.shutil, "which", return_value="mvn"),
+            patch.object(
+                e2e_dev_harness.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired(["mvn", "test"], 600, output="partial"),
+            ),
+        ):
+            code, result = e2e_dev_harness.verify(args)
+
+        self.assertEqual(124, code)
+        self.assertEqual(124, result["maven"]["exit_code"])
+        self.assertIn("timed out", result["maven"]["stderr_tail"])
 
 
 class MemorySafetyTests(unittest.TestCase):

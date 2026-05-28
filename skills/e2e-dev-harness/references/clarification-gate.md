@@ -4,6 +4,7 @@ The gate prevents coding before the problem is testable.
 
 ## Required Fields
 
+- Restated Intent when `--require-intent` is enabled
 - Goal
 - Non-goals or out-of-scope items
 - Affected services/modules
@@ -17,6 +18,18 @@ The gate prevents coding before the problem is testable.
 - Open questions
 
 Acceptance criteria may be written as explicit IDs (`AC-1`, `AC2`) or as plain bullets. The gate canonicalizes explicit IDs to `AC-n`; plain bullets are assigned `AC-1`, `AC-2`, and so on for coverage-matrix checking.
+
+## Restated Intent
+
+For high-risk, audited, or interactive runs, add:
+
+```markdown
+## Restated Intent
+- The agent understands the user wants ...
+- The user confirmed this understanding on <date/session/artifact>.
+```
+
+Run `clarify --require-intent` or `gate --require-intent` to make this a hard blocker. Without this mode, the section is advisory so CI and non-interactive replay can still run.
 
 When an acceptance criterion or use case declares MQ/DMQ/Kafka/JMS notification behavior, the design must also state the cross-layer call chain and sender/producer injection point. Example:
 

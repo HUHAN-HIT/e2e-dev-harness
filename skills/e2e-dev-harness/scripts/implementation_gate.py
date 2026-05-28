@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -13,6 +14,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import clarification_gate  # noqa: E402
+import checkpoint_gate  # noqa: E402
 import contract_gate  # noqa: E402
 import coverage_gate  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
@@ -24,6 +26,37 @@ import reviewer_gate  # noqa: E402
 import rework_gate  # noqa: E402
 import spring_static_check  # noqa: E402
 import task_alignment_guard  # noqa: E402
+
+
+@dataclass(frozen=True)
+class GateRequest:
+    repo: Path
+    phase: str
+    design_doc: Path | None = None
+    kg_status_file: Path | None = None
+    red_test_evidence: Path | None = None
+    coverage_matrix: Path | None = None
+    unit_test_evidence: Path | None = None
+    business_review: Path | None = None
+    memory_updates: Path | None = None
+    skip_spring_static_check: bool = False
+    rework_dirs: list[Path] | None = None
+    dependency_report: Path | None = None
+    implementation_manifest: Path | None = None
+    review_dirs: list[Path] | None = None
+    handoff_dirs: list[Path] | None = None
+    contract_dirs: list[Path] | None = None
+    require_contracts: bool = False
+    require_handoffs: bool = False
+    require_semantic_reviews: bool = True
+    review_profile: Path | None = None
+    requirements_archive: Path | None = None
+    require_requirements_archive: bool = False
+    changed_files: Path | None = None
+    base_ref: str | None = None
+    checkpoint_mode: str = "off"
+    confirmation_dirs: list[Path] | None = None
+    require_intent: bool = False
 
 
 def read_json(path: Path) -> dict | None:
@@ -56,32 +89,33 @@ def find_kg_status_file(repo: Path, explicit: Path | None) -> Path:
     return candidates[0]
 
 
-def validate_gate(
-    repo: Path,
-    design_doc: Path | None,
-    kg_status_file: Path | None,
-    phase: str,
-    red_test_evidence: Path | None,
-    coverage_matrix: Path | None = None,
-    unit_test_evidence: Path | None = None,
-    business_review: Path | None = None,
-    memory_updates: Path | None = None,
-    skip_spring_static_check: bool = False,
-    rework_dirs: list[Path] | None = None,
-    dependency_report: Path | None = None,
-    implementation_manifest: Path | None = None,
-    review_dirs: list[Path] | None = None,
-    handoff_dirs: list[Path] | None = None,
-    contract_dirs: list[Path] | None = None,
-    require_contracts: bool = False,
-    require_handoffs: bool = False,
-    require_semantic_reviews: bool = True,
-    review_profile: Path | None = None,
-    requirements_archive: Path | None = None,
-    require_requirements_archive: bool = False,
-    changed_files: Path | None = None,
-    base_ref: str | None = None,
-) -> dict:
+def validate_gate_request(request: GateRequest) -> dict:
+    repo = request.repo
+    design_doc = request.design_doc
+    kg_status_file = request.kg_status_file
+    phase = request.phase
+    red_test_evidence = request.red_test_evidence
+    coverage_matrix = request.coverage_matrix
+    unit_test_evidence = request.unit_test_evidence
+    business_review = request.business_review
+    memory_updates = request.memory_updates
+    skip_spring_static_check = request.skip_spring_static_check
+    rework_dirs = request.rework_dirs
+    dependency_report = request.dependency_report
+    implementation_manifest = request.implementation_manifest
+    review_dirs = request.review_dirs
+    handoff_dirs = request.handoff_dirs
+    contract_dirs = request.contract_dirs
+    require_contracts = request.require_contracts
+    require_handoffs = request.require_handoffs
+    review_profile = request.review_profile
+    requirements_archive = request.requirements_archive
+    require_requirements_archive = request.require_requirements_archive
+    changed_files = request.changed_files
+    base_ref = request.base_ref
+    checkpoint_mode = request.checkpoint_mode
+    confirmation_dirs = request.confirmation_dirs
+    require_intent = request.require_intent
     repo = repo.resolve()
     blocked_reasons: list[str] = []
     warnings: list[str] = []
@@ -92,7 +126,7 @@ def validate_gate(
         if not design_path.exists():
             blocked_reasons.append(f"Design document not found: {design_path}")
         else:
-            design_result = clarification_gate.validate(design_path)
+            design_result = clarification_gate.validate(design_path, require_intent=require_intent)
             if not design_result["ready_for_implementation"]:
                 blocked_reasons.append("Clarification gate is not ready.")
     else:
@@ -129,6 +163,7 @@ def validate_gate(
     handoff_result = None
     contract_result = None
     requirements_archive_result = None
+    checkpoint_result = None
 
     required_review_phases = {
         "planning": ["design"],
@@ -163,6 +198,18 @@ def validate_gate(
     )
     if not contract_result["ready"]:
         blocked_reasons.extend(contract_result["blocked_reasons"])
+
+    if checkpoint_mode != "off":
+        required_phases = checkpoint_gate.DEFAULT_PHASES_BY_GATE[phase]
+        checkpoint_result = checkpoint_gate.validate(
+            repo,
+            confirmation_dirs,
+            required_phases,
+            "advisory" if checkpoint_mode == "advisory" else "required",
+        )
+        if checkpoint_mode == "required" and not checkpoint_result["ready"]:
+            blocked_reasons.extend(checkpoint_result["blocked_reasons"])
+        warnings.extend(checkpoint_result["warnings"])
 
     if phase == "completion":
         if not red_test_evidence:
@@ -254,12 +301,75 @@ def validate_gate(
         "dependency_report": dependency_result,
         "memory_updates": memory_result,
         "requirements_archive": requirements_archive_result,
+        "checkpoints": checkpoint_result,
         "rework": rework_result,
         "semantic_reviews": semantic_review_result,
         "handoffs": handoff_result,
         "contracts": contract_result,
         "spring_static_check": spring_result,
     }
+
+
+def validate_gate(
+    repo: Path,
+    design_doc: Path | None,
+    kg_status_file: Path | None,
+    phase: str,
+    red_test_evidence: Path | None,
+    coverage_matrix: Path | None = None,
+    unit_test_evidence: Path | None = None,
+    business_review: Path | None = None,
+    memory_updates: Path | None = None,
+    skip_spring_static_check: bool = False,
+    rework_dirs: list[Path] | None = None,
+    dependency_report: Path | None = None,
+    implementation_manifest: Path | None = None,
+    review_dirs: list[Path] | None = None,
+    handoff_dirs: list[Path] | None = None,
+    contract_dirs: list[Path] | None = None,
+    require_contracts: bool = False,
+    require_handoffs: bool = False,
+    require_semantic_reviews: bool = True,
+    review_profile: Path | None = None,
+    requirements_archive: Path | None = None,
+    require_requirements_archive: bool = False,
+    changed_files: Path | None = None,
+    base_ref: str | None = None,
+    checkpoint_mode: str = "off",
+    confirmation_dirs: list[Path] | None = None,
+    require_intent: bool = False,
+) -> dict:
+    return validate_gate_request(
+        GateRequest(
+            repo=repo,
+            design_doc=design_doc,
+            kg_status_file=kg_status_file,
+            phase=phase,
+            red_test_evidence=red_test_evidence,
+            coverage_matrix=coverage_matrix,
+            unit_test_evidence=unit_test_evidence,
+            business_review=business_review,
+            memory_updates=memory_updates,
+            skip_spring_static_check=skip_spring_static_check,
+            rework_dirs=rework_dirs,
+            dependency_report=dependency_report,
+            implementation_manifest=implementation_manifest,
+            review_dirs=review_dirs,
+            handoff_dirs=handoff_dirs,
+            contract_dirs=contract_dirs,
+            require_contracts=require_contracts,
+            require_handoffs=require_handoffs,
+            require_semantic_reviews=require_semantic_reviews,
+            review_profile=review_profile,
+            requirements_archive=requirements_archive,
+            require_requirements_archive=require_requirements_archive,
+            changed_files=changed_files,
+            base_ref=base_ref,
+            checkpoint_mode=checkpoint_mode,
+            confirmation_dirs=confirmation_dirs,
+            require_intent=require_intent,
+        )
+    )
 
 
 def main() -> int:
@@ -279,6 +389,9 @@ def main() -> int:
     parser.add_argument("--implementation-manifest", type=Path)
     parser.add_argument("--changed-files", type=Path)
     parser.add_argument("--base-ref")
+    parser.add_argument("--checkpoint-mode", choices=["off", "advisory", "required"], default="off")
+    parser.add_argument("--confirmation-dir", action="append", type=Path)
+    parser.add_argument("--require-intent", action="store_true")
     parser.add_argument("--rework-dir", action="append", type=Path)
     parser.add_argument("--review-dir", action="append", type=Path)
     parser.add_argument("--review-profile", type=Path)
@@ -291,31 +404,36 @@ def main() -> int:
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    result = validate_gate(
-        args.repo,
-        args.design_doc,
-        args.kg_status_file,
-        args.phase,
-        args.red_test_evidence,
-        args.coverage_matrix,
-        args.unit_test_evidence,
-        args.business_review,
-        args.memory_updates,
-        args.skip_spring_static_check,
-        args.rework_dir,
-        args.dependency_report,
-        args.implementation_manifest,
-        args.review_dir,
-        args.handoff_dir,
-        args.contract_dir,
-        args.require_contracts,
-        args.require_handoffs,
-        args.require_semantic_reviews,
-        args.review_profile,
-        args.requirements_archive,
-        args.require_requirements_archive,
-        args.changed_files,
-        args.base_ref,
+    result = validate_gate_request(
+        GateRequest(
+            repo=args.repo,
+            design_doc=args.design_doc,
+            kg_status_file=args.kg_status_file,
+            phase=args.phase,
+            red_test_evidence=args.red_test_evidence,
+            coverage_matrix=args.coverage_matrix,
+            unit_test_evidence=args.unit_test_evidence,
+            business_review=args.business_review,
+            memory_updates=args.memory_updates,
+            skip_spring_static_check=args.skip_spring_static_check,
+            rework_dirs=args.rework_dir,
+            dependency_report=args.dependency_report,
+            implementation_manifest=args.implementation_manifest,
+            review_dirs=args.review_dir,
+            handoff_dirs=args.handoff_dir,
+            contract_dirs=args.contract_dir,
+            require_contracts=args.require_contracts,
+            require_handoffs=args.require_handoffs,
+            require_semantic_reviews=args.require_semantic_reviews,
+            review_profile=args.review_profile,
+            requirements_archive=args.requirements_archive,
+            require_requirements_archive=args.require_requirements_archive,
+            changed_files=args.changed_files,
+            base_ref=args.base_ref,
+            checkpoint_mode=args.checkpoint_mode,
+            confirmation_dirs=args.confirmation_dir,
+            require_intent=args.require_intent,
+        )
     )
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))

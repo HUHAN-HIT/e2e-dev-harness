@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Shared helpers for e2e-dev-harness scripts."""
 
 from __future__ import annotations
@@ -8,6 +8,8 @@ import shlex
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+
+DEFAULT_SUBPROCESS_TIMEOUT_SECONDS = 600
 
 SKIP_DIRS = {".git", ".idea", ".vscode", "target", "build", "node_modules", ".gradle", "graphify-out", "agent-runs"}
 SHELL_CONTROL_TOKENS = {"&&", "||", "|", ";", "<", ">", ">>", "2>", "2>>", "&"}

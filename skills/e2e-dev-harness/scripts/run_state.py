@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Create and validate e2e-dev-harness run state files."""
 
 from __future__ import annotations

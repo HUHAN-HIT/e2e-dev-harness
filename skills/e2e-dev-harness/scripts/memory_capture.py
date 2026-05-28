@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Initialize, scan, and append project memory for e2e-dev-harness."""
 
 from __future__ import annotations

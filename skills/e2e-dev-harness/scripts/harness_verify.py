@@ -103,23 +103,25 @@ def validate(
 
     gate_result = None
     if run_completion_gate:
-        gate_result = implementation_gate.validate_gate(
-            repo,
-            registry_entry(registry_data, "design_doc") or registry_entry(registry_data, "design"),
-            registry_entry(registry_data, "knowledge_graph_status"),
-            "completion",
-            registry_entry(registry_data, "red_test_evidence"),
-            coverage_matrix=registry_entry(registry_data, "coverage_matrix"),
-            unit_test_evidence=registry_entry(registry_data, "green_test_evidence"),
-            business_review=registry_entry(registry_data, "business_review"),
-            dependency_report=registry_entry(registry_data, "dependency_report"),
-            implementation_manifest=registry_entry(registry_data, "implementation_manifest"),
-            requirements_archive=registry_entry(registry_data, "requirements_archive"),
-            require_requirements_archive=True,
-            handoff_dirs=[registry_entry(registry_data, "agent_run_dir") / "handoffs"] if registry_entry(registry_data, "agent_run_dir") else None,
-            contract_dirs=[registry_entry(registry_data, "contracts_dir")] if registry_entry(registry_data, "contracts_dir") else None,
-            require_contracts=len(state_data.get("services", [])) > 1,
-            require_handoffs=state_data.get("selected_mode") == "multi",
+        gate_result = implementation_gate.validate_gate_request(
+            implementation_gate.GateRequest(
+                repo=repo,
+                design_doc=registry_entry(registry_data, "design_doc") or registry_entry(registry_data, "design"),
+                kg_status_file=registry_entry(registry_data, "knowledge_graph_status"),
+                phase="completion",
+                red_test_evidence=registry_entry(registry_data, "red_test_evidence"),
+                coverage_matrix=registry_entry(registry_data, "coverage_matrix"),
+                unit_test_evidence=registry_entry(registry_data, "green_test_evidence"),
+                business_review=registry_entry(registry_data, "business_review"),
+                dependency_report=registry_entry(registry_data, "dependency_report"),
+                implementation_manifest=registry_entry(registry_data, "implementation_manifest"),
+                requirements_archive=registry_entry(registry_data, "requirements_archive"),
+                require_requirements_archive=True,
+                handoff_dirs=[registry_entry(registry_data, "agent_run_dir") / "handoffs"] if registry_entry(registry_data, "agent_run_dir") else None,
+                contract_dirs=[registry_entry(registry_data, "contracts_dir")] if registry_entry(registry_data, "contracts_dir") else None,
+                require_contracts=len(state_data.get("services", [])) > 1,
+                require_handoffs=state_data.get("selected_mode") == "multi",
+            )
         )
         if not gate_result["ready"]:
             blocked.extend("Completion gate: " + reason for reason in gate_result["blocked_reasons"])

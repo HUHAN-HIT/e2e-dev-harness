@@ -1,4 +1,4 @@
-﻿# Execution Control
+# Execution Control
 
 Use execution control when an agent runtime supports pre-tool or pre-action hooks.
 The hook is the enforcement layer: it blocks code writes until the active run enters the implementation phase.
@@ -33,7 +33,7 @@ skills/e2e-dev-harness/hooks/codex-pre-action.example.json
 skills/e2e-dev-harness/hooks/gemini-pre-action.example.json
 ```
 
-Each runtime has different hook wiring, but all examples call the same `phase_guard.py` command.
+Each runtime has different hook wiring, but all examples call the same `phase_guard.py` command. The Codex and Gemini files are templates unless the host runner explicitly supports blocking pre-action or pre-tool configuration; writing the template alone is not enforcement.
 If a runtime cannot pass hook JSON through stdin, pass `--tool`, `--path`, and `--run-dir` explicitly.
 
 ## Hook Install and Check
@@ -66,3 +66,4 @@ python skills/e2e-dev-harness/scripts/auto_transition.py . \
 It exits with `0` when ready and `2` when blocked, so CI and hooks can consume it directly.
 
 For GitHub Actions, copy `skills/e2e-dev-harness/ci/github-actions-harness.yml` into `.github/workflows/` and replace the `<run>` placeholders.
+The bundled workflow uses `windows-latest`; do not switch it to Linux unless the project has explicitly standardized on Linux CI.

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 import clarification_gate  # noqa: E402
 import coverage_gate  # noqa: E402
 import implementation_manifest  # noqa: E402
-from common import posix  # noqa: E402
+from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, posix  # noqa: E402
 
 
 ALWAYS_ALLOWED_PREFIXES = (
@@ -28,6 +29,11 @@ ALWAYS_ALLOWED_PREFIXES = (
     "skills/e2e-dev-harness/",
 )
 TEST_HINTS = ("/src/test/", "/test/", "/tests/", "test/", "tests/")
+INTERFACE_FILE_RE = re.compile(
+    r"(controller|client|sender|producer|publisher|listener|consumer|handler|endpoint|route)\.(java|kt|go|ts|js|py)$",
+    re.IGNORECASE,
+)
+AC_ID_RE = re.compile(r"\bAC-?\d+\b", re.IGNORECASE)
 
 
 def repo_path(repo: Path, path: Path | None) -> Path | None:
@@ -71,9 +77,12 @@ def changed_files_from_git(repo: Path, base_ref: str | None) -> tuple[list[str],
             text=True,
             capture_output=True,
             check=False,
+            timeout=DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
         )
     except OSError as error:
         return [], [f"Unable to run git diff for task alignment: {error}"]
+    except subprocess.TimeoutExpired:
+        return [], [f"git diff timed out after {DEFAULT_SUBPROCESS_TIMEOUT_SECONDS} seconds for task alignment."]
     if completed.returncode != 0:
         return [], [completed.stderr.strip() or f"git diff failed with exit code {completed.returncode}"]
     return [line.strip().replace("\\", "/") for line in completed.stdout.splitlines() if line.strip()], []
@@ -157,7 +166,52 @@ def manifest_missing_ids(design_doc: Path | None, manifest: Path | None) -> list
     return [ac_id for ac_id in expected if ac_id not in manifest_text]
 
 
-def correction_actions(scope_drift: list[str], missing_coverage: list[str], missing_manifest: list[str], scopes: set[str]) -> list[dict]:
+def design_impact_interfaces(design_doc: Path | None) -> list[dict[str, str]]:
+    text = read_text(design_doc)
+    if not text:
+        return []
+    summary = clarification_gate.section_text(text, clarification_gate.IMPACT_SECTION_PATTERNS)
+    if not summary:
+        return []
+    _headers, rows = clarification_gate.parse_first_markdown_table(summary)
+    interfaces: list[dict[str, str]] = []
+    for row in rows:
+        interface = row.get("interface", "").strip()
+        related_ac = row.get("related_ac", "").strip()
+        if interface:
+            interfaces.append({"interface": interface, "related_ac": clarification_gate.normalize_acceptance_id(related_ac)})
+    return interfaces
+
+
+def manifest_unplanned_acceptance_ids(design_doc: Path | None, manifest: Path | None) -> list[str]:
+    if not design_doc or not design_doc.exists() or not manifest or not manifest.exists():
+        return []
+    expected = {item["id"] for item in clarification_gate.extract_acceptance_items(design_doc)}
+    found = {
+        clarification_gate.normalize_acceptance_id(match.group(0))
+        for match in AC_ID_RE.finditer(read_text(manifest))
+    }
+    return sorted(found - expected)
+
+
+def changed_interface_files_without_design(changed_files: list[str], impact_interfaces: list[dict[str, str]]) -> list[str]:
+    if impact_interfaces:
+        return []
+    return [
+        path
+        for path in changed_files
+        if INTERFACE_FILE_RE.search(Path(path).name) and not any(hint in f"/{path}" for hint in TEST_HINTS)
+    ]
+
+
+def correction_actions(
+    scope_drift: list[str],
+    missing_coverage: list[str],
+    missing_manifest: list[str],
+    scopes: set[str],
+    unplanned_acceptance: list[str] | None = None,
+    undeclared_interface_files: list[str] | None = None,
+) -> list[dict]:
     actions: list[dict] = []
     if not scopes and scope_drift:
         actions.append(
@@ -189,6 +243,22 @@ def correction_actions(scope_drift: list[str], missing_coverage: list[str], miss
                 "return_phase": "implementation",
                 "reason": "Acceptance criteria are missing from the implementation manifest.",
                 "required_action": "Map implementation artifacts and code paths for: " + ", ".join(missing_manifest),
+            }
+        )
+    if unplanned_acceptance:
+        actions.append(
+            {
+                "return_phase": "clarify",
+                "reason": "Implementation manifest references acceptance criteria that are not in the design.",
+                "required_action": "Clarify whether these ACs are in scope or remove the undeclared behavior: " + ", ".join(unplanned_acceptance),
+            }
+        )
+    if undeclared_interface_files:
+        actions.append(
+            {
+                "return_phase": "clarify",
+                "reason": "Interface-like production files changed without declared Impact Summary interfaces.",
+                "required_action": "Add affected interface rows to the design or move unrelated interface changes out of scope.",
             }
         )
     return actions
@@ -230,11 +300,28 @@ def validate(
     missing_manifest = manifest_missing_ids(design_path, manifest_path)
     if missing_manifest:
         blocked.append("Acceptance criteria missing from implementation manifest: " + ", ".join(missing_manifest))
+    impact_interfaces = design_impact_interfaces(design_path)
+    unplanned_acceptance = manifest_unplanned_acceptance_ids(design_path, manifest_path)
+    if unplanned_acceptance:
+        blocked.append("Implementation manifest references undeclared acceptance criteria: " + ", ".join(unplanned_acceptance))
+    undeclared_interface_files = changed_interface_files_without_design(file_list, impact_interfaces)
+    if undeclared_interface_files:
+        blocked.append(
+            "Interface-like production files changed without design Impact Summary rows: "
+            + ", ".join(undeclared_interface_files)
+        )
 
     if not file_list:
         warnings.append("No changed-file evidence supplied; scope drift could not be fully checked.")
 
-    actions = correction_actions(scope_drift, missing_coverage, missing_manifest, scopes)
+    actions = correction_actions(
+        scope_drift,
+        missing_coverage,
+        missing_manifest,
+        scopes,
+        unplanned_acceptance,
+        undeclared_interface_files,
+    )
     return {
         "repo": str(repo),
         "ready": not blocked,
@@ -245,6 +332,11 @@ def validate(
         "scope_drift_files": scope_drift,
         "missing_coverage_acceptance_ids": missing_coverage,
         "missing_manifest_acceptance_ids": missing_manifest,
+        "deviation": {
+            "impact_interfaces": impact_interfaces,
+            "undeclared_acceptance_ids": unplanned_acceptance,
+            "undeclared_interface_files": undeclared_interface_files,
+        },
         "correction_actions": actions,
     }
 

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Unified CLI for the e2e-dev-harness workflow."""
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ if str(SCRIPT_DIR) not in sys.path:
 import agent_instructions  # noqa: E402
 import artifact_registry  # noqa: E402
 import clarification_gate  # noqa: E402
+from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import execution_trace  # noqa: E402
 import implementation_gate  # noqa: E402
@@ -112,7 +113,7 @@ def trace_event(
     trace_file = getattr(args, "trace_file", None)
     if not trace_file:
         return
-    execution_trace.append_event(
+    result = execution_trace.append_event(
         as_repo(args.repo),
         trace_file,
         phase,
@@ -121,6 +122,12 @@ def trace_event(
         elapsed_ms=elapsed_ms,
         artifacts=artifacts,
     )
+    if not result.get("ready", False):
+        failures = getattr(args, "_trace_failures", [])
+        for reason in result.get("blocked_reasons", []) or ["Execution trace update failed."]:
+            if reason not in failures:
+                failures.append(reason)
+        setattr(args, "_trace_failures", failures)
 
 
 def timed_phase(args, phase: str, func, *call_args):
@@ -397,7 +404,7 @@ def clarify(args) -> tuple[int, dict]:
     design_path = resolve_repo_path(repo, args.design_doc)
     if not design_path or not design_path.exists():
         return 2, {"ready_for_implementation": False, "error": f"Design doc not found: {design_path}"}
-    result = clarification_gate.validate(design_path)
+    result = clarification_gate.validate(design_path, require_intent=getattr(args, "require_intent", False))
     run_state_path = getattr(args, "run_state", None)
     if run_state_path and result.get("ready_for_implementation"):
         result["run_state_transition"] = run_state.transition_state(
@@ -926,6 +933,7 @@ def plan(args) -> tuple[int, dict]:
         run_dir = require_repo_path(repo, Path(result["agent_run_dir"]), "agent run directory")
         (run_dir / "handoffs").mkdir(parents=True, exist_ok=True)
         (run_dir / "evidence").mkdir(parents=True, exist_ok=True)
+        (run_dir / "confirmations").mkdir(parents=True, exist_ok=True)
         require_repo_path(repo, Path(result["handoff_artifacts"]["review_requests_dir"]), "review requests directory").mkdir(parents=True, exist_ok=True)
         require_repo_path(repo, Path(result["handoff_artifacts"]["reviews_dir"]), "reviews directory").mkdir(parents=True, exist_ok=True)
         require_repo_path(repo, Path(result["handoff_artifacts"]["rework_dir"]), "rework directory").mkdir(parents=True, exist_ok=True)
@@ -970,34 +978,39 @@ def plan(args) -> tuple[int, dict]:
 
 def gate(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
-    result = implementation_gate.validate_gate(
-        repo,
-        args.design_doc,
-        args.kg_status_file,
-        args.phase,
-        args.red_test_evidence,
-        args.coverage_matrix,
-        args.unit_test_evidence,
-        args.business_review,
-        args.memory_updates,
-        skip_spring_static_check=getattr(args, "skip_spring_static_check", False),
-        rework_dirs=getattr(args, "rework_dir", None),
-        dependency_report=getattr(args, "dependency_report", None),
-        implementation_manifest=getattr(args, "implementation_manifest", None),
-        review_dirs=getattr(args, "review_dir", None),
-        handoff_dirs=getattr(args, "handoff_dir", None),
-        contract_dirs=getattr(args, "contract_dir", None),
-        require_contracts=getattr(args, "require_contracts", False),
-        require_handoffs=getattr(args, "require_handoffs", False),
-        require_semantic_reviews=getattr(args, "require_semantic_reviews", False),
-        review_profile=getattr(args, "review_profile", None),
-        requirements_archive=getattr(args, "requirements_archive", None),
-        require_requirements_archive=(
-            getattr(args, "require_requirements_archive", False)
-            or (getattr(args, "strict_workflow", False) and args.phase == "completion")
-        ),
-        changed_files=getattr(args, "changed_files", None),
-        base_ref=getattr(args, "base_ref", None),
+    result = implementation_gate.validate_gate_request(
+        implementation_gate.GateRequest(
+            repo=repo,
+            design_doc=args.design_doc,
+            kg_status_file=args.kg_status_file,
+            phase=args.phase,
+            red_test_evidence=args.red_test_evidence,
+            coverage_matrix=args.coverage_matrix,
+            unit_test_evidence=args.unit_test_evidence,
+            business_review=args.business_review,
+            memory_updates=args.memory_updates,
+            skip_spring_static_check=getattr(args, "skip_spring_static_check", False),
+            rework_dirs=getattr(args, "rework_dir", None),
+            dependency_report=getattr(args, "dependency_report", None),
+            implementation_manifest=getattr(args, "implementation_manifest", None),
+            review_dirs=getattr(args, "review_dir", None),
+            handoff_dirs=getattr(args, "handoff_dir", None),
+            contract_dirs=getattr(args, "contract_dir", None),
+            require_contracts=getattr(args, "require_contracts", False),
+            require_handoffs=getattr(args, "require_handoffs", False),
+            require_semantic_reviews=getattr(args, "require_semantic_reviews", False),
+            review_profile=getattr(args, "review_profile", None),
+            requirements_archive=getattr(args, "requirements_archive", None),
+            require_requirements_archive=(
+                getattr(args, "require_requirements_archive", False)
+                or (getattr(args, "strict_workflow", False) and args.phase == "completion")
+            ),
+            changed_files=getattr(args, "changed_files", None),
+            base_ref=getattr(args, "base_ref", None),
+            checkpoint_mode=getattr(args, "checkpoint_mode", "off"),
+            confirmation_dirs=getattr(args, "confirmation_dir", None),
+            require_intent=getattr(args, "require_intent", False),
+        )
     )
     if result.get("ready"):
         transition_target = {
@@ -1053,15 +1066,30 @@ def verify(args) -> tuple[int, dict]:
             }
         else:
             command[0] = maven_executable
-            completed = subprocess.run(command, cwd=as_repo(args.repo), text=True, capture_output=True)
             display_command = ["mvn"] + command[1:]
-            maven_result = {
-                "skipped": False,
-                "command": " ".join(display_command),
-                "exit_code": completed.returncode,
-                "stdout_tail": completed.stdout[-4000:],
-                "stderr_tail": completed.stderr[-4000:],
-            }
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=as_repo(args.repo),
+                    text=True,
+                    capture_output=True,
+                    timeout=DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
+                )
+                maven_result = {
+                    "skipped": False,
+                    "command": " ".join(display_command),
+                    "exit_code": completed.returncode,
+                    "stdout_tail": completed.stdout[-4000:],
+                    "stderr_tail": completed.stderr[-4000:],
+                }
+            except subprocess.TimeoutExpired as error:
+                maven_result = {
+                    "skipped": False,
+                    "command": " ".join(display_command),
+                    "exit_code": 124,
+                    "stdout_tail": (error.stdout or "")[-4000:] if isinstance(error.stdout, str) else "",
+                    "stderr_tail": f"Maven command timed out after {DEFAULT_SUBPROCESS_TIMEOUT_SECONDS} seconds.",
+                }
     trace_event(
         args,
         "maven",
@@ -1095,6 +1123,14 @@ def verify(args) -> tuple[int, dict]:
         "maven": maven_result,
     }
     exit_code = max(prepare_code, clarify_code, gate_code, maven_result.get("exit_code", 0) if not args.skip_maven else 0)
+    trace_failures = getattr(args, "_trace_failures", [])
+    if trace_failures:
+        result["execution_trace"] = {
+            "ready": False,
+            "blocked_reasons": trace_failures,
+            "warnings": [],
+        }
+        exit_code = max(exit_code, 2)
     if getattr(args, "strict_workflow", False):
         approval_path = resolve_repo_path(as_repo(args.repo), getattr(args, "workflow_approval", None))
         guard_result = workflow_guard.validate_verify_result(
@@ -1143,6 +1179,14 @@ def verify(args) -> tuple[int, dict]:
         int((time.perf_counter() - total_started) * 1000),
         [str(args.status_file)] if args.status_file else None,
     )
+    final_trace_failures = getattr(args, "_trace_failures", [])
+    if final_trace_failures:
+        result["execution_trace"] = {
+            "ready": False,
+            "blocked_reasons": final_trace_failures,
+            "warnings": [],
+        }
+        exit_code = max(exit_code, 2)
     write_status(args.status_file, result)
     return exit_code, result
 
@@ -1196,6 +1240,7 @@ def main() -> int:
     clarify_parser = subparsers.add_parser("clarify", help="Run the clarification gate.")
     clarify_parser.add_argument("repo", nargs="?", default=".", type=Path)
     clarify_parser.add_argument("--design-doc", required=True, type=Path)
+    clarify_parser.add_argument("--require-intent", action="store_true")
     clarify_parser.add_argument("--run-state", type=Path)
     clarify_parser.add_argument("--status-file", type=Path)
 
@@ -1230,6 +1275,9 @@ def main() -> int:
     gate_parser.add_argument("--implementation-manifest", type=Path)
     gate_parser.add_argument("--changed-files", type=Path)
     gate_parser.add_argument("--base-ref")
+    gate_parser.add_argument("--checkpoint-mode", choices=["off", "advisory", "required"], default="off")
+    gate_parser.add_argument("--confirmation-dir", action="append", type=Path)
+    gate_parser.add_argument("--require-intent", action="store_true")
     gate_parser.add_argument("--rework-dir", action="append", type=Path)
     gate_parser.add_argument("--review-dir", action="append", type=Path)
     gate_parser.add_argument("--review-profile", type=Path)
@@ -1259,6 +1307,9 @@ def main() -> int:
     verify_parser.add_argument("--implementation-manifest", type=Path)
     verify_parser.add_argument("--changed-files", type=Path)
     verify_parser.add_argument("--base-ref")
+    verify_parser.add_argument("--checkpoint-mode", choices=["off", "advisory", "required"], default="off")
+    verify_parser.add_argument("--confirmation-dir", action="append", type=Path)
+    verify_parser.add_argument("--require-intent", action="store_true")
     verify_parser.add_argument("--rework-dir", action="append", type=Path)
     verify_parser.add_argument("--review-dir", action="append", type=Path)
     verify_parser.add_argument("--review-profile", type=Path)

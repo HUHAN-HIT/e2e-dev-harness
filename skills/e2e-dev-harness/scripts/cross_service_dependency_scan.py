@@ -17,7 +17,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from common import SKIP_DIRS, posix  # noqa: E402
+from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, SKIP_DIRS, posix  # noqa: E402
 
 HTTP_MAPPING_RE = re.compile(r"@(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)\s*(?:\((.*?)\))?", re.S)
 VALUE_FIELD_RE = re.compile(r"@Value\s*\(\s*\"\$\{([^}:]+)(?::[^}]*)?}\"\s*\)\s*(?:private|protected|public)?\s*(?:final\s+)?(?:String|URI|URL)\s+(\w+)", re.S)
@@ -39,12 +39,14 @@ def java_parser_backend() -> dict:
         return {
             "backend": "regex-fallback",
             "tree_sitter_available": False,
+            "ast_parser_active": False,
             "warning": "tree-sitter Java parser is unavailable; deterministic scan uses regex fallback and may miss nested Java syntax.",
         }
     return {
-        "backend": "tree-sitter-java-available",
+        "backend": "regex-fallback",
         "tree_sitter_available": True,
-        "warning": "",
+        "ast_parser_active": False,
+        "warning": "tree-sitter Java packages are installed, but AST parsing is not wired into this scanner yet; deterministic scan uses regex fallback.",
     }
 
 
@@ -440,7 +442,14 @@ def dmq_dependencies(producers: list[dict], consumers: list[dict]) -> tuple[list
 
 def run_command(command: list[str], cwd: Path) -> dict:
     try:
-        completed = subprocess.run(command, cwd=cwd, text=True, capture_output=True, shell=False)
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            shell=False,
+            timeout=DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
+        )
         return {
             "command": " ".join(command),
             "exit_code": completed.returncode,
@@ -449,6 +458,13 @@ def run_command(command: list[str], cwd: Path) -> dict:
         }
     except FileNotFoundError as error:
         return {"command": " ".join(command), "exit_code": 127, "stdout_tail": "", "stderr_tail": str(error)}
+    except subprocess.TimeoutExpired as error:
+        return {
+            "command": " ".join(command),
+            "exit_code": 124,
+            "stdout_tail": (error.stdout or "")[-4000:] if isinstance(error.stdout, str) else "",
+            "stderr_tail": f"Command timed out after {DEFAULT_SUBPROCESS_TIMEOUT_SECONDS} seconds.",
+        }
 
 
 def gitnexus_evidence(
@@ -530,6 +546,7 @@ def scan(
     output_dir: Path | None = None,
     command_runner=run_command,
     gitnexus_available: bool | None = None,
+    require_tree_sitter_ast: bool = False,
 ) -> dict:
     repo = repo.resolve()
     services = detect_services(repo)
@@ -552,9 +569,12 @@ def scan(
     warnings = list(gitnexus_warnings)
     if parser_backend.get("warning"):
         warnings.append(str(parser_backend["warning"]))
+    parser_blockers: list[str] = []
+    if require_tree_sitter_ast and not parser_backend.get("ast_parser_active"):
+        parser_blockers.append("tree-sitter AST parsing is required but not active; scanner output cannot be used as high-risk Java impact evidence.")
     result = {
         "repo": str(repo),
-        "ready": not unresolved,
+        "ready": not unresolved and not parser_blockers,
         "services": services,
         "tool_priority": ["gitnexus", "deterministic-scan", "graphify"],
         "java_parser": parser_backend,
@@ -567,6 +587,7 @@ def scan(
         "dmq": {"producers": producers, "consumers": consumers},
         "dependencies": dependencies,
         "unresolved_questions": unresolved,
+        "blocked_reasons": parser_blockers,
         "warnings": warnings,
         "report_paths": {},
     }
@@ -634,6 +655,7 @@ def main() -> int:
     parser.add_argument("--graphify-mode", choices=["auxiliary", "off"], default="auxiliary")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--no-write", action="store_true")
+    parser.add_argument("--require-tree-sitter-ast", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -643,6 +665,7 @@ def main() -> int:
         graphify_mode=args.graphify_mode,
         write_reports=not args.no_write,
         output_dir=args.output_dir,
+        require_tree_sitter_ast=args.require_tree_sitter_ast,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0 if result["ready"] else 2

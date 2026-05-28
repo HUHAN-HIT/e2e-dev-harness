@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Strict workflow guard for e2e-dev-harness status artifacts."""
 
 from __future__ import annotations

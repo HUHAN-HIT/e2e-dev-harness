@@ -1,4 +1,4 @@
-﻿# Platform Compatibility
+# Platform Compatibility
 
 Use this skill as an agent-neutral workflow package. The stable contract is the `SKILL.md`, `references/`, `scripts/`, and `review-profiles/` directory structure; Codex-specific UI metadata under `agents/openai.yaml` is optional.
 

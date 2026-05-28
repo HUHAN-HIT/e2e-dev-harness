@@ -1,4 +1,4 @@
-﻿---
+---
 name: e2e-dev-harness
 description: Use when a feature, bugfix, refactor, or design-doc task needs strict requirements, TDD, service isolation, knowledge graph evidence, memory capture, and completion verification across single-service or multi-service repositories.
 ---
@@ -51,6 +51,7 @@ For command details, read `references/implementation-gates.md`.
 - Clarification is a hard gate. The design must state goals, non-goals, affected services/modules, use cases,
   change logic, bounded impact summary, contracts, acceptance criteria, test design, and resolved open questions.
   Read `references/clarification-gate.md`.
+  For high-risk or interactive runs, require `Restated Intent` with `--require-intent` so the agent's understanding is confirmed before planning.
   MQ/DMQ/Kafka requirements must name the cross-layer call chain and sender/producer injection point before implementation.
 - Prefer GitNexus for code-level cross-service evidence and explicit impact artifacts.
   Do not duplicate low-level `grep`/`rg` usage instructions just because GitNexus augments searches.
@@ -66,7 +67,7 @@ For command details, read `references/implementation-gates.md`.
   Semantic reviews, implementation manifest, coverage matrix, unit-test JSON, business review, dependency report when cross-service,
   task-alignment evidence, closed rework, and passing guard are completion evidence.
 - Task drift is a blocker. Changed production files must stay inside declared design/manifest/coverage scope.
-  If a change is outside scope, return to `plan` or `clarify`; do not normalize the drift in the final report.
+  If a change is outside scope, introduces undeclared acceptance criteria, or changes interface-like production files without Impact Summary rows, return to `plan` or `clarify`; do not normalize the drift in the final report.
 - Every created agent run has `run-state.json` and `artifact-registry.json`.
   Treat them as the portable harness state for Codex, Claude Code, or generic CLI agents.
 - Runtime hooks can enforce phase locks before code-writing tools run.
@@ -77,6 +78,8 @@ For command details, read `references/implementation-gates.md`.
 - Harness verification can replay a run from state and policy with `harness_verify.py` or `verify --harness`.
   Emit `run-summary.json` / `run-summary.md` for CI, reviewer agents, evaluation, and later requirement analysis.
 - Use `execution_trace.py` or `verify --trace-file` to record phase timing, decisions, artifacts, and optional token counts.
+  Use `command_evidence.py` for tests and graph commands when evidence must include exit code, elapsed time, output hashes, and environment metadata.
+  Use `checkpoint_gate.py` or `gate --checkpoint-mode required` to pause after clarify, R1, and TDD Red on critical or interactive work.
   Agent start/stop is runtime-specific; this harness enforces portable state, hooks, gates, and rework routing instead of claiming non-portable process control.
 
 ## Workflow

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Create and validate agent-run artifact registries."""
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-﻿# Memory Integration
+# Memory Integration
 
 Use memory to preserve verified project knowledge across tasks while keeping agent context small.
 

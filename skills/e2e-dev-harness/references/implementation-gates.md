@@ -1,4 +1,4 @@
-﻿# Implementation Gates
+# Implementation Gates
 
 Use this reference when running `gate`, `verify`, `guard`, completion checks, or rework loops.
 
@@ -42,6 +42,14 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py gate . \
 ```
 
 Planning checks clarification readiness, knowledge graph status, and R1 design review. Implementation additionally requires red-test evidence and R1+R2 reviews. Completion requires design doc, red-test evidence, unit-test command evidence, business review, R1+R2+R3 reviews, coverage matrix, implementation manifest, dependency report when cross-service, closed rework, and Spring static check unless explicitly skipped. Add `--require-handoffs` for multi-service, contract/data-risk, or split-agent runs.
+
+For interactive or high-risk runs, add `--require-intent` and `--checkpoint-mode required`. Required checkpoints are:
+
+- planning: `clarify`
+- implementation: `clarify`, `r1-design`, `tdd-red`
+- completion: `clarify`, `r1-design`, `tdd-red`, `implementation`
+
+Store confirmations as Markdown or JSON under `docs/agent-runs/<run>/confirmations/`. Each confirmation needs `Phase`, `Status: approved` or `confirmed`, `Confirmed By`, and a non-blocking `Decision`.
 
 ## Run State And Artifact Registry
 
@@ -198,7 +206,13 @@ For audit or null-safety ACs, coverage must name the audit fields or null/missin
 
 For multi-module or artifact-heavy designs, `implementation-manifest.md` must include `id`, `module`, `artifact`, `artifact_type`, `source`, `required`, `tests`, `status`, and `evidence`. Required rows must point to existing artifacts, real tests, and implemented or verified status.
 
-Unit-test evidence must be structured JSON with `command` and integer `exit_code`. Plain text such as `PASS` is not accepted.
+Unit-test evidence must be structured JSON with `command` and integer `exit_code`. Plain text such as `PASS` is not accepted. Prefer `command_evidence.py` so Maven, GitNexus, security, or custom verification evidence includes exit code, elapsed time, output hashes, and environment metadata:
+
+```bash
+python skills/e2e-dev-harness/scripts/command_evidence.py . \
+  --command "mvn test" \
+  --output docs/agent-runs/<run>/evidence/maven-test.json
+```
 
 ## Task Alignment And Drift Correction
 
@@ -221,6 +235,13 @@ The guard emits `correction_actions`:
 - missing manifest AC -> return to `implementation`
 
 Do not paper over drift in the completion report. Either update the design/plan before implementation continues, or remove the unrelated change.
+
+Task alignment also detects semantic drift that commonly raises completion risk:
+
+- implementation manifest references AC ids not present in the design
+- interface-like production files such as controllers, clients, senders, producers, listeners, or handlers changed without Impact Summary interface rows
+
+These issues should return to `clarify` or `plan`, not be explained away in the final report.
 
 The requirements archive summarizes the final clarified requirement, acceptance-criteria status, use-case coverage, impacted services/contracts, evidence links, review/rework outcome, promoted memory entries, and follow-up opportunities. It is recommended for every completed run and required by strict completion workflows. When `--requirements-archive` is omitted, the gate auto-discovers `docs/agent-runs/<run>/requirements-archive.md` from other artifacts in the same run. Read `requirements-archive.md`.
 
@@ -262,6 +283,8 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py guard . \
 
 Strict guard blocks missing prepare, disabled dependency scan, disabled dependency report writing, skipped Maven, skipped Spring static check during completion, missing clarification status, missing completion gate, failed completion gate, missing independent semantic review evidence, failed Maven, and unresolved dependency questions. For multi-service, contract/data-risk, or split-agent runs, also pass `--require-handoffs`; an empty `handoffs/` directory is acceptable only when the run explicitly stayed single-agent and no downstream handoff was consumed. A skip can pass only with an approval file containing `Approval: user-approved`.
 
+External commands run by the harness use a bounded timeout and report exit code `124` on timeout. Treat Maven, GitNexus, or `git diff` timeout as blocked evidence, not as a reason to skip the gate.
+
 ## Execution Trace
 
 Use `--trace-file docs/agent-runs/<run>/execution-trace.json` with `verify` to record phase timing. Use `execution_trace.py` directly when reviewer agents, CI jobs, or external wrappers can provide token counts or decisions:
@@ -281,6 +304,7 @@ python skills/e2e-dev-harness/scripts/execution_trace.py . \
 ```
 
 Token counts are optional because agent runtimes expose them differently. Do not invent token numbers; record them only when the runtime reports them.
+If an existing trace is invalid JSON, has the wrong schema, or has a non-list `events` field, the trace update blocks and the file is not overwritten. Treat this as an audit integrity failure that must be repaired explicitly.
 
 ## Rework Protocol
 

@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "e2e-dev-harness-phase-guard",
   "event": "pre-tool-use",
   "tools": ["write_file", "replace", "edit", "multi_edit"],

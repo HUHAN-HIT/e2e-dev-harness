@@ -1,4 +1,4 @@
-﻿# Requirements Archive
+# Requirements Archive
 
 Use `docs/agent-runs/<run>/requirements-archive.md` as the final feature-level summary after implementation is complete. It sits between noisy run evidence and durable `memory/*.md`: detailed enough for future requirement analysis, concise enough to read before related follow-up work.
 
