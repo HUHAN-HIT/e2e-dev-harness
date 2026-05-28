@@ -2,6 +2,30 @@
 
 Use this reference only after applying `superpowers:test-driven-development`. The Superpowers TDD skill owns the method: write the test first, watch it fail for the expected reason, write minimal production code, watch it pass, then refactor while green.
 
+## Enforcement Modes
+
+TDD is always expected for production changes, but the harness uses scenario-based evidence depth:
+
+| Scenario | Mode | Required proof |
+| --- | --- | --- |
+| Simple scoped change | `basic` | A red evidence note or command output that states the expected failing test/reason, then normal green unit-test JSON at completion. |
+| Standard requirement | `basic` plus R2/R3 review | Red evidence, concrete coverage rows, green command JSON, and reviewer checks. |
+| Public API, MQ/DMQ/Kafka, payment/refund, data/schema, auth/security, cross-service | `strict` or `auto` with `critical` tier | Structured red command JSON with non-zero `exit_code`, structured green command JSON with zero `exit_code`, and coverage mapping. |
+| Audited/compliance run | `strict` | Strict red/green command evidence plus execution trace and replay. |
+
+Use:
+
+```bash
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py gate . \
+  --phase completion \
+  --tdd-mode auto \
+  --workflow-tier critical \
+  --red-test-evidence docs/agent-runs/<run>/evidence/red-test.json \
+  --unit-test-evidence docs/agent-runs/<run>/evidence/green-test.json
+```
+
+`basic` keeps simple tasks lightweight. `strict` is for cases where post-hoc tests would hide meaningful delivery risk.
+
 ## Test Selection
 
 Within that cycle, use the lowest-cost Java/Spring test that proves the behavior:
@@ -37,7 +61,7 @@ Before finishing:
 mvn test
 ```
 
-Record each passing command as JSON evidence for the completion gate:
+Record strict red/green commands with `command_evidence.py` or compatible JSON. Red evidence should have a non-zero exit code; green evidence should pass:
 
 ```json
 {

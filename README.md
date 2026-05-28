@@ -33,6 +33,7 @@ skills/e2e-dev-harness/
     execution_trace.py
     checkpoint_gate.py
     command_evidence.py
+    tdd_evidence.py
     task_tier.py
     task_alignment_guard.py
     ...
@@ -273,6 +274,19 @@ python skills\e2e-dev-harness\scripts\command_evidence.py . `
   --command "mvn test" `
   --output docs\agent-runs\<run>\evidence\maven-test.json
 ```
+
+## TDD Modes
+
+Use scenario-based TDD enforcement:
+
+| Scenario | Mode | Evidence |
+| --- | --- | --- |
+| small/simple change | `--tdd-mode basic` | non-empty red evidence that names the expected failing test or failure reason |
+| normal standard requirement | `--tdd-mode basic` plus R2/R3 reviews | red evidence, green unit-test JSON, coverage matrix |
+| API/MQ/payment/data/security/cross-service | `--tdd-mode strict` or `--tdd-mode auto --workflow-tier critical` | red command JSON with non-zero exit code, green command JSON with zero exit code |
+| audit/compliance run | `--tdd-mode strict` | strict red/green evidence plus trace and replay |
+
+`basic` is the default so simple tasks are not slowed by full chronology proof. Use `strict` when post-hoc tests would be a material delivery risk.
 
 ## Harness Replay
 

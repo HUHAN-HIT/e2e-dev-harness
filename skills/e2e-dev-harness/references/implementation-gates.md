@@ -43,6 +43,12 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py gate . \
 
 Planning checks clarification readiness, knowledge graph status, and R1 design review. Implementation additionally requires red-test evidence and R1+R2 reviews. Completion requires design doc, red-test evidence, unit-test command evidence, business review, R1+R2+R3 reviews, coverage matrix, implementation manifest, dependency report when cross-service, closed rework, and Spring static check unless explicitly skipped. Add `--require-handoffs` for multi-service, contract/data-risk, or split-agent runs.
 
+TDD enforcement is scenario-based:
+
+- `--tdd-mode basic` (default): suitable for simple scoped changes; red evidence may be a concise failure note or command output that names the expected failing test/reason.
+- `--tdd-mode strict`: required for high-risk API/MQ/payment/data/security/cross-service/audited work; red evidence must be structured command JSON with non-zero `exit_code`, and completion also requires green command JSON with zero `exit_code`.
+- `--tdd-mode auto`: resolves to `strict` for `critical` or `audited` workflow tiers and `basic` otherwise.
+
 For interactive or high-risk runs, add `--require-intent` and `--checkpoint-mode required`. Required checkpoints are:
 
 - planning: `clarify`

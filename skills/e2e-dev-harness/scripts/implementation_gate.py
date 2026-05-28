@@ -26,6 +26,7 @@ import reviewer_gate  # noqa: E402
 import rework_gate  # noqa: E402
 import spring_static_check  # noqa: E402
 import task_alignment_guard  # noqa: E402
+import tdd_evidence  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,8 @@ class GateRequest:
     checkpoint_mode: str = "off"
     confirmation_dirs: list[Path] | None = None
     require_intent: bool = False
+    tdd_mode: str = "basic"
+    workflow_tier: str = "basic"
 
 
 def read_json(path: Path) -> dict | None:
@@ -116,6 +119,8 @@ def validate_gate_request(request: GateRequest) -> dict:
     checkpoint_mode = request.checkpoint_mode
     confirmation_dirs = request.confirmation_dirs
     require_intent = request.require_intent
+    tdd_mode = request.tdd_mode
+    workflow_tier = request.workflow_tier
     repo = repo.resolve()
     blocked_reasons: list[str] = []
     warnings: list[str] = []
@@ -142,15 +147,19 @@ def validate_gate_request(request: GateRequest) -> dict:
         warnings.append("Knowledge graph status exists, but no graph tools were selected.")
 
     red_test_result = None
+    tdd_result = None
     if phase == "implementation":
-        if not red_test_evidence:
-            blocked_reasons.append("Implementation phase requires --red-test-evidence.")
-        else:
-            evidence_path = red_test_evidence if red_test_evidence.is_absolute() else repo / red_test_evidence
-            if not evidence_path.exists() or not evidence_path.read_text(encoding="utf-8", errors="replace").strip():
-                blocked_reasons.append(f"Red test evidence is missing or empty: {evidence_path}")
-            else:
-                red_test_result = str(evidence_path)
+        tdd_result = tdd_evidence.validate(
+            repo,
+            red_test_evidence,
+            phase="implementation",
+            mode=tdd_mode,
+            workflow_tier=workflow_tier,
+        )
+        if not tdd_result["ready"]:
+            blocked_reasons.extend(tdd_result["blocked_reasons"])
+        warnings.extend(tdd_result["warnings"])
+        red_test_result = tdd_result.get("red_evidence")
 
     coverage_result = None
     memory_result = None
@@ -212,14 +221,18 @@ def validate_gate_request(request: GateRequest) -> dict:
         warnings.extend(checkpoint_result["warnings"])
 
     if phase == "completion":
-        if not red_test_evidence:
-            blocked_reasons.append("Completion phase requires --red-test-evidence.")
-        else:
-            evidence_path = red_test_evidence if red_test_evidence.is_absolute() else repo / red_test_evidence
-            if not evidence_path.exists() or not evidence_path.read_text(encoding="utf-8", errors="replace").strip():
-                blocked_reasons.append(f"Red test evidence is missing or empty: {evidence_path}")
-            else:
-                red_test_result = str(evidence_path)
+        tdd_result = tdd_evidence.validate(
+            repo,
+            red_test_evidence,
+            unit_test_evidence,
+            phase="completion",
+            mode=tdd_mode,
+            workflow_tier=workflow_tier,
+        )
+        if not tdd_result["ready"]:
+            blocked_reasons.extend(tdd_result["blocked_reasons"])
+        warnings.extend(tdd_result["warnings"])
+        red_test_result = tdd_result.get("red_evidence")
         coverage_result = coverage_gate.validate(repo, coverage_matrix, unit_test_evidence, business_review, design_doc)
         if not coverage_result["ready"]:
             blocked_reasons.extend(coverage_result["blocked_reasons"])
@@ -295,6 +308,7 @@ def validate_gate_request(request: GateRequest) -> dict:
         "knowledge_graph_status_file": str(kg_path),
         "knowledge_graph_status_loaded": bool(kg_status),
         "red_test_evidence": red_test_result,
+        "tdd": tdd_result,
         "coverage": coverage_result,
         "implementation_manifest": implementation_manifest_result,
         "task_alignment": task_alignment_result,
@@ -338,6 +352,8 @@ def validate_gate(
     checkpoint_mode: str = "off",
     confirmation_dirs: list[Path] | None = None,
     require_intent: bool = False,
+    tdd_mode: str = "basic",
+    workflow_tier: str = "basic",
 ) -> dict:
     return validate_gate_request(
         GateRequest(
@@ -368,6 +384,8 @@ def validate_gate(
             checkpoint_mode=checkpoint_mode,
             confirmation_dirs=confirmation_dirs,
             require_intent=require_intent,
+            tdd_mode=tdd_mode,
+            workflow_tier=workflow_tier,
         )
     )
 
@@ -392,6 +410,8 @@ def main() -> int:
     parser.add_argument("--checkpoint-mode", choices=["off", "advisory", "required"], default="off")
     parser.add_argument("--confirmation-dir", action="append", type=Path)
     parser.add_argument("--require-intent", action="store_true")
+    parser.add_argument("--tdd-mode", choices=tdd_evidence.MODES, default="basic")
+    parser.add_argument("--workflow-tier", default="basic")
     parser.add_argument("--rework-dir", action="append", type=Path)
     parser.add_argument("--review-dir", action="append", type=Path)
     parser.add_argument("--review-profile", type=Path)
@@ -433,6 +453,8 @@ def main() -> int:
             checkpoint_mode=args.checkpoint_mode,
             confirmation_dirs=args.confirmation_dir,
             require_intent=args.require_intent,
+            tdd_mode=args.tdd_mode,
+            workflow_tier=args.workflow_tier,
         )
     )
     if args.json:

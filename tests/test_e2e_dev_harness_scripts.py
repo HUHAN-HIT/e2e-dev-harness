@@ -46,6 +46,7 @@ import requirements_archive  # noqa: E402
 import superpowers_probe  # noqa: E402
 import task_tier  # noqa: E402
 import task_alignment_guard  # noqa: E402
+import tdd_evidence  # noqa: E402
 import reviewer_gate  # noqa: E402
 import rework_gate  # noqa: E402
 import workflow_guard  # noqa: E402
@@ -540,6 +541,48 @@ class CommandEvidenceTests(unittest.TestCase):
 
         self.assertEqual(2, result["exit_code"])
         self.assertIn("Shell control operators", result["stderr_tail"])
+
+
+class TddEvidenceTests(unittest.TestCase):
+    def test_basic_tdd_accepts_lightweight_red_failure_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            red = repo / "red.txt"
+            red.write_text("Red test failed for expected reason in QuoteServiceTest.\n", encoding="utf-8")
+
+            result = tdd_evidence.validate(repo, red, mode="basic")
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("basic", result["effective_mode"])
+
+    def test_strict_tdd_blocks_red_command_that_passed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            red = repo / "red.json"
+            write_command_evidence(red, "mvn -pl services/a -am test", exit_code=0)
+
+            result = tdd_evidence.validate(repo, red, mode="strict")
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("unexpectedly passed" in reason for reason in result["blocked_reasons"]))
+
+    def test_strict_tdd_completion_requires_green_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            red = repo / "red.json"
+            green = repo / "green.json"
+            write_command_evidence(red, "mvn -pl services/a -am test", exit_code=1)
+            write_command_evidence(green, "mvn -pl services/a -am test", exit_code=0)
+
+            result = tdd_evidence.validate(repo, red, green, phase="completion", mode="strict")
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(1, result["red_commands"][0]["exit_code"])
+        self.assertEqual(0, result["green_commands"][0]["exit_code"])
+
+    def test_auto_tdd_uses_strict_for_critical_tier(self) -> None:
+        self.assertEqual("strict", tdd_evidence.resolve_mode("auto", "critical"))
+        self.assertEqual("basic", tdd_evidence.resolve_mode("auto", "standard"))
 
 
 class CheckpointGateTests(unittest.TestCase):

@@ -59,7 +59,9 @@ For command details, read `references/implementation-gates.md`.
   Put raw impact output in evidence files; keep only a bounded affected-interface summary in agent context.
   Use Graphify for docs, ADRs, diagrams, and semantic context. Scanner facts seed both. Read `references/kg-tool-selection.md`.
 - Memory is optional context, not authority. Capture only verified or user-approved facts; Obsidian tags and links help selection but never replace explicit text. Read `references/memory-integration.md`.
-- TDD is mandatory for production changes. Write a red test, observe the expected failure, implement minimally, then broaden Maven verification. Read `references/tdd-java-spring.md`.
+- TDD is mandatory for production changes, but enforcement depth is scenario-based.
+  Use `--tdd-mode basic` for simple changes and `--tdd-mode strict` or `auto` for critical/audited changes.
+  Write a red test, observe the expected failure, implement minimally, then broaden Maven verification. Read `references/tdd-java-spring.md`.
 - Review profiles are portable project policy. Auto-discover project profiles and extend bundled profiles only when useful.
   Use common issue guidance for reviewer focus. Read `references/review-profiles.md` and `references/common-review-issues.md`.
 - Archive the final requirement summary after completion so future analysis can read outcomes without replaying every run artifact. Read `references/requirements-archive.md`.

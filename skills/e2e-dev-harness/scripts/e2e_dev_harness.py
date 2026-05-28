@@ -1010,6 +1010,8 @@ def gate(args) -> tuple[int, dict]:
             checkpoint_mode=getattr(args, "checkpoint_mode", "off"),
             confirmation_dirs=getattr(args, "confirmation_dir", None),
             require_intent=getattr(args, "require_intent", False),
+            tdd_mode=getattr(args, "tdd_mode", "basic"),
+            workflow_tier=getattr(args, "workflow_tier", "basic"),
         )
     )
     if result.get("ready"):
@@ -1278,6 +1280,8 @@ def main() -> int:
     gate_parser.add_argument("--checkpoint-mode", choices=["off", "advisory", "required"], default="off")
     gate_parser.add_argument("--confirmation-dir", action="append", type=Path)
     gate_parser.add_argument("--require-intent", action="store_true")
+    gate_parser.add_argument("--tdd-mode", choices=["off", "advisory", "basic", "strict", "auto"], default="basic")
+    gate_parser.add_argument("--workflow-tier", choices=task_tier.TIERS, default="basic")
     gate_parser.add_argument("--rework-dir", action="append", type=Path)
     gate_parser.add_argument("--review-dir", action="append", type=Path)
     gate_parser.add_argument("--review-profile", type=Path)
@@ -1310,6 +1314,7 @@ def main() -> int:
     verify_parser.add_argument("--checkpoint-mode", choices=["off", "advisory", "required"], default="off")
     verify_parser.add_argument("--confirmation-dir", action="append", type=Path)
     verify_parser.add_argument("--require-intent", action="store_true")
+    verify_parser.add_argument("--tdd-mode", choices=["off", "advisory", "basic", "strict", "auto"], default="basic")
     verify_parser.add_argument("--rework-dir", action="append", type=Path)
     verify_parser.add_argument("--review-dir", action="append", type=Path)
     verify_parser.add_argument("--review-profile", type=Path)
