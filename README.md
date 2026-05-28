@@ -43,9 +43,31 @@ tests/
 
 ## Quick Start
 
-Run discovery before implementation:
+Create a controlled run before analysis or implementation. This writes the
+starter design artifact, run-state, `.phase-lock`, artifact registry, and
+agent schedule. Production code writes stay locked until the implementation
+gate passes.
 
 ```powershell
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py start . `
+  --feature "<feature>" `
+  --request "<original user request>"
+```
+
+Ask the harness what is allowed next:
+
+```powershell
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py next . `
+  --state docs\agent-runs\<run>\run-state.json
+```
+
+Then fill the generated design doc and run clarification/discovery:
+
+```powershell
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py clarify . `
+  --design-doc docs\design\<feature>.md `
+  --run-state docs\agent-runs\<run>\run-state.json
+
 python skills\e2e-dev-harness\scripts\e2e_dev_harness.py prepare . `
   --design-doc docs\design\<feature>.md `
   --workflow-tier auto `
@@ -55,11 +77,12 @@ python skills\e2e-dev-harness\scripts\e2e_dev_harness.py prepare . `
   --include-agent-content
 ```
 
-After affected services or paths are known, create an agent-run archive:
+After affected services or paths are known, create the full agent-run archive:
 
 ```powershell
 python skills\e2e-dev-harness\scripts\e2e_dev_harness.py plan . `
   --design-doc docs\design\<feature>.md `
+  --agent-run-dir docs\agent-runs\<run> `
   --service-scope affected `
   --service services\<service> `
   --create-archive

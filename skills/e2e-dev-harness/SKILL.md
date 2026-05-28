@@ -18,18 +18,24 @@ For runtime-specific invocation, install paths, and fallback behavior, read `ref
 
 ## Fast Path
 
-Start every non-trivial run with the unified prepare command:
+Start every non-trivial run by creating a controlled harness run. This must
+happen before dependency analysis or implementation so `.phase-lock` can block
+production-code writes until the implementation gate passes:
 
 ```bash
-python skills/e2e-dev-harness/scripts/e2e_dev_harness.py prepare . \
-  --design-doc docs/design/<feature>.md \
-  --workflow-tier auto \
-  --agent-mode strict \
-  --agent-scope discovery \
-  --service-scope discovery \
-  --include-agent-content
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py start . \
+  --feature "<feature>" \
+  --request "<original user request>"
 ```
 
+Then call `next` and do only the returned phase:
+
+```bash
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py next . \
+  --state docs/agent-runs/<run>/run-state.json
+```
+
+Fill the generated design doc, then run `clarify` before planning or coding.
 After clarification identifies affected services or paths, rerun prepare or plan with `--service-scope affected` plus explicit `--service` or `--path` when names are ambiguous.
 Workflow tiers are `basic`, `standard`, `critical`, and `audited`; all preserve auditable evidence, test proof, and replayable run records.
 Tiers decide evidence depth and orchestration strength, not whether the run is rigorous.
@@ -73,6 +79,7 @@ For command details, read `references/implementation-gates.md`.
   If a change is outside scope, introduces undeclared acceptance criteria, or changes interface-like production files without Impact Summary rows, return to `plan` or `clarify`; do not normalize the drift in the final report.
 - Every created agent run has `run-state.json` and `artifact-registry.json`.
   Treat them as the portable harness state for Codex, Claude Code, or generic CLI agents.
+- Do not run `prepare` as a substitute for `start`. `prepare` is dependency discovery only; `start` creates the active run, design template, and phase lock.
 - Runtime hooks can enforce phase locks before code-writing tools run.
   Use `install_hooks.py`, `phase_guard.py`, and hook examples when the agent runtime supports pre-action checks.
   Read `references/execution-control.md`.

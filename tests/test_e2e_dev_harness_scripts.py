@@ -5395,6 +5395,59 @@ class MemoryCaptureTests(unittest.TestCase):
 
 
 class OrchestrationArtifactTests(unittest.TestCase):
+    def test_start_creates_controlled_run_design_and_locked_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            args = SimpleNamespace(
+                repo=repo,
+                feature="Refund MQ",
+                request="Publish refund notification after success.",
+                design_doc=None,
+                agent_run_dir=None,
+                run_id="run",
+                run_date=None,
+                force=False,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.start(args)
+            design = Path(result["design_doc"])
+            design_exists = design.exists()
+            design_text = design.read_text(encoding="utf-8")
+            state = json.loads(Path(result["run_state"]).read_text(encoding="utf-8"))
+            lock = json.loads(Path(result["phase_lock"]).read_text(encoding="utf-8"))
+            guard = phase_guard.validate_action(repo, "Write", [Path("services/refund/src/main/java/RefundService.java")])
+
+        self.assertEqual(0, code)
+        self.assertTrue(design_exists)
+        self.assertIn("## Restated Intent", design_text)
+        self.assertEqual("CREATED", state["lifecycle"])
+        self.assertEqual("code-write-locked", lock["state"])
+        self.assertFalse(guard["ready"])
+
+    def test_next_reports_clarify_after_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            start_args = SimpleNamespace(
+                repo=repo,
+                feature="Quote",
+                request="Return a quote.",
+                design_doc=None,
+                agent_run_dir=None,
+                run_id="run",
+                run_date=None,
+                force=False,
+                status_file=None,
+            )
+            _code, start_result = e2e_dev_harness.start(start_args)
+            next_args = SimpleNamespace(repo=repo, state=Path(start_result["run_state"]), status_file=None)
+
+            code, result = e2e_dev_harness.next_step(next_args)
+
+        self.assertEqual(0, code)
+        self.assertEqual("CREATED", result["lifecycle"])
+        self.assertEqual("clarify", result["next"]["phase"])
+
     def test_discovery_mode_has_no_agent_plan(self) -> None:
         artifacts = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
 

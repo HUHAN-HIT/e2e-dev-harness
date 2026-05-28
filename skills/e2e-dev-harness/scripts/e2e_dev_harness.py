@@ -96,6 +96,124 @@ def optional_text(path: Path | None) -> str:
         return ""
 
 
+def design_template(feature: str, request: str = "") -> str:
+    title = feature.strip() or "Feature"
+    original = request.strip() or "<paste the original user request here>"
+    return f"""# {title}
+
+## Restated Intent
+- Agent restatement:
+- User confirmation: pending
+
+## Goal
+- {original}
+
+## Scope
+- Affected services/modules:
+- In scope:
+- Non-goals:
+
+## Use Cases
+- UC-1:
+
+## Acceptance Criteria
+- AC-1:
+
+## Test Design
+- First red test:
+- Verification command:
+
+## Impact Summary
+- Source: manual pending GitNexus/dependency scanner evidence
+- Raw Evidence:
+
+| type | interface | affected callers/consumers | related AC | required tests/contracts | risk |
+| --- | --- | --- | --- | --- | --- |
+| N/A | No public/cross-service/interface impact identified yet | N/A | AC-1 | N/A | low |
+
+## Change Logic
+- Current behavior:
+- Target behavior:
+- Runtime path:
+- State/data/API/event effects:
+- Compatibility or migration notes:
+
+## Contracts
+- HTTP/API:
+- MQ/DMQ/Kafka:
+
+## Open Questions
+- Pending user confirmation of Restated Intent.
+"""
+
+
+def load_run_state(repo: Path, state_path: Path) -> dict:
+    path = state_path if state_path.is_absolute() else repo / state_path
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def next_action_for_lifecycle(lifecycle: str) -> dict:
+    actions = {
+        "CREATED": {
+            "phase": "clarify",
+            "command": "Fill docs/design/<feature>.md, then run e2e_dev_harness.py clarify --design-doc <design> --run-state <state>.",
+            "allowed_writes": ["docs/design/", "docs/agent-runs/"],
+            "blocked_writes": ["production code", "tests outside harness evidence"],
+        },
+        "CLARIFIED": {
+            "phase": "plan",
+            "command": "Run e2e_dev_harness.py plan --design-doc <design> --create-archive, then complete R1 review.",
+            "allowed_writes": ["docs/agent-runs/", "docs/design/"],
+            "blocked_writes": ["production code"],
+        },
+        "PLANNED": {
+            "phase": "tdd-red",
+            "command": "Write the first red test, capture red evidence, run R2 review, then gate --phase implementation.",
+            "allowed_writes": ["test files for red evidence", "docs/agent-runs/"],
+            "blocked_writes": ["production code until implementation gate passes"],
+        },
+        "RED_READY": {
+            "phase": "implementation-gate",
+            "command": "Run gate --phase implementation with red evidence and run-state to open implementation.",
+            "allowed_writes": ["docs/agent-runs/"],
+            "blocked_writes": ["production code until implementation gate passes"],
+        },
+        "IMPLEMENTED": {
+            "phase": "implement-or-complete",
+            "command": "Production code writes are open. Implement minimally, run verification, R3 review, then completion gate.",
+            "allowed_writes": ["declared production/test scope", "docs/agent-runs/"],
+            "blocked_writes": ["undeclared scope drift"],
+        },
+        "REVIEWED": {
+            "phase": "completion",
+            "command": "Run completion gate, strict guard, summary, and requirements archive validation.",
+            "allowed_writes": ["docs/agent-runs/"],
+            "blocked_writes": ["new production changes without rework item"],
+        },
+        "REWORK_REQUIRED": {
+            "phase": "rework",
+            "command": "Follow rework item return_phase; do not patch directly outside the routed phase.",
+            "allowed_writes": ["rework-routed scope only"],
+            "blocked_writes": ["unrouted production changes"],
+        },
+        "VERIFIED": {
+            "phase": "archive",
+            "command": "Refresh registry, archive requirements, and report evidence.",
+            "allowed_writes": ["docs/agent-runs/", "memory updates with approval"],
+            "blocked_writes": ["new implementation changes"],
+        },
+    }
+    return actions.get(
+        lifecycle,
+        {
+            "phase": "unknown",
+            "command": "Inspect run-state.json and repair lifecycle before continuing.",
+            "allowed_writes": ["docs/agent-runs/"],
+            "blocked_writes": ["production code"],
+        },
+    )
+
+
 def without_status_file(args):
     values = vars(args).copy()
     values["status_file"] = None
@@ -399,6 +517,66 @@ def prepare(args) -> tuple[int, dict]:
     result["blocked_components"] = blocked
     write_status(args.status_file, result)
     return (2 if blocked else 0), result
+
+
+def start(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    feature = args.feature or "feature"
+    slug = orchestration_plan.safe_slug(feature)
+    run_id = args.run_id or orchestration_plan.default_run_id(slug, args.run_date)
+    run_dir = require_repo_path(repo, args.agent_run_dir or Path(f"docs/agent-runs/{run_id}"), "agent run directory")
+    design_path = require_repo_path(repo, args.design_doc or Path(f"docs/design/{slug}.md"), "design document")
+    artifacts = orchestration_plan.artifacts(slug, str(run_dir.relative_to(repo)).replace("\\", "/"), args.run_date, [])
+    artifacts["design_doc"] = str(design_path.relative_to(repo)).replace("\\", "/")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "evidence").mkdir(parents=True, exist_ok=True)
+    (run_dir / "confirmations").mkdir(parents=True, exist_ok=True)
+    design_path.parent.mkdir(parents=True, exist_ok=True)
+    created: list[str] = []
+    if design_path.exists() and not args.force:
+        design_created = False
+    else:
+        design_path.write_text(design_template(feature, args.request or ""), encoding="utf-8")
+        design_created = True
+        created.append(str(design_path))
+    schedule = orchestration_plan.agent_schedule("unplanned", [], [])
+    schedule_path = require_repo_path(repo, Path(artifacts["agent_schedule"]), "agent schedule")
+    schedule_path.write_text(json.dumps(schedule, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    created.append(str(schedule_path))
+    registry = artifact_registry.build_registry(repo, artifacts["agent_run_dir"], artifacts, "unplanned", [])
+    registry_path = require_repo_path(repo, Path(artifacts["artifact_registry"]), "artifact registry")
+    artifact_registry.write_registry(repo, registry_path, registry)
+    created.append(str(registry_path))
+    state = run_state.build_state(
+        artifacts["agent_run_dir"],
+        "unplanned",
+        [],
+        artifacts["artifact_registry"],
+        lifecycle="CREATED",
+    )
+    state_path = require_repo_path(repo, Path(artifacts["run_state"]), "run state")
+    run_state.write_state(repo, state_path, state)
+    created.append(str(state_path))
+    lock_path = state_path.parent / run_state.PHASE_LOCK
+    result = {
+        "repo": str(repo),
+        "ready": True,
+        "feature": feature,
+        "run_id": run_id,
+        "agent_run_dir": str(run_dir),
+        "design_doc": str(design_path),
+        "design_created": design_created,
+        "run_state": str(state_path),
+        "phase_lock": str(lock_path),
+        "artifact_registry": str(registry_path),
+        "agent_schedule": str(schedule_path),
+        "created": created,
+        "next": next_action_for_lifecycle("CREATED"),
+        "blocked_reasons": [],
+        "warnings": [] if design_created else ["Design document already existed; use --force to rewrite the starter template."],
+    }
+    write_status(args.status_file, result)
+    return 0, result
 
 
 def clarify(args) -> tuple[int, dict]:
@@ -1214,6 +1392,36 @@ def guard(args) -> tuple[int, dict]:
     return (0 if result["ready"] else 2), result
 
 
+def next_step(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    state_path = require_repo_path(repo, args.state, "run state")
+    if not state_path.exists():
+        result = {
+            "repo": str(repo),
+            "ready": False,
+            "blocked_reasons": [f"Run state not found: {state_path}. Run e2e_dev_harness.py start first."],
+            "warnings": [],
+        }
+        write_status(args.status_file, result)
+        return 2, result
+    state = load_run_state(repo, state_path)
+    lifecycle = str(state.get("lifecycle", ""))
+    action = next_action_for_lifecycle(lifecycle)
+    result = {
+        "repo": str(repo),
+        "ready": True,
+        "run_state": str(state_path),
+        "phase_lock": str(state_path.parent / run_state.PHASE_LOCK),
+        "lifecycle": lifecycle,
+        "next": action,
+        "gates": state.get("gates", {}),
+        "blocked_reasons": [],
+        "warnings": [],
+    }
+    write_status(args.status_file, result)
+    return 0, result
+
+
 def add_prepare_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("repo", nargs="?", default=".", type=Path)
     parser.add_argument("--design-doc", type=Path)
@@ -1243,6 +1451,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="Print JSON output.")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    start_parser = subparsers.add_parser("start", help="Create a controlled harness run and starter design artifact.")
+    start_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    start_parser.add_argument("--feature", required=True)
+    start_parser.add_argument("--request", default="")
+    start_parser.add_argument("--design-doc", type=Path)
+    start_parser.add_argument("--agent-run-dir", type=Path)
+    start_parser.add_argument("--run-id")
+    start_parser.add_argument("--run-date")
+    start_parser.add_argument("--force", action="store_true")
+    start_parser.add_argument("--status-file", type=Path)
 
     prepare_parser = subparsers.add_parser("prepare", help="Run pre-clarification/pre-planning discovery.")
     add_prepare_args(prepare_parser)
@@ -1353,9 +1572,16 @@ def main() -> int:
     guard_parser.add_argument("--approval-file", type=Path)
     guard_parser.add_argument("--status-file", type=Path)
 
+    next_parser = subparsers.add_parser("next", help="Show the next allowed harness action from run-state.")
+    next_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    next_parser.add_argument("--state", required=True, type=Path)
+    next_parser.add_argument("--status-file", type=Path)
+
     args = parser.parse_args()
     try:
-        if args.command == "prepare":
+        if args.command == "start":
+            exit_code, result = start(args)
+        elif args.command == "prepare":
             exit_code, result = prepare(args)
         elif args.command == "clarify":
             exit_code, result = clarify(args)
@@ -1365,6 +1591,8 @@ def main() -> int:
             exit_code, result = gate(args)
         elif args.command == "guard":
             exit_code, result = guard(args)
+        elif args.command == "next":
+            exit_code, result = next_step(args)
         else:
             exit_code, result = verify(args)
     except (FileNotFoundError, ValueError) as error:
