@@ -33,6 +33,8 @@ skills/e2e-dev-harness/
     execution_trace.py
     checkpoint_gate.py
     command_evidence.py
+    test_impact_plan.py
+    context_pack.py
     tdd_evidence.py
     task_tier.py
     task_alignment_guard.py
@@ -120,6 +122,46 @@ All tiers keep auditable evidence, test proof, and replayable run records. The t
 ## Dependency Scan Parser
 
 `cross_service_dependency_scan.py` reports `java_parser.backend`. The current scanner uses `regex-fallback` even when `tree_sitter` packages are installed, and reports `ast_parser_active: false`, because silently claiming AST precision would hide missed Java call paths. Treat `regex-fallback` as acceptable for lightweight discovery; for high-risk Java impact decisions, require GitNexus evidence and use `--require-tree-sitter-ast` if the run policy demands an active AST parser.
+
+## Incremental Test Scope
+
+For large Maven repositories, do not default to full-suite testing on every turn. Generate a test impact plan from changed files and dependency evidence, then run every required command in that plan.
+
+```powershell
+git diff --name-only > docs\agent-runs\<run>\evidence\changed-files.txt
+
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py test-impact . `
+  --changed-files docs\agent-runs\<run>\evidence\changed-files.txt `
+  --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json `
+  --output docs\agent-runs\<run>\evidence\test-impact-plan.json
+```
+
+Completion can then prove that the planned affected commands actually passed:
+
+```powershell
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py gate . `
+  --phase completion `
+  --design-doc docs\design\<feature>.md `
+  --unit-test-evidence docs\agent-runs\<run>\evidence\green-test.txt `
+  --test-impact-plan docs\agent-runs\<run>\evidence\test-impact-plan.json
+```
+
+If the plan contains `mvn -pl services\foo -am test`, the unit-test evidence must contain that command with `exit_code: 0`. Root/shared build or source changes intentionally expand to `mvn test`.
+
+## Context Packs
+
+For multi-agent runs, generate a request-scoped context pack per scheduled agent instead of passing the full conversation or all run artifacts.
+
+```powershell
+python skills\e2e-dev-harness\scripts\context_pack.py . `
+  --agent-schedule docs\agent-runs\<run>\agent-schedule.json `
+  --service services\<service> `
+  --output docs\agent-runs\<run>\context-packs\<service>.json `
+  --max-files 12 `
+  --max-chars 120000
+```
+
+The pack lists allowed inputs, allowed outputs, dependency phase, and budget. A pack that exceeds file or byte limits is blocked, forcing the coordinator to summarize inputs before dispatch.
 
 ## Hook Configuration
 

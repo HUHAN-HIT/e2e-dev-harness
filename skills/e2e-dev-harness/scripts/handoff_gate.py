@@ -25,8 +25,16 @@ PASS_STATUSES = {"ready", "verified", "complete", "completed", "approved", "clea
 BLOCK_STATUSES = {"draft", "open", "in-progress", "in_progress", "blocked"}
 NONE_VALUES = {"", "-", "none", "n/a", "na", "no", "no open questions"}
 PLACEHOLDER_RE = re.compile(r"^\s*(<[^>]+>|\[[^\]]+\]|todo|tbd|unknown|draft|placeholder)\s*$", re.IGNORECASE)
+TEMPLATE_BODY_RE = re.compile(r"\b(todo|tbd|fill in|draft guidance|not ready|placeholder)\b|<[^>]+>", re.IGNORECASE)
 SHA_RE = re.compile(r"\bsha256:[0-9a-f]{64}\b", re.IGNORECASE)
 HEADING_RE = re.compile(r"^\s{0,3}##\s+(?P<title>.+?)\s*$")
+REQUIRED_READY_BODY_SECTIONS = {
+    "summary": "Summary",
+    "facts used": "Facts Used",
+    "decisions made": "Decisions Made",
+    "downstream assumptions": "Downstream Assumptions",
+    "verification evidence": "Verification Evidence",
+}
 
 
 def normalize_key(value: str) -> str:
@@ -109,6 +117,31 @@ def open_questions_section(body: str) -> str:
         if capturing:
             captured.append(line)
     return "\n".join(captured).strip()
+
+
+def section_body(body: str, wanted_title: str) -> str:
+    lines = body.splitlines()
+    capturing = False
+    captured: list[str] = []
+    wanted = wanted_title.strip().lower()
+    for line in lines:
+        match = HEADING_RE.match(line)
+        if match:
+            title = match.group("title").strip().lower()
+            if capturing:
+                break
+            capturing = title == wanted
+            continue
+        if capturing:
+            captured.append(line)
+    return "\n".join(captured).strip()
+
+
+def section_is_meaningful(text: str) -> bool:
+    cleaned = "\n".join(line.strip(" -*\t") for line in text.splitlines()).strip()
+    if not cleaned:
+        return False
+    return TEMPLATE_BODY_RE.search(cleaned) is None
 
 
 def is_no_open_questions(value: str) -> bool:
@@ -268,6 +301,11 @@ def validate_item(path: Path, fields: dict[str, str | list[str]], body: str) -> 
         blocked.append(f"Handoff {path} must declare open_questions: None before downstream consumption.")
     if body_open_questions and not is_no_open_questions(body_open_questions):
         blocked.append(f"Handoff {path} Open Questions section is not closed.")
+    if status in PASS_STATUSES:
+        for section_key, section_label in REQUIRED_READY_BODY_SECTIONS.items():
+            text = section_body(body, section_key)
+            if not section_is_meaningful(text):
+                blocked.append(f"Handoff {path} ready body section is empty or template-only: {section_label}.")
 
     item = {
         "path": str(path),

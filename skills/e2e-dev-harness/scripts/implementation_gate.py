@@ -28,6 +28,7 @@ import spring_static_check  # noqa: E402
 import task_alignment_guard  # noqa: E402
 import task_tier  # noqa: E402
 import tdd_evidence  # noqa: E402
+import test_impact_plan as test_impact_plan_gate  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,7 @@ class GateRequest:
     requirements_archive: Path | None = None
     require_requirements_archive: bool = False
     changed_files: Path | None = None
+    test_impact_plan: Path | None = None
     base_ref: str | None = None
     checkpoint_mode: str = "off"
     confirmation_dirs: list[Path] | None = None
@@ -113,6 +115,27 @@ def load_dependency_report(repo: Path, path: Path | None) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def discover_test_impact_plan(repo: Path, explicit: Path | None, related_paths: list[Path | None]) -> Path | None:
+    if explicit:
+        return explicit
+    for related in related_paths:
+        resolved = resolve_optional_repo_path(repo, related)
+        if resolved and resolved.parent.exists():
+            candidate = resolved.parent / "test-impact-plan.json"
+            if candidate.exists():
+                return candidate
+    agent_runs = repo / "docs" / "agent-runs"
+    if agent_runs.exists():
+        matches = sorted(
+            agent_runs.glob("*/evidence/test-impact-plan.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        if matches:
+            return matches[0]
+    return None
+
+
 def evaluate_workflow_tier(repo: Path, requested: str, design_doc: Path | None, dependency_report: Path | None) -> dict:
     design_text = read_text_if_exists(resolve_optional_repo_path(repo, design_doc))
     dependency_data = load_dependency_report(repo, dependency_report)
@@ -146,6 +169,7 @@ def validate_gate_request(request: GateRequest) -> dict:
     requirements_archive = request.requirements_archive
     require_requirements_archive = request.require_requirements_archive
     changed_files = request.changed_files
+    test_impact_plan = request.test_impact_plan
     base_ref = request.base_ref
     checkpoint_mode = request.checkpoint_mode
     confirmation_dirs = request.confirmation_dirs
@@ -204,6 +228,7 @@ def validate_gate_request(request: GateRequest) -> dict:
     dependency_result = None
     implementation_manifest_result = None
     task_alignment_result = None
+    test_impact_plan_result = None
     handoff_result = None
     contract_result = None
     requirements_archive_result = None
@@ -289,6 +314,19 @@ def validate_gate_request(request: GateRequest) -> dict:
         if not task_alignment_result["ready"]:
             blocked_reasons.extend(task_alignment_result["blocked_reasons"])
         warnings.extend(task_alignment_result["warnings"])
+        resolved_test_impact_plan = discover_test_impact_plan(
+            repo,
+            test_impact_plan,
+            [unit_test_evidence, coverage_matrix, implementation_manifest, dependency_report],
+        )
+        test_impact_plan_result = test_impact_plan_gate.validate(repo, resolved_test_impact_plan, unit_test_evidence)
+        if resolved_test_impact_plan:
+            test_impact_plan_result["path"] = str(
+                resolved_test_impact_plan if resolved_test_impact_plan.is_absolute() else repo / resolved_test_impact_plan
+            )
+        if not test_impact_plan_result["ready"]:
+            blocked_reasons.extend(test_impact_plan_result["blocked_reasons"])
+        warnings.extend(test_impact_plan_result["warnings"])
         dependency_result = cross_service_dependency_scan.validate_dependency_report(repo, dependency_report, design_doc)
         if not dependency_result["ready"]:
             blocked_reasons.extend(dependency_result["blocked_reasons"])
@@ -348,6 +386,7 @@ def validate_gate_request(request: GateRequest) -> dict:
         "coverage": coverage_result,
         "implementation_manifest": implementation_manifest_result,
         "task_alignment": task_alignment_result,
+        "test_impact_plan": test_impact_plan_result,
         "dependency_report": dependency_result,
         "memory_updates": memory_result,
         "requirements_archive": requirements_archive_result,
@@ -384,6 +423,7 @@ def validate_gate(
     requirements_archive: Path | None = None,
     require_requirements_archive: bool = False,
     changed_files: Path | None = None,
+    test_impact_plan: Path | None = None,
     base_ref: str | None = None,
     checkpoint_mode: str = "off",
     confirmation_dirs: list[Path] | None = None,
@@ -416,6 +456,7 @@ def validate_gate(
             requirements_archive=requirements_archive,
             require_requirements_archive=require_requirements_archive,
             changed_files=changed_files,
+            test_impact_plan=test_impact_plan,
             base_ref=base_ref,
             checkpoint_mode=checkpoint_mode,
             confirmation_dirs=confirmation_dirs,
@@ -442,6 +483,7 @@ def main() -> int:
     parser.add_argument("--dependency-report", type=Path)
     parser.add_argument("--implementation-manifest", type=Path)
     parser.add_argument("--changed-files", type=Path)
+    parser.add_argument("--test-impact-plan", type=Path)
     parser.add_argument("--base-ref")
     parser.add_argument("--checkpoint-mode", choices=["off", "advisory", "required"], default="off")
     parser.add_argument("--confirmation-dir", action="append", type=Path)
@@ -485,6 +527,7 @@ def main() -> int:
             requirements_archive=args.requirements_archive,
             require_requirements_archive=args.require_requirements_archive,
             changed_files=args.changed_files,
+            test_impact_plan=args.test_impact_plan,
             base_ref=args.base_ref,
             checkpoint_mode=args.checkpoint_mode,
             confirmation_dirs=args.confirmation_dir,

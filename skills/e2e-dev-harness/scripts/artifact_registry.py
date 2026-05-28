@@ -23,6 +23,7 @@ DIRECTORY_KEYS = {
 PATTERN_KEYS = {
     "rework_pattern",
     "contract_pattern",
+    "context_pack_pattern",
 }
 REQUIRED_BY_COMPLETION = {
     "design_doc",
@@ -36,6 +37,7 @@ REQUIRED_BY_COMPLETION = {
     "dependency_report",
     "impact_summary",
     "impact_evidence",
+    "test_impact_plan",
     "implementation_manifest",
     "requirements_archive",
     "red_test_evidence",

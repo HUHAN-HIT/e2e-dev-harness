@@ -30,6 +30,7 @@ import orchestration_plan  # noqa: E402
 import run_state  # noqa: E402
 import superpowers_probe  # noqa: E402
 import task_tier  # noqa: E402
+import test_impact_plan  # noqa: E402
 import workflow_guard  # noqa: E402
 
 
@@ -642,6 +643,7 @@ This is a living plan. Keep it current while implementing the feature.
 - Requirements: {artifacts['requirements']}
 - Impact summary: {artifacts['impact_summary']}
 - Raw impact evidence: {artifacts['impact_evidence']}
+- Test impact plan: {artifacts['test_impact_plan']}
 - Use cases: {artifacts['use_cases']}
 - Test plan: {artifacts['test_plan']}
 - Implementation plan: {artifacts['implementation_plan']}
@@ -672,6 +674,7 @@ This is a living plan. Keep it current while implementing the feature.
 - Dependency report: {artifacts['dependency_report']}
 - Impact summary: {artifacts['impact_summary']}
 - Raw impact evidence: {artifacts['impact_evidence']}
+- Test impact plan: {artifacts['test_impact_plan']}
 - Implementation manifest: {artifacts['implementation_manifest']}
 - Red test: {artifacts['red_test_evidence']}
 - Green test: {artifacts['green_test_evidence']}
@@ -704,7 +707,100 @@ If coverage review, tests, business review, or user review finds a missed requir
 """
 
 
+def handoff_body_guidance(agent_name: str) -> dict[str, list[str]]:
+    guidance = {
+        "requirements-clarifier": {
+            "Summary": [
+                "TODO: Restate the user intent, final goal, non-goals, and confirmed scope.",
+                "TODO: List resolved acceptance criteria and unresolved items that block downstream work.",
+            ],
+            "Facts Used": [
+                "TODO: Name project instructions, design docs, GitNexus/Graphify evidence, and user confirmations used.",
+            ],
+            "Decisions Made": [
+                "TODO: Record scope decisions, tier/orchestration decision, and why out-of-scope items were excluded.",
+            ],
+            "Downstream Assumptions": [
+                "TODO: State what use-case/test agents may rely on without rereading the full conversation.",
+            ],
+            "Verification Evidence": [
+                "TODO: Link clarification gate output, impact summary evidence, and confirmation artifacts.",
+            ],
+        },
+        "use-case-designer": {
+            "Summary": [
+                "TODO: Summarize happy paths, failure paths, data effects, and cross-service flows.",
+            ],
+            "Facts Used": [
+                "TODO: Name the requirements handoff, impact summary, contracts, and dependency evidence consumed.",
+            ],
+            "Decisions Made": [
+                "TODO: Map every AC to one or more use cases, or mark an explicitly approved deferral.",
+            ],
+            "Downstream Assumptions": [
+                "TODO: State API/data/contract behavior that test design must cover.",
+            ],
+            "Verification Evidence": [
+                "TODO: Link use-case artifact, contract artifacts, and R1 review status when available.",
+            ],
+        },
+        "test-case-developer": {
+            "Summary": [
+                "TODO: Summarize red-test intent, expected failure, test scope, and broadened verification plan.",
+            ],
+            "Facts Used": [
+                "TODO: Name requirements, use cases, impact summary, contracts, and project test patterns consumed.",
+            ],
+            "Decisions Made": [
+                "TODO: Record selected test types, Maven module commands, mocks/fakes, and non-covered risks.",
+            ],
+            "Downstream Assumptions": [
+                "TODO: State exact failing tests and constraints the code developer must satisfy before production edits.",
+            ],
+            "Verification Evidence": [
+                "TODO: Link red-test evidence, test-impact plan, and R2 review output.",
+            ],
+        },
+        "code-developer": {
+            "Summary": [
+                "TODO: Summarize implementation scope, changed runtime path, and residual risk.",
+            ],
+            "Facts Used": [
+                "TODO: Name requirements, use cases, test plan, red-test evidence, context pack, and service plan consumed.",
+            ],
+            "Decisions Made": [
+                "TODO: Record implementation choices, project patterns reused, and any approved deviations.",
+            ],
+            "Downstream Assumptions": [
+                "TODO: State what reviewers may assume about code ownership, contracts, and verification boundaries.",
+            ],
+            "Verification Evidence": [
+                "TODO: Link green-test evidence, implementation manifest, coverage matrix, and command evidence.",
+            ],
+        },
+    }
+    base = guidance.get(agent_name, {})
+    if not base:
+        for role, role_guidance in sorted(guidance.items(), key=lambda item: len(item[0]), reverse=True):
+            if agent_name.startswith(role + "-"):
+                base = role_guidance
+                break
+    return base or {
+        "Summary": ["TODO: Summarize the completed role output and remaining risk."],
+        "Facts Used": ["TODO: Name all consumed artifacts and evidence."],
+        "Decisions Made": ["TODO: Record important decisions and tradeoffs."],
+        "Downstream Assumptions": ["TODO: State assumptions downstream agents may rely on."],
+        "Verification Evidence": ["TODO: Link command, review, or gate evidence."],
+    }
+
+
 def handoff_text(agent_name: str) -> str:
+    guidance = handoff_body_guidance(agent_name)
+
+    def section(title: str) -> str:
+        lines = "\n".join(f"- {item}" for item in guidance[title])
+        return f"## {title}\n\n{lines}"
+
     return f"""---
 agent: {agent_name}
 agent_id: <agent-id>
@@ -722,19 +818,25 @@ memory_updates_proposed: []
 
 # Agent Handoff
 
-## Summary
+This is a draft starter handoff. It is NOT READY for downstream consumption until the owner replaces every TODO, records hashes, sets `status: ready`, and writes the matching `.ready.json` marker.
 
-## Facts Used
+{section("Summary")}
 
-## Decisions Made
+{section("Facts Used")}
+
+{section("Decisions Made")}
 
 ## Open Questions
 
-## Downstream Assumptions
+TODO: Use `None` only after all downstream-blocking questions are closed.
 
-## Verification Evidence
+{section("Downstream Assumptions")}
+
+{section("Verification Evidence")}
 
 ## Proposed Memory Updates
+
+TODO: List proposed memory updates or `None`.
 """
 
 
@@ -773,6 +875,7 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
         ),
         artifacts["impact_summary"]: impact_summary_template("all-services", artifacts["impact_evidence"]),
         artifacts["impact_evidence"]: impact_evidence_template(),
+        artifacts["test_impact_plan"]: test_impact_plan_template(),
         artifacts["implementation_manifest"]: implementation_manifest_template("all-services"),
         artifacts["requirements_archive"]: requirements_archive_template("all-services"),
         artifacts["green_test_evidence"]: unit_test_evidence_template("all-services"),
@@ -865,6 +968,24 @@ def impact_evidence_template() -> str:
             "source": "gitnexus impact + dependency scanner",
             "commands": [],
             "notes": "Store raw impact output here; keep design docs and handoffs to bounded summaries.",
+        },
+        indent=2,
+    ) + "\n"
+
+
+def test_impact_plan_template() -> str:
+    return json.dumps(
+        {
+            "schema": "e2e-dev-harness.test-impact-plan.v1",
+            "status": "template",
+            "strategy": "incremental-tests",
+            "changed_files": [],
+            "ignored_changes": [],
+            "commands": [],
+            "notes": (
+                "Generate with test_impact_plan.py --changed-files <file> --output <this-file>. "
+                "Completion blocks while status remains template."
+            ),
         },
         indent=2,
     ) + "\n"
@@ -1191,6 +1312,7 @@ def gate(args) -> tuple[int, dict]:
                 or (getattr(args, "strict_workflow", False) and args.phase == "completion")
             ),
             changed_files=getattr(args, "changed_files", None),
+            test_impact_plan=getattr(args, "test_impact_plan", None),
             base_ref=getattr(args, "base_ref", None),
             checkpoint_mode=getattr(args, "checkpoint_mode", "off"),
             confirmation_dirs=getattr(args, "confirmation_dir", None),
@@ -1392,6 +1514,22 @@ def guard(args) -> tuple[int, dict]:
     return (0 if result["ready"] else 2), result
 
 
+def test_impact(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    if args.validate_plan:
+        result = test_impact_plan.validate(repo, args.validate_plan, args.unit_test_evidence)
+        write_status(args.status_file, result)
+        return (0 if result["ready"] else 2), result
+    changed_files = test_impact_plan.parse_changed_files(resolve_repo_path(repo, args.changed_files))
+    result = test_impact_plan.build_plan(repo, changed_files, resolve_repo_path(repo, args.dependency_report))
+    if args.output:
+        output = require_repo_path(repo, args.output, "test impact output")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_status(args.status_file, result)
+    return 0, result
+
+
 def next_step(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
     state_path = require_repo_path(repo, args.state, "run state")
@@ -1503,6 +1641,7 @@ def main() -> int:
     gate_parser.add_argument("--dependency-report", type=Path)
     gate_parser.add_argument("--implementation-manifest", type=Path)
     gate_parser.add_argument("--changed-files", type=Path)
+    gate_parser.add_argument("--test-impact-plan", type=Path)
     gate_parser.add_argument("--base-ref")
     gate_parser.add_argument("--checkpoint-mode", choices=["off", "advisory", "required"], default="off")
     gate_parser.add_argument("--confirmation-dir", action="append", type=Path)
@@ -1537,6 +1676,7 @@ def main() -> int:
     verify_parser.add_argument("--dependency-report", type=Path)
     verify_parser.add_argument("--implementation-manifest", type=Path)
     verify_parser.add_argument("--changed-files", type=Path)
+    verify_parser.add_argument("--test-impact-plan", type=Path)
     verify_parser.add_argument("--base-ref")
     verify_parser.add_argument("--checkpoint-mode", choices=["off", "advisory", "required"], default="off")
     verify_parser.add_argument("--confirmation-dir", action="append", type=Path)
@@ -1572,6 +1712,15 @@ def main() -> int:
     guard_parser.add_argument("--approval-file", type=Path)
     guard_parser.add_argument("--status-file", type=Path)
 
+    test_impact_parser = subparsers.add_parser("test-impact", help="Create or validate an incremental test impact plan.")
+    test_impact_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    test_impact_parser.add_argument("--changed-files", type=Path)
+    test_impact_parser.add_argument("--dependency-report", type=Path)
+    test_impact_parser.add_argument("--output", type=Path)
+    test_impact_parser.add_argument("--validate", dest="validate_plan", type=Path)
+    test_impact_parser.add_argument("--unit-test-evidence", type=Path)
+    test_impact_parser.add_argument("--status-file", type=Path)
+
     next_parser = subparsers.add_parser("next", help="Show the next allowed harness action from run-state.")
     next_parser.add_argument("repo", nargs="?", default=".", type=Path)
     next_parser.add_argument("--state", required=True, type=Path)
@@ -1591,6 +1740,8 @@ def main() -> int:
             exit_code, result = gate(args)
         elif args.command == "guard":
             exit_code, result = guard(args)
+        elif args.command == "test-impact":
+            exit_code, result = test_impact(args)
         elif args.command == "next":
             exit_code, result = next_step(args)
         else:

@@ -68,6 +68,9 @@ For command details, read `references/implementation-gates.md`.
 - TDD is mandatory for production changes, but enforcement depth is scenario-based.
   Use the default `--tdd-mode auto`; it resolves to strict red/green command evidence for critical/audited work.
   Write a red test, observe the expected failure, implement minimally, then broaden Maven verification. Read `references/tdd-java-spring.md`.
+- Large repositories use planned incremental verification, not ad hoc test selection.
+  Generate `evidence/test-impact-plan.json` from changed files and dependency evidence; completion must prove every required command passed in unit-test JSON.
+  Root/shared build or source changes expand to full `mvn test`.
 - Review profiles are portable project policy. Auto-discover project profiles and extend bundled profiles only when useful.
   Use common issue guidance for reviewer focus. Read `references/review-profiles.md` and `references/common-review-issues.md`.
 - Archive the final requirement summary after completion so future analysis can read outcomes without replaying every run artifact. Read `references/requirements-archive.md`.
@@ -89,6 +92,7 @@ For command details, read `references/implementation-gates.md`.
   Emit `run-summary.json` / `run-summary.md` for CI, reviewer agents, evaluation, and later requirement analysis.
 - Use `execution_trace.py` or `verify --trace-file` to record phase timing, decisions, artifacts, and optional token counts.
   Use `command_evidence.py` for tests and graph commands when evidence must include exit code, elapsed time, output hashes, and environment metadata.
+  Use `context_pack.py` before dispatching service-scoped agents so each agent receives only request-scoped allowed inputs/outputs within a file and byte budget.
   Use `checkpoint_gate.py` or `gate --checkpoint-mode required` to pause after clarify, R1, and TDD Red on critical or interactive work.
   Agent start/stop is runtime-specific; this harness enforces portable state, hooks, gates, and rework routing instead of claiming non-portable process control.
 
@@ -100,7 +104,7 @@ For command details, read `references/implementation-gates.md`.
 4. Plan: choose `single`, explicit `single-review`, or `multi`; write an ExecPlan for complex work. Read `references/exec-plan.md`.
 5. TDD red: write the first failing test and capture failing evidence.
 6. R2 test review: independent reviewer checks happy/failure paths, security cases, and contract coverage before production code.
-7. TDD green/refactor: implement with the Superpowers Red-Green-Refactor cycle.
+7. TDD green/refactor: implement with the Superpowers Red-Green-Refactor cycle; run the test-impact plan's required Maven commands before broadening verification.
 8. R3 implementation review: independent reviewer traces every AC through the concrete code path.
    Then check completeness, tests, security, anti-patterns, and project-pattern consistency. The bundled default review profile is enforced unless an explicit project profile overrides it.
 9. Completion gate: prove every acceptance criterion and required artifact has use cases, service ownership, concrete tests, concrete code refs, business review, task alignment, and closed rework.
@@ -128,6 +132,7 @@ Important boundaries:
 - Discovery scope lists service candidates but does not create service plans.
 - Affected scope creates service plans only from explicit `--service` / `--path` or design-declared affected modules.
 - Multi-service work keeps each service plan and code-agent handoff under `docs/agent-runs/<run>/service-plans/<service>/`.
+- Before dispatching a service code agent, create `docs/agent-runs/<run>/context-packs/<agent-or-service>.json` from `agent-schedule.json`; do not pass inherited developer chat as context.
 - The orchestration result records `multi_agent_decision` with criteria, evidence, and required artifacts.
 - R1/R2/R3 reviews must be independent agents or separate reviewer sessions; one consolidated after-the-fact review is invalid.
 - Coverage Reviewer always runs before completion.

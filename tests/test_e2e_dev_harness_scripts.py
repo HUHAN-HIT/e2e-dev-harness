@@ -24,6 +24,7 @@ import agent_instructions  # noqa: E402
 import artifact_registry  # noqa: E402
 import checkpoint_gate  # noqa: E402
 import command_evidence  # noqa: E402
+import context_pack  # noqa: E402
 import coverage_gate  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import e2e_dev_harness  # noqa: E402
@@ -46,6 +47,7 @@ import requirements_archive  # noqa: E402
 import superpowers_probe  # noqa: E402
 import task_tier  # noqa: E402
 import task_alignment_guard  # noqa: E402
+import test_impact_plan  # noqa: E402
 import tdd_evidence  # noqa: E402
 import reviewer_gate  # noqa: E402
 import rework_gate  # noqa: E402
@@ -900,6 +902,94 @@ class CoverageGateTests(unittest.TestCase):
             result = coverage_gate.validate(repo, matrix, unit, review)
 
         self.assertTrue(result["ready"])
+
+
+class TestImpactPlanTests(unittest.TestCase):
+    def test_build_plan_uses_affected_maven_service_module(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            module = repo / "services" / "refund-service"
+            module.mkdir(parents=True)
+            (module / "pom.xml").write_text("<project />\n", encoding="utf-8")
+            changed = ["services/refund-service/src/main/java/com/example/RefundService.java"]
+
+            result = test_impact_plan.build_plan(repo, changed)
+
+        self.assertEqual("e2e-dev-harness.test-impact-plan.v1", result["schema"])
+        self.assertEqual("ready", result["status"])
+        self.assertEqual(["mvn -pl services/refund-service -am test"], [item["command"] for item in result["commands"]])
+
+    def test_validate_blocks_missing_required_command_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            plan = repo / "docs" / "agent-runs" / "run" / "evidence" / "test-impact-plan.json"
+            unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.json"
+            plan.parent.mkdir(parents=True)
+            plan.write_text(
+                json.dumps(
+                    {
+                        "schema": test_impact_plan.SCHEMA,
+                        "status": "ready",
+                        "commands": [
+                            {
+                                "id": "TST-001",
+                                "command": "mvn -pl services/refund-service -am test",
+                                "required": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            write_command_evidence(unit, "mvn test")
+
+            result = test_impact_plan.validate(repo, plan, unit)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("was not found" in reason for reason in result["blocked_reasons"]))
+
+    def test_validate_accepts_matching_required_command_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            plan = repo / "docs" / "agent-runs" / "run" / "evidence" / "test-impact-plan.json"
+            unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.json"
+            plan.parent.mkdir(parents=True)
+            plan.write_text(
+                json.dumps(
+                    {
+                        "schema": test_impact_plan.SCHEMA,
+                        "status": "ready",
+                        "commands": [
+                            {
+                                "id": "TST-001",
+                                "command": "mvn -pl services/refund-service -am test",
+                                "required": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            write_command_evidence(unit, "mvn -pl services/refund-service -am test")
+
+            result = test_impact_plan.validate(repo, plan, unit)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(["mvn -pl services/refund-service -am test"], result["matched_commands"])
+
+    def test_validate_blocks_starter_template(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            plan = repo / "test-impact-plan.json"
+            plan.write_text(
+                json.dumps({"schema": test_impact_plan.SCHEMA, "status": "template", "commands": []}),
+                encoding="utf-8",
+            )
+
+            result = test_impact_plan.validate(repo, plan, None)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("starter template" in reason for reason in result["blocked_reasons"]))
 
 
 class ImplementationManifestTests(unittest.TestCase):
@@ -1827,9 +1917,29 @@ class HandoffGateTests(unittest.TestCase):
 
                     # Agent Handoff
 
+                    ## Summary
+
+                    Implemented order-service refund flow.
+
+                    ## Facts Used
+
+                    Consumed the test handoff and service plan.
+
+                    ## Decisions Made
+
+                    Reused the existing service-layer pattern.
+
                     ## Open Questions
 
                     None
+
+                    ## Downstream Assumptions
+
+                    Coverage reviewer may rely on the implementation manifest.
+
+                    ## Verification Evidence
+
+                    mvn -pl services/order-service -am test passed.
                     """
                 ).strip(),
                 encoding="utf-8",
@@ -1840,6 +1950,59 @@ class HandoffGateTests(unittest.TestCase):
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
         self.assertEqual(1, len(result["items"]))
+
+    def test_handoff_gate_blocks_ready_handoff_with_empty_body_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+            handoff = handoff_dir / "04-code-developer.md"
+            handoff.write_text(
+                textwrap.dedent(
+                    """
+                    ---
+                    agent: code-developer
+                    agent_id: developer-agent-1
+                    status: ready
+                    inputs:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md
+                    outputs:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md
+                    input_hashes:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    output_hashes:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                    consumed_by:
+                      - coverage-reviewer
+                    open_questions: None
+                    ---
+
+                    # Agent Handoff
+
+                    ## Summary
+
+                    ## Facts Used
+
+                    ## Decisions Made
+
+                    ## Open Questions
+
+                    None
+
+                    ## Downstream Assumptions
+
+                    ## Verification Evidence
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            self.write_ready_marker(handoff)
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Summary" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any("Verification Evidence" in reason for reason in result["blocked_reasons"]))
 
     def test_handoff_gate_blocks_missing_ready_marker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2073,6 +2236,19 @@ class ContractGateTests(unittest.TestCase):
         self.assertIn("output_hashes:", text)
         self.assertIn("consumed_by:", text)
         self.assertIn("open_questions:", text)
+        self.assertIn("Summarize implementation scope", text)
+        self.assertIn("This is a draft starter handoff", text)
+
+    def test_role_handoff_templates_contain_actionable_role_guidance(self) -> None:
+        requirements = e2e_dev_harness.handoff_text("requirements-clarifier")
+        use_cases = e2e_dev_harness.handoff_text("use-case-designer")
+        tests = e2e_dev_harness.handoff_text("test-case-developer")
+        code = e2e_dev_harness.handoff_text("code-developer")
+
+        self.assertIn("Restate the user intent", requirements)
+        self.assertIn("happy paths, failure paths", use_cases)
+        self.assertIn("red-test intent", tests)
+        self.assertIn("changed runtime path", code)
 
     def test_review_request_template_names_default_profile_and_checklist(self) -> None:
         text = e2e_dev_harness.review_request_template(
@@ -4745,6 +4921,86 @@ class ImplementationGateTests(unittest.TestCase):
         self.assertTrue(any("outside declared task scope" in reason for reason in result["blocked_reasons"]))
         self.assertEqual("plan", result["task_alignment"]["correction_actions"][0]["return_phase"])
 
+    def test_completion_gate_blocks_unsatisfied_test_impact_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.json"
+            plan = repo / "docs" / "agent-runs" / "run" / "evidence" / "test-impact-plan.json"
+            design.parent.mkdir(parents=True)
+            kg.parent.mkdir(parents=True)
+            unit.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Goal
+                    - Return a quote.
+
+                    ## Scope
+                    - services/sample-service
+
+                    ## Use Cases
+                    - Return a quote.
+
+                    ## Acceptance Criteria
+                    - AC-1 Quote is returned.
+
+                    ## Test Design
+                    - Unit test first.
+
+                    ## Open Questions
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            write_command_evidence(unit, "mvn test")
+            plan.write_text(
+                json.dumps(
+                    {
+                        "schema": test_impact_plan.SCHEMA,
+                        "status": "ready",
+                        "commands": [
+                            {
+                                "id": "TST-001",
+                                "command": "mvn -pl services/sample-service -am test",
+                                "required": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            ready_result = {"ready": True, "blocked_reasons": [], "warnings": []}
+            with patch.object(implementation_gate.tdd_evidence, "validate", return_value=ready_result), \
+                patch.object(implementation_gate.coverage_gate, "validate", return_value=ready_result), \
+                patch.object(implementation_gate.implementation_manifest_gate, "validate", return_value=ready_result), \
+                patch.object(implementation_gate.task_alignment_guard, "validate", return_value=ready_result), \
+                patch.object(implementation_gate.cross_service_dependency_scan, "validate_dependency_report", return_value=ready_result), \
+                patch.object(implementation_gate.reviewer_gate, "validate", return_value=ready_result), \
+                patch.object(implementation_gate.rework_gate, "validate", return_value=ready_result):
+                result = implementation_gate.validate_gate(
+                    repo,
+                    design,
+                    kg,
+                    "completion",
+                    None,
+                    None,
+                    unit,
+                    None,
+                    test_impact_plan=plan,
+                    skip_spring_static_check=True,
+                )
+
+        self.assertFalse(result["ready"])
+        self.assertFalse(result["test_impact_plan"]["ready"])
+        self.assertTrue(any("Required test impact command" in reason for reason in result["blocked_reasons"]))
+
     def test_end_to_end_harness_plan_gate_completion_flow(self) -> None:
         design_text = textwrap.dedent(
             """
@@ -4837,10 +5093,22 @@ class ImplementationGateTests(unittest.TestCase):
             red.parent.mkdir(parents=True, exist_ok=True)
             write_command_evidence(red, "mvn test -Dtest=CallbackTest", exit_code=1)
             matrix.write_text(coverage, encoding="utf-8")
-            write_command_evidence(unit)
+            write_command_evidence(unit, "mvn -pl services/sample-service -am test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
             manifest_path.write_text(manifest, encoding="utf-8")
             changed.write_text("services/sample-service/src/main/java/com/example/QuoteService.java\n", encoding="utf-8")
+            test_plan_path = repo / artifacts["test_impact_plan"]
+            test_plan_path.write_text(
+                json.dumps(
+                    test_impact_plan.build_plan(
+                        repo,
+                        ["services/sample-service/src/main/java/com/example/QuoteService.java"],
+                    ),
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             review_dir = self.write_semantic_reviews(repo)
             service_review_helper = ReviewerGateTests()
             service_review_helper.write_service_review(repo, "sample-service", "test")
@@ -4865,6 +5133,7 @@ class ImplementationGateTests(unittest.TestCase):
                 dependency_report=None,
                 implementation_manifest=None,
                 changed_files=None,
+                test_impact_plan=None,
                 base_ref=None,
                 rework_dir=None,
                 review_dir=[review_dir],
@@ -5833,6 +6102,18 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("docs/agent-runs/2026-05-23-checkout/run-summary.md", result["run_summary_md"])
         self.assertEqual("docs/agent-runs/2026-05-23-checkout/execution-trace.json", result["execution_trace"])
 
+    def test_plan_artifacts_include_test_impact_and_context_pack_paths(self) -> None:
+        result = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
+
+        self.assertEqual(
+            "docs/agent-runs/2026-05-23-checkout/evidence/test-impact-plan.json",
+            result["test_impact_plan"],
+        )
+        self.assertEqual(
+            "docs/agent-runs/2026-05-23-checkout/context-packs/<agent-or-task>.json",
+            result["context_pack_pattern"],
+        )
+
     def test_plan_artifacts_include_implementation_manifest_path(self) -> None:
         result = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
 
@@ -5840,6 +6121,68 @@ class OrchestrationArtifactTests(unittest.TestCase):
             "docs/agent-runs/2026-05-23-checkout/evidence/implementation-manifest.md",
             result["implementation_manifest"],
         )
+
+    def test_context_pack_builds_request_scoped_task_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            requirements = repo / "docs" / "agent-runs" / "run" / "handoffs" / "01-requirements-clarifier.md"
+            requirements.parent.mkdir(parents=True)
+            requirements.write_text("Requirement summary\n", encoding="utf-8")
+            schedule = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "code-developer-order-service",
+                                "phase": "implement",
+                                "service": "services/order-service",
+                                "inputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+                                "outputs": ["docs/agent-runs/run/service-plans/order-service/implementation-manifest.md"],
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = context_pack.build_pack(repo, schedule, service="services/order-service", max_files=2, max_chars=1000)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("request-scoped; no inherited developer chat context", result["context_policy"])
+        self.assertEqual(1, result["budget"]["input_files"])
+
+    def test_context_pack_blocks_budget_overflow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            requirements = repo / "docs" / "agent-runs" / "run" / "handoffs" / "01-requirements-clarifier.md"
+            requirements.parent.mkdir(parents=True)
+            requirements.write_text("x" * 50, encoding="utf-8")
+            schedule = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "code-developer",
+                                "phase": "implement",
+                                "inputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+                                "outputs": [],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = context_pack.build_pack(repo, schedule, agent="code-developer", max_files=2, max_chars=10)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("above max_chars" in reason for reason in result["blocked_reasons"]))
 
     def test_service_plan_archive_contains_microservice_scoped_sections(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
