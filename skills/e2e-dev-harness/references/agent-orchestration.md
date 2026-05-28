@@ -36,6 +36,8 @@ When `--service-scope auto` and no explicit service/path is supplied, the helper
 
 Every generated `service-plans/<service>/implementation-plan.md` must include agent assignment, allowed change scope, modification points, service-local change logic, TDD plan, contracts, data/transaction effects, risks, and completion evidence. The code agent owns that plan; reviewer agents validate it independently.
 
+`plan --create-archive` also writes `agent-schedule.json`. Treat it as the compact task board for agent dispatch: each task has an agent id, phase, service scope, dependency phases, input artifacts, output artifacts, and parallel group. Agents should update task status and artifact hashes there instead of exchanging long free-form chat transcripts. For multi-service work, service-scoped code-developer tasks in different `service:<name>` parallel groups may run concurrently after shared contracts and R2 review are stable.
+
 ## Agent Roles
 
 ### Requirements Clarifier

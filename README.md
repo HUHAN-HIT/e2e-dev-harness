@@ -2,7 +2,7 @@
 
 This repository contains an agent-neutral delivery harness for serious Java/Spring/Maven requirement implementation. It is designed for Codex, Claude Code, Gemini CLI, OpenCode, CI jobs, and any runtime that can read `SKILL.md` and execute the bundled Python scripts.
 
-The harness is not just process documentation. It provides machine-checkable gates, run-state files, artifact registries, replay verification, workflow tiers, review profiles, and optional pre-action hook templates that can block code writes before the implementation phase when the active agent runtime actually supports blocking hooks.
+The harness is not just process documentation. It provides machine-checkable gates, run-state files, agent schedules, artifact registries, replay verification, workflow tiers, review profiles, and optional pre-action hook templates that can block code writes before the implementation phase when the active agent runtime actually supports blocking hooks.
 
 ## Layout
 
@@ -281,12 +281,12 @@ Use scenario-based TDD enforcement:
 
 | Scenario | Mode | Evidence |
 | --- | --- | --- |
-| small/simple change | `--tdd-mode basic` | non-empty red evidence that names the expected failing test or failure reason |
-| normal standard requirement | `--tdd-mode basic` plus R2/R3 reviews | red evidence, green unit-test JSON, coverage matrix |
-| API/MQ/payment/data/security/cross-service | `--tdd-mode strict` or `--tdd-mode auto --workflow-tier critical` | red command JSON with non-zero exit code, green command JSON with zero exit code |
+| small/simple change | `--tdd-mode auto` resolves to `basic` | non-empty red evidence that names the expected failing test or failure reason |
+| normal standard requirement | `--tdd-mode auto` resolves to `basic` plus R2/R3 reviews | red evidence, green unit-test JSON, coverage matrix |
+| API/MQ/payment/data/security/cross-service | `--tdd-mode auto` resolves to `strict` when the workflow tier is `critical` or `audited` | red command JSON with non-zero exit code, green command JSON with zero exit code |
 | audit/compliance run | `--tdd-mode strict` | strict red/green evidence plus trace and replay |
 
-`basic` is the default so simple tasks are not slowed by full chronology proof. Use `strict` when post-hoc tests would be a material delivery risk.
+`auto` is the default. The gate reads the design and dependency report to classify the workflow tier; high-risk API/MQ/payment/data/security/cross-service work cannot silently pass with lightweight post-hoc test notes.
 
 ## Harness Replay
 
@@ -341,6 +341,17 @@ skills/e2e-dev-harness/ci/github-actions-harness.yml
 ```
 
 The bundled workflow targets `windows-latest` because this harness is maintained for Windows-first Java/Maven projects.
+
+Strict completion also validates phase coverage. A run is blocked if plan did not create harness state, R1/R2/R3 reviews are missing, TDD red/green evidence is absent, completion gate was skipped, or the strict guard result is not saved for final reporting. Save guard output into the run evidence directory:
+
+```powershell
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py guard . `
+  --verify-status docs\agent-runs\<run>\evidence\verify.json `
+  --strict `
+  --require-completion `
+  --status-file docs\agent-runs\<run>\evidence\strict-guard.json `
+  --json
+```
 
 ## Development Checks
 

@@ -18,6 +18,7 @@ BASE_GATES = [
     "task-alignment",
     "run-state",
     "artifact-registry",
+    "agent-schedule",
     "run-summary",
 ]
 STANDARD_GATES = BASE_GATES + [

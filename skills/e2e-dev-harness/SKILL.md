@@ -60,7 +60,7 @@ For command details, read `references/implementation-gates.md`.
   Use Graphify for docs, ADRs, diagrams, and semantic context. Scanner facts seed both. Read `references/kg-tool-selection.md`.
 - Memory is optional context, not authority. Capture only verified or user-approved facts; Obsidian tags and links help selection but never replace explicit text. Read `references/memory-integration.md`.
 - TDD is mandatory for production changes, but enforcement depth is scenario-based.
-  Use `--tdd-mode basic` for simple changes and `--tdd-mode strict` or `auto` for critical/audited changes.
+  Use the default `--tdd-mode auto`; it resolves to strict red/green command evidence for critical/audited work.
   Write a red test, observe the expected failure, implement minimally, then broaden Maven verification. Read `references/tdd-java-spring.md`.
 - Review profiles are portable project policy. Auto-discover project profiles and extend bundled profiles only when useful.
   Use common issue guidance for reviewer focus. Read `references/review-profiles.md` and `references/common-review-issues.md`.
@@ -68,6 +68,7 @@ For command details, read `references/implementation-gates.md`.
 - Completion requires task-completion proof, not chat claims: every AC has concrete code refs and concrete test refs.
   Semantic reviews, implementation manifest, coverage matrix, unit-test JSON, business review, dependency report when cross-service,
   task-alignment evidence, closed rework, and passing guard are completion evidence.
+- Skipped phases are blockers in strict completion. R1/R2/R3 reviews, harness plan state, TDD red/green, completion gate, and strict guard must have machine-readable evidence; do not mark them as skipped in the final report.
 - Task drift is a blocker. Changed production files must stay inside declared design/manifest/coverage scope.
   If a change is outside scope, introduces undeclared acceptance criteria, or changes interface-like production files without Impact Summary rows, return to `plan` or `clarify`; do not normalize the drift in the final report.
 - Every created agent run has `run-state.json` and `artifact-registry.json`.
@@ -94,7 +95,7 @@ For command details, read `references/implementation-gates.md`.
 6. R2 test review: independent reviewer checks happy/failure paths, security cases, and contract coverage before production code.
 7. TDD green/refactor: implement with the Superpowers Red-Green-Refactor cycle.
 8. R3 implementation review: independent reviewer traces every AC through the concrete code path.
-   Then check completeness, tests, security, anti-patterns, and project-pattern consistency. Use a review profile when the project has required checklist items.
+   Then check completeness, tests, security, anti-patterns, and project-pattern consistency. The bundled default review profile is enforced unless an explicit project profile overrides it.
 9. Completion gate: prove every acceptance criterion and required artifact has use cases, service ownership, concrete tests, concrete code refs, business review, task alignment, and closed rework.
 10. Rework loop: findings create rework items and return to the earliest required phase before more production-code edits.
 11. Strict guard/report: run `verify --strict-workflow` or `guard`, capture accepted memory updates, and report evidence plus residual risks.
@@ -144,11 +145,16 @@ For Java/Spring code dependencies, GitNexus is the primary evidence engine. Grap
 
 For changed requirements or code diffs, use GitNexus impact tooling explicitly:
 
+When multiple repositories are indexed, GitNexus CLI symbol and diff commands
+must target the current project root with `--repo <repo-root>`; prefer an
+absolute path, or `.` only when the command is run from the project root.
+
 ```bash
-gitnexus detect-changes --scope unstaged
-gitnexus detect-changes --scope staged
-gitnexus detect-changes --scope compare --base-ref main
-gitnexus impact "<symbol-or-path>" --include-tests
+gitnexus detect-changes --repo <repo-root> --scope unstaged
+gitnexus detect-changes --repo <repo-root> --scope staged
+gitnexus detect-changes --repo <repo-root> --scope compare --base-ref main
+gitnexus context "<symbol-or-path>" --repo <repo-root>
+gitnexus impact "<symbol-or-path>" --repo <repo-root> --include-tests
 ```
 
 Do not require agents to call GitNexus for every `grep`/`rg` command when local GitNexus search augmentation is already installed. Treat that as exploration help, not completion evidence.

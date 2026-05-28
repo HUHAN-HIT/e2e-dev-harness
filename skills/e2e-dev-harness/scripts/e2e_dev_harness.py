@@ -293,6 +293,7 @@ def orchestration_status(
     mode_facts = orchestration_plan.mode_facts_for_service_scope(facts, services, resolved_service_scope)
     selected, reasons = orchestration_plan.choose_mode(mode, mode_facts, design_text, design_is_template)
     artifacts = orchestration_plan.artifacts(slug, agent_run_dir, run_date, services)
+    agents = orchestration_plan.agent_plan(selected, artifacts, services)
     return {
         "requested_mode": mode,
         "enabled": True,
@@ -307,7 +308,8 @@ def orchestration_status(
         "agent_run_dir": artifacts["agent_run_dir"],
         "handoff_artifacts": artifacts,
         "multi_agent_decision": orchestration_plan.multi_agent_decision(selected, services, reasons),
-        "agents": orchestration_plan.agent_plan(selected, artifacts, services),
+        "agents": agents,
+        "agent_schedule": orchestration_plan.agent_schedule(selected, services, agents),
     }
 
 
@@ -499,6 +501,8 @@ This is a living plan. Keep it current while implementing the feature.
 - Business review: {artifacts['business_review']}
 - Rework gate: {artifacts['rework_dir']}
 - Verification: {artifacts['verification_evidence']}
+- Phase coverage: {artifacts['phase_coverage']}
+- Strict guard: {artifacts['strict_guard_result']}
 
 ## Agent Protocol
 
@@ -942,6 +946,9 @@ def plan(args) -> tuple[int, dict]:
         proposed = require_repo_path(repo, Path(result["handoff_artifacts"]["proposed_memory_updates"]), "proposed memory updates")
         if not proposed.exists():
             proposed.write_text("# Proposed Memory Updates\n\n", encoding="utf-8")
+        schedule_path = require_repo_path(repo, Path(result["handoff_artifacts"]["agent_schedule"]), "agent schedule")
+        schedule_path.write_text(json.dumps(result["agent_schedule"], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        result["agent_schedule_written"] = str(schedule_path)
         result["agent_run_archive_created"] = str(run_dir)
     if args.write_exec_plan or args.create_archive:
         target = require_repo_path(repo, args.write_exec_plan or Path(result["handoff_artifacts"]["exec_plan"]), "exec plan")
@@ -999,7 +1006,7 @@ def gate(args) -> tuple[int, dict]:
             require_contracts=getattr(args, "require_contracts", False),
             require_handoffs=getattr(args, "require_handoffs", False),
             require_semantic_reviews=getattr(args, "require_semantic_reviews", False),
-            review_profile=getattr(args, "review_profile", None),
+            review_profile=getattr(args, "review_profile", None) or Path(DEFAULT_REVIEW_PROFILE),
             requirements_archive=getattr(args, "requirements_archive", None),
             require_requirements_archive=(
                 getattr(args, "require_requirements_archive", False)
@@ -1010,8 +1017,8 @@ def gate(args) -> tuple[int, dict]:
             checkpoint_mode=getattr(args, "checkpoint_mode", "off"),
             confirmation_dirs=getattr(args, "confirmation_dir", None),
             require_intent=getattr(args, "require_intent", False),
-            tdd_mode=getattr(args, "tdd_mode", "basic"),
-            workflow_tier=getattr(args, "workflow_tier", "basic"),
+            tdd_mode=getattr(args, "tdd_mode", "auto"),
+            workflow_tier=getattr(args, "workflow_tier", "auto"),
         )
     )
     if result.get("ready"):
@@ -1111,6 +1118,7 @@ def verify(args) -> tuple[int, dict]:
             "dependency_scan_mode": getattr(args, "dependency_scan_mode", "auto"),
             "write_dependency_report": getattr(args, "write_dependency_report", True),
             "implementation_manifest": str(getattr(args, "implementation_manifest", "") or ""),
+            "state": str(getattr(args, "state", "") or getattr(args, "run_state", "") or ""),
             "require_semantic_reviews": args.phase == "completion" or getattr(args, "require_semantic_reviews", False),
             "require_contracts": getattr(args, "require_contracts", False),
             "require_handoffs": getattr(args, "require_handoffs", False),
@@ -1280,11 +1288,11 @@ def main() -> int:
     gate_parser.add_argument("--checkpoint-mode", choices=["off", "advisory", "required"], default="off")
     gate_parser.add_argument("--confirmation-dir", action="append", type=Path)
     gate_parser.add_argument("--require-intent", action="store_true")
-    gate_parser.add_argument("--tdd-mode", choices=["off", "advisory", "basic", "strict", "auto"], default="basic")
-    gate_parser.add_argument("--workflow-tier", choices=task_tier.TIERS, default="basic")
+    gate_parser.add_argument("--tdd-mode", choices=["off", "advisory", "basic", "strict", "auto"], default="auto")
+    gate_parser.add_argument("--workflow-tier", choices=task_tier.TIERS, default="auto")
     gate_parser.add_argument("--rework-dir", action="append", type=Path)
     gate_parser.add_argument("--review-dir", action="append", type=Path)
-    gate_parser.add_argument("--review-profile", type=Path)
+    gate_parser.add_argument("--review-profile", type=Path, default=Path(DEFAULT_REVIEW_PROFILE))
     gate_parser.add_argument("--handoff-dir", action="append", type=Path)
     gate_parser.add_argument("--contract-dir", action="append", type=Path)
     gate_parser.add_argument("--require-contracts", action="store_true")
@@ -1314,10 +1322,10 @@ def main() -> int:
     verify_parser.add_argument("--checkpoint-mode", choices=["off", "advisory", "required"], default="off")
     verify_parser.add_argument("--confirmation-dir", action="append", type=Path)
     verify_parser.add_argument("--require-intent", action="store_true")
-    verify_parser.add_argument("--tdd-mode", choices=["off", "advisory", "basic", "strict", "auto"], default="basic")
+    verify_parser.add_argument("--tdd-mode", choices=["off", "advisory", "basic", "strict", "auto"], default="auto")
     verify_parser.add_argument("--rework-dir", action="append", type=Path)
     verify_parser.add_argument("--review-dir", action="append", type=Path)
-    verify_parser.add_argument("--review-profile", type=Path)
+    verify_parser.add_argument("--review-profile", type=Path, default=Path(DEFAULT_REVIEW_PROFILE))
     verify_parser.add_argument("--handoff-dir", action="append", type=Path)
     verify_parser.add_argument("--contract-dir", action="append", type=Path)
     verify_parser.add_argument("--require-contracts", action="store_true")

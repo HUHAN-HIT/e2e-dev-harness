@@ -80,6 +80,106 @@ def validate_requirements_archive(gate: dict, workflow: dict, strict: bool, comp
     return blocked
 
 
+def phase_status(name: str, ready: bool, evidence: str = "", reason: str = "") -> dict:
+    return {
+        "phase": name,
+        "ready": ready,
+        "status": "finished" if ready else "skipped",
+        "evidence": evidence,
+        "reason": reason,
+    }
+
+
+def validate_phase_coverage(
+    verify_result: dict,
+    completion_required: bool,
+    require_strict_guard: bool = False,
+) -> dict:
+    phases: list[dict] = []
+    workflow = verify_result.get("workflow") if isinstance(verify_result.get("workflow"), dict) else {}
+    prepare = verify_result.get("prepare")
+    clarification = verify_result.get("clarification")
+    gate = verify_result.get("implementation_gate")
+    maven = verify_result.get("maven")
+
+    prepare_ready = isinstance(prepare, dict) and not prepare.get("blocked")
+    phases.append(phase_status("prepare", prepare_ready, "prepare", "Prepare phase is missing or blocked."))
+
+    clarify_ready = isinstance(clarification, dict) and clarification.get("ready_for_implementation") is True
+    phases.append(phase_status("clarify", clarify_ready, "clarification", "Clarification phase is missing or blocked."))
+
+    plan_ready = bool(workflow.get("harness") and workflow.get("state"))
+    phases.append(
+        phase_status(
+            "plan",
+            plan_ready,
+            str(workflow.get("state") or ""),
+            "Strict completion requires harness plan evidence: run-state from plan --create-archive plus verify --harness --state.",
+        )
+    )
+
+    semantic = gate.get("semantic_reviews") if isinstance(gate, dict) else None
+    covered = set(semantic.get("covered_phases") or []) if isinstance(semantic, dict) else set()
+    phases.append(phase_status("R1 review", "design" in covered, "semantic_reviews.design", "R1 design review was skipped."))
+
+    tdd = gate.get("tdd") if isinstance(gate, dict) else None
+    tdd_red_ready = isinstance(tdd, dict) and tdd.get("ready") is True and bool(tdd.get("red_evidence"))
+    if not tdd_red_ready and isinstance(gate, dict):
+        tdd_red_ready = bool(gate.get("red_test_evidence"))
+    phases.append(phase_status("TDD red", tdd_red_ready, "tdd.red_evidence", "TDD red evidence is missing."))
+
+    phases.append(phase_status("R2 review", "test" in covered, "semantic_reviews.test", "R2 test review was skipped."))
+
+    green_ready = isinstance(maven, dict) and not maven.get("skipped") and maven.get("exit_code") == 0
+    if isinstance(tdd, dict) and tdd.get("green_commands"):
+        green_ready = green_ready or all(item.get("exit_code") == 0 for item in tdd.get("green_commands", []))
+    phases.append(phase_status("TDD green", green_ready, "maven or tdd.green_commands", "TDD green verification is missing or failed."))
+
+    phases.append(
+        phase_status(
+            "R3 review",
+            "implementation" in covered,
+            "semantic_reviews.implementation",
+            "R3 implementation review was skipped.",
+        )
+    )
+
+    completion_gate_ready = isinstance(gate, dict) and gate.get("phase") == "completion" and gate.get("ready") is True
+    phases.append(
+        phase_status(
+            "Completion Gate",
+            completion_gate_ready,
+            "implementation_gate",
+            "Completion gate was skipped or did not pass.",
+        )
+    )
+
+    if require_strict_guard:
+        strict_guard = verify_result.get("workflow_guard")
+        strict_guard_ready = isinstance(strict_guard, dict) and strict_guard.get("ready") is True
+        phases.append(
+            phase_status(
+                "Strict Guard",
+                strict_guard_ready,
+                "workflow_guard",
+                "Strict guard was skipped or did not pass.",
+            )
+        )
+
+    blocked = [
+        f"{item['phase']} phase skipped: {item['reason']}"
+        for item in phases
+        if not item["ready"]
+    ] if completion_required else []
+    return {
+        "ready": not blocked,
+        "required": completion_required,
+        "require_strict_guard": require_strict_guard,
+        "phases": phases,
+        "blocked_reasons": blocked,
+    }
+
+
 def validate_prepare(prepare: dict | None, strict: bool, approval_text: str) -> tuple[list[str], list[str]]:
     blocked: list[str] = []
     warnings: list[str] = []
@@ -169,12 +269,19 @@ def validate_verify_result(
         elif not maven.get("skipped") and maven.get("exit_code") != 0:
             blocked.append(f"Maven verification failed with exit_code={maven.get('exit_code')}.")
 
+    phase_coverage = None
+    if strict and completion_required:
+        phase_coverage = validate_phase_coverage(verify_result, completion_required, require_strict_guard=False)
+        if not phase_coverage["ready"]:
+            blocked.extend(phase_coverage["blocked_reasons"])
+
     return {
         "ready": not blocked,
         "strict": strict,
         "require_completion": completion_required,
         "blocked_reasons": unique(blocked),
         "warnings": unique(warnings),
+        "phase_coverage": phase_coverage,
     }
 
 

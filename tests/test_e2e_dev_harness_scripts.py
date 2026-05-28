@@ -59,7 +59,7 @@ def write_command_evidence(path: Path, command: str = "mvn test", exit_code: int
             {
                 "command": command,
                 "exit_code": exit_code,
-                "stdout_tail": "BUILD SUCCESS",
+                "stdout_tail": "BUILD SUCCESS" if exit_code == 0 else "BUILD FAILURE expected failing test",
                 "stderr_tail": "",
             }
         )
@@ -622,7 +622,7 @@ class CheckpointGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result = checkpoint_gate.validate(Path(tmp), None, ["clarify"], "advisory")
 
-        self.assertTrue(result["ready"])
+        self.assertTrue(result["ready"], result["blocked_reasons"])
         self.assertTrue(any("clarify" in warning for warning in result["warnings"]))
 
 
@@ -1070,7 +1070,7 @@ class ImplementationManifestTests(unittest.TestCase):
 
             result = implementation_manifest.validate(repo, manifest_path, design_path)
 
-        self.assertTrue(result["ready"])
+        self.assertTrue(result["ready"], result["blocked_reasons"])
         self.assertEqual(2, result["required_rows"])
 
 
@@ -1460,8 +1460,14 @@ class CrossServiceDependencyScanTests(unittest.TestCase):
                 gitnexus_available=True,
             )
 
-        self.assertTrue(any(command[:2] == ["gitnexus", "context"] for command in calls))
-        self.assertTrue(any(command[:2] == ["gitnexus", "impact"] for command in calls))
+        repo_arg = str(repo.resolve())
+        context_calls = [command for command in calls if command[:2] == ["gitnexus", "context"]]
+        impact_calls = [command for command in calls if command[:2] == ["gitnexus", "impact"]]
+        self.assertTrue(context_calls)
+        self.assertTrue(impact_calls)
+        for command in context_calls + impact_calls:
+            self.assertIn("--repo", command)
+            self.assertEqual(repo_arg, command[command.index("--repo") + 1])
         self.assertTrue(result["gitnexus"]["evidence"])
 
     def test_gitnexus_unavailable_marks_evidence_insufficient(self) -> None:
@@ -1528,6 +1534,8 @@ def verified_workflow_result() -> dict:
             "write_dependency_report": True,
             "require_semantic_reviews": True,
             "require_requirements_archive": True,
+            "harness": True,
+            "state": "docs/agent-runs/run/run-state.json",
         },
         "prepare": {
             "blocked": False,
@@ -1549,6 +1557,12 @@ def verified_workflow_result() -> dict:
             "phase": "completion",
             "ready": True,
             "blocked_reasons": [],
+            "red_test_evidence": "docs/agent-runs/run/evidence/red-test.txt",
+            "tdd": {
+                "ready": True,
+                "red_evidence": "docs/agent-runs/run/evidence/red-test.txt",
+                "green_commands": [{"command": "mvn test", "exit_code": 0}],
+            },
             "semantic_reviews": {
                 "ready": True,
                 "covered_phases": ["design", "test", "implementation"],
@@ -1622,6 +1636,41 @@ class WorkflowGuardTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("completion gate" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_guard_blocks_plan_without_harness_state_in_strict_completion(self) -> None:
+        verify_result = verified_workflow_result()
+        verify_result["workflow"]["harness"] = False
+        verify_result["workflow"]["state"] = ""
+
+        result = workflow_guard.validate_verify_result(verify_result, strict=True, require_completion=True)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("plan phase skipped" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_guard_phase_coverage_reports_skipped_reviews_and_gates(self) -> None:
+        verify_result = verified_workflow_result()
+        verify_result["implementation_gate"]["semantic_reviews"]["covered_phases"] = ["design"]
+        verify_result["implementation_gate"]["phase"] = "implementation"
+        verify_result["implementation_gate"]["ready"] = False
+
+        result = workflow_guard.validate_verify_result(verify_result, strict=True, require_completion=True)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("r2 review phase skipped" in reason.lower() for reason in result["blocked_reasons"]))
+        self.assertTrue(any("r3 review phase skipped" in reason.lower() for reason in result["blocked_reasons"]))
+        self.assertTrue(any("completion gate" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_phase_coverage_can_require_strict_guard_for_final_summary(self) -> None:
+        verify_result = verified_workflow_result()
+
+        result = workflow_guard.validate_phase_coverage(
+            verify_result,
+            completion_required=True,
+            require_strict_guard=True,
+        )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Strict Guard" in reason for reason in result["blocked_reasons"]))
 
     def test_guard_blocks_missing_independent_semantic_reviews_in_strict_completion(self) -> None:
         verify_result = verified_workflow_result()
@@ -2095,6 +2144,23 @@ class ReworkGateTests(unittest.TestCase):
 
 
 class ReviewerGateTests(unittest.TestCase):
+    PROFILE_CHECKLIST = {
+        "design": ["ac-completeness", "dependency-impact", "security-sensitive-paths"],
+        "test": ["happy-and-failure-paths", "contract-coverage", "security-negative-paths"],
+        "implementation": [
+            "ac-code-path-trace",
+            "implementation-completeness",
+            "security-negative-paths",
+            "project-pattern-consistency",
+        ],
+    }
+
+    def profile_checklist(self, phase: str) -> str:
+        items = self.PROFILE_CHECKLIST.get(phase, [])
+        if not items:
+            return ""
+        return "## Required Review Checklist\n\n" + "\n".join(f"- [x] {item}: checked." for item in items)
+
     def review_doc(
         self,
         phase: str,
@@ -2262,6 +2328,7 @@ class ReviewerGateTests(unittest.TestCase):
         review.write_text(
             self.review_doc(
                 phase,
+                checklist=self.profile_checklist(phase),
                 request=request_rel,
                 request_hash=hashlib.sha256(request.read_bytes()).hexdigest(),
                 developer_agent=developer_agent,
@@ -3123,6 +3190,20 @@ class RequirementsArchiveTests(unittest.TestCase):
 
 
 class ImplementationGateTests(unittest.TestCase):
+    REVIEW_CHECKLIST = {
+        "design": ["ac-completeness", "dependency-impact", "security-sensitive-paths"],
+        "test": ["happy-and-failure-paths", "contract-coverage", "security-negative-paths"],
+        "implementation": [
+            "ac-code-path-trace",
+            "implementation-completeness",
+            "security-negative-paths",
+            "project-pattern-consistency",
+        ],
+    }
+
+    def default_review_checklist(self, phase: str) -> str:
+        return "\n".join(f"- [x] {item}: checked." for item in self.REVIEW_CHECKLIST.get(phase, []))
+
     def write_semantic_reviews(self, repo: Path, phases: tuple[str, ...] = ("design", "test", "implementation")) -> Path:
         review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
         request_dir = repo / "docs" / "agent-runs" / "run" / "review-requests"
@@ -3174,6 +3255,7 @@ class ImplementationGateTests(unittest.TestCase):
                 encoding="utf-8",
             )
             request_hash = hashlib.sha256(request_path.read_bytes()).hexdigest()
+            checklist = self.default_review_checklist(phase)
             code_path_trace = ""
             if phase == "implementation":
                 code_path_trace = textwrap.dedent(
@@ -3209,6 +3291,10 @@ class ImplementationGateTests(unittest.TestCase):
                     - Findings: None
                     - Required Rework: None
                     - Status: approved
+
+                    ## Required Review Checklist
+
+                    {checklist}
                     {code_path_trace}
                     """
                 ).strip(),
@@ -3250,6 +3336,63 @@ class ImplementationGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("Knowledge graph status" in reason for reason in result["blocked_reasons"]))
+
+    def test_implementation_gate_auto_tdd_becomes_strict_for_messaging_design(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Refund Notification
+
+            ## Goal
+            - Publish refund MQ notification.
+
+            ## Scope
+            - services/refund-service
+
+            ## Use Cases
+            - Refund succeeds and emits a topic payload.
+
+            ## Acceptance Criteria
+            - AC-1 DMQ topic refund.completed is sent with payload fields.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+
+            ## Impact Summary
+            | interface | affected consumer | evidence | AC | test obligation | risk |
+            | --- | --- | --- | --- | --- | --- |
+            | refund.completed topic | downstream consumers | Raw Evidence: docs/agent-runs/run/evidence/impact.json | AC-1 | producer test | high |
+            - Source: GitNexus impact + dependency scanner
+
+            ## Change Logic
+            - Current behavior: refund completes without message.
+            - Target behavior: refund emits DMQ event.
+            - Runtime path: RefundService -> RefundMessageSender -> topic.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "refund.md"
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            red = repo / "docs" / "agent-runs" / "run" / "evidence" / "red-test.txt"
+            design.parent.mkdir(parents=True)
+            kg.parent.mkdir(parents=True)
+            red.parent.mkdir(parents=True)
+            design.write_text(markdown, encoding="utf-8")
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+
+            result = implementation_gate.validate_gate(repo, design, kg, "implementation", red)
+
+        self.assertFalse(result["ready"])
+        self.assertEqual("critical", result["workflow_tier"]["tier"])
+        self.assertEqual("strict", result["tdd"]["effective_mode"])
+        self.assertTrue(
+            any("strict evidence must be JSON" in reason for reason in result["blocked_reasons"]),
+            result["blocked_reasons"],
+        )
 
     def test_gate_request_dataclass_matches_legacy_validate_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3492,7 +3635,7 @@ class ImplementationGateTests(unittest.TestCase):
             archive.parent.mkdir(parents=True)
             design.write_text(markdown, encoding="utf-8")
             kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
-            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            write_command_evidence(red, "mvn test -Dtest=PaymentCallbackTest", exit_code=1)
             matrix.write_text(coverage, encoding="utf-8")
             write_command_evidence(unit, "mvn -pl services/sample-service -am test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
@@ -3624,7 +3767,7 @@ class ImplementationGateTests(unittest.TestCase):
             red.parent.mkdir(parents=True)
             design.write_text(markdown, encoding="utf-8")
             kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
-            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            write_command_evidence(red, "mvn test -Dtest=CallbackTest", exit_code=1)
             matrix.write_text(coverage, encoding="utf-8")
             write_command_evidence(unit, "mvn -pl services/sample-service -am test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
@@ -4296,7 +4439,7 @@ class ImplementationGateTests(unittest.TestCase):
             matrix.parent.mkdir(parents=True)
             design.write_text(markdown, encoding="utf-8")
             kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
-            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            write_command_evidence(red, "mvn test -Dtest=CallbackTest", exit_code=1)
             matrix.write_text(coverage, encoding="utf-8")
             write_command_evidence(unit, "mvn test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
@@ -4384,7 +4527,7 @@ class ImplementationGateTests(unittest.TestCase):
             matrix.parent.mkdir(parents=True)
             design.write_text(markdown, encoding="utf-8")
             kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
-            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            write_command_evidence(red, "mvn test -Dtest=CallbackTest", exit_code=1)
             matrix.write_text(coverage, encoding="utf-8")
             write_command_evidence(unit, "mvn test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
@@ -4477,7 +4620,7 @@ class ImplementationGateTests(unittest.TestCase):
             matrix.parent.mkdir(parents=True)
             design.write_text(markdown, encoding="utf-8")
             kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
-            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            write_command_evidence(red, "mvn test -Dtest=CallbackTest", exit_code=1)
             matrix.write_text(coverage, encoding="utf-8")
             write_command_evidence(unit, "mvn test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
@@ -4513,7 +4656,7 @@ class ImplementationGateTests(unittest.TestCase):
                 skip_spring_static_check=True,
             )
 
-        self.assertTrue(result["ready"])
+        self.assertTrue(result["ready"], result["blocked_reasons"])
         self.assertTrue(result["dependency_report"]["ready"])
 
     def test_completion_gate_blocks_task_drift_changed_files(self) -> None:
@@ -4572,7 +4715,7 @@ class ImplementationGateTests(unittest.TestCase):
             matrix.parent.mkdir(parents=True)
             design.write_text(design_text, encoding="utf-8")
             kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
-            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            write_command_evidence(red, "mvn test -Dtest=CallbackTest", exit_code=1)
             matrix.write_text(coverage, encoding="utf-8")
             write_command_evidence(unit)
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
@@ -4692,7 +4835,7 @@ class ImplementationGateTests(unittest.TestCase):
             kg.parent.mkdir(parents=True)
             kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
             red.parent.mkdir(parents=True, exist_ok=True)
-            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            write_command_evidence(red, "mvn test -Dtest=CallbackTest", exit_code=1)
             matrix.write_text(coverage, encoding="utf-8")
             write_command_evidence(unit)
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
@@ -5370,6 +5513,8 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertIn("multiple affected services/modules", result["multi_agent_decision"]["criteria"])
         self.assertIn("jeepay-service", result["handoff_artifacts"]["service_plans"])
         self.assertIn("code-developer-jeepay-service", [agent["name"] for agent in result["agents"]])
+        self.assertEqual("e2e-dev-harness.agent-schedule.v1", result["agent_schedule"]["schema"])
+        self.assertTrue(any(task["parallel_group"] == "service:jeepay-service" for task in result["agent_schedule"]["tasks"]))
 
     def test_plan_archive_creates_handoffs_for_design_affected_root_modules(self) -> None:
         design_text = textwrap.dedent(
@@ -5450,10 +5595,13 @@ class OrchestrationArtifactTests(unittest.TestCase):
             self.assertTrue((repo / result["handoff_artifacts"]["impact_summary"]).exists())
             self.assertTrue((repo / result["handoff_artifacts"]["impact_evidence"]).exists())
             self.assertTrue((repo / result["handoff_artifacts"]["artifact_registry"]).exists())
+            self.assertTrue((repo / result["handoff_artifacts"]["agent_schedule"]).exists())
             self.assertTrue((repo / result["handoff_artifacts"]["run_state"]).exists())
             registry = json.loads((repo / result["handoff_artifacts"]["artifact_registry"]).read_text(encoding="utf-8"))
+            schedule = json.loads((repo / result["handoff_artifacts"]["agent_schedule"]).read_text(encoding="utf-8"))
             state = json.loads((repo / result["handoff_artifacts"]["run_state"]).read_text(encoding="utf-8"))
             self.assertEqual("e2e-dev-harness.artifact-registry.v1", registry["schema"])
+            self.assertEqual("e2e-dev-harness.agent-schedule.v1", schedule["schema"])
             self.assertEqual("e2e-dev-harness.run-state.v1", state["schema"])
             self.assertEqual("PLANNED", state["lifecycle"])
             self.assertEqual(result["handoff_artifacts"]["artifact_registry"], state["artifact_registry"])
@@ -6326,7 +6474,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
             ):
                 code, result = e2e_dev_harness.prepare(args)
 
-        self.assertEqual(0, code)
+        self.assertEqual(0, code, result.get("blocked_reasons"))
         self.assertEqual("critical", result["workflow_tier"]["tier"])
         self.assertIn("contracts", result["workflow_tier"]["required_gates"])
 
@@ -6591,7 +6739,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
             code, _result = e2e_dev_harness.verify(args)
             trace_result = execution_trace.validate_trace(repo, trace_path, ["prepare", "maven", "verify"])
 
-        self.assertEqual(0, code)
+        self.assertEqual(0, code, _result.get("blocked_reasons"))
         self.assertTrue(trace_result["ready"], trace_result["blocked_reasons"])
         self.assertGreaterEqual(trace_result["summary"]["elapsed_ms_total"], 0)
 
@@ -6886,6 +7034,11 @@ class SuperpowersProbeCompatibilityTests(unittest.TestCase):
 
 
 class UnifiedCliTests(unittest.TestCase):
+    REVIEW_CHECKLIST = ImplementationGateTests.REVIEW_CHECKLIST
+
+    def default_review_checklist(self, phase: str) -> str:
+        return "\n".join(f"- [x] {item}: checked." for item in self.REVIEW_CHECKLIST.get(phase, []))
+
     def write_semantic_reviews(self, repo: Path) -> Path:
         review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
         request_dir = repo / "docs" / "agent-runs" / "run" / "review-requests"
@@ -6935,6 +7088,7 @@ class UnifiedCliTests(unittest.TestCase):
                 encoding="utf-8",
             )
             request_hash = hashlib.sha256(request_path.read_bytes()).hexdigest()
+            checklist = self.default_review_checklist(phase)
             code_path_trace = ""
             if phase == "implementation":
                 code_path_trace = textwrap.dedent(
@@ -6970,6 +7124,10 @@ class UnifiedCliTests(unittest.TestCase):
                     - Findings: None
                     - Required Rework: None
                     - Status: approved
+
+                    ## Required Review Checklist
+
+                    {checklist}
                     {code_path_trace}
                     """
                 ).strip(),
@@ -7301,7 +7459,7 @@ class UnifiedCliTests(unittest.TestCase):
 
             code, result = e2e_dev_harness.gate(args)
 
-        self.assertEqual(0, code)
+        self.assertEqual(0, code, result.get("blocked_reasons"))
         self.assertTrue(result["implementation_manifest"]["ready"])
 
     def test_cli_gate_accepts_dependency_report(self) -> None:
@@ -7373,7 +7531,7 @@ class UnifiedCliTests(unittest.TestCase):
             dependency_report.parent.mkdir(parents=True, exist_ok=True)
             design.write_text(design_text, encoding="utf-8")
             kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
-            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            write_command_evidence(red, "mvn test -Dtest=PaymentCallbackTest", exit_code=1)
             matrix.write_text(coverage, encoding="utf-8")
             write_command_evidence(unit, "mvn test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
@@ -7414,7 +7572,7 @@ class UnifiedCliTests(unittest.TestCase):
 
             code, result = e2e_dev_harness.gate(args)
 
-        self.assertEqual(0, code)
+        self.assertEqual(0, code, result.get("blocked_reasons"))
         self.assertTrue(result["dependency_report"]["ready"])
 
     def test_verify_strict_workflow_blocks_skip_maven(self) -> None:

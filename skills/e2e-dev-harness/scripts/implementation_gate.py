@@ -26,6 +26,7 @@ import reviewer_gate  # noqa: E402
 import rework_gate  # noqa: E402
 import spring_static_check  # noqa: E402
 import task_alignment_guard  # noqa: E402
+import task_tier  # noqa: E402
 import tdd_evidence  # noqa: E402
 
 
@@ -92,6 +93,36 @@ def find_kg_status_file(repo: Path, explicit: Path | None) -> Path:
     return candidates[0]
 
 
+def resolve_optional_repo_path(repo: Path, path: Path | None) -> Path | None:
+    if not path:
+        return None
+    return path if path.is_absolute() else repo / path
+
+
+def read_text_if_exists(path: Path | None) -> str:
+    if path and path.exists() and path.is_file():
+        return path.read_text(encoding="utf-8", errors="replace")
+    return ""
+
+
+def load_dependency_report(repo: Path, path: Path | None) -> dict:
+    resolved = resolve_optional_repo_path(repo, path)
+    if not resolved or not resolved.exists():
+        return {}
+    data = read_json(resolved)
+    return data if isinstance(data, dict) else {}
+
+
+def evaluate_workflow_tier(repo: Path, requested: str, design_doc: Path | None, dependency_report: Path | None) -> dict:
+    design_text = read_text_if_exists(resolve_optional_repo_path(repo, design_doc))
+    dependency_data = load_dependency_report(repo, dependency_report)
+    return task_tier.evaluate(requested or "auto", design_text, {}, dependency_data)
+
+
+def default_review_profile() -> Path:
+    return SCRIPT_DIR.parent / "review-profiles" / "default.json"
+
+
 def validate_gate_request(request: GateRequest) -> dict:
     repo = request.repo
     design_doc = request.design_doc
@@ -111,7 +142,7 @@ def validate_gate_request(request: GateRequest) -> dict:
     contract_dirs = request.contract_dirs
     require_contracts = request.require_contracts
     require_handoffs = request.require_handoffs
-    review_profile = request.review_profile
+    review_profile = request.review_profile or default_review_profile()
     requirements_archive = request.requirements_archive
     require_requirements_archive = request.require_requirements_archive
     changed_files = request.changed_files
@@ -124,6 +155,10 @@ def validate_gate_request(request: GateRequest) -> dict:
     repo = repo.resolve()
     blocked_reasons: list[str] = []
     warnings: list[str] = []
+    workflow_tier_result = evaluate_workflow_tier(repo, workflow_tier, design_doc, dependency_report)
+    effective_workflow_tier = workflow_tier_result["tier"]
+    if effective_workflow_tier in {"critical", "audited"} and tdd_mode == "off":
+        blocked_reasons.append("Critical or audited workflow cannot disable TDD evidence; use --tdd-mode auto or strict.")
 
     design_result = None
     if design_doc:
@@ -154,7 +189,7 @@ def validate_gate_request(request: GateRequest) -> dict:
             red_test_evidence,
             phase="implementation",
             mode=tdd_mode,
-            workflow_tier=workflow_tier,
+            workflow_tier=effective_workflow_tier,
         )
         if not tdd_result["ready"]:
             blocked_reasons.extend(tdd_result["blocked_reasons"])
@@ -227,7 +262,7 @@ def validate_gate_request(request: GateRequest) -> dict:
             unit_test_evidence,
             phase="completion",
             mode=tdd_mode,
-            workflow_tier=workflow_tier,
+            workflow_tier=effective_workflow_tier,
         )
         if not tdd_result["ready"]:
             blocked_reasons.extend(tdd_result["blocked_reasons"])
@@ -304,6 +339,7 @@ def validate_gate_request(request: GateRequest) -> dict:
         "ready": not blocked_reasons,
         "blocked_reasons": blocked_reasons,
         "warnings": warnings,
+        "workflow_tier": workflow_tier_result,
         "design": design_result,
         "knowledge_graph_status_file": str(kg_path),
         "knowledge_graph_status_loaded": bool(kg_status),
@@ -352,8 +388,8 @@ def validate_gate(
     checkpoint_mode: str = "off",
     confirmation_dirs: list[Path] | None = None,
     require_intent: bool = False,
-    tdd_mode: str = "basic",
-    workflow_tier: str = "basic",
+    tdd_mode: str = "auto",
+    workflow_tier: str = "auto",
 ) -> dict:
     return validate_gate_request(
         GateRequest(
@@ -410,8 +446,8 @@ def main() -> int:
     parser.add_argument("--checkpoint-mode", choices=["off", "advisory", "required"], default="off")
     parser.add_argument("--confirmation-dir", action="append", type=Path)
     parser.add_argument("--require-intent", action="store_true")
-    parser.add_argument("--tdd-mode", choices=tdd_evidence.MODES, default="basic")
-    parser.add_argument("--workflow-tier", default="basic")
+    parser.add_argument("--tdd-mode", choices=tdd_evidence.MODES, default="auto")
+    parser.add_argument("--workflow-tier", choices=task_tier.TIERS, default="auto")
     parser.add_argument("--rework-dir", action="append", type=Path)
     parser.add_argument("--review-dir", action="append", type=Path)
     parser.add_argument("--review-profile", type=Path)
@@ -445,7 +481,7 @@ def main() -> int:
             require_contracts=args.require_contracts,
             require_handoffs=args.require_handoffs,
             require_semantic_reviews=args.require_semantic_reviews,
-            review_profile=args.review_profile,
+            review_profile=args.review_profile or default_review_profile(),
             requirements_archive=args.requirements_archive,
             require_requirements_archive=args.require_requirements_archive,
             changed_files=args.changed_files,

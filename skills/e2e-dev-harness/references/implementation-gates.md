@@ -45,9 +45,12 @@ Planning checks clarification readiness, knowledge graph status, and R1 design r
 
 TDD enforcement is scenario-based:
 
-- `--tdd-mode basic` (default): suitable for simple scoped changes; red evidence may be a concise failure note or command output that names the expected failing test/reason.
+- `--tdd-mode auto` (default): classifies the workflow from the design/dependency report; critical or audited work uses strict evidence, other scoped work uses basic evidence.
+- `--tdd-mode basic`: suitable only for simple scoped changes; red evidence may be a concise failure note or command output that names the expected failing test/reason.
 - `--tdd-mode strict`: required for high-risk API/MQ/payment/data/security/cross-service/audited work; red evidence must be structured command JSON with non-zero `exit_code`, and completion also requires green command JSON with zero `exit_code`.
 - `--tdd-mode auto`: resolves to `strict` for `critical` or `audited` workflow tiers and `basic` otherwise.
+
+The bundled default review profile is applied by `e2e_dev_harness.py gate` and `verify` unless `--review-profile` is explicitly overridden. A review report with only `Status: approved` is not sufficient; it must check the required profile items and include implementation Code Path Trace coverage where applicable.
 
 For interactive or high-risk runs, add `--require-intent` and `--checkpoint-mode required`. Required checkpoints are:
 
@@ -56,6 +59,20 @@ For interactive or high-risk runs, add `--require-intent` and `--checkpoint-mode
 - completion: `clarify`, `r1-design`, `tdd-red`, `implementation`
 
 Store confirmations as Markdown or JSON under `docs/agent-runs/<run>/confirmations/`. Each confirmation needs `Phase`, `Status: approved` or `confirmed`, `Confirmed By`, and a non-blocking `Decision`.
+
+## Phase Coverage
+
+Strict completion treats skipped core phases as blockers. `workflow_guard.py` validates this coverage from the saved verify result:
+
+- `prepare` must be present and unblocked.
+- `clarify` must be ready.
+- `plan` must have harness state evidence from `plan --create-archive` and `verify --harness --state`.
+- `R1 review`, `R2 review`, and `R3 review` must be covered by independent semantic review evidence.
+- `TDD red` and `TDD green` must have evidence for the selected TDD mode.
+- `Completion Gate` must run with `--phase completion` and pass.
+- `Strict Guard` should be saved to `docs/agent-runs/<run>/evidence/strict-guard.json` with `guard --status-file`; final summaries mark it missing when skipped.
+
+Use `workflow_guard.validate_phase_coverage(..., require_strict_guard=True)` or the run summary to audit the final package for guard omission.
 
 ## Run State And Artifact Registry
 

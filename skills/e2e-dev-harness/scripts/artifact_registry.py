@@ -31,6 +31,7 @@ REQUIRED_BY_COMPLETION = {
     "use_cases",
     "test_plan",
     "implementation_plan",
+    "agent_schedule",
     "knowledge_graph_status",
     "dependency_report",
     "impact_summary",
@@ -41,6 +42,8 @@ REQUIRED_BY_COMPLETION = {
     "green_test_evidence",
     "coverage_matrix",
     "business_review",
+    "phase_coverage",
+    "strict_guard_result",
 }
 
 

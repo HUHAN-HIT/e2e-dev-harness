@@ -86,6 +86,8 @@ def next_actions(summary: dict) -> list[str]:
         actions.append("Resolve harness verification blockers.")
     if any(status != "present" for status in summary["semantic_reviews"].values()):
         actions.append("Run independent R1/R2/R3 semantic reviews.")
+    if summary.get("strict_guard") != "present" and summary.get("strict_completion"):
+        actions.append("Run strict workflow guard and save its status artifact.")
     if not actions and summary.get("ready") is True:
         actions.append("Run is ready for archival or downstream reporting.")
     return actions
@@ -103,6 +105,10 @@ def build_summary(repo: Path, state_path: Path, verify_result: dict | None = Non
     verify = verify_result or {}
     blocked = verify.get("blocked_reasons", []) if isinstance(verify.get("blocked_reasons", []), list) else []
     warnings = verify.get("warnings", []) if isinstance(verify.get("warnings", []), list) else []
+    workflow = verify.get("workflow") if isinstance(verify.get("workflow"), dict) else {}
+    strict_completion = bool(workflow.get("strict") and workflow.get("phase") == "completion")
+    if strict_completion and not isinstance(verify.get("workflow_guard"), dict):
+        blocked = list(blocked) + ["Strict Guard phase is missing; run e2e_dev_harness.py guard or verify --strict-workflow and save the result."]
     missing = required_missing(repo, artifacts)
     summary = {
         "schema": "e2e-dev-harness.run-summary.v1",
@@ -119,6 +125,8 @@ def build_summary(repo: Path, state_path: Path, verify_result: dict | None = Non
         "required_missing_count": len(missing),
         "required_missing": missing,
         "semantic_reviews": review_artifacts(artifacts),
+        "strict_completion": strict_completion,
+        "strict_guard": "present" if isinstance(verify.get("workflow_guard"), dict) else "missing",
         "blocked_reasons": blocked,
         "warnings": warnings,
         "run_state": str(resolved_state),
@@ -150,6 +158,9 @@ def markdown(summary: dict) -> str:
     ]
     for label, review_status in summary.get("semantic_reviews", {}).items():
         lines.append(f"- {label}: {review_status}")
+    if summary.get("strict_completion"):
+        lines.extend(["", "## Strict Guard"])
+        lines.append(f"- Status: {summary.get('strict_guard')}")
     lines.extend(["", "## Next Actions"])
     for action in summary.get("next_actions", []):
         lines.append(f"- {action}")

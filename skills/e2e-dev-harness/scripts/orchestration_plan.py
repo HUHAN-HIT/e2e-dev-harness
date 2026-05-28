@@ -385,6 +385,7 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
         "agent_run_dir": base,
         "run_state": f"{base}/run-state.json",
         "artifact_registry": f"{base}/artifact-registry.json",
+        "agent_schedule": f"{base}/agent-schedule.json",
         "run_summary": f"{base}/run-summary.json",
         "run_summary_md": f"{base}/run-summary.md",
         "execution_trace": f"{base}/execution-trace.json",
@@ -416,6 +417,8 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
         "red_test_evidence": f"{evidence}/red-test.txt",
         "green_test_evidence": f"{evidence}/green-test.txt",
         "verification_evidence": f"{evidence}/verification.txt",
+        "phase_coverage": f"{evidence}/phase-coverage.json",
+        "strict_guard_result": f"{evidence}/strict-guard.json",
         "coverage_matrix": f"{evidence}/coverage-matrix.md",
         "business_review": f"{evidence}/business-review.md",
         "service_plans": service_artifacts(base, services),
@@ -606,6 +609,72 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
         "gate": "Every acceptance criterion maps to use cases, required implementation artifacts, tests, code refs, and business review evidence.",
     })
     return agents
+
+
+def phase_for_agent(name: str) -> str:
+    if "requirements" in name or "clarifier" in name:
+        return "clarify"
+    if "use-case" in name or "designer" in name:
+        return "design"
+    if "test" in name:
+        return "tdd-red"
+    if "code-developer" in name:
+        return "implement"
+    if "coverage" in name:
+        return "completion"
+    if "reviewer" in name or "review" in name:
+        if "design" in name:
+            return "r1-review"
+        if "test" in name:
+            return "r2-review"
+        return "r3-review"
+    return "plan"
+
+
+def depends_on_for_phase(phase: str) -> list[str]:
+    dependencies = {
+        "clarify": [],
+        "design": ["clarify"],
+        "r1-review": ["design"],
+        "tdd-red": ["design", "r1-review"],
+        "r2-review": ["tdd-red"],
+        "implement": ["tdd-red", "r2-review"],
+        "r3-review": ["implement"],
+        "completion": ["r3-review"],
+    }
+    return dependencies.get(phase, ["plan"])
+
+
+def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) -> dict:
+    tasks: list[dict] = []
+    for index, agent in enumerate(agents, start=1):
+        name = str(agent.get("name", f"agent-{index}"))
+        phase = phase_for_agent(name)
+        service = ""
+        for candidate in services:
+            if service_slug(candidate) in name:
+                service = candidate
+                break
+        tasks.append(
+            {
+                "id": f"T{index:02d}",
+                "agent": name,
+                "phase": phase,
+                "service": service,
+                "parallel_group": f"service:{service}" if service and phase in {"implement", "r3-review"} else phase,
+                "depends_on_phases": depends_on_for_phase(phase),
+                "inputs": agent.get("inputs", []),
+                "outputs": agent.get("outputs", []),
+                "status": "planned",
+            }
+        )
+    return {
+        "schema": "e2e-dev-harness.agent-schedule.v1",
+        "selected_mode": selected_mode,
+        "services": services,
+        "coordination": "machine-readable task board; agents update task status and artifact hashes instead of exchanging long free-form chat.",
+        "tasks": tasks,
+    }
 
 
 def multi_agent_decision(selected_mode: str, services: list[str], reasons: list[str]) -> dict:

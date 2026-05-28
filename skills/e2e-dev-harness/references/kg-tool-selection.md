@@ -32,11 +32,17 @@ For workflow evidence, still run explicit GitNexus commands and record their out
 
 Use GitNexus for requirements or diff impact analysis when scope is uncertain:
 
+When more than one repository is indexed, pass the current project root through
+`--repo <repo-root>` for `query`, `context`, `impact`, and `detect-changes`.
+Use an absolute repo root for automation; `.` is acceptable only when the
+command runs from the project root.
+
 ```bash
-gitnexus detect-changes --scope unstaged
-gitnexus detect-changes --scope staged
-gitnexus detect-changes --scope compare --base-ref main
-gitnexus impact "<symbol-or-path>" --include-tests
+gitnexus detect-changes --repo <repo-root> --scope unstaged
+gitnexus detect-changes --repo <repo-root> --scope staged
+gitnexus detect-changes --repo <repo-root> --scope compare --base-ref main
+gitnexus context "<symbol-or-path>" --repo <repo-root>
+gitnexus impact "<symbol-or-path>" --repo <repo-root> --include-tests
 ```
 
 Use `detect-changes` to map a concrete diff to indexed symbols and execution flows. Use `impact` when the requirement names a symbol, path, API, route, topic, or contract seed before code has changed.
@@ -81,9 +87,10 @@ For current GitNexus CLI versions, the local command shape is:
 ```bash
 gitnexus analyze .
 gitnexus status
-gitnexus query "<concept>"
-gitnexus impact "<symbol-or-path>"
-gitnexus detect-changes --scope unstaged
+gitnexus query "<concept>" --repo <repo-root>
+gitnexus context "<symbol-or-path>" --repo <repo-root>
+gitnexus impact "<symbol-or-path>" --repo <repo-root>
+gitnexus detect-changes --repo <repo-root> --scope unstaged
 ```
 
 Use `gitnexus analyze .` as the default refresh command when GitNexus is installed and the repo has no more specific script.

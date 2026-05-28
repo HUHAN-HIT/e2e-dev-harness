@@ -476,11 +476,12 @@ def gitnexus_evidence(
     max_seeds: int = 12,
 ) -> tuple[dict, list[str]]:
     available = bool(shutil.which("gitnexus")) if gitnexus_available is None else gitnexus_available
+    repo_arg = str(repo.resolve())
     result = {
         "mode": gitnexus_mode,
         "available": available,
         "primary": True,
-        "suggested_refresh_command": "gitnexus analyze .",
+        "suggested_refresh_command": f'gitnexus analyze "{repo_arg}"',
         "verified": False,
         "evidence": [],
     }
@@ -503,10 +504,10 @@ def gitnexus_evidence(
         ):
             if value and value not in seeds:
                 seeds.append(str(value))
-    evidence: list[dict] = [command_runner(["gitnexus", "analyze", "."], repo)]
+    evidence: list[dict] = [command_runner(["gitnexus", "analyze", repo_arg], repo)]
     for seed in seeds[:max_seeds]:
-        evidence.append(command_runner(["gitnexus", "context", seed], repo))
-        evidence.append(command_runner(["gitnexus", "impact", seed], repo))
+        evidence.append(command_runner(["gitnexus", "context", seed, "--repo", repo_arg], repo))
+        evidence.append(command_runner(["gitnexus", "impact", seed, "--repo", repo_arg], repo))
     result["evidence"] = evidence
     result["verified"] = bool(evidence) and all(item.get("exit_code") == 0 for item in evidence)
     if gitnexus_mode == "strict" and not result["verified"]:
