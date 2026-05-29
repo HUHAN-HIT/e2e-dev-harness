@@ -76,6 +76,8 @@ docs/agent-runs/<date-feature>/
     02-use-case-designer.md
     03-test-case-developer.md
     04-code-developer.md
+  service-designs/
+    <service>.md
   review-requests/
     R1-design-review-request.md
     R2-test-review-request.md
@@ -89,6 +91,7 @@ docs/agent-runs/<date-feature>/
   service-plans/
     <service>/
       implementation-plan.md
+      test-impact-plan.json
       code-agent.md
       review-requests/
         R2-test-review-request.md

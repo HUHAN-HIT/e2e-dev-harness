@@ -222,6 +222,7 @@ def extract_http_clients(repo: Path, services: list[str], configs: dict[str, lis
         if not service:
             continue
         text = read_text(path)
+        owner = class_name(text, path)
         refs = variable_config_refs(text)
         config_by_key = config_lookup(configs, service)
         for var, key in refs.items():
@@ -240,6 +241,7 @@ def extract_http_clients(repo: Path, services: list[str], configs: dict[str, lis
                     "config_value": entry["value"],
                     "config_path": entry["path"],
                     "target_service": target_service,
+                    "symbol": owner,
                     "base_path": base_path,
                     "call_path": call_path,
                     "unresolved_placeholder": unresolved,
@@ -253,6 +255,7 @@ def extract_http_clients(repo: Path, services: list[str], configs: dict[str, lis
                 "config_value": raw_url,
                 "config_path": None,
                 "target_service": target_service,
+                "symbol": owner,
                 "base_path": base_path,
                 "call_path": path_suffix,
                 "unresolved_placeholder": unresolved,
@@ -273,6 +276,7 @@ def extract_http_clients(repo: Path, services: list[str], configs: dict[str, lis
                     "config_value": entry["value"],
                     "config_path": entry["path"],
                     "target_service": target_service,
+                    "symbol": service_slug(service),
                     "base_path": base_path,
                     "call_path": "",
                     "unresolved_placeholder": unresolved,
@@ -305,6 +309,8 @@ def http_dependencies(clients: list[dict], routes: list[dict]) -> tuple[list[dic
             "source_service": client["service"],
             "target_service": client.get("target_service"),
             "target_route": target_path,
+            "source_symbol": client.get("symbol"),
+            "target_symbol": target_route.get("symbol") if target_route else None,
             "config_key": client.get("config_key"),
             "confidence": "verified" if client.get("target_service") and target_route else "candidate",
             "evidence_refs": client["evidence_refs"] + (target_route["evidence_refs"] if target_route else []),
@@ -398,6 +404,8 @@ def extract_messaging(repo: Path, services: list[str]) -> tuple[list[dict], list
                 })
         for match in LISTENER_RE.finditer(text):
             args = match.group(2)
+            method_match = re.search(r"\b(?:public|private|protected)?\s*(?:[\w<>\[\].]+\s+)+(\w+)\s*\(", text[match.end() :])
+            listener_symbol = method_match.group(1) if method_match else match.group(1)
             topic = annotation_attr(args, ("topic", "topics", "destination"), consts)
             tag = annotation_attr(args, ("tag", "tags", "selectorExpression"), consts)
             group = annotation_attr(args, ("group", "consumerGroup", "groupId"), consts)
@@ -407,7 +415,7 @@ def extract_messaging(repo: Path, services: list[str]) -> tuple[list[dict], list
                     "topic": topic,
                     "tag": tag,
                     "group": group,
-                    "symbol": f"{owner}.{match.group(1)}",
+                    "symbol": f"{owner}.{listener_symbol}",
                     "evidence_refs": [f"{posix(path.relative_to(repo))}:@{match.group(1)}"],
                 })
     return producers, consumers
@@ -433,6 +441,8 @@ def dmq_dependencies(producers: list[dict], consumers: list[dict]) -> tuple[list
                 "topic": producer["topic"],
                 "tag": producer.get("tag") or consumer.get("tag"),
                 "consumer_group": consumer.get("group"),
+                "source_symbol": producer.get("symbol"),
+                "target_symbol": consumer.get("symbol"),
                 "confidence": "ambiguous" if mismatch else "verified",
                 "evidence_refs": producer["evidence_refs"] + consumer["evidence_refs"],
                 "unresolved": bool(mismatch),
@@ -467,6 +477,46 @@ def run_command(command: list[str], cwd: Path) -> dict:
         }
 
 
+def is_gitnexus_symbol_seed(value: str) -> bool:
+    value = value.strip()
+    if not value:
+        return False
+    if "/" in value or "\\" in value or value.startswith((".", "-")):
+        return False
+    if value.startswith("/") or ":" in value or "://" in value or "{" in value or "}" in value:
+        return False
+    if re.search(r"\s", value):
+        return False
+    return bool(re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*", value))
+
+
+def dependency_in_scope(dependency: dict, affected_services: set[str]) -> bool:
+    if not affected_services:
+        return True
+    return any(
+        service in affected_services
+        for service in (dependency.get("source_service"), dependency.get("target_service"))
+        if isinstance(service, str)
+    )
+
+
+def gitnexus_symbol_seeds(dependencies: list[dict], affected_services: list[str] | None = None, max_seeds: int = 12) -> list[str]:
+    scoped = {service.replace("\\", "/").strip("/") for service in affected_services or [] if service}
+    seeds: list[str] = []
+    for dependency in dependencies:
+        if not dependency_in_scope(dependency, scoped):
+            continue
+        for key in ("source_symbol", "target_symbol"):
+            value = dependency.get(key)
+            if not isinstance(value, str) or not is_gitnexus_symbol_seed(value):
+                continue
+            if value not in seeds:
+                seeds.append(value)
+            if len(seeds) >= max_seeds:
+                return seeds
+    return seeds
+
+
 def gitnexus_evidence(
     repo: Path,
     dependencies: list[dict],
@@ -474,6 +524,7 @@ def gitnexus_evidence(
     command_runner=run_command,
     gitnexus_available: bool | None = None,
     max_seeds: int = 12,
+    affected_services: list[str] | None = None,
 ) -> tuple[dict, list[str]]:
     available = bool(shutil.which("gitnexus")) if gitnexus_available is None else gitnexus_available
     repo_arg = str(repo.resolve())
@@ -482,6 +533,9 @@ def gitnexus_evidence(
         "available": available,
         "primary": True,
         "suggested_refresh_command": f'gitnexus analyze "{repo_arg}"',
+        "scope_services": affected_services or [],
+        "seed_policy": "context accepts symbol seeds only; impact runs on scoped changed/affected symbols, never service directories",
+        "symbol_seeds": [],
         "verified": False,
         "evidence": [],
     }
@@ -493,21 +547,14 @@ def gitnexus_evidence(
         warnings.append("GitNexus is unavailable; dependency evidence falls back to deterministic scan and should be treated as insufficient for high-risk cross-service changes.")
         return result, warnings
 
-    seeds: list[str] = []
-    for dependency in dependencies:
-        for value in (
-            dependency.get("topic"),
-            dependency.get("config_key"),
-            dependency.get("target_route"),
-            dependency.get("source_service"),
-            dependency.get("target_service"),
-        ):
-            if value and value not in seeds:
-                seeds.append(str(value))
+    seeds = gitnexus_symbol_seeds(dependencies, affected_services, max_seeds=max_seeds)
+    result["symbol_seeds"] = seeds
     evidence: list[dict] = [command_runner(["gitnexus", "analyze", repo_arg], repo)]
-    for seed in seeds[:max_seeds]:
+    for seed in seeds:
         evidence.append(command_runner(["gitnexus", "context", seed, "--repo", repo_arg], repo))
         evidence.append(command_runner(["gitnexus", "impact", seed, "--repo", repo_arg], repo))
+    if not seeds and dependencies:
+        warnings.append("No GitNexus symbol seeds were derived from scoped dependencies; do not pass service directories to gitnexus context.")
     result["evidence"] = evidence
     result["verified"] = bool(evidence) and all(item.get("exit_code") == 0 for item in evidence)
     if gitnexus_mode == "strict" and not result["verified"]:
@@ -548,6 +595,7 @@ def scan(
     command_runner=run_command,
     gitnexus_available: bool | None = None,
     require_tree_sitter_ast: bool = False,
+    affected_services: list[str] | None = None,
 ) -> dict:
     repo = repo.resolve()
     services = detect_services(repo)
@@ -562,10 +610,11 @@ def scan(
     parser_backend = java_parser_backend()
     gitnexus, gitnexus_warnings = gitnexus_evidence(
         repo,
-        dependencies or [{"source_service": service} for service in services],
+        dependencies,
         gitnexus_mode,
         command_runner,
         gitnexus_available,
+        affected_services=affected_services,
     )
     warnings = list(gitnexus_warnings)
     if parser_backend.get("warning"):
@@ -577,6 +626,7 @@ def scan(
         "repo": str(repo),
         "ready": not unresolved and not parser_blockers,
         "services": services,
+        "affected_services": affected_services or [],
         "tool_priority": ["gitnexus", "deterministic-scan", "graphify"],
         "java_parser": parser_backend,
         "gitnexus": gitnexus,
@@ -655,6 +705,7 @@ def main() -> int:
     parser.add_argument("--gitnexus-mode", choices=["auto", "strict", "optional", "off"], default="auto")
     parser.add_argument("--graphify-mode", choices=["auxiliary", "off"], default="auxiliary")
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--affected-service", action="append", help="Limit GitNexus evidence seeds to involved services/modules; can be repeated.")
     parser.add_argument("--no-write", action="store_true")
     parser.add_argument("--require-tree-sitter-ast", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -667,6 +718,7 @@ def main() -> int:
         write_reports=not args.no_write,
         output_dir=args.output_dir,
         require_tree_sitter_ast=args.require_tree_sitter_ast,
+        affected_services=args.affected_service,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0 if result["ready"] else 2

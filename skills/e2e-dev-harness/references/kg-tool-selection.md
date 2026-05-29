@@ -41,9 +41,12 @@ command runs from the project root.
 gitnexus detect-changes --repo <repo-root> --scope unstaged
 gitnexus detect-changes --repo <repo-root> --scope staged
 gitnexus detect-changes --repo <repo-root> --scope compare --base-ref main
-gitnexus context "<symbol-or-path>" --repo <repo-root>
-gitnexus impact "<symbol-or-path>" --repo <repo-root> --include-tests
+gitnexus context "<ClassName|methodName|ClassName.methodName>" --repo <repo-root>
+gitnexus impact "<changed-symbol-or-file>" --repo <repo-root> --include-tests
 ```
+
+Use `context` only for code symbols such as classes, functions, and methods. It is not a directory scanner. Do not run `gitnexus context services/foo --repo <repo-root>`.
+Use `impact` or `detect-changes` for affected-scope analysis, and constrain the seeds to the microservices declared in the global design or service design slices.
 
 Use `detect-changes` to map a concrete diff to indexed symbols and execution flows. Use `impact` when the requirement names a symbol, path, API, route, topic, or contract seed before code has changed.
 
@@ -66,7 +69,7 @@ gate blocks until an active AST parser exists.
 
 2. Inspect `knowledge-graph/cross-service-dependencies.json` and `.md`.
 3. Treat unresolved URL, topic, tag, group, or service mappings as clarification questions.
-4. Use GitNexus evidence from the report (`analyze`, `context`, `impact`) as code-level evidence for implementation planning and completion.
+4. Use GitNexus evidence from the report (`analyze`, symbol-scoped `context`, symbol/file-scoped `impact`) as code-level evidence for implementation planning and completion.
 5. Use Graphify only to add document/ADR/architecture context. `INFERRED` or `AMBIGUOUS` Graphify relationships are not hard completion evidence.
 
 For high-risk cross-service work, use `--gitnexus-mode strict`. If GitNexus is unavailable, the report remains useful as a seed list, but it should be treated as evidence-insufficient until reviewed with `rg`, Maven modules, and targeted code reads.
@@ -88,8 +91,8 @@ For current GitNexus CLI versions, the local command shape is:
 gitnexus analyze .
 gitnexus status
 gitnexus query "<concept>" --repo <repo-root>
-gitnexus context "<symbol-or-path>" --repo <repo-root>
-gitnexus impact "<symbol-or-path>" --repo <repo-root>
+gitnexus context "<ClassName|methodName|ClassName.methodName>" --repo <repo-root>
+gitnexus impact "<changed-symbol-or-file>" --repo <repo-root>
 gitnexus detect-changes --repo <repo-root> --scope unstaged
 ```
 

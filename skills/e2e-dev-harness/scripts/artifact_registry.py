@@ -19,11 +19,13 @@ DIRECTORY_KEYS = {
     "reviews_dir",
     "rework_dir",
     "contracts_dir",
+    "service_designs_dir",
 }
 PATTERN_KEYS = {
     "rework_pattern",
     "contract_pattern",
     "context_pack_pattern",
+    "service_design_pattern",
 }
 REQUIRED_BY_COMPLETION = {
     "design_doc",
@@ -38,6 +40,7 @@ REQUIRED_BY_COMPLETION = {
     "impact_summary",
     "impact_evidence",
     "test_impact_plan",
+    "service_design",
     "implementation_manifest",
     "requirements_archive",
     "red_test_evidence",

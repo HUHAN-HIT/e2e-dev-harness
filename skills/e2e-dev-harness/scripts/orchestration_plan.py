@@ -74,9 +74,32 @@ AFFECTED_SECTION_KEYWORDS = (
     "in-scope",
     "in scope",
     "涉及模块",
+    "涉及服务",
+    "涉及微服务",
     "影响模块",
     "影响服务",
+    "影响微服务",
+    "受影响服务",
+    "受影响模块",
+    "微服务",
 )
+GENERIC_SERVICE_LABELS = {
+    "service",
+    "services",
+    "module",
+    "modules",
+    "affected service",
+    "affected services",
+    "affected module",
+    "affected modules",
+    "服务",
+    "模块",
+    "微服务",
+    "影响服务",
+    "涉及服务",
+}
+LIST_ITEM_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+")
+TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
 
 
 def read_design(path: Path | None) -> str:
@@ -124,21 +147,80 @@ def design_sections(text: str) -> dict[str, str]:
     return {title: "\n".join(lines).strip() for title, lines in sections.items()}
 
 
+def affected_section_bodies(text: str) -> list[str]:
+    return [
+        body
+        for title, body in design_sections(text).items()
+        if any(keyword in title for keyword in AFFECTED_SECTION_KEYWORDS)
+    ]
+
+
+def clean_service_token(value: str) -> str:
+    token = value.strip().strip("`'\".,;，。；、()[]")
+    token = token.replace("\\", "/")
+    token = token.split(" - ", 1)[0].split(" -- ", 1)[0].split("：", 1)[0].split(":", 1)[0]
+    token = re.split(r"\s+", token.strip(), maxsplit=1)[0] if token.strip() else ""
+    return normalize_path(token)
+
+
+def add_requested_service_token(requested: list[str], seen: set[str], value: str) -> None:
+    service = clean_service_token(value)
+    lowered = service.lower()
+    if not service or lowered in {"none", "n/a", "na"} or lowered in GENERIC_SERVICE_LABELS:
+        return
+    if service not in seen:
+        seen.add(service)
+        requested.append(service)
+
+
+def service_tokens_from_design_line(line: str) -> list[str]:
+    stripped = line.strip()
+    if not stripped or TABLE_SEPARATOR_RE.match(stripped):
+        return []
+    if "|" in stripped:
+        cells = [cell.strip() for cell in stripped.strip("|").split("|") if cell.strip()]
+        if not cells:
+            return []
+        first = cells[0].lower()
+        if first in GENERIC_SERVICE_LABELS:
+            return []
+        return [cells[0]]
+
+    item = LIST_ITEM_RE.sub("", stripped).strip()
+    if not item:
+        return []
+    if ":" in item or "：" in item:
+        separator = ":" if ":" in item else "："
+        left, right = item.split(separator, 1)
+        if left.strip().lower() in GENERIC_SERVICE_LABELS:
+            return [part.strip() for part in re.split(r"[,，、;；]", right) if part.strip()]
+        return [left.strip()]
+    return [part.strip() for part in re.split(r"[,，、;；]", item) if part.strip()]
+
+
 def requested_services_from_design(text: str) -> list[str]:
     requested: list[str] = []
     seen: set[str] = set()
-    for title, body in design_sections(text).items():
-        if not any(keyword in title for keyword in AFFECTED_SECTION_KEYWORDS):
-            continue
+    for body in affected_section_bodies(text):
         for line in body.splitlines():
-            if not re.match(r"\s*[-*]\s+", line):
-                continue
-            item = re.sub(r"^\s*[-*]\s+", "", line).strip()
-            service = normalize_path(item.split(":", 1)[0].split(" - ", 1)[0].split(" ", 1)[0])
-            if service and service.lower() not in {"none", "n/a"} and service not in seen:
-                seen.add(service)
-                requested.append(service)
+            for token in service_tokens_from_design_line(line):
+                add_requested_service_token(requested, seen, token)
     return requested
+
+
+def service_mentioned_in_text(service: str, text: str) -> bool:
+    if not text:
+        return False
+    normalized_text = normalize_path(text).lower()
+    service_value = normalize_path(service).lower()
+    service_name = service_value.rstrip("/").split("/")[-1]
+    for value in (service_value, service_name):
+        if not value:
+            continue
+        pattern = r"(?<![a-z0-9_.-])" + re.escape(value) + r"(?![a-z0-9_.-])"
+        if re.search(pattern, normalized_text):
+            return True
+    return False
 
 
 def services_from_design(text: str, facts: dict) -> list[str]:
@@ -150,6 +232,11 @@ def services_from_design(text: str, facts: dict) -> list[str]:
         if matched and matched not in seen:
             seen.add(matched)
             selected.append(matched)
+    affected_text = "\n".join(affected_section_bodies(text))
+    for candidate in candidates:
+        if candidate not in seen and service_mentioned_in_text(candidate, affected_text):
+            seen.add(candidate)
+            selected.append(candidate)
     return selected
 
 
@@ -204,10 +291,10 @@ def actionable_mode_reasons(reasons: list[str]) -> list[str]:
 
 def choose_mode(requested: str, facts: dict, design_text: str, design_is_template: bool) -> tuple[str, list[str]]:
     reasons = mode_reasons(facts, design_text, design_is_template)
-    if requested == "single-review":
+    if requested in {"single", "single-review"}:
         actionable_reasons = actionable_mode_reasons(reasons)
         if actionable_reasons:
-            return "multi", ["single-review escalated to multi: " + "; ".join(actionable_reasons[:3])] + reasons
+            return "multi", [f"{requested} escalated to multi: " + "; ".join(actionable_reasons[:3])] + reasons
         return requested, [f"mode explicitly set to {requested}"]
     if requested in EXPLICIT_AGENT_MODES:
         return requested, [f"mode explicitly set to {requested}"]
@@ -357,6 +444,7 @@ def service_artifacts(base: str, services: list[str] | None) -> dict:
         service_base = f"{base}/service-plans/{slug}"
         result[service] = {
             "service_dir": service,
+            "service_design": f"{base}/service-designs/{slug}.md",
             "service_plan": f"{service_base}/implementation-plan.md",
             "code_agent": f"{service_base}/code-agent.md",
             "review_requests_dir": f"{service_base}/review-requests",
@@ -366,6 +454,7 @@ def service_artifacts(base: str, services: list[str] | None) -> dict:
             "implementation_review_request": f"{service_base}/review-requests/R3-implementation-review-request.md",
             "implementation_review": f"{service_base}/reviews/R3-implementation-review.md",
             "implementation_manifest": f"{service_base}/implementation-manifest.md",
+            "test_impact_plan": f"{service_base}/test-impact-plan.json",
             "test_evidence": f"{service_base}/unit-test-evidence.txt",
             "coverage_matrix": f"{service_base}/coverage-matrix.md",
             "business_review": f"{service_base}/business-review.md",
@@ -395,6 +484,8 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
         "use_cases": f"{handoffs}/02-use-case-designer.md",
         "test_plan": f"{handoffs}/03-test-case-developer.md",
         "implementation_plan": f"{handoffs}/04-code-developer.md",
+        "service_designs_dir": f"{base}/service-designs",
+        "service_design_pattern": f"{base}/service-designs/<service>.md",
         "proposed_memory_updates": f"{base}/proposed-memory-updates.md",
         "review_requests_dir": review_requests,
         "reviews_dir": reviews,
@@ -511,10 +602,10 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
                 artifact_paths["requirements"],
                 artifact_paths["impact_summary"],
                 artifact_paths["use_cases"],
-                    artifact_paths["test_plan"],
-                    artifact_paths["test_impact_plan"],
-                ],
-                "outputs": [artifact_paths["test_review"]],
+                artifact_paths["test_plan"],
+                artifact_paths["test_impact_plan"],
+            ],
+            "outputs": [artifact_paths["test_review"]],
             "gate": "Production code waits until test review is approved or rework is routed.",
         },
     ])
@@ -531,7 +622,9 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
                         artifact_paths["use_cases"],
                         artifact_paths["test_plan"],
                         artifact_paths["test_impact_plan"],
+                        paths["service_design"],
                         paths["service_plan"],
+                        paths["test_impact_plan"],
                         artifact_paths["dependency_report"],
                         "failing tests for this service",
                     ],
@@ -559,6 +652,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
                         artifact_paths["impact_summary"],
                         artifact_paths["use_cases"],
                         artifact_paths["test_plan"],
+                        paths["service_design"],
                         paths["service_plan"],
                         paths["implementation_manifest"],
                         paths["coverage_matrix"],

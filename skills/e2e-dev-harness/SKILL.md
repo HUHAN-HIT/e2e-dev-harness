@@ -71,12 +71,18 @@ For command details, read `references/implementation-gates.md`.
 - Large repositories use planned incremental verification, not ad hoc test selection.
   Generate `evidence/test-impact-plan.json` from changed files and dependency evidence; completion must prove every required command passed in unit-test JSON.
   Root/shared build or source changes expand to full `mvn test`.
+- Multi-service designs use one global design anchor plus service-local design slices.
+  Each affected service gets `service-designs/<service>.md` with mapped ACs, allowed edit scope, runtime path, TDD plan, dependency boundary, and test impact.
+  Validate slices with `e2e_dev_harness.py service-design` before dispatching service code agents.
 - Review profiles are portable project policy. Auto-discover project profiles and extend bundled profiles only when useful.
   Use common issue guidance for reviewer focus. Read `references/review-profiles.md` and `references/common-review-issues.md`.
 - Archive the final requirement summary after completion so future analysis can read outcomes without replaying every run artifact. Read `references/requirements-archive.md`.
 - Completion requires task-completion proof, not chat claims: every AC has concrete code refs and concrete test refs.
   Semantic reviews, implementation manifest, coverage matrix, unit-test JSON, business review, dependency report when cross-service,
   task-alignment evidence, closed rework, and passing guard are completion evidence.
+- The implementation completion unit is all assigned ACs, not the first passing AC.
+  After any individual AC turns green, run or mentally apply `ac-progress`; if assigned ACs remain, continue TDD red/green without asking whether to proceed or whether to start R3.
+  R3 review is allowed only after `e2e_dev_harness.py ac-progress` is ready for the current service slice or global design.
 - Skipped phases are blockers in strict completion. R1/R2/R3 reviews, harness plan state, TDD red/green, completion gate, and strict guard must have machine-readable evidence; do not mark them as skipped in the final report.
 - Task drift is a blocker. Changed production files must stay inside declared design/manifest/coverage scope.
   If a change is outside scope, introduces undeclared acceptance criteria, or changes interface-like production files without Impact Summary rows, return to `plan` or `clarify`; do not normalize the drift in the final report.
@@ -104,17 +110,18 @@ For command details, read `references/implementation-gates.md`.
 4. Plan: choose `single`, explicit `single-review`, or `multi`; write an ExecPlan for complex work. Read `references/exec-plan.md`.
 5. TDD red: write the first failing test and capture failing evidence.
 6. R2 test review: independent reviewer checks happy/failure paths, security cases, and contract coverage before production code.
-7. TDD green/refactor: implement with the Superpowers Red-Green-Refactor cycle; run the test-impact plan's required Maven commands before broadening verification.
-8. R3 implementation review: independent reviewer traces every AC through the concrete code path.
+7. TDD green/refactor: implement with the Superpowers Red-Green-Refactor cycle for every assigned AC; run the test-impact plan's required Maven commands before broadening verification.
+8. AC progress gate: prove all assigned ACs for the service slice or global design have coverage rows, implementation manifest rows, and passing green/unit command evidence. Do not ask to start R3 while ACs remain.
+9. R3 implementation review: independent reviewer traces every AC through the concrete code path.
    Then check completeness, tests, security, anti-patterns, and project-pattern consistency. The bundled default review profile is enforced unless an explicit project profile overrides it.
-9. Completion gate: prove every acceptance criterion and required artifact has use cases, service ownership, concrete tests, concrete code refs, business review, task alignment, and closed rework.
-10. Rework loop: findings create rework items and return to the earliest required phase before more production-code edits.
-11. Strict guard/report: run `verify --strict-workflow` or `guard`, capture accepted memory updates, and report evidence plus residual risks.
-12. Trace/archive: attach `execution-trace.json` and summaries when reporting or evaluating the run.
+10. Completion gate: prove every acceptance criterion and required artifact has use cases, service ownership, concrete tests, concrete code refs, business review, task alignment, and closed rework.
+11. Rework loop: findings create rework items and return to the earliest required phase before more production-code edits.
+12. Strict guard/report: run `verify --strict-workflow` or `guard`, capture accepted memory updates, and report evidence plus residual risks.
+13. Trace/archive: attach `execution-trace.json` and summaries when reporting or evaluating the run.
 
 ## Agent Orchestration
 
-Default to `single` for small low-risk work.
+Default to `single` only for small low-risk single-service work.
 Use explicit `single-review` only for single-service medium work where one developer context is acceptable but R1/R2/R3 still need independent request-scoped reviewer invocations.
 Use `multi` for cross-service, contract/data-risk, design-heavy, or user-requested context isolation.
 
@@ -128,10 +135,11 @@ python skills/e2e-dev-harness/scripts/orchestration_plan.py . \
 Important boundaries:
 
 - `auto` recommends only `single` or `multi`; `single-review` is explicit.
-- `single-review` escalates to `multi` if multiple services or high-risk evidence is detected.
+- `single` and `single-review` escalate to `multi` if multiple affected services/modules, contract/data-risk, or design-heavy evidence is detected; do not keep serial single-agent coding for multi-service work.
 - Discovery scope lists service candidates but does not create service plans.
-- Affected scope creates service plans only from explicit `--service` / `--path` or design-declared affected modules.
+- Affected scope creates service plans only from explicit `--service` / `--path`, dependency evidence, or design-declared affected services/modules.
 - Multi-service work keeps each service plan and code-agent handoff under `docs/agent-runs/<run>/service-plans/<service>/`.
+- Service code agents consume `service-designs/<service>.md` first, then the service implementation plan and service-local test impact plan; they should not reload the full global design unless the slice is incomplete.
 - Before dispatching a service code agent, create `docs/agent-runs/<run>/context-packs/<agent-or-service>.json` from `agent-schedule.json`; do not pass inherited developer chat as context.
 - The orchestration result records `multi_agent_decision` with criteria, evidence, and required artifacts.
 - R1/R2/R3 reviews must be independent agents or separate reviewer sessions; one consolidated after-the-fact review is invalid.
@@ -165,10 +173,12 @@ absolute path, or `.` only when the command is run from the project root.
 gitnexus detect-changes --repo <repo-root> --scope unstaged
 gitnexus detect-changes --repo <repo-root> --scope staged
 gitnexus detect-changes --repo <repo-root> --scope compare --base-ref main
-gitnexus context "<symbol-or-path>" --repo <repo-root>
-gitnexus impact "<symbol-or-path>" --repo <repo-root> --include-tests
+gitnexus context "<ClassName|methodName|ClassName.methodName>" --repo <repo-root>
+gitnexus impact "<changed-symbol-or-file>" --repo <repo-root> --include-tests
 ```
 
+`context` is a 360-degree symbol view; do not pass service directories to it.
+For affected-scope analysis use `impact` or `detect-changes`, seeded by changed symbols/files and limited to the services named in the design/service slices.
 Do not require agents to call GitNexus for every `grep`/`rg` command when local GitNexus search augmentation is already installed. Treat that as exploration help, not completion evidence.
 
 When service A depends on service B through HTTP or DMQ, freeze the shared contract before parallel implementation.

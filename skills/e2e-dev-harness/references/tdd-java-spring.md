@@ -92,3 +92,8 @@ When an acceptance criterion creates or updates persisted business data, tests s
 | Update/refund/callback status change | `updatedAt` plus the actor/source field used by the project. |
 
 For update-like flows such as refunds, callbacks, status transitions, or MQ-consumer side effects, add at least one red test that fails when `updatedAt` is not changed. If `createdBy` is system-derived, assert the system actor or explicitly document why the project does not store it.
+## Completion Unit
+
+The default completion unit is all assigned acceptance criteria for the current global design or service design slice.
+After one AC turns green, continue with the next assigned AC until `e2e_dev_harness.py ac-progress` is ready.
+Do not ask the user whether to continue or start R3 after only AC-1 unless the user explicitly scoped the run to AC-1 only.

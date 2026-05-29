@@ -21,6 +21,7 @@ if str(SCRIPTS) not in sys.path:
 
 import clarification_gate  # noqa: E402
 import agent_instructions  # noqa: E402
+import ac_progress_gate  # noqa: E402
 import artifact_registry  # noqa: E402
 import checkpoint_gate  # noqa: E402
 import command_evidence  # noqa: E402
@@ -44,6 +45,7 @@ import phase_guard  # noqa: E402
 import run_summary  # noqa: E402
 import run_state  # noqa: E402
 import requirements_archive  # noqa: E402
+import service_design_gate  # noqa: E402
 import superpowers_probe  # noqa: E402
 import task_tier  # noqa: E402
 import task_alignment_guard  # noqa: E402
@@ -904,6 +906,110 @@ class CoverageGateTests(unittest.TestCase):
         self.assertTrue(result["ready"])
 
 
+class AcProgressGateTests(unittest.TestCase):
+    def test_ac_progress_blocks_r3_when_assigned_ac_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            matrix = repo / "docs" / "agent-runs" / "run" / "coverage.md"
+            manifest = repo / "docs" / "agent-runs" / "run" / "manifest.md"
+            unit = repo / "docs" / "agent-runs" / "run" / "unit.json"
+            matrix.parent.mkdir(parents=True)
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Acceptance Criteria
+                    - AC-1 Quote is returned.
+                    - AC-2 Quote failure is rejected.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            matrix.write_text(
+                textwrap.dedent(
+                    """
+                    | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+                    | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | AC-1 | Quote is returned | success | services/a | QuoteServiceTest | QuoteService | reviewed | verified |
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            manifest.write_text(
+                textwrap.dedent(
+                    """
+                    | id | module | artifact | artifact_type | source | required | tests | status | evidence |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | IM-1 | services/a | services/a/QuoteService.java | service | AC-1 | yes | QuoteServiceTest | verified | done |
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            write_command_evidence(unit)
+
+            result = ac_progress_gate.validate(repo, design, None, matrix, manifest, unit)
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(["AC-2"], result["missing_coverage"])
+        self.assertEqual(["AC-2"], result["missing_manifest"])
+        self.assertTrue(any("Continue TDD" in warning for warning in result["warnings"]))
+
+    def test_ac_progress_allows_r3_when_all_service_slice_acs_are_done(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            service_design = repo / "docs" / "agent-runs" / "run" / "service-designs" / "quote-service.md"
+            matrix = repo / "docs" / "agent-runs" / "run" / "service-plans" / "quote-service" / "coverage.md"
+            manifest = repo / "docs" / "agent-runs" / "run" / "service-plans" / "quote-service" / "manifest.md"
+            unit = repo / "docs" / "agent-runs" / "run" / "service-plans" / "quote-service" / "unit.json"
+            service_design.parent.mkdir(parents=True)
+            matrix.parent.mkdir(parents=True)
+            service_design.write_text(
+                textwrap.dedent(
+                    """
+                    # Service Design Slice
+
+                    ## Mapped Acceptance Criteria
+                    | AC | global requirement | service responsibility | local tests |
+                    | --- | --- | --- | --- |
+                    | AC-1 | Quote is returned | success path | QuoteServiceTest |
+                    | AC-2 | Quote failure is rejected | failure path | QuoteFailureTest |
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            matrix.write_text(
+                textwrap.dedent(
+                    """
+                    | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+                    | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | AC-1 | Quote is returned | success | services/a | QuoteServiceTest | QuoteService | reviewed | verified |
+                    | AC-2 | Quote failure is rejected | failure | services/a | QuoteFailureTest | QuoteService | reviewed | verified |
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            manifest.write_text(
+                textwrap.dedent(
+                    """
+                    | id | module | artifact | artifact_type | source | required | tests | status | evidence |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | IM-1 | services/a | services/a/QuoteService.java | service | AC-1 | yes | QuoteServiceTest | verified | done |
+                    | IM-2 | services/a | services/a/QuoteService.java | service | AC-2 | yes | QuoteFailureTest | verified | done |
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            write_command_evidence(unit, "mvn -pl services/a -am test")
+
+            result = ac_progress_gate.validate(repo, None, service_design, matrix, manifest, unit)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(["AC-1", "AC-2"], result["completed_acceptance_ids"])
+
+
 class TestImpactPlanTests(unittest.TestCase):
     def test_build_plan_uses_affected_maven_service_module(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1526,14 +1632,20 @@ class CrossServiceDependencyScanTests(unittest.TestCase):
         self.assertEqual("ambiguous", dependency["confidence"])
         self.assertTrue(any("tag" in question.lower() for question in result["unresolved_questions"]))
 
-    def test_gitnexus_evidence_runs_context_and_impact_for_seeds(self) -> None:
+    def test_gitnexus_evidence_runs_context_and_impact_for_symbol_seeds_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            service = repo / "services" / "quote-service"
-            (service / "src" / "main" / "java" / "com" / "example").mkdir(parents=True)
-            (service / "pom.xml").write_text("<project />", encoding="utf-8")
-            (service / "src" / "main" / "java" / "com" / "example" / "QuotePublisher.java").write_text(
+            producer = repo / "services" / "quote-service"
+            consumer = repo / "services" / "billing-service"
+            for service in (producer, consumer):
+                (service / "src" / "main" / "java" / "com" / "example").mkdir(parents=True)
+                (service / "pom.xml").write_text("<project />", encoding="utf-8")
+            (producer / "src" / "main" / "java" / "com" / "example" / "QuotePublisher.java").write_text(
                 'class QuotePublisher { void publish() { dmqTemplate.publish("quote.created", payload); } }',
+                encoding="utf-8",
+            )
+            (consumer / "src" / "main" / "java" / "com" / "example" / "QuoteListener.java").write_text(
+                'class QuoteListener { @DmqListener(topic = "quote.created", group = "billing") void onQuote(Object payload) {} }',
                 encoding="utf-8",
             )
             calls: list[list[str]] = []
@@ -1558,7 +1670,47 @@ class CrossServiceDependencyScanTests(unittest.TestCase):
         for command in context_calls + impact_calls:
             self.assertIn("--repo", command)
             self.assertEqual(repo_arg, command[command.index("--repo") + 1])
+            self.assertNotIn("services/quote-service", command)
+            self.assertNotIn("services/billing-service", command)
+        self.assertTrue(all("/" not in command[2] for command in context_calls))
+        self.assertEqual(["QuotePublisher.publish", "QuoteListener.onQuote"], result["gitnexus"]["symbol_seeds"])
         self.assertTrue(result["gitnexus"]["evidence"])
+
+    def test_gitnexus_evidence_can_scope_symbol_seeds_to_affected_services(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            dependencies = [
+                {
+                    "source_service": "services/order-service",
+                    "target_service": "services/payment-service",
+                    "source_symbol": "OrderClient.reserve",
+                    "target_symbol": "PaymentController.post",
+                },
+                {
+                    "source_service": "services/catalog-service",
+                    "target_service": "services/search-service",
+                    "source_symbol": "CatalogClient.sync",
+                    "target_symbol": "SearchController.post",
+                },
+            ]
+            calls: list[list[str]] = []
+
+            def fake_runner(command: list[str], cwd: Path) -> dict:
+                calls.append(command)
+                return {"command": " ".join(command), "exit_code": 0, "stdout_tail": "ok", "stderr_tail": ""}
+
+            result, warnings = cross_service_dependency_scan.gitnexus_evidence(
+                repo,
+                dependencies,
+                "strict",
+                command_runner=fake_runner,
+                gitnexus_available=True,
+                affected_services=["services/payment-service"],
+            )
+
+        self.assertEqual([], warnings)
+        self.assertEqual(["OrderClient.reserve", "PaymentController.post"], result["symbol_seeds"])
+        self.assertFalse(any("CatalogClient.sync" in command for command in [" ".join(call) for call in calls]))
 
     def test_gitnexus_unavailable_marks_evidence_insufficient(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5782,6 +5934,30 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertEqual(["jeepay-core", "jeepay-service", "jeepay-payment"], selected)
 
+    def test_design_affected_services_accepts_table_and_comma_list(self) -> None:
+        facts = {"service_candidates": ["services/refund-service", "services/ledger-service", "services/notice-service"]}
+        design_text = textwrap.dedent(
+            """
+            # Refund Reconcile
+
+            ## 影响服务
+            | 服务 | 说明 |
+            | --- | --- |
+            | refund-service | refund state machine |
+            | ledger-service | accounting journal |
+
+            ## Affected services
+            services: notice-service
+            """
+        ).strip()
+
+        selected = orchestration_plan.services_from_design(design_text, facts)
+
+        self.assertEqual(
+            ["services/refund-service", "services/ledger-service", "services/notice-service"],
+            selected,
+        )
+
     def test_orchestration_status_uses_design_modules_for_service_plans(self) -> None:
         facts = {
             "service_candidates": ["jeepay-core", "jeepay-service", "jeepay-payment"],
@@ -5835,6 +6011,10 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertIn("multiple affected services/modules", result["multi_agent_decision"]["criteria"])
         self.assertIn("jeepay-service", result["handoff_artifacts"]["service_plans"])
         self.assertIn("code-developer-jeepay-service", [agent["name"] for agent in result["agents"]])
+        code_agent = next(agent for agent in result["agents"] if agent["name"] == "code-developer-jeepay-service")
+        service_paths = result["handoff_artifacts"]["service_plans"]["jeepay-service"]
+        self.assertIn(service_paths["service_design"], code_agent["inputs"])
+        self.assertIn(service_paths["test_impact_plan"], code_agent["inputs"])
         self.assertEqual("e2e-dev-harness.agent-schedule.v1", result["agent_schedule"]["schema"])
         self.assertTrue(any(task["parallel_group"] == "service:jeepay-service" for task in result["agent_schedule"]["tasks"]))
 
@@ -5936,13 +6116,16 @@ class OrchestrationArtifactTests(unittest.TestCase):
             self.assertIn("affected callers/consumers", impact_text)
             for module in ("jeepay-core", "jeepay-service", "jeepay-payment"):
                 paths = result["handoff_artifacts"]["service_plans"][module]
+                self.assertTrue((repo / paths["service_design"]).exists())
                 self.assertTrue((repo / paths["service_plan"]).exists())
                 self.assertTrue((repo / paths["code_agent"]).exists())
                 self.assertTrue((repo / paths["implementation_manifest"]).exists())
+                self.assertTrue((repo / paths["test_impact_plan"]).exists())
                 self.assertTrue((repo / paths["test_review_request"]).exists())
                 self.assertTrue((repo / paths["implementation_review_request"]).exists())
                 self.assertFalse((repo / paths["test_review"]).exists())
                 self.assertFalse((repo / paths["implementation_review"]).exists())
+            self.assertTrue((repo / result["handoff_artifacts"]["service_designs_dir"]).exists())
             self.assertTrue((repo / result["handoff_artifacts"]["verification_evidence"]).exists())
 
     def test_unmatched_requested_services_are_reported(self) -> None:
@@ -6034,12 +6217,20 @@ class OrchestrationArtifactTests(unittest.TestCase):
         )
 
         self.assertEqual(
+            "docs/agent-runs/2026-05-23-checkout/service-designs/order-service.md",
+            result["service_plans"]["services/order-service"]["service_design"],
+        )
+        self.assertEqual(
             "docs/agent-runs/2026-05-23-checkout/service-plans/order-service/implementation-plan.md",
             result["service_plans"]["services/order-service"]["service_plan"],
         )
         self.assertEqual(
             "docs/agent-runs/2026-05-23-checkout/service-plans/payment-service/code-agent.md",
             result["service_plans"]["services/payment-service"]["code_agent"],
+        )
+        self.assertEqual(
+            "docs/agent-runs/2026-05-23-checkout/service-plans/payment-service/test-impact-plan.json",
+            result["service_plans"]["services/payment-service"]["test_impact_plan"],
         )
 
     def test_plan_artifacts_include_rework_paths(self) -> None:
@@ -6113,6 +6304,14 @@ class OrchestrationArtifactTests(unittest.TestCase):
             "docs/agent-runs/2026-05-23-checkout/context-packs/<agent-or-task>.json",
             result["context_pack_pattern"],
         )
+        self.assertEqual(
+            "docs/agent-runs/2026-05-23-checkout/service-designs",
+            result["service_designs_dir"],
+        )
+        self.assertEqual(
+            "docs/agent-runs/2026-05-23-checkout/service-designs/<service>.md",
+            result["service_design_pattern"],
+        )
 
     def test_plan_artifacts_include_implementation_manifest_path(self) -> None:
         result = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
@@ -6184,6 +6383,127 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("above max_chars" in reason for reason in result["blocked_reasons"]))
 
+    def test_service_design_gate_requires_global_ac_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "checkout.md"
+            service_dir = repo / "docs" / "agent-runs" / "run" / "service-designs"
+            service_dir.mkdir(parents=True)
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Checkout
+
+                    ## Acceptance Criteria
+                    - AC-1 Order is created.
+                    - AC-2 Payment is reserved.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            (service_dir / "order-service.md").write_text(
+                textwrap.dedent(
+                    """
+                    # Service Design Slice: services/order-service
+
+                    ## Service Scope
+                    - Service/module: services/order-service
+                    - Allowed edit scope:
+                      - services/order-service/
+
+                    ## Global Intent Summary
+                    - Create checkout order.
+
+                    ## Mapped Acceptance Criteria
+                    | AC | global requirement | service responsibility | local tests |
+                    | --- | --- | --- | --- |
+                    | AC-1 | Order is created | Persist order | OrderServiceTest |
+
+                    ## Runtime Path
+                    - Controller -> OrderService -> Repository
+
+                    ## Service-local TDD Plan
+                    - First red test: OrderServiceTest
+
+                    ## Dependency Boundary
+                    - Independent service change: yes
+                    - HTTP/API dependencies: None
+                    - MQ/DMQ/Kafka dependencies: None
+
+                    ## Test Impact
+                    - mvn -pl services/order-service -am test
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            result = service_design_gate.validate(repo, design, service_dir)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("AC-2" in reason for reason in result["blocked_reasons"]))
+
+    def test_service_design_gate_allows_complete_service_slices(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "checkout.md"
+            service_dir = repo / "docs" / "agent-runs" / "run" / "service-designs"
+            service_dir.mkdir(parents=True)
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Checkout
+
+                    ## Acceptance Criteria
+                    - AC-1 Order is created.
+                    - AC-2 Payment is reserved.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            for service, ac_id in (("order-service", "AC-1"), ("payment-service", "AC-2")):
+                (service_dir / f"{service}.md").write_text(
+                    textwrap.dedent(
+                        f"""
+                        # Service Design Slice: services/{service}
+
+                        ## Service Scope
+                        - Service/module: services/{service}
+                        - Allowed edit scope:
+                          - services/{service}/
+
+                        ## Global Intent Summary
+                        - Checkout service responsibility.
+
+                        ## Mapped Acceptance Criteria
+                        | AC | global requirement | service responsibility | local tests |
+                        | --- | --- | --- | --- |
+                        | {ac_id} | Requirement | Local responsibility | {service}Test |
+
+                        ## Runtime Path
+                        - Controller -> Service -> Repository
+
+                        ## Service-local TDD Plan
+                        - First red test: {service}Test
+
+                        ## Dependency Boundary
+                        - Independent service change: yes
+                        - HTTP/API dependencies: None
+                        - MQ/DMQ/Kafka dependencies: None
+
+                        ## Test Impact
+                        - mvn -pl services/{service} -am test
+                        """
+                    ).strip(),
+                    encoding="utf-8",
+                )
+
+            result = service_design_gate.validate(repo, design, service_dir)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(["AC-1", "AC-2"], result["mapped_acceptance_ids"])
+
     def test_service_plan_archive_contains_microservice_scoped_sections(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -6196,9 +6516,14 @@ class OrchestrationArtifactTests(unittest.TestCase):
             e2e_dev_harness.create_handoff_files(repo, artifacts)
 
             service_plan = repo / artifacts["service_plans"]["services/order-service"]["service_plan"]
+            service_design = repo / artifacts["service_plans"]["services/order-service"]["service_design"]
             text = service_plan.read_text(encoding="utf-8")
+            design_text = service_design.read_text(encoding="utf-8")
             request_text = (repo / artifacts["implementation_review_request"]).read_text(encoding="utf-8")
 
+        self.assertIn("# Service Design Slice: services/order-service", design_text)
+        self.assertIn("## Mapped Acceptance Criteria", design_text)
+        self.assertIn("## Dependency Boundary", design_text)
         self.assertIn("# Service Implementation Plan: services/order-service", text)
         self.assertIn("## Agent Assignment", text)
         self.assertIn("## Modification Points", text)
@@ -7212,6 +7537,14 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertEqual("multi", mode)
         self.assertTrue(any("single-review escalated" in reason for reason in reasons))
+
+    def test_single_escalates_to_multi_for_multiple_services(self) -> None:
+        facts: dict = {"service_candidates": ["services/order-service", "services/payment-service"]}
+
+        mode, reasons = orchestration_plan.choose_mode("single", facts, "irrelevant", False)
+
+        self.assertEqual("multi", mode)
+        self.assertTrue(any("single escalated" in reason for reason in reasons))
 
     def test_single_review_keeps_phase_reviewers_and_coverage_reviewer(self) -> None:
         artifacts = orchestration_plan.artifacts("checkout", run_date="2026-05-23")

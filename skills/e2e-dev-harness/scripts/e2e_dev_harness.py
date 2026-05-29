@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import agent_instructions  # noqa: E402
+import ac_progress_gate  # noqa: E402
 import artifact_registry  # noqa: E402
 import clarification_gate  # noqa: E402
 from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS  # noqa: E402
@@ -28,6 +29,7 @@ import harness_verify  # noqa: E402
 import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
 import run_state  # noqa: E402
+import service_design_gate  # noqa: E402
 import superpowers_probe  # noqa: E402
 import task_tier  # noqa: E402
 import test_impact_plan  # noqa: E402
@@ -181,9 +183,9 @@ def next_action_for_lifecycle(lifecycle: str) -> dict:
         },
         "IMPLEMENTED": {
             "phase": "implement-or-complete",
-            "command": "Production code writes are open. Implement minimally, run verification, R3 review, then completion gate.",
+            "command": "Production code writes are open. Continue TDD red/green until ac-progress is ready for all assigned ACs, then run R3 review and completion gate.",
             "allowed_writes": ["declared production/test scope", "docs/agent-runs/"],
-            "blocked_writes": ["undeclared scope drift"],
+            "blocked_writes": ["undeclared scope drift", "R3 review before all assigned ACs pass ac-progress"],
         },
         "REVIEWED": {
             "phase": "completion",
@@ -890,6 +892,14 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
             path.write_text(text, encoding="utf-8")
             created.append(str(path))
     for service, paths in artifacts.get("service_plans", {}).items():
+        service_design = require_repo_path(repo, Path(paths["service_design"]), f"{service} service design")
+        service_design.parent.mkdir(parents=True, exist_ok=True)
+        if not service_design.exists():
+            service_design.write_text(
+                service_design_template(service, artifacts.get("design_doc", "<global-design-doc>")),
+                encoding="utf-8",
+            )
+            created.append(str(service_design))
         service_review_requests = {
             "test_review_request": review_request_template(
                 "test",
@@ -914,6 +924,7 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
             ("service_plan", f"service-plan-{service}"),
             ("code_agent", f"code-developer-{orchestration_plan.service_slug(service)}"),
             ("implementation_manifest", f"implementation-manifest-{service}"),
+            ("test_impact_plan", f"test-impact-plan-{service}"),
             ("test_evidence", f"unit-test-evidence-{service}"),
             ("coverage_matrix", f"coverage-{service}"),
             ("business_review", f"business-review-{service}"),
@@ -927,12 +938,67 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
                     path.write_text(unit_test_evidence_template(service), encoding="utf-8")
                 elif key == "implementation_manifest":
                     path.write_text(implementation_manifest_template(service), encoding="utf-8")
+                elif key == "test_impact_plan":
+                    path.write_text(test_impact_plan_template(), encoding="utf-8")
                 elif key == "service_plan":
                     path.write_text(service_plan_template(service), encoding="utf-8")
                 else:
                     path.write_text(handoff_text(title), encoding="utf-8")
                 created.append(str(path))
     return created
+
+
+def service_design_template(service: str, global_design: str) -> str:
+    return f"""# Service Design Slice: {service}
+
+Global design: {global_design}
+
+This service design is the primary input for the service code agent. Keep global context bounded; copy only the ACs, constraints, and dependency facts this service needs.
+
+## Service Scope
+- Service/module: {service}
+- Allowed edit scope:
+  - {service}/
+- Explicitly out of scope:
+
+## Global Intent Summary
+- Restated user intent:
+- This service's responsibility:
+
+## Mapped Acceptance Criteria
+| AC | global requirement | service responsibility | local tests |
+| --- | --- | --- | --- |
+| AC-1 |  |  |  |
+
+## Runtime Path
+- Entry point:
+- Service/domain path:
+- Repository/client/sender path:
+- Output or side effect:
+
+## Service-local TDD Plan
+- First red test:
+- Expected failure:
+- Minimal green implementation:
+- Refactor checks:
+- Required Maven command:
+
+## Dependency Boundary
+- Independent service change: pending
+- HTTP/API dependencies:
+- MQ/DMQ/Kafka dependencies:
+- Shared DB/schema/config/security dependencies:
+- Required contracts or explicit non-applicability:
+
+## Test Impact
+- Service-local test impact plan:
+- Broadened verification:
+
+## Reviewer Focus
+- Service-local R2 review:
+- Service-local R3 review:
+- Known risks:
+"""
 
 
 def coverage_matrix_template(service: str) -> str:
@@ -1082,6 +1148,7 @@ def review_request_template(phase: str, title: str, output_path: str, scope: str
 - Developer Agent: <developer-agent-id>
 - Reviewer Agent: <independent-reviewer-agent-id>
 - Reviewer Invocation: {invocation_path}
+- AC Progress Gate: required before R3; all assigned ACs must be present in coverage matrix, implementation manifest, and passing green/unit command evidence.
 
 ## Review Assignment
 
@@ -1143,6 +1210,7 @@ def service_plan_template(service: str) -> str:
 ## Scope
 
 - Service/module:
+- Service design slice: service-designs/{orchestration_plan.service_slug(service)}.md
 - Files allowed to change:
 - Shared files allowed to change:
 - Out of scope:
@@ -1241,6 +1309,9 @@ def plan(args) -> tuple[int, dict]:
         require_repo_path(repo, Path(result["handoff_artifacts"]["reviews_dir"]), "reviews directory").mkdir(parents=True, exist_ok=True)
         require_repo_path(repo, Path(result["handoff_artifacts"]["rework_dir"]), "rework directory").mkdir(parents=True, exist_ok=True)
         require_repo_path(repo, Path(result["handoff_artifacts"]["contracts_dir"]), "contracts directory").mkdir(parents=True, exist_ok=True)
+        require_repo_path(repo, Path(result["handoff_artifacts"]["service_designs_dir"]), "service designs directory").mkdir(parents=True, exist_ok=True)
+        if args.design_doc:
+            result["handoff_artifacts"]["design_doc"] = str(args.design_doc).replace("\\", "/")
         result["handoff_files_created"] = create_handoff_files(repo, result["handoff_artifacts"])
         proposed = require_repo_path(repo, Path(result["handoff_artifacts"]["proposed_memory_updates"]), "proposed memory updates")
         if not proposed.exists():
@@ -1256,8 +1327,6 @@ def plan(args) -> tuple[int, dict]:
         result["exec_plan_written"] = str(target)
     if args.create_archive:
         registry_artifacts = dict(result["handoff_artifacts"])
-        if args.design_doc:
-            registry_artifacts["design_doc"] = str(args.design_doc).replace("\\", "/")
         registry = artifact_registry.build_registry(
             repo,
             result["agent_run_dir"],
@@ -1530,6 +1599,27 @@ def test_impact(args) -> tuple[int, dict]:
     return 0, result
 
 
+def service_design(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    result = service_design_gate.validate(repo, args.global_design, args.service_design_dir, args.service_design)
+    write_status(args.status_file, result)
+    return (0 if result["ready"] else 2), result
+
+
+def ac_progress(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    result = ac_progress_gate.validate(
+        repo,
+        args.design_doc,
+        args.service_design,
+        args.coverage_matrix,
+        args.implementation_manifest,
+        args.unit_test_evidence,
+    )
+    write_status(args.status_file, result)
+    return (0 if result["ready"] else 2), result
+
+
 def next_step(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
     state_path = require_repo_path(repo, args.state, "run state")
@@ -1721,6 +1811,22 @@ def main() -> int:
     test_impact_parser.add_argument("--unit-test-evidence", type=Path)
     test_impact_parser.add_argument("--status-file", type=Path)
 
+    service_design_parser = subparsers.add_parser("service-design", help="Validate service design slices against the global design.")
+    service_design_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    service_design_parser.add_argument("--global-design", required=True, type=Path)
+    service_design_parser.add_argument("--service-design-dir", type=Path)
+    service_design_parser.add_argument("--service-design", action="append", type=Path)
+    service_design_parser.add_argument("--status-file", type=Path)
+
+    ac_progress_parser = subparsers.add_parser("ac-progress", help="Block R3 review until all assigned ACs have implementation and test evidence.")
+    ac_progress_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    ac_progress_parser.add_argument("--design-doc", type=Path)
+    ac_progress_parser.add_argument("--service-design", type=Path)
+    ac_progress_parser.add_argument("--coverage-matrix", required=True, type=Path)
+    ac_progress_parser.add_argument("--implementation-manifest", required=True, type=Path)
+    ac_progress_parser.add_argument("--unit-test-evidence", required=True, type=Path)
+    ac_progress_parser.add_argument("--status-file", type=Path)
+
     next_parser = subparsers.add_parser("next", help="Show the next allowed harness action from run-state.")
     next_parser.add_argument("repo", nargs="?", default=".", type=Path)
     next_parser.add_argument("--state", required=True, type=Path)
@@ -1742,6 +1848,10 @@ def main() -> int:
             exit_code, result = guard(args)
         elif args.command == "test-impact":
             exit_code, result = test_impact(args)
+        elif args.command == "service-design":
+            exit_code, result = service_design(args)
+        elif args.command == "ac-progress":
+            exit_code, result = ac_progress(args)
         elif args.command == "next":
             exit_code, result = next_step(args)
         else:

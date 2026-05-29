@@ -101,6 +101,7 @@ docs/agent-runs/<run>/
   run-summary.md
   exec-plan.md
   handoffs/
+  service-designs/
   review-requests/
   reviews/
   evidence/
@@ -122,6 +123,12 @@ All tiers keep auditable evidence, test proof, and replayable run records. The t
 ## Dependency Scan Parser
 
 `cross_service_dependency_scan.py` reports `java_parser.backend`. The current scanner uses `regex-fallback` even when `tree_sitter` packages are installed, and reports `ast_parser_active: false`, because silently claiming AST precision would hide missed Java call paths. Treat `regex-fallback` as acceptable for lightweight discovery; for high-risk Java impact decisions, require GitNexus evidence and use `--require-tree-sitter-ast` if the run policy demands an active AST parser.
+
+GitNexus command roles are intentionally separated:
+
+- `gitnexus context` takes a code symbol such as a class, function, method, or `Class.method`; do not pass service directories.
+- `gitnexus impact` or `gitnexus detect-changes` owns affected-scope analysis.
+- In multi-service runs, generate evidence only for the services declared in the global design/service slices, not every detected module in the repository.
 
 ## Incremental Test Scope
 
@@ -152,6 +159,22 @@ If the plan contains `mvn -pl services\foo -am test`, the unit-test evidence mus
 
 For multi-agent runs, generate a request-scoped context pack per scheduled agent instead of passing the full conversation or all run artifacts.
 
+Multi-service work uses one global design anchor plus service-local design slices. If the global design declares multiple affected services/modules, orchestration must use `multi` even when the caller supplied `--mode single`; `single` is reserved for low-risk single-service work.
+
+```text
+docs/agent-runs/<run>/service-designs/<service>.md
+docs/agent-runs/<run>/service-plans/<service>/implementation-plan.md
+docs/agent-runs/<run>/service-plans/<service>/test-impact-plan.json
+```
+
+Validate the service slices before dispatching code agents:
+
+```powershell
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py service-design . `
+  --global-design docs\design\<feature>.md `
+  --service-design-dir docs\agent-runs\<run>\service-designs
+```
+
 ```powershell
 python skills\e2e-dev-harness\scripts\context_pack.py . `
   --agent-schedule docs\agent-runs\<run>\agent-schedule.json `
@@ -162,6 +185,20 @@ python skills\e2e-dev-harness\scripts\context_pack.py . `
 ```
 
 The pack lists allowed inputs, allowed outputs, dependency phase, and budget. A pack that exceeds file or byte limits is blocked, forcing the coordinator to summarize inputs before dispatch.
+
+## AC Progress
+
+Do not stop after the first passing AC unless the user explicitly scoped the run to that AC. Before R3, prove all assigned ACs for the global design or service design slice are implemented and tested:
+
+```powershell
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py ac-progress . `
+  --service-design docs\agent-runs\<run>\service-designs\<service>.md `
+  --coverage-matrix docs\agent-runs\<run>\service-plans\<service>\coverage-matrix.md `
+  --implementation-manifest docs\agent-runs\<run>\service-plans\<service>\implementation-manifest.md `
+  --unit-test-evidence docs\agent-runs\<run>\service-plans\<service>\unit-test-evidence.txt
+```
+
+If this blocks on `AC-2`, continue TDD red/green for `AC-2`; do not ask whether to start R3.
 
 ## Hook Configuration
 
