@@ -5,16 +5,14 @@ description: Use when a feature, bugfix, refactor, or design-doc task needs stri
 
 # E2E Dev Harness
 
-Use this skill to turn a request or design document into a clarified, tested, verified code change.
-It is tuned for Java 21, Spring Framework 6.x, and Maven, but the workflow name is intentionally stack-neutral.
+Use this skill to turn a request or design into a clarified, tested, verified code change.
+It is tuned for Java 21, Spring 6.x, and Maven.
 
 Governing rule: do not start implementation while behavior, use cases, APIs, data effects, service contracts, or test expectations are ambiguous.
 
 ## Platform Compatibility
 
-This skill is agent-neutral. Use it from Codex, Claude Code, Gemini CLI, OpenCode,
-or any agent runtime that can read a `SKILL.md` plus bundled scripts.
-For runtime-specific invocation, install paths, and fallback behavior, read `references/platform-compatibility.md`.
+Agent-neutral: Codex, Claude Code, Gemini CLI, OpenCode, and runtimes that can read `SKILL.md` plus bundled scripts. Read `references/platform-compatibility.md`.
 
 ## Fast Path
 
@@ -36,26 +34,16 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py next . \
 ```
 
 Fill the generated design doc, then run `clarify` before planning or coding.
-After clarification identifies affected services or paths, rerun prepare or plan with `--service-scope affected` plus explicit `--service` or `--path` when names are ambiguous.
-Workflow tiers are `basic`, `standard`, `critical`, and `audited`; all preserve auditable evidence, test proof, and replayable run records.
-Tiers decide evidence depth and orchestration strength, not whether the run is rigorous.
+After clarification, rerun prepare or plan with `--service-scope affected` plus explicit `--service` or `--path` when names are ambiguous.
+Workflow tiers `basic|standard|critical|audited` decide evidence depth and orchestration strength; every tier remains auditable.
 
-Use focused subcommands only when needed:
-
-- `clarify`: machine-check a Markdown design note.
-- `plan`: choose agent mode and optionally create an agent-run archive.
-- `gate`: enforce planning, implementation, or completion phase requirements.
-- `verify`: run prepare, clarification, optional gate, and optional Maven.
-- `guard`: hook/CI guard over a saved strict `verify` result.
-
-For command details, read `references/implementation-gates.md`.
+Use focused subcommands only when needed: `clarify`, `plan`, `gate`, `verify`, `guard`. Read `references/implementation-gates.md`.
 
 ## Hard Rules
 
 - Load project instructions before requirement clarification. Use discovery scope first; load affected service `AGENT.md` / `AGENTS.md` only after scope is known. Read `references/agent-instructions.md`.
 - Use Superpowers when available. `superpowers:brainstorming` owns clarification; `superpowers:test-driven-development` owns TDD. Read `references/superpowers-integration.md`.
-- Clarification is a hard gate. The design must state goals, non-goals, affected services/modules, use cases,
-  change logic, bounded impact summary, contracts, acceptance criteria, test design, and resolved open questions.
+- Clarification is a hard gate. The design must state goals, non-goals, affected services/modules, use cases, change logic, impact summary, contracts, ACs, test design, and resolved questions.
   Read `references/clarification-gate.md`.
   For high-risk or interactive runs, require `Restated Intent` with `--require-intent` so the agent's understanding is confirmed before planning.
   MQ/DMQ/Kafka requirements must name the cross-layer call chain and sender/producer injection point before implementation.
@@ -77,9 +65,7 @@ For command details, read `references/implementation-gates.md`.
 - Review profiles are portable project policy. Auto-discover project profiles and extend bundled profiles only when useful.
   Use common issue guidance for reviewer focus. Read `references/review-profiles.md` and `references/common-review-issues.md`.
 - Archive the final requirement summary after completion so future analysis can read outcomes without replaying every run artifact. Read `references/requirements-archive.md`.
-- Completion requires task-completion proof, not chat claims: every AC has concrete code refs and concrete test refs.
-  Semantic reviews, implementation manifest, coverage matrix, unit-test JSON, business review, dependency report when cross-service,
-  task-alignment evidence, closed rework, and passing guard are completion evidence.
+- Completion requires proof, not chat claims: every AC has concrete code/test refs plus reviews, manifest, coverage, unit-test JSON, business review, dependency evidence, closed rework, and guard.
 - The implementation completion unit is all assigned ACs, not the first passing AC.
   After any individual AC turns green, run or mentally apply `ac-progress`; if assigned ACs remain, continue TDD red/green without asking whether to proceed or whether to start R3.
   R3 review is allowed only after `e2e_dev_harness.py ac-progress` is ready for the current service slice or global design.
@@ -91,6 +77,10 @@ For command details, read `references/implementation-gates.md`.
 - Do not run `prepare` as a substitute for `start`. `prepare` is dependency discovery only; `start` creates the active run, design template, and phase lock.
 - Runtime hooks can enforce phase locks before code-writing tools run.
   Use `install_hooks.py`, `phase_guard.py`, and hook examples when the agent runtime supports pre-action checks.
+  Claude Code hooks must include `Bash` in the PreToolUse matcher, because shell commands can write code.
+  The guard permits red-test writes under `src/test`, `test`, or `tests` during `PLANNED`/`RED_READY`; production code waits for `IMPLEMENTED`.
+  Multi-service runtime edits outside a claimed service require explicit `shared_edit_scopes`.
+  If a runtime hook is unavailable or uncertain, run `e2e_dev_harness.py pre-code --path <planned-code-file> --run-dir docs/agent-runs/<run>` immediately before any code edit.
   Read `references/execution-control.md`.
   After red-test evidence exists, run `e2e_dev_harness.py gate --phase implementation --run-state docs/agent-runs/<run>/run-state.json`;
   a passing gate opens the `IMPLEMENTED` phase automatically.
@@ -98,7 +88,7 @@ For command details, read `references/implementation-gates.md`.
   Emit `run-summary.json` / `run-summary.md` for CI, reviewer agents, evaluation, and later requirement analysis.
 - Use `execution_trace.py` or `verify --trace-file` to record phase timing, decisions, artifacts, and optional token counts.
   Use `command_evidence.py` for tests and graph commands when evidence must include exit code, elapsed time, output hashes, and environment metadata.
-  Use `context_pack.py` before dispatching service-scoped agents so each agent receives only request-scoped allowed inputs/outputs within a file and byte budget.
+  Use `context_pack.py` before service-scoped dispatch so each agent gets bounded request-scoped inputs/outputs.
   Use `agent-task --action claim` before any multi-service code agent writes code; phase guard blocks unclaimed service writes and cross-service edits by a single claimed task.
   Use `checkpoint_gate.py` or `gate --checkpoint-mode required` to pause after clarify, R1, and TDD Red on critical or interactive work.
   Agent start/stop is runtime-specific; this harness enforces portable state, hooks, gates, and rework routing instead of claiming non-portable process control.
@@ -145,7 +135,8 @@ Important boundaries:
 - Service code agents consume `service-designs/<service>.md` first, then the service implementation plan and service-local test impact plan; they should not reload the full global design unless the slice is incomplete.
 - Before dispatching a service code agent, create `docs/agent-runs/<run>/context-packs/<agent-or-service>.json` from `agent-schedule.json`; do not pass inherited developer chat as context.
 - Before a service code agent writes code, claim its task with `e2e_dev_harness.py agent-task --action claim --schedule docs/agent-runs/<run>/agent-schedule.json --task-id <id> --agent <agent> --state docs/agent-runs/<run>/run-state.json`.
-- Completion requires each service implement task to be completed with `agent-task --action complete` and an existing evidence file that matches one of the task outputs; the completion gate replays `agent-schedule.json`.
+- Claiming a code task is blocked until scheduled dependency phases are completed and multi-service `service_design` has passed in run-state.
+- Completion requires `agent-task --action complete`; evidence must live under the service plan, match outputs, show passed unit tests, and replace manifest/coverage templates.
 - The orchestration result records `multi_agent_decision` with criteria, evidence, and required artifacts.
 - R1/R2/R3 reviews must be independent agents or separate reviewer sessions; one consolidated after-the-fact review is invalid.
 - Coverage Reviewer always runs before completion.
@@ -192,7 +183,9 @@ Missing producer/consumer ACKs, contract tests, or DMQ topic/tag/group details b
 
 ## Gates And Rework
 
-Use `e2e_dev_harness.py gate` at planning, implementation, and completion phases. Use `verify --strict-workflow` plus `guard` when scripts must be enforceable in pre-push or CI.
+Use `e2e_dev_harness.py gate` at planning, implementation, and completion phases.
+Implementation/completion gates require `--run-state`; bypass only with `--no-harness-state --harness-state-approval <file>` containing `Approval: user-approved`.
+Use `verify --strict-workflow` plus `guard` for pre-push or CI enforcement.
 
 Gate details live in `references/implementation-gates.md`, including:
 

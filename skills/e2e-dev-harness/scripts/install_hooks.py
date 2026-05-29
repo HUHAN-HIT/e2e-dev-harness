@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -65,6 +66,41 @@ def template(runtime: str) -> dict:
     return load_json(RUNTIME_TEMPLATES[runtime])
 
 
+def guard_script_path() -> Path:
+    return SCRIPT_DIR / "phase_guard.py"
+
+
+def quote_command_path(path: Path) -> str:
+    return '"' + str(path).replace('"', '\\"') + '"'
+
+
+def runtime_guard_command(repo: Path) -> str:
+    return (
+        f"{quote_command_path(Path(sys.executable))} "
+        f"{quote_command_path(guard_script_path())} "
+        f"{quote_command_path(repo.resolve())} "
+        "--hook-input - --json"
+    )
+
+
+def rewrite_guard_command(value, repo: Path):
+    if isinstance(value, dict):
+        rewritten = {}
+        for key, item in value.items():
+            if key == "command" and isinstance(item, str) and "phase_guard.py" in item:
+                rewritten[key] = runtime_guard_command(repo)
+            else:
+                rewritten[key] = rewrite_guard_command(item, repo)
+        return rewritten
+    if isinstance(value, list):
+        return [rewrite_guard_command(item, repo) for item in value]
+    return value
+
+
+def hook_for_repo(runtime: str, repo: Path) -> dict:
+    return rewrite_guard_command(template(runtime), repo)
+
+
 def command_present(value) -> bool:
     if isinstance(value, dict):
         return any(command_present(item) for item in value.values())
@@ -72,6 +108,40 @@ def command_present(value) -> bool:
         return any(command_present(item) for item in value)
     if isinstance(value, str):
         return "phase_guard.py" in value and "--hook-input" in value
+    return False
+
+
+def command_strings(value) -> list[str]:
+    if isinstance(value, dict):
+        results: list[str] = []
+        for item in value.values():
+            results.extend(command_strings(item))
+        return results
+    if isinstance(value, list):
+        results: list[str] = []
+        for item in value:
+            results.extend(command_strings(item))
+        return results
+    if isinstance(value, str) and "phase_guard.py" in value:
+        return [value]
+    return []
+
+
+def guard_command_targets_existing_script(data: dict) -> bool:
+    expected = str(guard_script_path())
+    commands = command_strings(data)
+    return bool(commands) and guard_script_path().exists() and all(expected in command for command in commands)
+
+
+def claude_bash_matcher_present(data: dict) -> bool:
+    hooks = data.get("hooks", {})
+    entries = hooks.get("PreToolUse") if isinstance(hooks, dict) else []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        matcher = str(entry.get("matcher", ""))
+        if "Bash" in matcher:
+            return True
     return False
 
 
@@ -91,6 +161,10 @@ def validate_config(path: Path) -> dict:
         blocked.append("Hook config must call phase_guard.py with --hook-input.")
     elif not blocking_present(data):
         blocked.append("Hook config must be blocking or define a PreToolUse blocking hook.")
+    elif not guard_command_targets_existing_script(data):
+        blocked.append("Hook command must point to the installed phase_guard.py absolute path, not a target-repo relative skills path.")
+    elif path.as_posix().endswith(".claude/settings.json") and not claude_bash_matcher_present(data):
+        blocked.append("Claude Code hook matcher must include Bash so shell-based code writes are checked.")
     return {
         "ready": not blocked,
         "blocked_reasons": blocked,
@@ -116,9 +190,10 @@ def merge_claude(existing: dict, hook: dict) -> dict:
 def install(repo: Path, runtime: str, target: Path | None = None, dry_run: bool = False) -> dict:
     repo = repo.resolve()
     target_path = repo_path(repo, target or DEFAULT_TARGETS[runtime])
-    hook = template(runtime)
+    hook = hook_for_repo(runtime, repo)
     if runtime == "claude":
-        output = merge_claude(load_json(target_path), hook)
+        current = rewrite_guard_command(load_json(target_path), repo)
+        output = merge_claude(current, hook)
     else:
         output = hook
     result = {

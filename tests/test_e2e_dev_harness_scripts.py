@@ -4,6 +4,7 @@ import io
 import importlib
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -681,6 +682,41 @@ class KnowledgeGraphRefreshTests(unittest.TestCase):
 
 
 class AgentInstructionScopeTests(unittest.TestCase):
+    def test_harness_environment_variables_override_legacy_workflow_names(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "E2E_DEV_WORKFLOW_AGENT_INSTRUCTIONS_MODE": "off",
+                "E2E_DEV_HARNESS_AGENT_INSTRUCTIONS_MODE": "strict",
+                "E2E_DEV_WORKFLOW_AGENT_MODE": "single",
+                "E2E_DEV_HARNESS_AGENT_MODE": "multi",
+                "E2E_DEV_WORKFLOW_MEMORY_MODE": "off",
+                "E2E_DEV_HARNESS_MEMORY_MODE": "auto",
+                "E2E_DEV_WORKFLOW_SUPERPOWERS_MODE": "off",
+                "E2E_DEV_HARNESS_SUPERPOWERS_MODE": "strict",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                "strict",
+                agent_instructions.env_default(
+                    "E2E_DEV_HARNESS_AGENT_INSTRUCTIONS_MODE",
+                    "E2E_DEV_WORKFLOW_AGENT_INSTRUCTIONS_MODE",
+                    "auto",
+                ),
+            )
+            self.assertEqual("multi", orchestration_plan.env_default("E2E_DEV_HARNESS_AGENT_MODE", "E2E_DEV_WORKFLOW_AGENT_MODE", "auto"))
+            self.assertEqual("auto", memory_capture.env_default("E2E_DEV_HARNESS_MEMORY_MODE", "E2E_DEV_WORKFLOW_MEMORY_MODE", "strict"))
+            self.assertEqual("strict", superpowers_probe.env_default("E2E_DEV_HARNESS_SUPERPOWERS_MODE", "E2E_DEV_WORKFLOW_SUPERPOWERS_MODE", "auto"))
+
+    def test_legacy_workflow_environment_variables_remain_supported(self) -> None:
+        with patch.dict(os.environ, {"E2E_DEV_WORKFLOW_AGENT_MODE": "single-review"}, clear=False):
+            os.environ.pop("E2E_DEV_HARNESS_AGENT_MODE", None)
+
+            result = orchestration_plan.env_default("E2E_DEV_HARNESS_AGENT_MODE", "E2E_DEV_WORKFLOW_AGENT_MODE", "auto")
+
+        self.assertEqual("single-review", result)
+
     def test_unknown_scope_loads_root_only_and_discovers_services(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -3666,6 +3702,36 @@ class ImplementationGateTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("Knowledge graph status" in reason for reason in result["blocked_reasons"]))
 
+    def test_implementation_gate_requires_run_state_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+
+            result = implementation_gate.validate_gate_request(
+                implementation_gate.GateRequest(repo=repo, phase="implementation")
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("--run-state" in reason for reason in result["blocked_reasons"]))
+
+    def test_implementation_gate_allows_explicit_no_harness_state_only_with_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            approval = repo / "approval.md"
+            approval.write_text("Approval: user-approved\n", encoding="utf-8")
+
+            result = implementation_gate.validate_gate_request(
+                implementation_gate.GateRequest(
+                    repo=repo,
+                    phase="implementation",
+                    no_harness_state=True,
+                    harness_state_approval=approval,
+                )
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertFalse(any("--run-state" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any("bypassed" in warning for warning in result["warnings"]))
+
     def test_implementation_gate_auto_tdd_becomes_strict_for_messaging_design(self) -> None:
         markdown = textwrap.dedent(
             """
@@ -3831,12 +3897,14 @@ class ImplementationGateTests(unittest.TestCase):
             design = repo / "docs" / "design" / "feature.md"
             kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
             red = repo / "docs" / "agent-runs" / "run" / "evidence" / "red-test.txt"
+            approval = repo / "approval.md"
             design.parent.mkdir(parents=True)
             kg.parent.mkdir(parents=True)
             red.parent.mkdir(parents=True)
             design.write_text(markdown, encoding="utf-8")
             kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
             red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            approval.write_text("Approval: user-approved\n", encoding="utf-8")
             review_dir = self.write_semantic_reviews(repo, phases=("design",))
 
             result = implementation_gate.validate_gate(
@@ -3846,6 +3914,8 @@ class ImplementationGateTests(unittest.TestCase):
                 "implementation",
                 red,
                 review_dirs=[review_dir],
+                no_harness_state=True,
+                harness_state_approval=approval,
             )
 
         self.assertFalse(result["ready"])
@@ -3890,6 +3960,7 @@ class ImplementationGateTests(unittest.TestCase):
             matrix = repo / "docs" / "agent-runs" / "coverage.md"
             unit = repo / "docs" / "agent-runs" / "unit.txt"
             review = repo / "docs" / "agent-runs" / "business.md"
+            approval = repo / "approval.md"
             design.parent.mkdir(parents=True)
             kg.parent.mkdir(parents=True)
             matrix.parent.mkdir(parents=True)
@@ -3899,6 +3970,7 @@ class ImplementationGateTests(unittest.TestCase):
             matrix.write_text(coverage, encoding="utf-8")
             write_command_evidence(unit, "mvn -pl services/sample-service -am test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
+            approval.write_text("Approval: user-approved\n", encoding="utf-8")
             review_dir = self.write_semantic_reviews(repo)
 
             result = implementation_gate.validate_gate(
@@ -3911,6 +3983,8 @@ class ImplementationGateTests(unittest.TestCase):
                 unit,
                 review,
                 review_dirs=[review_dir],
+                no_harness_state=True,
+                harness_state_approval=approval,
             )
 
         self.assertTrue(result["ready"])
@@ -3957,6 +4031,7 @@ class ImplementationGateTests(unittest.TestCase):
             matrix = repo / "docs" / "agent-runs" / "coverage.md"
             unit = repo / "docs" / "agent-runs" / "unit.txt"
             review = repo / "docs" / "agent-runs" / "business.md"
+            approval = repo / "approval.md"
             archive = repo / "docs" / "agent-runs" / "run" / "requirements-archive.md"
             design.parent.mkdir(parents=True)
             kg.parent.mkdir(parents=True)
@@ -3968,6 +4043,7 @@ class ImplementationGateTests(unittest.TestCase):
             matrix.write_text(coverage, encoding="utf-8")
             write_command_evidence(unit, "mvn -pl services/sample-service -am test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
+            approval.write_text("Approval: user-approved\n", encoding="utf-8")
             archive.write_text("# Requirements Archive\n\n## Original Request\nBuild quote creation.\n", encoding="utf-8")
             review_dir = self.write_semantic_reviews(repo)
 
@@ -4091,6 +4167,7 @@ class ImplementationGateTests(unittest.TestCase):
             unit = run / "evidence" / "green-test.txt"
             review = run / "evidence" / "business-review.md"
             archive = run / "requirements-archive.md"
+            approval = repo / "approval.md"
             design.parent.mkdir(parents=True)
             kg.parent.mkdir(parents=True)
             red.parent.mkdir(parents=True)
@@ -4101,6 +4178,7 @@ class ImplementationGateTests(unittest.TestCase):
             write_command_evidence(unit, "mvn -pl services/sample-service -am test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
             archive.write_text(archive_doc, encoding="utf-8")
+            approval.write_text("Approval: user-approved\n", encoding="utf-8")
             review_dir = self.write_semantic_reviews(repo)
 
             result = implementation_gate.validate_gate(
@@ -4114,6 +4192,8 @@ class ImplementationGateTests(unittest.TestCase):
                 review,
                 review_dirs=[review_dir],
                 require_requirements_archive=True,
+                no_harness_state=True,
+                harness_state_approval=approval,
             )
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
@@ -4361,6 +4441,8 @@ class ImplementationGateTests(unittest.TestCase):
             unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
             manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            approval = repo / "approval.md"
+            approval = repo / "approval.md"
             design.parent.mkdir(parents=True)
             kg.parent.mkdir(parents=True)
             matrix.parent.mkdir(parents=True)
@@ -4550,6 +4632,7 @@ class ImplementationGateTests(unittest.TestCase):
             unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
             rework_file = repo / "docs" / "agent-runs" / "run" / "rework" / "rework-001.md"
+            approval = repo / "approval.md"
             design.parent.mkdir(parents=True)
             kg.parent.mkdir(parents=True)
             matrix.parent.mkdir(parents=True)
@@ -4623,6 +4706,7 @@ class ImplementationGateTests(unittest.TestCase):
             unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
             rework_file = repo / "docs" / "agent-runs" / "run" / "rework" / "rework-001.md"
+            approval = repo / "approval.md"
             design.parent.mkdir(parents=True)
             kg.parent.mkdir(parents=True)
             matrix.parent.mkdir(parents=True)
@@ -4634,6 +4718,7 @@ class ImplementationGateTests(unittest.TestCase):
             write_command_evidence(unit, "mvn -pl services/sample-service -am test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
             rework_file.write_text(rework, encoding="utf-8")
+            approval.write_text("Approval: user-approved\n", encoding="utf-8")
             review_dir = self.write_semantic_reviews(repo)
 
             result = implementation_gate.validate_gate(
@@ -4646,6 +4731,8 @@ class ImplementationGateTests(unittest.TestCase):
                 unit,
                 review,
                 review_dirs=[review_dir],
+                no_harness_state=True,
+                harness_state_approval=approval,
             )
 
         self.assertTrue(result["ready"])
@@ -4844,6 +4931,10 @@ class ImplementationGateTests(unittest.TestCase):
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
             manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
             dependency_report = repo / "knowledge-graph" / "cross-service-dependencies.json"
+            approval = repo / "approval.md"
+            approval = repo / "approval.md"
+            approval = repo / "approval.md"
+            approval = repo / "approval.md"
             for path in (
                 "services/quote-service/src/main/java/com/example/BillingClient.java",
                 "services/billing-service/src/main/java/com/example/BillingController.java",
@@ -4937,6 +5028,7 @@ class ImplementationGateTests(unittest.TestCase):
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
             manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
             dependency_report = repo / "knowledge-graph" / "cross-service-dependencies.json"
+            approval = repo / "approval.md"
             for path in (
                 "services/quote-service/src/main/java/com/example/BillingClient.java",
                 "services/billing-service/src/main/java/com/example/BillingController.java",
@@ -4968,6 +5060,7 @@ class ImplementationGateTests(unittest.TestCase):
                 json.dumps({"ready": True, "dependencies": [{"kind": "http"}], "unresolved_questions": []}),
                 encoding="utf-8",
             )
+            approval.write_text("Approval: user-approved\n", encoding="utf-8")
             review_dir = self.write_semantic_reviews(repo)
 
             result = implementation_gate.validate_gate(
@@ -4983,6 +5076,8 @@ class ImplementationGateTests(unittest.TestCase):
                 implementation_manifest=manifest_path,
                 review_dirs=[review_dir],
                 skip_spring_static_check=True,
+                no_harness_state=True,
+                harness_state_approval=approval,
             )
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
@@ -6906,9 +7001,9 @@ class OrchestrationArtifactTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
-            evidence = repo / "docs" / "agent-runs" / "run" / "reviews" / "R3-implementation-review.md"
+            evidence = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-gate.json"
             evidence.parent.mkdir(parents=True)
-            evidence.write_text("approved\n", encoding="utf-8")
+            evidence.write_text(json.dumps({"phase": "implementation", "ready": True}), encoding="utf-8")
             state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json")
             run_state.write_state(repo, state_path, state)
 
@@ -6955,6 +7050,28 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(any("gate=implementation" in reason for reason in result["blocked_reasons"]))
         self.assertTrue(any("requires implementation gate evidence" in reason for reason in result["blocked_reasons"]))
 
+    def test_run_state_blocks_implemented_transition_with_non_gate_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            evidence = repo / "docs" / "agent-runs" / "run" / "evidence" / "red-test.txt"
+            evidence.parent.mkdir(parents=True)
+            evidence.write_text("expected failure\n", encoding="utf-8")
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            run_state.write_state(repo, state_path, state)
+
+            result = run_state.transition_state(
+                repo,
+                state_path,
+                "IMPLEMENTED",
+                gate="implementation",
+                gate_status="passed",
+                evidence=evidence,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("valid JSON" in reason or "implementation gate" in reason for reason in result["blocked_reasons"]))
+
     def test_multi_phase_guard_requires_claimed_service_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -6967,6 +7084,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
                 "docs/agent-runs/run/artifact-registry.json",
                 "IMPLEMENTED",
             )
+            state["gates"]["service_design"] = "passed"
             run_state.write_state(repo, state_path, state)
             schedule = {
                 "schema": "e2e-dev-harness.agent-schedule.v1",
@@ -7015,6 +7133,62 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(cross_service["ready"])
         self.assertTrue(any("only one service" in reason for reason in cross_service["blocked_reasons"]))
 
+    def test_multi_phase_guard_blocks_unscoped_shared_runtime_code(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state(
+                "run",
+                "multi",
+                ["services/order-service"],
+                "docs/agent-runs/run/artifact-registry.json",
+                "IMPLEMENTED",
+            )
+            state["owners"]["services/order-service"] = {
+                "task_id": "T01",
+                "agent": "agent-order",
+                "status": "claimed",
+            }
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Edit",
+                [Path("pom.xml")],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("outside claimed services" in reason for reason in result["blocked_reasons"]))
+
+    def test_multi_phase_guard_allows_explicit_shared_edit_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state(
+                "run",
+                "multi",
+                ["services/order-service"],
+                "docs/agent-runs/run/artifact-registry.json",
+                "IMPLEMENTED",
+            )
+            state["owners"]["services/order-service"] = {
+                "task_id": "T01",
+                "agent": "agent-order",
+                "status": "claimed",
+            }
+            state["shared_edit_scopes"] = ["shared-kernel"]
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Edit",
+                [Path("shared-kernel/src/main/java/com/example/Money.java")],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
     def test_agent_task_complete_requires_existing_declared_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -7056,6 +7230,137 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(any("task outputs" in reason for reason in wrong["blocked_reasons"]))
         self.assertTrue(ok["ready"], ok["blocked_reasons"])
         self.assertEqual(["docs/agent-runs/run/service-plans/order-service/unit-test-evidence.txt"], ok["task"]["evidence"])
+
+    def test_agent_task_claim_blocks_unfinished_dependency_phases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule_path = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            schedule_path.parent.mkdir(parents=True)
+            state = run_state.build_state("run", "multi", ["services/order-service"], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            state["gates"]["service_design"] = "passed"
+            run_state.write_state(repo, state_path, state)
+            schedule_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {"id": "T01", "phase": "tdd-red", "status": "completed"},
+                            {"id": "T02", "phase": "r2-review", "status": "planned"},
+                            {
+                                "id": "T03",
+                                "phase": "implement",
+                                "service": "services/order-service",
+                                "status": "planned",
+                                "depends_on_phases": ["tdd-red", "r2-review"],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = agent_scheduler.claim(repo, schedule_path, "T03", "agent-order", state_path)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("r2-review" in reason for reason in result["blocked_reasons"]))
+
+    def test_agent_task_complete_requires_service_artifacts_and_passed_unit_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            base = repo / "docs" / "agent-runs" / "run" / "service-plans" / "order-service"
+            base.mkdir(parents=True)
+            unit = base / "unit-test-evidence.json"
+            manifest = base / "implementation-manifest.md"
+            coverage = base / "coverage-matrix.md"
+            unit.write_text(json.dumps([{"command": "mvn -pl order-service test", "exit_code": 0}]), encoding="utf-8")
+            manifest.write_text(
+                "| id | module | artifact | artifact_type | source | required | tests | status | evidence |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| IM-1 | order-service | OrderService | service | AC-1 | yes | OrderServiceTest | verified | unit |\n",
+                encoding="utf-8",
+            )
+            coverage.write_text(
+                "| id | acceptance | use_case | service | tests | code_refs | business_review | status |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| AC-1 | ok | UC-1 | order-service | OrderServiceTest | OrderService | reviewed | verified |\n",
+                encoding="utf-8",
+            )
+            schedule_path = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            schedule_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "phase": "implement",
+                                "service": "services/order-service",
+                                "status": "claimed",
+                                "owner": "agent-order",
+                                "outputs": [
+                                    "docs/agent-runs/run/service-plans/order-service/unit-test-evidence.json",
+                                    "docs/agent-runs/run/service-plans/order-service/implementation-manifest.md",
+                                    "docs/agent-runs/run/service-plans/order-service/coverage-matrix.md",
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = agent_scheduler.complete(
+                repo,
+                schedule_path,
+                "T01",
+                "agent-order",
+                evidence=[
+                    "docs/agent-runs/run/service-plans/order-service/unit-test-evidence.json",
+                    "docs/agent-runs/run/service-plans/order-service/implementation-manifest.md",
+                    "docs/agent-runs/run/service-plans/order-service/coverage-matrix.md",
+                ],
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_agent_task_complete_blocks_template_manifest_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            base = repo / "docs" / "agent-runs" / "run" / "service-plans" / "order-service"
+            base.mkdir(parents=True)
+            manifest = base / "implementation-manifest.md"
+            manifest.write_text("TODO template\n", encoding="utf-8")
+            schedule_path = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            schedule_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "phase": "implement",
+                                "service": "services/order-service",
+                                "status": "claimed",
+                                "owner": "agent-order",
+                                "outputs": ["docs/agent-runs/run/service-plans/order-service/implementation-manifest.md"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = agent_scheduler.complete(
+                repo,
+                schedule_path,
+                "T01",
+                "agent-order",
+                evidence=["docs/agent-runs/run/service-plans/order-service/implementation-manifest.md"],
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("placeholder/template" in reason for reason in result["blocked_reasons"]))
 
     def test_clarify_auto_transitions_run_state_when_supplied(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7105,6 +7410,8 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("CLARIFIED", updated["lifecycle"])
         self.assertEqual("passed", updated["gates"]["clarification"])
         self.assertTrue(result["run_state_transition"]["ready"])
+        self.assertTrue(result["blocked_next_without_plan"])
+        self.assertFalse(result["next_required"]["code_writes_allowed"])
 
     def test_gate_auto_transitions_implementation_phase_when_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7175,6 +7482,115 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("Code write blocked" in reason for reason in result["blocked_reasons"]))
 
+    def test_phase_guard_allows_red_test_write_in_planned_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            run_state.write_state(repo, state_path, state)
+            lock = json.loads((state_path.parent / ".phase-lock").read_text(encoding="utf-8"))
+
+            result = phase_guard.validate_action(
+                repo,
+                "Edit",
+                [Path("services/payment-service/src/test/java/PaymentServiceTest.java")],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertEqual("test-write-open", lock["state"])
+        self.assertIn("PLANNED", lock["allowed_test_write_lifecycles"])
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(["services\\payment-service\\src\\test\\java\\PaymentServiceTest.java"], result["test_code_paths"])
+
+    def test_phase_guard_blocks_mixed_test_and_runtime_write_in_planned_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "MultiEdit",
+                [
+                    Path("services/payment-service/src/test/java/PaymentServiceTest.java"),
+                    Path("services/payment-service/src/main/java/PaymentService.java"),
+                ],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(["services\\payment-service\\src\\main\\java\\PaymentService.java"], result["runtime_code_paths"])
+        self.assertTrue(any("Code write blocked" in reason for reason in result["blocked_reasons"]))
+
+    def test_phase_guard_parses_apply_patch_hook_paths(self) -> None:
+        hook_text = json.dumps(
+            {
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "patch": textwrap.dedent(
+                        """
+                        *** Begin Patch
+                        *** Update File: services/payment-service/src/main/java/PaymentService.java
+                        @@
+                        +changed
+                        *** End Patch
+                        """
+                    )
+                },
+            }
+        )
+
+        tool, paths = phase_guard.parse_hook_input(hook_text)
+
+        self.assertEqual("apply_patch", tool)
+        self.assertEqual(["services/payment-service/src/main/java/PaymentService.java"], paths)
+
+    def test_phase_guard_blocks_bash_write_before_implementation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CLARIFIED")
+            run_state.write_state(repo, state_path, state)
+            hook_text = json.dumps(
+                {
+                    "tool_name": "Bash",
+                    "tool_input": {
+                        "command": "cat <<'EOF' > services/payment-service/src/main/java/PaymentService.java\nclass X {}\nEOF"
+                    },
+                }
+            )
+            tool, paths = phase_guard.parse_hook_input(hook_text)
+
+            result = phase_guard.validate_action(repo, tool, [Path(path) for path in paths], run_dir=Path("docs/agent-runs/run"))
+
+        self.assertEqual(["services/payment-service/src/main/java/PaymentService.java"], paths)
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Code write blocked" in reason for reason in result["blocked_reasons"]))
+
+    def test_pre_code_blocks_code_write_before_implementation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CLARIFIED")
+            run_state.write_state(repo, state_path, state)
+
+            code, result = e2e_dev_harness.pre_code(
+                SimpleNamespace(
+                    repo=repo,
+                    tool="Edit",
+                    path=[Path("services/payment-service/src/main/java/PaymentService.java")],
+                    patch=None,
+                    command_text="",
+                    lock=None,
+                    run_dir=Path("docs/agent-runs/run"),
+                    status_file=None,
+                )
+            )
+
+        self.assertEqual(2, code)
+        self.assertFalse(result["ready"])
+
     def test_phase_guard_allows_code_write_in_implementation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -7218,7 +7634,10 @@ class OrchestrationArtifactTests(unittest.TestCase):
             with self.subTest(name=name):
                 text = (hook_dir / name).read_text(encoding="utf-8")
                 self.assertIn("phase_guard.py", text)
+                self.assertNotIn("python skills/e2e-dev-harness/scripts/phase_guard.py .", text)
                 self.assertIn("blocking", text.lower() if "claude" not in name else "blocking")
+                if name == "claude-code-settings.example.json":
+                    self.assertIn("Bash", text)
 
     def test_install_hooks_dry_run_reports_claude_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7230,6 +7649,22 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(result["dry_run"])
         self.assertTrue(result["target"].endswith(".claude\\settings.json") or result["target"].endswith(".claude/settings.json"))
         self.assertIn("hooks", result["planned_config"])
+        command = result["planned_config"]["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        self.assertIn(str(ROOT / "skills" / "e2e-dev-harness" / "scripts" / "phase_guard.py"), command)
+        self.assertIn(str(repo), command)
+
+    def test_install_hooks_rewrites_portable_runtime_templates(self) -> None:
+        for runtime in ("codex", "gemini"):
+            with self.subTest(runtime=runtime), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+
+                result = install_hooks.install(repo, runtime, dry_run=True)
+                command = result["planned_config"]["command"]
+
+                self.assertTrue(result["ready"], result["blocked_reasons"])
+                self.assertIn(str(ROOT / "skills" / "e2e-dev-harness" / "scripts" / "phase_guard.py"), command)
+                self.assertIn(str(repo), command)
+                self.assertNotIn("skills/e2e-dev-harness/scripts/phase_guard.py .", command)
 
     def test_install_hooks_merges_claude_settings_idempotently(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7248,6 +7683,73 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(validation["ready"], validation["blocked_reasons"])
         self.assertEqual(["Bash(git status)"], config["permissions"]["allow"])
         self.assertEqual(1, len(config["hooks"]["PreToolUse"]))
+
+    def test_install_hooks_rejects_repo_relative_phase_guard_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            settings = repo / ".claude" / "settings.json"
+            settings.parent.mkdir(parents=True)
+            settings.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            "PreToolUse": [
+                                {
+                                    "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": "python skills/e2e-dev-harness/scripts/phase_guard.py . --hook-input - --json",
+                                        }
+                                    ],
+                                }
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = install_hooks.validate_config(settings)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("absolute path" in reason for reason in result["blocked_reasons"]))
+
+    def test_install_hooks_rewrites_stale_repo_relative_phase_guard_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            settings = repo / ".claude" / "settings.json"
+            settings.parent.mkdir(parents=True)
+            settings.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            "PreToolUse": [
+                                {
+                                    "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": "python skills/e2e-dev-harness/scripts/phase_guard.py . --hook-input - --json",
+                                        }
+                                    ],
+                                }
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = install_hooks.install(repo, "claude", dry_run=True)
+            entries = result["planned_config"]["hooks"]["PreToolUse"]
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(1, len(entries))
+        command = entries[0]["hooks"][0]["command"]
+        self.assertIn(str(ROOT / "skills" / "e2e-dev-harness" / "scripts" / "phase_guard.py"), command)
+        self.assertIn(str(repo), command)
+        self.assertNotIn("python skills/e2e-dev-harness/scripts/phase_guard.py .", command)
 
     def test_auto_transition_from_ready_gate_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7453,6 +7955,46 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertIn("docs/agent-runs/run/handoffs/01-requirements-clarifier.md", summary["required_missing"])
         self.assertEqual("planned", summary["semantic_reviews"]["R1"])
         self.assertIn("Resolve harness verification blockers.", summary["next_actions"])
+
+    def test_run_summary_blocks_corrupt_execution_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            run_dir.mkdir(parents=True)
+            trace = run_dir / "execution-trace.json"
+            trace.write_text("{not-json", encoding="utf-8")
+            registry = artifact_registry.build_registry(
+                repo,
+                "run",
+                {"execution_trace": "docs/agent-runs/run/execution-trace.json"},
+                "single",
+                [],
+            )
+            registry_path = run_dir / "artifact-registry.json"
+            state_path = run_dir / "run-state.json"
+            artifact_registry.write_registry(repo, registry_path, registry)
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json")
+            run_state.write_state(repo, state_path, state)
+
+            summary = run_summary.build_summary(repo, state_path, {"ready": True, "blocked_reasons": [], "warnings": []})
+
+        self.assertFalse(summary["ready"])
+        self.assertEqual(1, summary["source_error_count"])
+        self.assertTrue(any("Execution trace is invalid JSON" in reason for reason in summary["blocked_reasons"]))
+        self.assertIn("Repair unreadable or invalid harness JSON artifacts before trusting the archive.", summary["next_actions"])
+
+    def test_run_summary_blocks_corrupt_run_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text("{not-json", encoding="utf-8")
+
+            summary = run_summary.build_summary(repo, state_path, {"ready": True, "blocked_reasons": [], "warnings": []})
+
+        self.assertFalse(summary["ready"])
+        self.assertEqual(1, summary["source_error_count"])
+        self.assertTrue(any("Run state is invalid JSON" in reason for reason in summary["blocked_reasons"]))
 
     def test_harness_verify_writes_run_summary_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -8524,6 +9066,7 @@ class UnifiedCliTests(unittest.TestCase):
             unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
             manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            approval = repo / "approval.md"
             design.parent.mkdir(parents=True)
             kg.parent.mkdir(parents=True)
             matrix.parent.mkdir(parents=True)
@@ -8534,6 +9077,7 @@ class UnifiedCliTests(unittest.TestCase):
             write_command_evidence(unit, "mvn -pl services/sample-service -am test")
             review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
             manifest_path.write_text(manifest, encoding="utf-8")
+            approval.write_text("Approval: user-approved\n", encoding="utf-8")
             review_dir = self.write_semantic_reviews(repo)
             args = SimpleNamespace(
                 repo=repo,
@@ -8551,6 +9095,8 @@ class UnifiedCliTests(unittest.TestCase):
                 require_semantic_reviews=False,
                 implementation_manifest=manifest_path,
                 skip_spring_static_check=True,
+                no_harness_state=True,
+                harness_state_approval=approval,
                 status_file=None,
             )
 
@@ -8615,6 +9161,7 @@ class UnifiedCliTests(unittest.TestCase):
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
             manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
             dependency_report = repo / "knowledge-graph" / "cross-service-dependencies.json"
+            approval = repo / "approval.md"
             for path in (
                 "services/order-service/src/main/java/com/example/PaymentClient.java",
                 "services/payment-service/src/main/java/com/example/PaymentController.java",
@@ -8647,6 +9194,7 @@ class UnifiedCliTests(unittest.TestCase):
                 json.dumps({"ready": True, "dependencies": [{"kind": "http"}], "unresolved_questions": []}),
                 encoding="utf-8",
             )
+            approval.write_text("Approval: user-approved\n", encoding="utf-8")
             review_dir = self.write_semantic_reviews(repo)
             args = SimpleNamespace(
                 repo=repo,
@@ -8664,6 +9212,8 @@ class UnifiedCliTests(unittest.TestCase):
                 review_dir=[review_dir],
                 require_semantic_reviews=False,
                 skip_spring_static_check=True,
+                no_harness_state=True,
+                harness_state_approval=approval,
                 status_file=None,
             )
 

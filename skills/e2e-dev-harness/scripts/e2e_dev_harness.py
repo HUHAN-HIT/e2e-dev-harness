@@ -29,6 +29,7 @@ import handoff_gate  # noqa: E402
 import harness_verify  # noqa: E402
 import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
+import phase_guard  # noqa: E402
 import run_state  # noqa: E402
 import service_design_gate  # noqa: E402
 import superpowers_probe  # noqa: E402
@@ -617,6 +618,12 @@ def clarify(args) -> tuple[int, dict]:
             gate_status="passed",
             evidence=design_path,
         )
+        result["blocked_next_without_plan"] = True
+        result["next_required"] = {
+            "phase": "plan",
+            "command": "Run e2e_dev_harness.py next, then e2e_dev_harness.py plan --create-archive before any code write.",
+            "code_writes_allowed": False,
+        }
     write_status(args.status_file, result)
     return (0 if result["ready_for_implementation"] else 2), result
 
@@ -1412,6 +1419,8 @@ def gate(args) -> tuple[int, dict]:
             tdd_mode=getattr(args, "tdd_mode", "auto"),
             workflow_tier=getattr(args, "workflow_tier", "auto"),
             run_state=getattr(args, "run_state", None) or getattr(args, "state", None),
+            no_harness_state=getattr(args, "no_harness_state", False),
+            harness_state_approval=getattr(args, "harness_state_approval", None),
         )
     )
     if result.get("ready"):
@@ -1421,9 +1430,15 @@ def gate(args) -> tuple[int, dict]:
         }.get(args.phase)
         run_state_path = getattr(args, "run_state", None) or getattr(args, "state", None)
         if transition_target and run_state_path:
-            evidence = args.red_test_evidence if args.phase == "implementation" else (
-                args.unit_test_evidence or args.implementation_manifest or args.red_test_evidence
-            )
+            resolved_state = require_repo_path(repo, run_state_path, "run state")
+            if args.phase == "implementation":
+                evidence = resolved_state.parent / "evidence" / "implementation-gate.json"
+                gate_evidence = dict(result)
+                gate_evidence.setdefault("phase", args.phase)
+                gate_evidence.setdefault("ready", True)
+                write_status(evidence, gate_evidence)
+            else:
+                evidence = args.unit_test_evidence or args.implementation_manifest or args.red_test_evidence
             transition = run_state.transition_state(
                 repo,
                 run_state_path,
@@ -1603,6 +1618,29 @@ def guard(args) -> tuple[int, dict]:
         require_completion=args.require_completion,
         approval_file=args.approval_file,
     )
+    write_status(args.status_file, result)
+    return (0 if result["ready"] else 2), result
+
+
+def pre_code(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    paths = list(args.path or [])
+    if args.patch:
+        patch_path = resolve_repo_path(repo, args.patch)
+        patch_text = patch_path.read_text(encoding="utf-8", errors="replace") if patch_path and patch_path.exists() else ""
+        paths.extend(Path(path) for path in phase_guard.paths_from_patch(patch_text))
+    if args.command_text:
+        paths.extend(Path(path) for path in phase_guard.paths_from_shell_command(args.command_text))
+    result = phase_guard.validate_action(
+        repo,
+        args.tool,
+        paths,
+        args.lock,
+        args.run_dir,
+    )
+    result["pre_code"] = True
+    result["tool"] = args.tool
+    result["paths_checked"] = [str(path) for path in paths]
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
 
@@ -1813,6 +1851,8 @@ def main() -> int:
     gate_parser.add_argument("--require-semantic-reviews", action="store_true")
     gate_parser.add_argument("--skip-spring-static-check", action="store_true")
     gate_parser.add_argument("--run-state", type=Path)
+    gate_parser.add_argument("--no-harness-state", action="store_true")
+    gate_parser.add_argument("--harness-state-approval", type=Path)
     gate_parser.add_argument("--status-file", type=Path)
 
     verify_parser = subparsers.add_parser("verify", help="Run prepare, clarification, optional gate, and optional Maven.")
@@ -1866,6 +1906,16 @@ def main() -> int:
     guard_parser.add_argument("--require-completion", action="store_true")
     guard_parser.add_argument("--approval-file", type=Path)
     guard_parser.add_argument("--status-file", type=Path)
+
+    pre_code_parser = subparsers.add_parser("pre-code", help="Check whether a planned code write is allowed by phase lock.")
+    pre_code_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    pre_code_parser.add_argument("--tool", default="Edit")
+    pre_code_parser.add_argument("--path", action="append", type=Path)
+    pre_code_parser.add_argument("--patch", type=Path, help="Patch file to inspect for edited paths.")
+    pre_code_parser.add_argument("--command-text", default="", help="Shell command text to inspect for write targets.")
+    pre_code_parser.add_argument("--lock", type=Path)
+    pre_code_parser.add_argument("--run-dir", type=Path)
+    pre_code_parser.add_argument("--status-file", type=Path)
 
     test_impact_parser = subparsers.add_parser("test-impact", help="Create or validate an incremental test impact plan.")
     test_impact_parser.add_argument("repo", nargs="?", default=".", type=Path)
@@ -1925,6 +1975,8 @@ def main() -> int:
             exit_code, result = gate(args)
         elif args.command == "guard":
             exit_code, result = guard(args)
+        elif args.command == "pre-code":
+            exit_code, result = pre_code(args)
         elif args.command == "test-impact":
             exit_code, result = test_impact(args)
         elif args.command == "service-design":

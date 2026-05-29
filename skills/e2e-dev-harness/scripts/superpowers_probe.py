@@ -16,6 +16,10 @@ REQUIRED = {
 }
 
 
+def env_default(new_name: str, old_name: str, fallback: str) -> str:
+    return os.environ.get(new_name) or os.environ.get(old_name, fallback)
+
+
 def candidate_skill_dirs() -> list[Path]:
     candidates: list[Path] = []
     env_skills = os.environ.get("SUPERPOWERS_SKILLS_DIR")
@@ -91,7 +95,7 @@ def main() -> int:
     parser.add_argument(
         "--mode",
         choices=["auto", "strict", "optional", "off"],
-        default=os.environ.get("E2E_DEV_WORKFLOW_SUPERPOWERS_MODE", "auto"),
+        default=env_default("E2E_DEV_HARNESS_SUPERPOWERS_MODE", "E2E_DEV_WORKFLOW_SUPERPOWERS_MODE", "auto"),
     )
     parser.add_argument("--phase", choices=["all", "clarification", "implementation"], default="all")
     parser.add_argument("--json", action="store_true", help="Print JSON only.")

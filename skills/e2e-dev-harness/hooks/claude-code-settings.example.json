@@ -2,11 +2,11 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python skills/e2e-dev-harness/scripts/phase_guard.py . --hook-input - --json"
+            "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --json"
           }
         ]
       }

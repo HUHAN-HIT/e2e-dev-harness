@@ -5,11 +5,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
 
-WRITE_TOOLS = {"write", "edit", "multiedit", "notebookedit"}
+WRITE_TOOLS = {
+    "write",
+    "edit",
+    "multiedit",
+    "notebookedit",
+    "applypatch",
+    "shellcommand",
+    "shell",
+    "bash",
+    "powershell",
+}
 CODE_SUFFIXES = {
     ".java",
     ".kt",
@@ -37,7 +48,14 @@ CODE_SUFFIXES = {
 CODE_FILENAMES = {"pom.xml", "build.gradle", "settings.gradle", "Dockerfile"}
 ARTIFACT_PREFIXES = ("docs/agent-runs/",)
 DOC_PREFIXES = ("docs/design/", "docs/requirements/", "docs/review-profiles/", ".e2e/")
+TEST_PATH_MARKERS = ("/src/test/", "/test/", "/tests/")
 CLAIMED_OWNER_STATUSES = {"claimed", "in-progress", "in_progress", "completed"}
+PATCH_FILE_RE = re.compile(r"^\s*(?:\*\*\* (?:Add|Update) File:|---|\+\+\+)\s+(?P<path>.+?)\s*$", re.MULTILINE)
+SHELL_WRITE_RE = re.compile(
+    r"(?:Set-Content|Add-Content|Out-File|New-Item)\b[^\r\n]*?(?:-Path|-LiteralPath|-FilePath|-Name)?\s*['\"]?(?P<cmdlet>[A-Za-z0-9_./\\:-]+\.[A-Za-z0-9]+)['\"]?"
+    r"|(?:^|\s)(?:>|>>)\s*['\"]?(?P<redir>[A-Za-z0-9_./\\:-]+\.[A-Za-z0-9]+)['\"]?",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def load_json(path: Path) -> dict:
@@ -68,6 +86,11 @@ def is_code_path(repo: Path, path: Path) -> bool:
     return name in CODE_FILENAMES or path.suffix in CODE_SUFFIXES
 
 
+def is_test_code_path(repo: Path, path: Path) -> bool:
+    relative = "/" + posix_relative(repo, path if path.is_absolute() else repo / path)
+    return any(marker in relative for marker in TEST_PATH_MARKERS)
+
+
 def service_for_code_path(repo: Path, path: Path, services: list[str]) -> str:
     relative = posix_relative(repo, path if path.is_absolute() else repo / path)
     matches = [
@@ -79,6 +102,17 @@ def service_for_code_path(repo: Path, path: Path, services: list[str]) -> str:
     if not matches:
         return ""
     return sorted(matches, key=len, reverse=True)[0]
+
+
+def path_matches_scope(repo: Path, path: Path, scopes: list[str]) -> bool:
+    relative = posix_relative(repo, path if path.is_absolute() else repo / path)
+    for scope in scopes:
+        normalized = str(scope).replace("\\", "/").strip("/")
+        if not normalized:
+            continue
+        if relative == normalized or relative.startswith(normalized + "/"):
+            return True
+    return False
 
 
 def discover_lock(repo: Path, explicit: Path | None = None, run_dir: Path | None = None) -> Path | None:
@@ -108,7 +142,39 @@ def parse_hook_input(text: str) -> tuple[str, list[str]]:
         value = tool_input.get(key) if isinstance(tool_input, dict) else None
         if value:
             paths.append(str(value))
+    patch_text = ""
+    command_text = ""
+    if isinstance(tool_input, dict):
+        patch_text = str(tool_input.get("patch") or tool_input.get("input") or tool_input.get("text") or "")
+        command_text = str(tool_input.get("command") or tool_input.get("cmd") or tool_input.get("script") or "")
+        if not command_text and isinstance(tool_input.get("tool_input"), dict):
+            nested = tool_input.get("tool_input")
+            command_text = str(nested.get("command") or nested.get("cmd") or nested.get("script") or "")
+    if normalize_tool(tool) == "applypatch" or "*** Begin Patch" in patch_text:
+        paths.extend(paths_from_patch(patch_text))
+    if normalize_tool(tool) in {"shellcommand", "shell", "bash", "powershell"}:
+        paths.extend(paths_from_shell_command(command_text))
     return tool, paths
+
+
+def paths_from_patch(text: str) -> list[str]:
+    paths: list[str] = []
+    for match in PATCH_FILE_RE.finditer(text or ""):
+        value = match.group("path").strip()
+        if value.startswith(("a/", "b/")):
+            value = value[2:]
+        if value and value != "/dev/null":
+            paths.append(value)
+    return paths
+
+
+def paths_from_shell_command(command: str) -> list[str]:
+    paths: list[str] = []
+    for match in SHELL_WRITE_RE.finditer(command or ""):
+        value = match.group("cmdlet") or match.group("redir") or ""
+        if value:
+            paths.append(value)
+    return paths
 
 
 def validate_action(
@@ -133,26 +199,65 @@ def validate_action(
         }
     data = load_json(lock)
     lifecycle = str(data.get("lifecycle", ""))
-    allowed = set(data.get("allowed_code_write_lifecycles") or ["IMPLEMENTED"])
-    if lifecycle not in allowed:
+    test_code_paths = [path for path in code_paths if is_test_code_path(repo, path)]
+    runtime_code_paths = [path for path in code_paths if path not in test_code_paths]
+    allowed_runtime = set(data.get("allowed_code_write_lifecycles") or ["IMPLEMENTED"])
+    allowed_tests = set(data.get("allowed_test_write_lifecycles") or ["PLANNED", "RED_READY", "IMPLEMENTED"])
+    if runtime_code_paths and lifecycle not in allowed_runtime:
         return {
             "ready": False,
             "blocked_reasons": [
                 f"Code write blocked: lifecycle {lifecycle or '<missing>'} is not in allowed phases: "
-                + ", ".join(sorted(allowed))
+                + ", ".join(sorted(allowed_runtime))
             ],
             "warnings": [],
             "phase_lock": str(lock),
             "lifecycle": lifecycle,
             "code_paths": [str(path) for path in code_paths],
+            "runtime_code_paths": [str(path) for path in runtime_code_paths],
+            "test_code_paths": [str(path) for path in test_code_paths],
+        }
+    if test_code_paths and not runtime_code_paths and lifecycle not in allowed_tests:
+        return {
+            "ready": False,
+            "blocked_reasons": [
+                f"Test write blocked: lifecycle {lifecycle or '<missing>'} is not in allowed test phases: "
+                + ", ".join(sorted(allowed_tests))
+            ],
+            "warnings": [],
+            "phase_lock": str(lock),
+            "lifecycle": lifecycle,
+            "code_paths": [str(path) for path in code_paths],
+            "runtime_code_paths": [str(path) for path in runtime_code_paths],
+            "test_code_paths": [str(path) for path in test_code_paths],
         }
     selected_mode = str(data.get("selected_mode", ""))
     services = [str(service).replace("\\", "/").strip("/") for service in data.get("services", []) or []]
-    if selected_mode == "multi" and services:
+    if selected_mode == "multi" and services and runtime_code_paths:
         touched_services = {
             service_for_code_path(repo, path, services)
-            for path in code_paths
+            for path in runtime_code_paths
         }
+        shared_edit_scopes = [str(scope) for scope in data.get("shared_edit_scopes", []) or []]
+        unscoped_paths = [
+            path
+            for path in runtime_code_paths
+            if not service_for_code_path(repo, path, services) and not path_matches_scope(repo, path, shared_edit_scopes)
+        ]
+        if unscoped_paths:
+            return {
+                "ready": False,
+                "blocked_reasons": [
+                    "Multi-service code write blocked: runtime code path is outside claimed services and no shared_edit_scopes entry allows it."
+                ],
+                "warnings": [],
+                "phase_lock": str(lock),
+                "lifecycle": lifecycle,
+                "code_paths": [str(path) for path in code_paths],
+                "runtime_code_paths": [str(path) for path in runtime_code_paths],
+                "test_code_paths": [str(path) for path in test_code_paths],
+                "unscoped_runtime_code_paths": [str(path) for path in unscoped_paths],
+            }
         touched_services.discard("")
         if len(touched_services) > 1:
             return {
@@ -164,6 +269,8 @@ def validate_action(
                 "phase_lock": str(lock),
                 "lifecycle": lifecycle,
                 "code_paths": [str(path) for path in code_paths],
+                "runtime_code_paths": [str(path) for path in runtime_code_paths],
+                "test_code_paths": [str(path) for path in test_code_paths],
                 "touched_services": sorted(touched_services),
             }
         owners = data.get("owners") if isinstance(data.get("owners"), dict) else {}
@@ -183,6 +290,8 @@ def validate_action(
                     "phase_lock": str(lock),
                     "lifecycle": lifecycle,
                     "code_paths": [str(path) for path in code_paths],
+                    "runtime_code_paths": [str(path) for path in runtime_code_paths],
+                    "test_code_paths": [str(path) for path in test_code_paths],
                     "touched_services": sorted(touched_services),
                 }
     return {
@@ -192,6 +301,8 @@ def validate_action(
         "phase_lock": str(lock),
         "lifecycle": lifecycle,
         "code_paths": [str(path) for path in code_paths],
+        "runtime_code_paths": [str(path) for path in runtime_code_paths],
+        "test_code_paths": [str(path) for path in test_code_paths],
     }
 
 

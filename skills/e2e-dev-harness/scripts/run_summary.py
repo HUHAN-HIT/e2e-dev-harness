@@ -9,12 +9,24 @@ from pathlib import Path
 
 
 def load_json(path: Path | None) -> dict:
+    data, _errors = load_json_checked(path)
+    return data
+
+
+def load_json_checked(path: Path | None, label: str = "JSON file", required: bool = False) -> tuple[dict, list[str]]:
     if not path:
-        return {}
+        return {}, [f"{label} path is missing."] if required else []
+    if not path.exists():
+        return {}, [f"{label} not found: {path}"] if required else []
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-        return {}
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as error:
+        return {}, [f"{label} is invalid JSON and must be repaired before run summary is trusted: {path}: {error}"]
+    except (OSError, UnicodeDecodeError) as error:
+        return {}, [f"{label} could not be read before run summary is trusted: {path}: {error}"]
+    if not isinstance(data, dict):
+        return {}, [f"{label} must be a JSON object: {path}"]
+    return data, []
 
 
 def resolve(repo: Path, value: str | None) -> Path | None:
@@ -84,6 +96,8 @@ def next_actions(summary: dict) -> list[str]:
         actions.append("Create or refresh missing completion artifacts.")
     if summary["blocked_count"]:
         actions.append("Resolve harness verification blockers.")
+    if summary.get("source_error_count"):
+        actions.append("Repair unreadable or invalid harness JSON artifacts before trusting the archive.")
     if any(status != "present" for status in summary["semantic_reviews"].values()):
         actions.append("Run independent R1/R2/R3 semantic reviews.")
     if summary.get("strict_guard") != "present" and summary.get("strict_completion"):
@@ -96,14 +110,19 @@ def next_actions(summary: dict) -> list[str]:
 def build_summary(repo: Path, state_path: Path, verify_result: dict | None = None) -> dict:
     repo = repo.resolve()
     resolved_state = state_path if state_path.is_absolute() else repo / state_path
-    state_data = load_json(resolved_state)
+    state_data, source_errors = load_json_checked(resolved_state, "Run state", required=True)
     registry_path = resolve(repo, state_data.get("artifact_registry"))
-    registry_data = load_json(registry_path)
+    registry_required = bool(state_data.get("artifact_registry"))
+    registry_data, registry_errors = load_json_checked(registry_path, "Artifact registry", required=registry_required)
+    source_errors.extend(registry_errors)
     artifacts = [item for item in registry_data.get("artifacts", []) if isinstance(item, dict)]
     trace_path = resolve(repo, artifact_path(artifacts, "execution_trace")) or (resolved_state.parent / "execution-trace.json")
-    trace_data = load_json(trace_path)
+    trace_data, trace_errors = load_json_checked(trace_path, "Execution trace", required=False)
+    if trace_path.exists():
+        source_errors.extend(trace_errors)
     verify = verify_result or {}
     blocked = verify.get("blocked_reasons", []) if isinstance(verify.get("blocked_reasons", []), list) else []
+    blocked = list(blocked) + source_errors
     warnings = verify.get("warnings", []) if isinstance(verify.get("warnings", []), list) else []
     workflow = verify.get("workflow") if isinstance(verify.get("workflow"), dict) else {}
     strict_completion = bool(workflow.get("strict") and workflow.get("phase") == "completion")
@@ -117,8 +136,9 @@ def build_summary(repo: Path, state_path: Path, verify_result: dict | None = Non
         "lifecycle": state_data.get("lifecycle") or "",
         "selected_mode": state_data.get("selected_mode") or registry_data.get("selected_mode") or "",
         "services": state_data.get("services") or registry_data.get("services") or [],
-        "ready": verify.get("ready"),
+        "ready": False if source_errors else verify.get("ready"),
         "blocked_count": len(blocked),
+        "source_error_count": len(source_errors),
         "warning_count": len(warnings),
         "artifact_count": len(artifacts),
         "artifact_status_counts": status_counts(artifacts),
@@ -198,13 +218,20 @@ def main() -> int:
         if not args.verify_result or args.verify_result.is_absolute()
         else repo / args.verify_result
     )
-    summary = build_summary(repo, args.state, load_json(verify_result_path))
+    verify_result, verify_errors = load_json_checked(verify_result_path, "Verify result", required=False)
+    if verify_errors:
+        verify_result = {
+            "ready": False,
+            "blocked_reasons": verify_errors,
+            "warnings": [],
+        }
+    summary = build_summary(repo, args.state, verify_result)
     write_outputs(summary, out_json, out_md)
     if args.json:
         print(json.dumps(summary, indent=2, ensure_ascii=False))
     else:
         print(markdown(summary), end="")
-    return 0
+    return 2 if summary.get("source_error_count") else 0
 
 
 if __name__ == "__main__":

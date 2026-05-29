@@ -18,6 +18,10 @@ if str(SCRIPT_DIR) not in sys.path:
 from common import parse_modules, posix  # noqa: E402
 
 
+def env_default(new_name: str, old_name: str, fallback: str) -> str:
+    return os.environ.get(new_name) or os.environ.get(old_name, fallback)
+
+
 MEMORY_FILES = {
     "project": "project.md",
     "decision": "decisions.md",
@@ -698,7 +702,7 @@ def main() -> int:
     scan_parser.add_argument(
         "--mode",
         choices=["auto", "strict", "optional", "off"],
-        default=os.environ.get("E2E_DEV_WORKFLOW_MEMORY_MODE", "auto"),
+        default=env_default("E2E_DEV_HARNESS_MEMORY_MODE", "E2E_DEV_WORKFLOW_MEMORY_MODE", "auto"),
     )
 
     add_parser = subparsers.add_parser("add", help="Append a verified memory entry.")

@@ -102,6 +102,10 @@ LIST_ITEM_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+")
 TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
 
 
+def env_default(new_name: str, old_name: str, fallback: str) -> str:
+    return os.environ.get(new_name) or os.environ.get(old_name, fallback)
+
+
 def read_design(path: Path | None) -> str:
     if not path:
         return ""
@@ -808,14 +812,14 @@ def main() -> int:
     parser.add_argument(
         "--mode",
         choices=AGENT_MODES,
-        default=os.environ.get("E2E_DEV_WORKFLOW_AGENT_MODE", "auto"),
+        default=env_default("E2E_DEV_HARNESS_AGENT_MODE", "E2E_DEV_WORKFLOW_AGENT_MODE", "auto"),
     )
     parser.add_argument("--design-doc", type=Path)
     parser.add_argument("--agent-run-dir", help="Archive directory for generated agent run files.")
     parser.add_argument("--run-date", help="Date prefix for default agent run directory, YYYY-MM-DD.")
     parser.add_argument("--path", action="append", help="Path that may be touched; can be repeated.")
     parser.add_argument("--service", action="append", help="Affected service directory or service name; can be repeated.")
-    parser.add_argument("--service-scope", choices=SERVICE_SCOPES, default=os.environ.get("E2E_DEV_WORKFLOW_SERVICE_SCOPE", "auto"))
+    parser.add_argument("--service-scope", choices=SERVICE_SCOPES, default=env_default("E2E_DEV_HARNESS_SERVICE_SCOPE", "E2E_DEV_WORKFLOW_SERVICE_SCOPE", "auto"))
     parser.add_argument("--dependency-report", type=Path)
     parser.add_argument("--status-file", type=Path)
     parser.add_argument("--json", action="store_true", help="Print JSON only.")

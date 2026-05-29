@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,8 @@ import task_alignment_guard  # noqa: E402
 import task_tier  # noqa: E402
 import tdd_evidence  # noqa: E402
 import test_impact_plan as test_impact_plan_gate  # noqa: E402
+
+APPROVAL_RE = re.compile(r"Approval\s*:\s*(user-approved|approved)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -66,6 +69,8 @@ class GateRequest:
     tdd_mode: str = "basic"
     workflow_tier: str = "basic"
     run_state: Path | None = None
+    no_harness_state: bool = False
+    harness_state_approval: Path | None = None
 
 
 def read_json(path: Path) -> dict | None:
@@ -73,6 +78,19 @@ def read_json(path: Path) -> dict | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def read_text(path: Path | None) -> str:
+    if not path:
+        return ""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def has_approval(path: Path | None) -> bool:
+    return bool(APPROVAL_RE.search(read_text(path)))
 
 
 def resolve_repo_path(repo: Path, path: Path | str | None) -> Path | None:
@@ -265,6 +283,14 @@ def validate_gate_request(request: GateRequest) -> dict:
     repo = repo.resolve()
     blocked_reasons: list[str] = []
     warnings: list[str] = []
+    if phase in {"implementation", "completion"} and not request.run_state:
+        approval_path = resolve_repo_path(repo, request.harness_state_approval)
+        if not request.no_harness_state or not has_approval(approval_path):
+            blocked_reasons.append(
+                f"{phase.capitalize()} gate requires --run-state so lifecycle, phase lock, and schedule state are enforced."
+            )
+        else:
+            warnings.append("Harness run-state enforcement was explicitly bypassed with user approval.")
     state_data, registry_data, state_errors = load_run_state_context(repo, request.run_state)
     blocked_reasons.extend(state_errors)
     workflow_tier_result = evaluate_workflow_tier(repo, workflow_tier, design_doc, dependency_report)
@@ -524,6 +550,9 @@ def validate_gate(
     require_intent: bool = False,
     tdd_mode: str = "auto",
     workflow_tier: str = "auto",
+    run_state: Path | None = None,
+    no_harness_state: bool = False,
+    harness_state_approval: Path | None = None,
 ) -> dict:
     return validate_gate_request(
         GateRequest(
@@ -557,6 +586,9 @@ def validate_gate(
             require_intent=require_intent,
             tdd_mode=tdd_mode,
             workflow_tier=workflow_tier,
+            run_state=run_state,
+            no_harness_state=no_harness_state,
+            harness_state_approval=harness_state_approval,
         )
     )
 
@@ -595,6 +627,8 @@ def main() -> int:
     parser.add_argument("--require-semantic-reviews", action="store_true")
     parser.add_argument("--skip-spring-static-check", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--no-harness-state", action="store_true")
+    parser.add_argument("--harness-state-approval", type=Path)
     args = parser.parse_args()
 
     result = validate_gate_request(
@@ -630,6 +664,8 @@ def main() -> int:
             tdd_mode=args.tdd_mode,
             workflow_tier=args.workflow_tier,
             run_state=args.run_state,
+            no_harness_state=args.no_harness_state,
+            harness_state_approval=args.harness_state_approval,
         )
     )
     if args.json:

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -19,6 +20,9 @@ import run_state  # noqa: E402
 
 
 CLAIMED_STATUSES = {"claimed", "in-progress", "in_progress", "completed"}
+COMPLETED_STATUSES = {"completed"}
+QUALITY_RE = re.compile(r"\b(todo|tbd|pending|placeholder|template)\b|<[^>]+>", re.IGNORECASE)
+PASS_RE = re.compile(r"\b(build success|success|passed|pass|verified|exit_code\"?\s*:\s*0)\b", re.IGNORECASE)
 
 
 def now_iso() -> str:
@@ -72,6 +76,98 @@ def posix_path(value: str) -> str:
     return value.replace("\\", "/").strip()
 
 
+def service_key(service: str) -> str:
+    return posix_path(service).strip("/").split("/")[-1]
+
+
+def path_under_service_plan(path: str, service: str) -> bool:
+    normalized = posix_path(path)
+    key = service_key(service)
+    return f"/service-plans/{key}/" in "/" + normalized
+
+
+def task_dependency_blockers(schedule: dict, task: dict, state: dict | None = None) -> list[str]:
+    blocked: list[str] = []
+    dependencies = [str(phase) for phase in task.get("depends_on_phases", []) or []]
+    tasks = [item for item in schedule.get("tasks", []) or [] if isinstance(item, dict)]
+    for phase in dependencies:
+        phase_tasks = [item for item in tasks if str(item.get("phase", "")) == phase]
+        if not phase_tasks:
+            blocked.append(f"Task {task.get('id', '<unknown>')} depends on phase {phase}, but no scheduled task records that phase.")
+            continue
+        if not any(str(item.get("status", "planned")).lower() in COMPLETED_STATUSES for item in phase_tasks):
+            blocked.append(f"Task {task.get('id', '<unknown>')} cannot be claimed until dependency phase {phase} is completed.")
+    if str(task.get("phase", "")) == "implement" and state:
+        gates = state.get("gates") if isinstance(state.get("gates"), dict) else {}
+        if state.get("selected_mode") == "multi" and gates.get("service_design") != "passed":
+            blocked.append("Implement task cannot be claimed until service_design gate is passed in run-state.")
+    return blocked
+
+
+def validate_unit_test_evidence(path: Path) -> list[str]:
+    try:
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as error:
+        return [f"Unit-test evidence could not be read: {path}: {error}"]
+    if QUALITY_RE.search(text):
+        return [f"Unit-test evidence contains placeholder content: {path}"]
+    if path.suffix.lower() == ".json":
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as error:
+            return [f"Unit-test evidence JSON is invalid: {path}: {error}"]
+        entries = data if isinstance(data, list) else [data]
+        if not entries or not all(isinstance(item, dict) and item.get("exit_code") == 0 for item in entries):
+            return [f"Unit-test evidence must contain passed command entries with exit_code 0: {path}"]
+        return []
+    if not PASS_RE.search(text):
+        return [f"Unit-test evidence must show passed verification: {path}"]
+    return []
+
+
+def validate_non_template_artifact(path: Path, label: str) -> list[str]:
+    try:
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as error:
+        return [f"{label} could not be read: {path}: {error}"]
+    if QUALITY_RE.search(text):
+        return [f"{label} contains placeholder/template content: {path}"]
+    if "|" not in text:
+        return [f"{label} must include a concrete table mapping, not free-form notes only: {path}"]
+    return []
+
+
+def validate_implement_completion_evidence(repo: Path, task: dict, evidence: list[str]) -> list[str]:
+    if str(task.get("phase", "")) != "implement":
+        return []
+    service = str(task.get("service", ""))
+    blocked: list[str] = []
+    if service:
+        for item in evidence:
+            if not path_under_service_plan(item, service):
+                blocked.append(f"Implement task evidence must stay under service-plans/{service_key(service)}/: {item}")
+    outputs = {posix_path(str(output)) for output in task.get("outputs", []) or [] if isinstance(output, str)}
+    evidence_set = {posix_path(item) for item in evidence}
+    required_kinds = {
+        "unit-test evidence": [output for output in outputs if "unit-test-evidence" in output or "test-evidence" in output],
+        "implementation manifest": [output for output in outputs if "implementation-manifest" in output],
+        "coverage matrix": [output for output in outputs if "coverage-matrix" in output or "coverage.md" in output],
+    }
+    for label, candidates in required_kinds.items():
+        if candidates and not any(candidate in evidence_set for candidate in candidates):
+            blocked.append(f"Implement task completion requires declared {label} output evidence.")
+    for item in sorted(evidence_set):
+        path = repo / item
+        lowered = item.lower()
+        if "unit-test-evidence" in lowered or "test-evidence" in lowered:
+            blocked.extend(validate_unit_test_evidence(path))
+        elif "implementation-manifest" in lowered:
+            blocked.extend(validate_non_template_artifact(path, "Implementation manifest"))
+        elif "coverage-matrix" in lowered or lowered.endswith("coverage.md"):
+            blocked.extend(validate_non_template_artifact(path, "Coverage matrix"))
+    return blocked
+
+
 def evidence_paths(repo: Path, evidence: list[str] | None) -> tuple[list[str], list[str]]:
     blocked: list[str] = []
     resolved: list[str] = []
@@ -113,6 +209,8 @@ def validate_schedule(schedule: dict, services: list[str], require_claims: bool 
         owner = str(task.get("owner", "")).strip()
         if require_claims and (not owner or status not in CLAIMED_STATUSES):
             blocked.append(f"Implement task for {service} must be claimed before code writes.")
+        if require_claims:
+            blocked.extend(task_dependency_blockers(schedule, task))
         if require_completed and status != "completed":
             blocked.append(f"Implement task for {service} must be completed before completion.")
     return {
@@ -156,6 +254,15 @@ def claim(repo: Path, schedule_path: Path, task_id: str, agent: str, state_path:
     task = find_task(schedule, task_id)
     if not task:
         return {"ready": False, "blocked_reasons": [f"Task not found in agent schedule: {task_id}"], "warnings": []}
+    state = None
+    if state_path:
+        resolved_state = resolve(repo, state_path)
+        if not resolved_state or not resolved_state.exists():
+            return {"ready": False, "blocked_reasons": [f"Run state not found: {resolved_state}"], "warnings": []}
+        state = load_json(resolved_state)
+    dependency_blocked = task_dependency_blockers(schedule, task, state)
+    if dependency_blocked:
+        return {"ready": False, "blocked_reasons": dependency_blocked, "warnings": []}
     status = str(task.get("status", "planned")).lower()
     if status == "completed":
         return {"ready": False, "blocked_reasons": [f"Task already completed: {task_id}"], "warnings": []}
@@ -202,6 +309,9 @@ def complete(
             "blocked_reasons": [f"Task {task_id} completion evidence must reference one of the task outputs."],
             "warnings": [],
         }
+    quality_blocked = validate_implement_completion_evidence(repo, task, resolved_evidence)
+    if quality_blocked:
+        return {"ready": False, "blocked_reasons": quality_blocked, "warnings": []}
     if not owner:
         task["owner"] = agent
         task["claimed_at"] = task.get("claimed_at") or now_iso()

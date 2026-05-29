@@ -21,6 +21,10 @@ AGENT_SCOPES = ("auto", "discovery", "affected", "all")
 DEFAULT_DISCOVERED_SERVICE_LIMIT = 20
 
 
+def env_default(new_name: str, old_name: str, fallback: str) -> str:
+    return os.environ.get(new_name) or os.environ.get(old_name, fallback)
+
+
 def first_agent_file(directory: Path) -> Path | None:
     for name in AGENT_FILENAMES:
         candidate = directory / name
@@ -274,12 +278,12 @@ def scan(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", nargs="?", default=".", type=Path)
-    parser.add_argument("--mode", choices=["auto", "strict", "optional", "off"], default=os.environ.get("E2E_DEV_WORKFLOW_AGENT_INSTRUCTIONS_MODE", "auto"))
+    parser.add_argument("--mode", choices=["auto", "strict", "optional", "off"], default=env_default("E2E_DEV_HARNESS_AGENT_INSTRUCTIONS_MODE", "E2E_DEV_WORKFLOW_AGENT_INSTRUCTIONS_MODE", "auto"))
     parser.add_argument("--include-content", action="store_true", help="Include instruction file content in output.")
     parser.add_argument("--max-chars", type=int, default=12000, help="Max chars per instruction file when including content.")
     parser.add_argument("--path", action="append", dest="paths", help="Path that may be touched; can be repeated to load scoped AGENT files.")
     parser.add_argument("--service", action="append", dest="services", help="Affected service directory or service name; can be repeated.")
-    parser.add_argument("--scope", choices=AGENT_SCOPES, default=os.environ.get("E2E_DEV_WORKFLOW_AGENT_INSTRUCTIONS_SCOPE", "auto"))
+    parser.add_argument("--scope", choices=AGENT_SCOPES, default=env_default("E2E_DEV_HARNESS_AGENT_INSTRUCTIONS_SCOPE", "E2E_DEV_WORKFLOW_AGENT_INSTRUCTIONS_SCOPE", "auto"))
     parser.add_argument("--max-discovered-services", type=int, default=DEFAULT_DISCOVERED_SERVICE_LIMIT)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()

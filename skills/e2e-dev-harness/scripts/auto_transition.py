@@ -64,10 +64,10 @@ def find_run_state(status_path: Path) -> Path | None:
     return None
 
 
-def evidence_for_phase(status: dict) -> Path | None:
+def evidence_for_phase(status: dict, status_path: Path) -> Path | None:
     phase = str(status.get("phase") or "")
-    if phase == "implementation" and status.get("red_test_evidence"):
-        return Path(str(status["red_test_evidence"]))
+    if phase == "implementation":
+        return status_path
     if phase == "completion":
         for key in ("unit_test_evidence", "implementation_manifest", "red_test_evidence"):
             if status.get(key):
@@ -124,7 +124,7 @@ def transition_from_status(repo: Path, status_path: Path, state_path: Path | Non
             "action": "blocked",
             "status_file": str(status_file),
         }
-    evidence = evidence_for_phase(status)
+    evidence = evidence_for_phase(status, status_file)
     transition = run_state.transition_state(
         repo,
         state_file,

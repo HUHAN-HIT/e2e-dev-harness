@@ -101,15 +101,19 @@ def write_state(repo: Path, path: Path, state: dict) -> None:
 
 
 def phase_lock_payload(state: dict) -> dict:
+    lifecycle = state.get("lifecycle", "")
+    test_write_open = lifecycle in {"PLANNED", "RED_READY", "IMPLEMENTED"}
     return {
         "schema": "e2e-dev-harness.phase-lock.v1",
         "run_id": state.get("run_id", ""),
-        "lifecycle": state.get("lifecycle", ""),
-        "state": "code-write-open" if state.get("lifecycle") == "IMPLEMENTED" else "code-write-locked",
+        "lifecycle": lifecycle,
+        "state": "code-write-open" if lifecycle == "IMPLEMENTED" else ("test-write-open" if test_write_open else "code-write-locked"),
         "allowed_code_write_lifecycles": ["IMPLEMENTED"],
+        "allowed_test_write_lifecycles": ["PLANNED", "RED_READY", "IMPLEMENTED"],
         "selected_mode": state.get("selected_mode", ""),
         "services": state.get("services", []),
         "owners": state.get("owners", {}),
+        "shared_edit_scopes": state.get("shared_edit_scopes", []),
         "updated_at": state.get("updated_at", now_iso()),
     }
 
@@ -188,6 +192,26 @@ def load_state(repo: Path, state_path: Path) -> tuple[Path, dict | None, list[st
         return path, None, [f"Run state is invalid JSON: {error}"]
 
 
+def implementation_gate_evidence_ready(path: Path | None) -> tuple[bool, str]:
+    if not path:
+        return False, "Transition to IMPLEMENTED requires implementation gate evidence."
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as error:
+        return False, f"Implementation gate evidence must be valid JSON: {path}: {error}"
+    except (OSError, UnicodeDecodeError) as error:
+        return False, f"Implementation gate evidence could not be read: {path}: {error}"
+    if not isinstance(data, dict):
+        return False, f"Implementation gate evidence must be a JSON object: {path}"
+    if data.get("phase") != "implementation":
+        return False, "Transition to IMPLEMENTED requires evidence from the implementation gate status artifact."
+    if data.get("ready") is not True:
+        return False, "Transition to IMPLEMENTED requires implementation gate evidence with ready=true."
+    if data.get("run_state_transition", {}).get("ready") is True:
+        return False, "Implementation gate evidence already includes a transition result; use the original pre-transition gate status artifact."
+    return True, ""
+
+
 def transition_allowed(current: str, target: str, allow_regression: bool) -> tuple[bool, str]:
     if target == "REWORK_REQUIRED":
         return True, ""
@@ -232,8 +256,9 @@ def transition_state(
             blocked.append("Transition to IMPLEMENTED requires gate=implementation.")
         if gate_status not in {"passed", "ready", "approved"}:
             blocked.append("Transition to IMPLEMENTED requires gate_status=passed.")
-        if not evidence_path:
-            blocked.append("Transition to IMPLEMENTED requires implementation gate evidence.")
+        gate_evidence_ready, gate_evidence_reason = implementation_gate_evidence_ready(evidence_path)
+        if not gate_evidence_ready:
+            blocked.append(gate_evidence_reason)
     if target_lifecycle == "VERIFIED" and not evidence_path:
         blocked.append("Transition to VERIFIED requires evidence.")
     if blocked:

@@ -226,7 +226,7 @@ If this blocks on `AC-2`, continue TDD red/green for `AC-2`; do not ask whether 
 
 ## Hook Configuration
 
-The hook examples are templates. To enforce them, copy or merge the matching file into the target runtime's project hook configuration. `install_hooks.py` can place or validate project-local files, but Codex and Gemini enforcement still depends on whether the host runner exposes a blocking pre-action/pre-tool hook.
+The hook examples are templates. To enforce them, run `install_hooks.py` from the installed skill directory so the generated hook command points to the absolute `phase_guard.py` path. Do not copy the example command verbatim into another repository; `python skills/e2e-dev-harness/scripts/phase_guard.py ...` only works when that repository contains the skill source tree. Codex and Gemini enforcement still depends on whether the host runner exposes a blocking pre-action/pre-tool hook.
 You can also install or check project-local hook configuration with:
 
 ```powershell
@@ -234,13 +234,13 @@ python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime claude --json
 python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime claude --check --json
 ```
 
-All examples call the same guard:
+The installed hooks all call the same guard shape. The first argument is the target repository, not the current shell directory:
 
 ```powershell
-python skills\e2e-dev-harness\scripts\phase_guard.py . --hook-input - --json
+"C:\absolute\path\to\python.exe" "C:\absolute\path\to\skills\e2e-dev-harness\scripts\phase_guard.py" "C:\absolute\path\to\target-repo" --hook-input - --json
 ```
 
-`phase_guard.py` reads `docs/agent-runs/<run>/.phase-lock` and blocks code-writing tools unless the lifecycle is `IMPLEMENTED`. In multi-service runs it also requires a claimed service code-developer task for the touched service/module. It still allows harness artifacts under `docs/agent-runs/` to be written before implementation.
+`phase_guard.py` reads `docs/agent-runs/<run>/.phase-lock`. It allows red-test writes under `src/test`, `test`, or `tests` during `PLANNED`/`RED_READY`, but blocks runtime production code until lifecycle `IMPLEMENTED`. In multi-service runs it also requires a claimed service code-developer task for runtime code writes in the touched service/module. It recognizes direct file tools, `apply_patch`, and common shell write commands. It still allows harness artifacts under `docs/agent-runs/` to be written before implementation.
 
 ### Claude Code
 
@@ -258,11 +258,11 @@ Minimal project config:
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python skills/e2e-dev-harness/scripts/phase_guard.py . --hook-input - --json"
+            "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --json"
           }
         ]
       }
@@ -288,12 +288,19 @@ The intended mapping is:
 {
   "event": "pre-action",
   "tools": ["Write", "Edit", "MultiEdit", "NotebookEdit"],
-  "command": "python skills/e2e-dev-harness/scripts/phase_guard.py . --hook-input - --json",
+  "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --json",
   "blocking": true
 }
 ```
 
-If the Codex host does not expose pre-action hooks, use `phase_guard.py` in the local wrapper or CI before allowing file-write steps, and always run `e2e_dev_harness.py guard` over the saved verify result.
+If the Codex host does not expose pre-action hooks, use `phase_guard.py` or the portable `pre-code` command in the local wrapper or CI before allowing file-write steps, and always run `e2e_dev_harness.py guard` over the saved verify result.
+
+```powershell
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py pre-code . `
+  --tool Edit `
+  --path services\payment-service\src\main\java\PaymentService.java `
+  --run-dir docs\agent-runs\<run>
+```
 
 ### Gemini CLI
 
@@ -309,7 +316,7 @@ The intended mapping is:
 {
   "event": "pre-tool-use",
   "tools": ["write_file", "replace", "edit", "multi_edit"],
-  "command": "python skills/e2e-dev-harness/scripts/phase_guard.py . --hook-input - --json",
+  "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --json",
   "blocking": true
 }
 ```
@@ -332,7 +339,7 @@ python skills\e2e-dev-harness\scripts\auto_transition.py . `
 Create or locate a run archive, then check a code write before implementation:
 
 ```powershell
-python skills\e2e-dev-harness\scripts\phase_guard.py . `
+"C:\absolute\path\to\python.exe" "C:\absolute\path\to\skills\e2e-dev-harness\scripts\phase_guard.py" "C:\absolute\path\to\target-repo" `
   --tool Edit `
   --path services\payment-service\src\main\java\PaymentService.java `
   --run-dir docs\agent-runs\<run> `
