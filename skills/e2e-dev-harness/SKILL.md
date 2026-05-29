@@ -73,7 +73,7 @@ For command details, read `references/implementation-gates.md`.
   Root/shared build or source changes expand to full `mvn test`.
 - Multi-service designs use one global design anchor plus service-local design slices.
   Each affected service gets `service-designs/<service>.md` with mapped ACs, allowed edit scope, runtime path, TDD plan, dependency boundary, and test impact.
-  Validate slices with `e2e_dev_harness.py service-design` before dispatching service code agents.
+  Multi-service `plan --create-archive` enters `SERVICE_DESIGN_REQUIRED`; validate slices with `e2e_dev_harness.py service-design --run-state <state>` before R2/TDD red or service code-agent dispatch.
 - Review profiles are portable project policy. Auto-discover project profiles and extend bundled profiles only when useful.
   Use common issue guidance for reviewer focus. Read `references/review-profiles.md` and `references/common-review-issues.md`.
 - Archive the final requirement summary after completion so future analysis can read outcomes without replaying every run artifact. Read `references/requirements-archive.md`.
@@ -99,6 +99,7 @@ For command details, read `references/implementation-gates.md`.
 - Use `execution_trace.py` or `verify --trace-file` to record phase timing, decisions, artifacts, and optional token counts.
   Use `command_evidence.py` for tests and graph commands when evidence must include exit code, elapsed time, output hashes, and environment metadata.
   Use `context_pack.py` before dispatching service-scoped agents so each agent receives only request-scoped allowed inputs/outputs within a file and byte budget.
+  Use `agent-task --action claim` before any multi-service code agent writes code; phase guard blocks unclaimed service writes and cross-service edits by a single claimed task.
   Use `checkpoint_gate.py` or `gate --checkpoint-mode required` to pause after clarify, R1, and TDD Red on critical or interactive work.
   Agent start/stop is runtime-specific; this harness enforces portable state, hooks, gates, and rework routing instead of claiming non-portable process control.
 
@@ -108,16 +109,18 @@ For command details, read `references/implementation-gates.md`.
 2. Clarify: use Superpowers brainstorming and the Markdown clarification gate; stop on unresolved behavior/API/data/test or impact-summary questions.
 3. R1 design review: independent semantic reviewer checks AC completeness, affected modules, security paths, and reference patterns.
 4. Plan: choose `single`, explicit `single-review`, or `multi`; write an ExecPlan for complex work. Read `references/exec-plan.md`.
-5. TDD red: write the first failing test and capture failing evidence.
-6. R2 test review: independent reviewer checks happy/failure paths, security cases, and contract coverage before production code.
-7. TDD green/refactor: implement with the Superpowers Red-Green-Refactor cycle for every assigned AC; run the test-impact plan's required Maven commands before broadening verification.
-8. AC progress gate: prove all assigned ACs for the service slice or global design have coverage rows, implementation manifest rows, and passing green/unit command evidence. Do not ask to start R3 while ACs remain.
-9. R3 implementation review: independent reviewer traces every AC through the concrete code path.
+5. Service design split for multi-service: fill and validate every `service-designs/<service>.md`; do not proceed while run-state is `SERVICE_DESIGN_REQUIRED`.
+6. TDD red: write the first failing service-local test and capture failing evidence.
+7. R2 test review: independent reviewer checks happy/failure paths, security cases, and contract coverage before production code.
+8. Dispatch/claim service code tasks: each service code agent claims its `agent-schedule.json` task before writing code; one claimed task edits only its service/module.
+9. TDD green/refactor: implement with the Superpowers Red-Green-Refactor cycle for every assigned AC; run the test-impact plan's required Maven commands before broadening verification.
+10. AC progress gate: prove all assigned ACs for the service slice or global design have coverage rows, implementation manifest rows, and passing green/unit command evidence. Do not ask to start R3 while ACs remain.
+11. R3 implementation review: independent reviewer traces every AC through the concrete code path.
    Then check completeness, tests, security, anti-patterns, and project-pattern consistency. The bundled default review profile is enforced unless an explicit project profile overrides it.
-10. Completion gate: prove every acceptance criterion and required artifact has use cases, service ownership, concrete tests, concrete code refs, business review, task alignment, and closed rework.
-11. Rework loop: findings create rework items and return to the earliest required phase before more production-code edits.
-12. Strict guard/report: run `verify --strict-workflow` or `guard`, capture accepted memory updates, and report evidence plus residual risks.
-13. Trace/archive: attach `execution-trace.json` and summaries when reporting or evaluating the run.
+12. Completion gate: prove every acceptance criterion and required artifact has use cases, service ownership, concrete tests, concrete code refs, business review, task alignment, completed service tasks, and closed rework.
+13. Rework loop: findings create rework items and return to the earliest required phase before more production-code edits.
+14. Strict guard/report: run `verify --strict-workflow` or `guard`, capture accepted memory updates, and report evidence plus residual risks.
+15. Trace/archive: attach `execution-trace.json` and summaries when reporting or evaluating the run.
 
 ## Agent Orchestration
 
@@ -141,6 +144,8 @@ Important boundaries:
 - Multi-service work keeps each service plan and code-agent handoff under `docs/agent-runs/<run>/service-plans/<service>/`.
 - Service code agents consume `service-designs/<service>.md` first, then the service implementation plan and service-local test impact plan; they should not reload the full global design unless the slice is incomplete.
 - Before dispatching a service code agent, create `docs/agent-runs/<run>/context-packs/<agent-or-service>.json` from `agent-schedule.json`; do not pass inherited developer chat as context.
+- Before a service code agent writes code, claim its task with `e2e_dev_harness.py agent-task --action claim --schedule docs/agent-runs/<run>/agent-schedule.json --task-id <id> --agent <agent> --state docs/agent-runs/<run>/run-state.json`.
+- Completion requires each service implement task to be completed with `agent-task --action complete` and an existing evidence file that matches one of the task outputs; the completion gate replays `agent-schedule.json`.
 - The orchestration result records `multi_agent_decision` with criteria, evidence, and required artifacts.
 - R1/R2/R3 reviews must be independent agents or separate reviewer sessions; one consolidated after-the-fact review is invalid.
 - Coverage Reviewer always runs before completion.

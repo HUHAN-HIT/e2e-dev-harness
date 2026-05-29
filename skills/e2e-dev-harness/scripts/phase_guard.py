@@ -37,6 +37,7 @@ CODE_SUFFIXES = {
 CODE_FILENAMES = {"pom.xml", "build.gradle", "settings.gradle", "Dockerfile"}
 ARTIFACT_PREFIXES = ("docs/agent-runs/",)
 DOC_PREFIXES = ("docs/design/", "docs/requirements/", "docs/review-profiles/", ".e2e/")
+CLAIMED_OWNER_STATUSES = {"claimed", "in-progress", "in_progress", "completed"}
 
 
 def load_json(path: Path) -> dict:
@@ -65,6 +66,19 @@ def is_code_path(repo: Path, path: Path) -> bool:
         return False
     name = path.name
     return name in CODE_FILENAMES or path.suffix in CODE_SUFFIXES
+
+
+def service_for_code_path(repo: Path, path: Path, services: list[str]) -> str:
+    relative = posix_relative(repo, path if path.is_absolute() else repo / path)
+    matches = [
+        service
+        for service in services
+        if relative == service.strip("/").replace("\\", "/")
+        or relative.startswith(service.strip("/").replace("\\", "/") + "/")
+    ]
+    if not matches:
+        return ""
+    return sorted(matches, key=len, reverse=True)[0]
 
 
 def discover_lock(repo: Path, explicit: Path | None = None, run_dir: Path | None = None) -> Path | None:
@@ -132,6 +146,45 @@ def validate_action(
             "lifecycle": lifecycle,
             "code_paths": [str(path) for path in code_paths],
         }
+    selected_mode = str(data.get("selected_mode", ""))
+    services = [str(service).replace("\\", "/").strip("/") for service in data.get("services", []) or []]
+    if selected_mode == "multi" and services:
+        touched_services = {
+            service_for_code_path(repo, path, services)
+            for path in code_paths
+        }
+        touched_services.discard("")
+        if len(touched_services) > 1:
+            return {
+                "ready": False,
+                "blocked_reasons": [
+                    "Multi-service code write blocked: one claimed code-developer task may edit only one service/module."
+                ],
+                "warnings": [],
+                "phase_lock": str(lock),
+                "lifecycle": lifecycle,
+                "code_paths": [str(path) for path in code_paths],
+                "touched_services": sorted(touched_services),
+            }
+        owners = data.get("owners") if isinstance(data.get("owners"), dict) else {}
+        for service in sorted(touched_services):
+            owner = owners.get(service) if isinstance(owners.get(service), dict) else {}
+            status = str(owner.get("status", "")).lower()
+            agent = str(owner.get("agent", "")).strip()
+            if not agent or status not in CLAIMED_OWNER_STATUSES:
+                return {
+                    "ready": False,
+                    "blocked_reasons": [
+                        "Multi-service code write blocked: service "
+                        + service
+                        + " has no claimed code-developer task in run-state owners."
+                    ],
+                    "warnings": [],
+                    "phase_lock": str(lock),
+                    "lifecycle": lifecycle,
+                    "code_paths": [str(path) for path in code_paths],
+                    "touched_services": sorted(touched_services),
+                }
     return {
         "ready": True,
         "blocked_reasons": [],

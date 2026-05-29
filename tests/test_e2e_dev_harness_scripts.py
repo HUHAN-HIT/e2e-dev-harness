@@ -22,6 +22,7 @@ if str(SCRIPTS) not in sys.path:
 import clarification_gate  # noqa: E402
 import agent_instructions  # noqa: E402
 import ac_progress_gate  # noqa: E402
+import agent_scheduler  # noqa: E402
 import artifact_registry  # noqa: E402
 import checkpoint_gate  # noqa: E402
 import command_evidence  # noqa: E402
@@ -6105,7 +6106,8 @@ class OrchestrationArtifactTests(unittest.TestCase):
             self.assertEqual("e2e-dev-harness.artifact-registry.v1", registry["schema"])
             self.assertEqual("e2e-dev-harness.agent-schedule.v1", schedule["schema"])
             self.assertEqual("e2e-dev-harness.run-state.v1", state["schema"])
-            self.assertEqual("PLANNED", state["lifecycle"])
+            self.assertEqual("SERVICE_DESIGN_REQUIRED", state["lifecycle"])
+            self.assertEqual("planned", state["gates"]["service_design"])
             self.assertEqual(result["handoff_artifacts"]["artifact_registry"], state["artifact_registry"])
             self.assertTrue(any(item["type"] == "design_doc" for item in registry["artifacts"]))
             archive_text = (repo / result["handoff_artifacts"]["requirements_archive"]).read_text(encoding="utf-8")
@@ -6425,6 +6427,8 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
                     ## Service-local TDD Plan
                     - First red test: OrderServiceTest
+                    - Expected failure: missing order persistence
+                    - Required Maven command: mvn -pl services/order-service -am test
 
                     ## Dependency Boundary
                     - Independent service change: yes
@@ -6462,7 +6466,10 @@ class OrchestrationArtifactTests(unittest.TestCase):
                 ).strip(),
                 encoding="utf-8",
             )
-            for service, ac_id in (("order-service", "AC-1"), ("payment-service", "AC-2")):
+            for service, ac_id, test_name in (
+                ("order-service", "AC-1", "OrderServiceTest"),
+                ("payment-service", "AC-2", "PaymentServiceTest"),
+            ):
                 (service_dir / f"{service}.md").write_text(
                     textwrap.dedent(
                         f"""
@@ -6479,13 +6486,15 @@ class OrchestrationArtifactTests(unittest.TestCase):
                         ## Mapped Acceptance Criteria
                         | AC | global requirement | service responsibility | local tests |
                         | --- | --- | --- | --- |
-                        | {ac_id} | Requirement | Local responsibility | {service}Test |
+                        | {ac_id} | Requirement | Local responsibility | {test_name} |
 
                         ## Runtime Path
                         - Controller -> Service -> Repository
 
                         ## Service-local TDD Plan
-                        - First red test: {service}Test
+                        - First red test: {test_name}
+                        - Expected failure: missing {service} behavior
+                        - Required Maven command: mvn -pl services/{service} -am test
 
                         ## Dependency Boundary
                         - Independent service change: yes
@@ -6503,6 +6512,250 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
         self.assertEqual(["AC-1", "AC-2"], result["mapped_acceptance_ids"])
+
+    def test_service_design_command_transitions_multi_run_to_planned(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "checkout.md"
+            service_dir = repo / "docs" / "agent-runs" / "run" / "service-designs"
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            design.parent.mkdir(parents=True)
+            service_dir.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Checkout
+
+                    ## Acceptance Criteria
+                    - AC-1 Order is created.
+                    - AC-2 Payment is reserved.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            for service, ac_id, test_name in (
+                ("order-service", "AC-1", "OrderServiceTest"),
+                ("payment-service", "AC-2", "PaymentServiceTest"),
+            ):
+                (service_dir / f"{service}.md").write_text(
+                    textwrap.dedent(
+                        f"""
+                        # Service Design Slice: services/{service}
+
+                        ## Service Scope
+                        - Service/module: services/{service}
+                        - Allowed edit scope:
+                          - services/{service}/
+
+                        ## Global Intent Summary
+                        - Checkout service responsibility.
+
+                        ## Mapped Acceptance Criteria
+                        | AC | global requirement | service responsibility | local tests |
+                        | --- | --- | --- | --- |
+                        | {ac_id} | Requirement | Local responsibility | {test_name} |
+
+                        ## Runtime Path
+                        - Controller -> Service -> Repository
+
+                        ## Service-local TDD Plan
+                        - First red test: {test_name}
+                        - Expected failure: missing {service} behavior
+                        - Required Maven command: mvn -pl services/{service} -am test
+
+                        ## Dependency Boundary
+                        - Independent service change: yes
+                        - HTTP/API dependencies: None
+                        - MQ/DMQ/Kafka dependencies: None
+
+                        ## Test Impact
+                        - mvn -pl services/{service} -am test
+                        """
+                    ).strip(),
+                    encoding="utf-8",
+                )
+            state = run_state.build_state(
+                "run",
+                "multi",
+                ["services/order-service", "services/payment-service"],
+                "docs/agent-runs/run/artifact-registry.json",
+                "SERVICE_DESIGN_REQUIRED",
+            )
+            run_state.write_state(repo, state_path, state)
+
+            code, result = e2e_dev_harness.service_design(
+                SimpleNamespace(
+                    repo=repo,
+                    global_design=design,
+                    service_design_dir=service_dir,
+                    service_design=None,
+                    run_state=state_path,
+                    status_file=None,
+                )
+            )
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code)
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("PLANNED", updated["lifecycle"])
+        self.assertEqual("passed", updated["gates"]["service_design"])
+
+    def test_multi_implementation_gate_blocks_before_service_design_state_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            artifacts = orchestration_plan.artifacts(
+                "checkout",
+                agent_run_dir="docs/agent-runs/run",
+                services=["services/order-service", "services/payment-service"],
+            )
+            design = repo / "docs" / "design" / "checkout.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Checkout
+
+                    ## Restated Intent
+                    Build checkout.
+
+                    ## Acceptance Criteria
+                    - AC-1 Order is created.
+                    - AC-2 Payment is reserved.
+
+                    ## Open Questions
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            artifacts["design_doc"] = "docs/design/checkout.md"
+            e2e_dev_harness.create_handoff_files(repo, artifacts)
+            schedule = orchestration_plan.agent_schedule(
+                "multi",
+                ["services/order-service", "services/payment-service"],
+                orchestration_plan.agent_plan("multi", artifacts, ["services/order-service", "services/payment-service"]),
+            )
+            (repo / artifacts["agent_schedule"]).write_text(json.dumps(schedule, indent=2), encoding="utf-8")
+            registry = artifact_registry.build_registry(
+                repo,
+                "docs/agent-runs/run",
+                artifacts,
+                "multi",
+                ["services/order-service", "services/payment-service"],
+            )
+            artifact_registry.write_registry(repo, repo / artifacts["artifact_registry"], registry)
+            state_path = repo / artifacts["run_state"]
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "multi",
+                ["services/order-service", "services/payment-service"],
+                artifacts["artifact_registry"],
+                "SERVICE_DESIGN_REQUIRED",
+            )
+            run_state.write_state(repo, state_path, state)
+
+            result = implementation_gate.validate_gate_request(
+                implementation_gate.GateRequest(
+                    repo=repo,
+                    phase="implementation",
+                    design_doc=Path("docs/design/checkout.md"),
+                    run_state=Path(artifacts["run_state"]),
+                )
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("service-design gate transitions" in reason for reason in result["blocked_reasons"]))
+
+    def test_multi_implementation_gate_requires_claimed_service_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            services = ["services/order-service", "services/payment-service"]
+            artifacts = orchestration_plan.artifacts("checkout", agent_run_dir="docs/agent-runs/run", services=services)
+            artifacts["design_doc"] = "docs/design/checkout.md"
+            design = repo / artifacts["design_doc"]
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Checkout
+
+                    ## Restated Intent
+                    Build checkout.
+
+                    ## Acceptance Criteria
+                    - AC-1 Order is created.
+                    - AC-2 Payment is reserved.
+
+                    ## Open Questions
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            e2e_dev_harness.create_handoff_files(repo, artifacts)
+            for service, ac_id, test_name in (
+                ("order-service", "AC-1", "OrderServiceTest"),
+                ("payment-service", "AC-2", "PaymentServiceTest"),
+            ):
+                service_design = repo / "docs" / "agent-runs" / "run" / "service-designs" / f"{service}.md"
+                service_design.write_text(
+                    textwrap.dedent(
+                        f"""
+                        # Service Design Slice: services/{service}
+
+                        ## Service Scope
+                        - Service/module: services/{service}
+                        - Allowed edit scope:
+                          - services/{service}/
+
+                        ## Global Intent Summary
+                        - Checkout service responsibility.
+
+                        ## Mapped Acceptance Criteria
+                        | AC | global requirement | service responsibility | local tests |
+                        | --- | --- | --- | --- |
+                        | {ac_id} | Requirement | Local responsibility | {test_name} |
+
+                        ## Runtime Path
+                        - Controller -> Service -> Repository
+
+                        ## Service-local TDD Plan
+                        - First red test: {test_name}
+                        - Expected failure: missing {service} behavior
+                        - Required Maven command: mvn -pl services/{service} -am test
+
+                        ## Dependency Boundary
+                        - Independent service change: yes
+                        - HTTP/API dependencies: None
+                        - MQ/DMQ/Kafka dependencies: None
+
+                        ## Test Impact
+                        - mvn -pl services/{service} -am test
+                        """
+                    ).strip(),
+                    encoding="utf-8",
+                )
+            agents = orchestration_plan.agent_plan("multi", artifacts, services)
+            schedule = orchestration_plan.agent_schedule("multi", services, agents)
+            (repo / artifacts["agent_schedule"]).write_text(json.dumps(schedule, indent=2), encoding="utf-8")
+            registry = artifact_registry.build_registry(repo, "docs/agent-runs/run", artifacts, "multi", services)
+            artifact_registry.write_registry(repo, repo / artifacts["artifact_registry"], registry)
+            state_path = repo / artifacts["run_state"]
+            state = run_state.build_state("docs/agent-runs/run", "multi", services, artifacts["artifact_registry"], "PLANNED")
+            state["gates"]["service_design"] = "passed"
+            run_state.write_state(repo, state_path, state)
+
+            result = implementation_gate.validate_gate_request(
+                implementation_gate.GateRequest(
+                    repo=repo,
+                    phase="implementation",
+                    design_doc=Path(artifacts["design_doc"]),
+                    run_state=Path(artifacts["run_state"]),
+                )
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("must be claimed" in reason for reason in result["blocked_reasons"]))
 
     def test_service_plan_archive_contains_microservice_scoped_sections(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6688,6 +6941,121 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("regression" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_run_state_blocks_manual_implemented_transition_without_gate_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            run_state.write_state(repo, state_path, state)
+
+            result = run_state.transition_state(repo, state_path, "IMPLEMENTED")
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("gate=implementation" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any("requires implementation gate evidence" in reason for reason in result["blocked_reasons"]))
+
+    def test_multi_phase_guard_requires_claimed_service_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            schedule_path = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            state = run_state.build_state(
+                "run",
+                "multi",
+                ["services/order-service", "services/payment-service"],
+                "docs/agent-runs/run/artifact-registry.json",
+                "IMPLEMENTED",
+            )
+            run_state.write_state(repo, state_path, state)
+            schedule = {
+                "schema": "e2e-dev-harness.agent-schedule.v1",
+                "selected_mode": "multi",
+                "services": ["services/order-service", "services/payment-service"],
+                "tasks": [
+                    {
+                        "id": "T01",
+                        "agent": "code-developer-order-service",
+                        "phase": "implement",
+                        "service": "services/order-service",
+                        "status": "planned",
+                    }
+                ],
+            }
+            schedule_path.parent.mkdir(parents=True, exist_ok=True)
+            schedule_path.write_text(json.dumps(schedule, indent=2), encoding="utf-8")
+
+            blocked = phase_guard.validate_action(
+                repo,
+                "Edit",
+                [Path("services/order-service/src/main/java/OrderService.java")],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+            claim = agent_scheduler.claim(repo, schedule_path, "T01", "agent-order", state_path)
+            allowed = phase_guard.validate_action(
+                repo,
+                "Edit",
+                [Path("services/order-service/src/main/java/OrderService.java")],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+            cross_service = phase_guard.validate_action(
+                repo,
+                "Edit",
+                [
+                    Path("services/order-service/src/main/java/OrderService.java"),
+                    Path("services/payment-service/src/main/java/PaymentService.java"),
+                ],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(blocked["ready"])
+        self.assertTrue(any("no claimed code-developer task" in reason for reason in blocked["blocked_reasons"]))
+        self.assertTrue(claim["ready"], claim["blocked_reasons"])
+        self.assertTrue(allowed["ready"], allowed["blocked_reasons"])
+        self.assertFalse(cross_service["ready"])
+        self.assertTrue(any("only one service" in reason for reason in cross_service["blocked_reasons"]))
+
+    def test_agent_task_complete_requires_existing_declared_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule_path = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            evidence = repo / "docs" / "agent-runs" / "run" / "service-plans" / "order-service" / "unit-test-evidence.txt"
+            other = repo / "docs" / "agent-runs" / "run" / "evidence" / "other.txt"
+            evidence.parent.mkdir(parents=True)
+            other.parent.mkdir(parents=True)
+            evidence.write_text("passed\n", encoding="utf-8")
+            other.write_text("passed\n", encoding="utf-8")
+            schedule = {
+                "schema": "e2e-dev-harness.agent-schedule.v1",
+                "selected_mode": "multi",
+                "services": ["services/order-service"],
+                "tasks": [
+                    {
+                        "id": "T01",
+                        "agent": "code-developer-order-service",
+                        "phase": "implement",
+                        "service": "services/order-service",
+                        "status": "claimed",
+                        "owner": "agent-order",
+                        "outputs": [
+                            "docs/agent-runs/run/service-plans/order-service/unit-test-evidence.txt"
+                        ],
+                    }
+                ],
+            }
+            schedule_path.parent.mkdir(parents=True, exist_ok=True)
+            schedule_path.write_text(json.dumps(schedule, indent=2), encoding="utf-8")
+
+            missing = agent_scheduler.complete(repo, schedule_path, "T01", "agent-order", evidence=["missing.txt"])
+            wrong = agent_scheduler.complete(repo, schedule_path, "T01", "agent-order", evidence=[str(other.relative_to(repo))])
+            ok = agent_scheduler.complete(repo, schedule_path, "T01", "agent-order", evidence=[str(evidence.relative_to(repo))])
+
+        self.assertFalse(missing["ready"])
+        self.assertTrue(any("missing" in reason for reason in missing["blocked_reasons"]))
+        self.assertFalse(wrong["ready"])
+        self.assertTrue(any("task outputs" in reason for reason in wrong["blocked_reasons"]))
+        self.assertTrue(ok["ready"], ok["blocked_reasons"])
+        self.assertEqual(["docs/agent-runs/run/service-plans/order-service/unit-test-evidence.txt"], ok["task"]["evidence"])
 
     def test_clarify_auto_transitions_run_state_when_supplied(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

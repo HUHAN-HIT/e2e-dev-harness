@@ -36,7 +36,22 @@ When `--service-scope auto` and no explicit service/path is supplied, the helper
 
 Every generated `service-plans/<service>/implementation-plan.md` must include agent assignment, allowed change scope, modification points, service-local change logic, TDD plan, contracts, data/transaction effects, risks, and completion evidence. The code agent owns that plan; reviewer agents validate it independently.
 
-`plan --create-archive` also writes `agent-schedule.json`. Treat it as the compact task board for agent dispatch: each task has an agent id, phase, service scope, dependency phases, input artifacts, output artifacts, and parallel group. Agents should update task status and artifact hashes there instead of exchanging long free-form chat transcripts. For multi-service work, service-scoped code-developer tasks in different `service:<name>` parallel groups may run concurrently after shared contracts and R2 review are stable.
+`plan --create-archive` also writes `agent-schedule.json`. Treat it as the compact task board for agent dispatch: each task has an agent id, phase, service scope, dependency phases, input artifacts, output artifacts, and parallel group. Agents update task status with `e2e_dev_harness.py agent-task` instead of exchanging long free-form chat transcripts.
+
+For multi-service work, `plan --create-archive` leaves run-state at `SERVICE_DESIGN_REQUIRED`. Fill and validate every service design slice with `service-design --run-state` before service code dispatch. Service-scoped code-developer tasks in different `service:<name>` parallel groups may run concurrently only after shared contracts, service designs, service-local TDD plans, and R2 review are stable.
+
+Before writing code, a service code agent must claim its task:
+
+```bash
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py agent-task . \
+  --schedule docs/agent-runs/<run>/agent-schedule.json \
+  --action claim \
+  --task-id <task-id> \
+  --agent <agent-name> \
+  --state docs/agent-runs/<run>/run-state.json
+```
+
+The claim writes service ownership into run-state and `.phase-lock`, allowing `phase_guard.py` to block unclaimed service writes and one-task multi-service edits. Completion requires each service implementation task to be marked `completed` with evidence.
 
 ## Agent Roles
 

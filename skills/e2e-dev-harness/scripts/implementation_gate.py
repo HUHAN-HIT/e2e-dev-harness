@@ -20,10 +20,12 @@ import coverage_gate  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import handoff_gate  # noqa: E402
 import implementation_manifest as implementation_manifest_gate  # noqa: E402
+import agent_scheduler  # noqa: E402
 import memory_capture  # noqa: E402
 import requirements_archive as requirements_archive_gate  # noqa: E402
 import reviewer_gate  # noqa: E402
 import rework_gate  # noqa: E402
+import service_design_gate  # noqa: E402
 import spring_static_check  # noqa: E402
 import task_alignment_guard  # noqa: E402
 import task_tier  # noqa: E402
@@ -63,6 +65,7 @@ class GateRequest:
     require_intent: bool = False
     tdd_mode: str = "basic"
     workflow_tier: str = "basic"
+    run_state: Path | None = None
 
 
 def read_json(path: Path) -> dict | None:
@@ -70,6 +73,89 @@ def read_json(path: Path) -> dict | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def resolve_repo_path(repo: Path, path: Path | str | None) -> Path | None:
+    if not path:
+        return None
+    value = Path(str(path))
+    return value if value.is_absolute() else repo / value
+
+
+def registry_entry(registry: dict, artifact_type: str, owner: str = "global") -> Path | None:
+    for item in registry.get("artifacts", []) or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == artifact_type and item.get("owner") == owner:
+            value = item.get("path")
+            if value:
+                return Path(str(value))
+    return None
+
+
+def load_run_state_context(repo: Path, state_path: Path | None) -> tuple[dict, dict, list[str]]:
+    if not state_path:
+        return {}, {}, []
+    state_file = resolve_repo_path(repo, state_path)
+    if not state_file or not state_file.exists():
+        return {}, {}, [f"Run state not found: {state_file}"]
+    state_data = read_json(state_file) or {}
+    registry_path = resolve_repo_path(repo, state_data.get("artifact_registry"))
+    registry_data = read_json(registry_path) if registry_path and registry_path.exists() else {}
+    return state_data, registry_data or {}, []
+
+
+def validate_multi_service_preconditions(repo: Path, request: GateRequest, state_data: dict, registry_data: dict) -> dict:
+    services = [str(service) for service in state_data.get("services", []) or []]
+    selected_mode = str(state_data.get("selected_mode", ""))
+    is_multi = selected_mode == "multi" or len(services) > 1
+    if not is_multi:
+        return {"ready": True, "blocked_reasons": [], "warnings": [], "service_design": None, "agent_schedule": None}
+    blocked: list[str] = []
+    warnings: list[str] = []
+    lifecycle = str(state_data.get("lifecycle", ""))
+    if request.phase in {"implementation", "completion"} and lifecycle == "SERVICE_DESIGN_REQUIRED":
+        blocked.append("Multi-service implementation is blocked until service-design gate transitions run-state to PLANNED.")
+    if request.phase == "implementation" and lifecycle not in {"PLANNED", "RED_READY"}:
+        blocked.append(f"Implementation gate requires lifecycle PLANNED or RED_READY for multi-service runs, got {lifecycle or '<missing>'}.")
+    if request.phase in {"implementation", "completion"}:
+        gates = state_data.get("gates") if isinstance(state_data.get("gates"), dict) else {}
+        if gates.get("service_design") != "passed":
+            blocked.append("Multi-service implementation requires run-state gates.service_design=passed.")
+
+    design_doc = request.design_doc or registry_entry(registry_data, "design_doc") or registry_entry(registry_data, "design")
+    service_design_dir = registry_entry(registry_data, "service_designs_dir")
+    service_design_result = service_design_gate.validate(repo, design_doc, service_design_dir, None)
+    if not service_design_result["ready"]:
+        blocked.extend("Service design: " + reason for reason in service_design_result["blocked_reasons"])
+
+    schedule_path = registry_entry(registry_data, "agent_schedule")
+    schedule_result = None
+    if not schedule_path:
+        blocked.append("Multi-service run requires agent-schedule.json in artifact registry.")
+    else:
+        resolved_schedule = resolve_repo_path(repo, schedule_path)
+        schedule = read_json(resolved_schedule) if resolved_schedule and resolved_schedule.exists() else {}
+        if not schedule:
+            blocked.append(f"Agent schedule not found or unreadable: {resolved_schedule}")
+        else:
+            schedule_result = agent_scheduler.validate_schedule(
+                schedule,
+                services,
+                require_claims=request.phase == "implementation",
+                require_completed=request.phase == "completion",
+            )
+            if not schedule_result["ready"]:
+                blocked.extend("Agent schedule: " + reason for reason in schedule_result["blocked_reasons"])
+            warnings.extend("Agent schedule: " + warning for warning in schedule_result["warnings"])
+
+    return {
+        "ready": not blocked,
+        "blocked_reasons": blocked,
+        "warnings": warnings,
+        "service_design": service_design_result,
+        "agent_schedule": schedule_result,
+    }
 
 
 def find_kg_status_file(repo: Path, explicit: Path | None) -> Path:
@@ -179,6 +265,8 @@ def validate_gate_request(request: GateRequest) -> dict:
     repo = repo.resolve()
     blocked_reasons: list[str] = []
     warnings: list[str] = []
+    state_data, registry_data, state_errors = load_run_state_context(repo, request.run_state)
+    blocked_reasons.extend(state_errors)
     workflow_tier_result = evaluate_workflow_tier(repo, workflow_tier, design_doc, dependency_report)
     effective_workflow_tier = workflow_tier_result["tier"]
     if effective_workflow_tier in {"critical", "audited"} and tdd_mode == "off":
@@ -204,6 +292,11 @@ def validate_gate_request(request: GateRequest) -> dict:
         blocked_reasons.append(f"Knowledge graph status file not found or unreadable: {kg_path}")
     elif not kg_status.get("selected_tools"):
         warnings.append("Knowledge graph status exists, but no graph tools were selected.")
+
+    multi_service_result = validate_multi_service_preconditions(repo, request, state_data, registry_data)
+    if not multi_service_result["ready"]:
+        blocked_reasons.extend(multi_service_result["blocked_reasons"])
+    warnings.extend(multi_service_result["warnings"])
 
     red_test_result = None
     tdd_result = None
@@ -381,6 +474,7 @@ def validate_gate_request(request: GateRequest) -> dict:
         "design": design_result,
         "knowledge_graph_status_file": str(kg_path),
         "knowledge_graph_status_loaded": bool(kg_status),
+        "multi_service_preconditions": multi_service_result,
         "red_test_evidence": red_test_result,
         "tdd": tdd_result,
         "coverage": coverage_result,
@@ -490,6 +584,7 @@ def main() -> int:
     parser.add_argument("--require-intent", action="store_true")
     parser.add_argument("--tdd-mode", choices=tdd_evidence.MODES, default="auto")
     parser.add_argument("--workflow-tier", choices=task_tier.TIERS, default="auto")
+    parser.add_argument("--run-state", type=Path)
     parser.add_argument("--rework-dir", action="append", type=Path)
     parser.add_argument("--review-dir", action="append", type=Path)
     parser.add_argument("--review-profile", type=Path)
@@ -534,6 +629,7 @@ def main() -> int:
             require_intent=args.require_intent,
             tdd_mode=args.tdd_mode,
             workflow_tier=args.workflow_tier,
+            run_state=args.run_state,
         )
     )
     if args.json:

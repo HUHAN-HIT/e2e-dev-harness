@@ -122,7 +122,31 @@ python skills/e2e-dev-harness/scripts/run_state.py . \
 ```
 
 `clarify --run-state docs/agent-runs/<run>/run-state.json` automatically transitions a ready clarification result to `CLARIFIED`.
-`plan --create-archive` creates `run-state.json`, `.phase-lock`, and `artifact-registry.json` at `PLANNED`.
+`plan --create-archive` creates `run-state.json`, `.phase-lock`, and `artifact-registry.json`. Single-service runs enter `PLANNED`; multi-service runs enter `SERVICE_DESIGN_REQUIRED`.
+
+For multi-service runs, fill every `service-designs/<service>.md`, then validate and transition:
+
+```bash
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py service-design . \
+  --global-design docs/design/<feature>.md \
+  --service-design-dir docs/agent-runs/<run>/service-designs \
+  --run-state docs/agent-runs/<run>/run-state.json
+```
+
+The implementation gate blocks while lifecycle is `SERVICE_DESIGN_REQUIRED` or `gates.service_design` is not `passed`.
+
+Before multi-service code writes, claim the scheduled service task:
+
+```bash
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py agent-task . \
+  --schedule docs/agent-runs/<run>/agent-schedule.json \
+  --action claim \
+  --task-id <task-id> \
+  --agent <agent-name> \
+  --state docs/agent-runs/<run>/run-state.json
+```
+
+Completion requires service implementation tasks to be completed in `agent-schedule.json`; `agent-task --action complete` must point at an existing evidence file that is one of the scheduled task outputs.
 
 ## Workflow Tiers
 

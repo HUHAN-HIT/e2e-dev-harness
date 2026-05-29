@@ -29,6 +29,10 @@ REQUIRED_SECTIONS = {
 }
 AC_RE = re.compile(r"\bAC-\d+\b", re.IGNORECASE)
 EMPTY_VALUES = {"", "n/a", "none", "-", "todo", "tbd"}
+CONCRETE_RUNTIME_RE = re.compile(r"(->|controller|service|repository|client|sender|producer|listener|handler|#|\.)", re.IGNORECASE)
+TEST_REF_RE = re.compile(r"(\b[A-Z][A-Za-z0-9_]*(?:Test|Tests|IT|Spec)\b|src/test|mvn|gradle|junit|assert)", re.IGNORECASE)
+MAVEN_OR_TEST_COMMAND_RE = re.compile(r"\b(mvn|gradle|test|verify)\b", re.IGNORECASE)
+PLACEHOLDER_RE = re.compile(r"\b(todo|tbd|pending|unknown|placeholder)\b|<[^>]+>", re.IGNORECASE)
 
 
 def resolve(repo: Path, path: Path | None) -> Path | None:
@@ -95,6 +99,50 @@ def dependency_boundary_closed(text: str) -> bool:
     return "independent service change:" in lowered
 
 
+def meaningful_lines(body: str) -> list[str]:
+    lines: list[str] = []
+    for line in body.splitlines():
+        normalized = line.strip().strip("-* ")
+        if normalized.lower() in EMPTY_VALUES:
+            continue
+        if PLACEHOLDER_RE.search(normalized):
+            continue
+        lines.append(normalized)
+    return lines
+
+
+def runtime_path_is_concrete(text: str) -> bool:
+    body = section_body(text, "Runtime Path")
+    return any(CONCRETE_RUNTIME_RE.search(line) for line in meaningful_lines(body))
+
+
+def tdd_plan_is_concrete(text: str) -> bool:
+    body = section_body(text, "Service-local TDD Plan")
+    lines = meaningful_lines(body)
+    has_red_test = any("first red test" in line.lower() and TEST_REF_RE.search(line) for line in lines)
+    has_expected_failure = any("expected failure" in line.lower() and len(line.split(":", 1)[-1].strip()) > 3 for line in lines)
+    has_command = any("required maven command" in line.lower() and MAVEN_OR_TEST_COMMAND_RE.search(line) for line in lines)
+    return has_red_test and has_expected_failure and has_command
+
+
+def test_impact_is_concrete(text: str) -> bool:
+    body = section_body(text, "Test Impact")
+    return any(MAVEN_OR_TEST_COMMAND_RE.search(line) for line in meaningful_lines(body))
+
+
+def local_tests_are_mapped(text: str) -> list[str]:
+    missing: list[str] = []
+    for row in coverage_gate.parse_markdown_tables(text):
+        ac_values = " ".join(row.get(key, "") for key in ("ac", "id", "acceptance", "global_requirement"))
+        ids = [match.upper() for match in AC_RE.findall(ac_values)]
+        if not ids:
+            continue
+        local_tests = row.get("local_tests") or row.get("tests") or ""
+        if not TEST_REF_RE.search(local_tests):
+            missing.extend(ids)
+    return sorted(set(missing))
+
+
 def validate(repo: Path, global_design: Path | None, service_design_dir: Path | None = None, service_designs: list[Path] | None = None) -> dict:
     repo = repo.resolve()
     blocked: list[str] = []
@@ -129,6 +177,18 @@ def validate(repo: Path, global_design: Path | None, service_design_dir: Path | 
             blocked.append(f"Service design {posix(path.relative_to(repo))} must map at least one global AC.")
         if not has_allowed_edit_scope(text):
             blocked.append(f"Service design {posix(path.relative_to(repo))} must declare a concrete allowed edit scope.")
+        if not runtime_path_is_concrete(text):
+            blocked.append(f"Service design {posix(path.relative_to(repo))} must declare a concrete Runtime Path.")
+        if not tdd_plan_is_concrete(text):
+            blocked.append(f"Service design {posix(path.relative_to(repo))} must declare first red test, expected failure, and required Maven command.")
+        if not test_impact_is_concrete(text):
+            blocked.append(f"Service design {posix(path.relative_to(repo))} must declare concrete Test Impact command.")
+        missing_tests = local_tests_are_mapped(text)
+        if missing_tests:
+            blocked.append(
+                f"Service design {posix(path.relative_to(repo))} must map local tests for ACs: "
+                + ", ".join(missing_tests)
+            )
         if not dependency_boundary_closed(text):
             blocked.append(f"Service design {posix(path.relative_to(repo))} must close Dependency Boundary and state independent service change.")
 

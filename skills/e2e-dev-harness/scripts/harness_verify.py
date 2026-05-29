@@ -121,6 +121,7 @@ def validate(
                 contract_dirs=[registry_entry(registry_data, "contracts_dir")] if registry_entry(registry_data, "contracts_dir") else None,
                 require_contracts=len(state_data.get("services", [])) > 1,
                 require_handoffs=state_data.get("selected_mode") == "multi",
+                run_state=state_path,
             )
         )
         if not gate_result["ready"]:

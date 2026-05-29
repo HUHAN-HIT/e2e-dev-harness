@@ -10,6 +10,8 @@ The lock records the lifecycle and the phases that may write production code.
 
 Code writes are allowed only when lifecycle is `IMPLEMENTED`.
 Documentation and run artifacts under `docs/agent-runs/` remain writable so agents can prepare evidence before implementation.
+For multi-service runs, `.phase-lock` also carries selected services and claimed owners from `run-state.json`.
+`phase_guard.py` blocks production-code writes when the touched service has no claimed code-developer task, and blocks a single write action that touches multiple services.
 
 ## Guard Command
 

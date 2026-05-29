@@ -23,6 +23,7 @@ PHASE_LOCK = ".phase-lock"
 LIFECYCLE = {
     "CREATED",
     "CLARIFIED",
+    "SERVICE_DESIGN_REQUIRED",
     "PLANNED",
     "RED_READY",
     "IMPLEMENTED",
@@ -34,6 +35,7 @@ LIFECYCLE = {
 ORDERED_LIFECYCLE = [
     "CREATED",
     "CLARIFIED",
+    "SERVICE_DESIGN_REQUIRED",
     "PLANNED",
     "RED_READY",
     "IMPLEMENTED",
@@ -63,6 +65,7 @@ def build_state(
         "artifact_registry": posix(artifact_registry_path),
         "gates": {
             "clarification": "planned",
+            "service_design": "planned",
             "planning": "planned",
             "implementation": "planned",
             "completion": "planned",
@@ -104,6 +107,9 @@ def phase_lock_payload(state: dict) -> dict:
         "lifecycle": state.get("lifecycle", ""),
         "state": "code-write-open" if state.get("lifecycle") == "IMPLEMENTED" else "code-write-locked",
         "allowed_code_write_lifecycles": ["IMPLEMENTED"],
+        "selected_mode": state.get("selected_mode", ""),
+        "services": state.get("services", []),
+        "owners": state.get("owners", {}),
         "updated_at": state.get("updated_at", now_iso()),
     }
 
@@ -221,6 +227,13 @@ def transition_state(
         evidence_path = evidence if evidence.is_absolute() else repo / evidence
         if not evidence_path.exists():
             blocked.append(f"Transition evidence not found: {evidence_path}")
+    if target_lifecycle == "IMPLEMENTED":
+        if gate != "implementation":
+            blocked.append("Transition to IMPLEMENTED requires gate=implementation.")
+        if gate_status not in {"passed", "ready", "approved"}:
+            blocked.append("Transition to IMPLEMENTED requires gate_status=passed.")
+        if not evidence_path:
+            blocked.append("Transition to IMPLEMENTED requires implementation gate evidence.")
     if target_lifecycle == "VERIFIED" and not evidence_path:
         blocked.append("Transition to VERIFIED requires evidence.")
     if blocked:

@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import agent_instructions  # noqa: E402
 import ac_progress_gate  # noqa: E402
+import agent_scheduler  # noqa: E402
 import artifact_registry  # noqa: E402
 import clarification_gate  # noqa: E402
 from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS  # noqa: E402
@@ -155,7 +156,8 @@ def load_run_state(repo: Path, state_path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def next_action_for_lifecycle(lifecycle: str) -> dict:
+def next_action_for_lifecycle(lifecycle: str, state: dict | None = None) -> dict:
+    state = state or {}
     actions = {
         "CREATED": {
             "phase": "clarify",
@@ -168,6 +170,12 @@ def next_action_for_lifecycle(lifecycle: str) -> dict:
             "command": "Run e2e_dev_harness.py plan --design-doc <design> --create-archive, then complete R1 review.",
             "allowed_writes": ["docs/agent-runs/", "docs/design/"],
             "blocked_writes": ["production code"],
+        },
+        "SERVICE_DESIGN_REQUIRED": {
+            "phase": "service-design",
+            "command": "Fill service-designs/<service>.md for every affected service, validate with e2e_dev_harness.py service-design --run-state <state>, then continue to R1/TDD planning.",
+            "allowed_writes": ["docs/agent-runs/", "docs/design/"],
+            "blocked_writes": ["production code", "service code-agent dispatch before service-design gate passes"],
         },
         "PLANNED": {
             "phase": "tdd-red",
@@ -206,7 +214,7 @@ def next_action_for_lifecycle(lifecycle: str) -> dict:
             "blocked_writes": ["new implementation changes"],
         },
     }
-    return actions.get(
+    action = actions.get(
         lifecycle,
         {
             "phase": "unknown",
@@ -215,6 +223,17 @@ def next_action_for_lifecycle(lifecycle: str) -> dict:
             "blocked_writes": ["production code"],
         },
     )
+    if lifecycle == "PLANNED" and state.get("selected_mode") == "multi":
+        action = dict(action)
+        action["command"] = (
+            "Run R1/R2 reviews, write service-local red tests, claim each code-developer task with "
+            "e2e_dev_harness.py agent-task --action claim, then gate --phase implementation."
+        )
+        action["blocked_writes"] = [
+            "production code until implementation gate passes",
+            "multi-service code writes without a claimed service code-developer task",
+        ]
+    return action
 
 
 def without_status_file(args):
@@ -574,7 +593,7 @@ def start(args) -> tuple[int, dict]:
         "artifact_registry": str(registry_path),
         "agent_schedule": str(schedule_path),
         "created": created,
-        "next": next_action_for_lifecycle("CREATED"),
+        "next": next_action_for_lifecycle("CREATED", state),
         "blocked_reasons": [],
         "warnings": [] if design_created else ["Design document already existed; use --force to rewrite the starter template."],
     }
@@ -1336,17 +1355,21 @@ def plan(args) -> tuple[int, dict]:
         )
         registry_path = require_repo_path(repo, Path(result["handoff_artifacts"]["artifact_registry"]), "artifact registry")
         artifact_registry.write_registry(repo, registry_path, registry)
+        lifecycle = "SERVICE_DESIGN_REQUIRED" if (
+            result.get("selected_mode") == "multi" and len(result.get("selected_services", [])) > 1
+        ) else "PLANNED"
         state = run_state.build_state(
             result["agent_run_dir"],
             result.get("selected_mode", ""),
             result.get("selected_services", []),
             result["handoff_artifacts"]["artifact_registry"],
-            lifecycle="PLANNED",
+            lifecycle=lifecycle,
         )
         state_path = require_repo_path(repo, Path(result["handoff_artifacts"]["run_state"]), "run state")
         run_state.write_state(repo, state_path, state)
         result["artifact_registry_written"] = str(registry_path)
         result["run_state_written"] = str(state_path)
+        result["run_state_lifecycle"] = lifecycle
     write_status(args.status_file, result)
     return 0, result
 
@@ -1388,6 +1411,7 @@ def gate(args) -> tuple[int, dict]:
             require_intent=getattr(args, "require_intent", False),
             tdd_mode=getattr(args, "tdd_mode", "auto"),
             workflow_tier=getattr(args, "workflow_tier", "auto"),
+            run_state=getattr(args, "run_state", None) or getattr(args, "state", None),
         )
     )
     if result.get("ready"):
@@ -1602,6 +1626,47 @@ def test_impact(args) -> tuple[int, dict]:
 def service_design(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
     result = service_design_gate.validate(repo, args.global_design, args.service_design_dir, args.service_design)
+    run_state_path = getattr(args, "run_state", None)
+    if run_state_path and result["ready"]:
+        transition = run_state.transition_state(
+            repo,
+            run_state_path,
+            "PLANNED",
+            gate="service_design",
+            gate_status="passed",
+            evidence=args.service_design_dir or (args.service_design[0] if args.service_design else None),
+        )
+        result["run_state_transition"] = transition
+        if not transition["ready"]:
+            result["ready"] = False
+            result["blocked_reasons"].extend("Run state transition: " + reason for reason in transition["blocked_reasons"])
+    write_status(args.status_file, result)
+    return (0 if result["ready"] else 2), result
+
+
+def agent_task(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    if args.action == "claim":
+        result = agent_scheduler.claim(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state)
+    elif args.action == "complete":
+        result = agent_scheduler.complete(
+            repo,
+            args.schedule,
+            args.task_id or "",
+            args.agent or "agent",
+            args.state,
+            args.evidence or [],
+        )
+    else:
+        schedule_path = args.schedule if args.schedule.is_absolute() else repo / args.schedule
+        schedule = json.loads(schedule_path.read_text(encoding="utf-8")) if schedule_path.exists() else {}
+        result = agent_scheduler.validate_schedule(
+            schedule,
+            args.service or [],
+            args.require_claims,
+            args.require_completed,
+        )
+        result["schedule"] = str(schedule_path)
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
 
@@ -1634,7 +1699,7 @@ def next_step(args) -> tuple[int, dict]:
         return 2, result
     state = load_run_state(repo, state_path)
     lifecycle = str(state.get("lifecycle", ""))
-    action = next_action_for_lifecycle(lifecycle)
+    action = next_action_for_lifecycle(lifecycle, state)
     result = {
         "repo": str(repo),
         "ready": True,
@@ -1816,7 +1881,21 @@ def main() -> int:
     service_design_parser.add_argument("--global-design", required=True, type=Path)
     service_design_parser.add_argument("--service-design-dir", type=Path)
     service_design_parser.add_argument("--service-design", action="append", type=Path)
+    service_design_parser.add_argument("--run-state", type=Path)
     service_design_parser.add_argument("--status-file", type=Path)
+
+    agent_task_parser = subparsers.add_parser("agent-task", help="Claim, complete, or validate scheduled agent tasks.")
+    agent_task_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    agent_task_parser.add_argument("--schedule", required=True, type=Path)
+    agent_task_parser.add_argument("--action", choices=["claim", "complete", "validate"], required=True)
+    agent_task_parser.add_argument("--task-id")
+    agent_task_parser.add_argument("--agent", default="")
+    agent_task_parser.add_argument("--state", type=Path)
+    agent_task_parser.add_argument("--service", action="append")
+    agent_task_parser.add_argument("--require-claims", action="store_true")
+    agent_task_parser.add_argument("--require-completed", action="store_true")
+    agent_task_parser.add_argument("--evidence", action="append")
+    agent_task_parser.add_argument("--status-file", type=Path)
 
     ac_progress_parser = subparsers.add_parser("ac-progress", help="Block R3 review until all assigned ACs have implementation and test evidence.")
     ac_progress_parser.add_argument("repo", nargs="?", default=".", type=Path)
@@ -1850,6 +1929,8 @@ def main() -> int:
             exit_code, result = test_impact(args)
         elif args.command == "service-design":
             exit_code, result = service_design(args)
+        elif args.command == "agent-task":
+            exit_code, result = agent_task(args)
         elif args.command == "ac-progress":
             exit_code, result = ac_progress(args)
         elif args.command == "next":

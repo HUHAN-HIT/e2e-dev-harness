@@ -167,12 +167,13 @@ docs/agent-runs/<run>/service-plans/<service>/implementation-plan.md
 docs/agent-runs/<run>/service-plans/<service>/test-impact-plan.json
 ```
 
-Validate the service slices before dispatching code agents:
+Multi-service `plan --create-archive` writes run-state lifecycle `SERVICE_DESIGN_REQUIRED`. Validate the service slices before R2/TDD red or dispatching code agents; the command below transitions the run-state to `PLANNED` only when every global AC is mapped into concrete service slices with runtime path, first red test, expected failure, required Maven command, dependency boundary, and test impact:
 
 ```powershell
 python skills\e2e-dev-harness\scripts\e2e_dev_harness.py service-design . `
   --global-design docs\design\<feature>.md `
-  --service-design-dir docs\agent-runs\<run>\service-designs
+  --service-design-dir docs\agent-runs\<run>\service-designs `
+  --run-state docs\agent-runs\<run>\run-state.json
 ```
 
 ```powershell
@@ -185,6 +186,29 @@ python skills\e2e-dev-harness\scripts\context_pack.py . `
 ```
 
 The pack lists allowed inputs, allowed outputs, dependency phase, and budget. A pack that exceeds file or byte limits is blocked, forcing the coordinator to summarize inputs before dispatch.
+
+Before a multi-service code agent writes code, claim the scheduled service task. Phase guard blocks unclaimed service writes and blocks one claimed task from editing multiple services:
+
+```powershell
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py agent-task . `
+  --schedule docs\agent-runs\<run>\agent-schedule.json `
+  --action claim `
+  --task-id T04 `
+  --agent code-developer-order-service `
+  --state docs\agent-runs\<run>\run-state.json
+```
+
+After service-local ACs, tests, and review evidence are done, complete the task. The evidence path must exist and match one of the task outputs in `agent-schedule.json`:
+
+```powershell
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py agent-task . `
+  --schedule docs\agent-runs\<run>\agent-schedule.json `
+  --action complete `
+  --task-id T04 `
+  --agent code-developer-order-service `
+  --state docs\agent-runs\<run>\run-state.json `
+  --evidence docs\agent-runs\<run>\service-plans\order-service\unit-test-evidence.txt
+```
 
 ## AC Progress
 
@@ -216,7 +240,7 @@ All examples call the same guard:
 python skills\e2e-dev-harness\scripts\phase_guard.py . --hook-input - --json
 ```
 
-`phase_guard.py` reads `docs/agent-runs/<run>/.phase-lock` and blocks code-writing tools unless the lifecycle is `IMPLEMENTED`. It still allows harness artifacts under `docs/agent-runs/` to be written before implementation.
+`phase_guard.py` reads `docs/agent-runs/<run>/.phase-lock` and blocks code-writing tools unless the lifecycle is `IMPLEMENTED`. In multi-service runs it also requires a claimed service code-developer task for the touched service/module. It still allows harness artifacts under `docs/agent-runs/` to be written before implementation.
 
 ### Claude Code
 
@@ -336,7 +360,7 @@ python skills\e2e-dev-harness\scripts\e2e_dev_harness.py gate . `
   --json
 ```
 
-Use `run_state.py --transition IMPLEMENTED` only as an explicit repair command when a previously successful gate did not write the transition.
+Manual `run_state.py --transition IMPLEMENTED` is blocked unless it includes `--gate implementation`, `--gate-status passed`, and existing implementation-gate evidence. Prefer rerunning the gate; use manual transition only to repair a previously successful gate status write failure.
 
 Run the same `phase_guard.py` command again. Expected:
 
