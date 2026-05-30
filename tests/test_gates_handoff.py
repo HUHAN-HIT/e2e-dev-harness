@@ -1,0 +1,343 @@
+"""Handoff gate: phase-transition readiness."""
+from __future__ import annotations
+
+import sys
+import hashlib
+import json
+import tempfile
+import textwrap
+import unittest
+
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "skills" / "e2e-dev-harness" / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+import handoff_gate  # noqa: E402
+import execution_trace  # noqa: E402
+import e2e_dev_harness  # noqa: E402
+
+
+class HandoffGateTests(unittest.TestCase):
+    def write_ready_marker(
+        self,
+        handoff: Path,
+        producer_agent: str = "developer-agent-1",
+        status: str = "ready",
+        sha256: str | None = None,
+    ) -> None:
+        marker = handoff.with_suffix(".ready.json")
+        marker.write_text(
+            json.dumps(
+                {
+                    "path": str(handoff.name),
+                    "sha256": sha256 or hashlib.sha256(handoff.read_bytes()).hexdigest(),
+                    "producer_agent": producer_agent,
+                    "status": status,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    def test_handoff_gate_blocks_draft_template_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+            (handoff_dir / "04-code-developer.md").write_text(
+                e2e_dev_harness.handoff_text("code-developer"),
+                encoding="utf-8",
+            )
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("draft" in reason.lower() for reason in result["blocked_reasons"]))
+        self.assertTrue(any("agent id" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_handoff_gate_blocks_partial_file_before_downstream_consumption(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+            (handoff_dir / "04-code-developer.md.partial").write_text("half written", encoding="utf-8")
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("partial" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_handoff_gate_can_require_non_empty_handoff_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+
+            result = handoff_gate.validate(repo, [handoff_dir], require_files=True)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("handoff artifacts are missing" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_handoff_gate_allows_ready_handoff_with_hashes_and_no_open_questions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+            handoff = handoff_dir / "04-code-developer.md"
+            handoff.write_text(
+                textwrap.dedent(
+                    """
+                    ---
+                    agent: code-developer
+                    agent_id: developer-agent-1
+                    status: ready
+                    inputs:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md
+                    outputs:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md
+                    input_hashes:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    output_hashes:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                    blocked_by: []
+                    consumed_by:
+                      - coverage-reviewer
+                    open_questions: None
+                    service_scope: services/order-service
+                    memory_updates_proposed: []
+                    ---
+
+                    # Agent Handoff
+
+                    ## Summary
+
+                    Implemented order-service refund flow.
+
+                    ## Facts Used
+
+                    Consumed the test handoff and service plan.
+
+                    ## Decisions Made
+
+                    Reused the existing service-layer pattern.
+
+                    ## Open Questions
+
+                    None
+
+                    ## Downstream Assumptions
+
+                    Coverage reviewer may rely on the implementation manifest.
+
+                    ## Verification Evidence
+
+                    mvn -pl services/order-service -am test passed.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            self.write_ready_marker(handoff)
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(1, len(result["items"]))
+
+    def test_handoff_gate_blocks_ready_handoff_with_empty_body_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+            handoff = handoff_dir / "04-code-developer.md"
+            handoff.write_text(
+                textwrap.dedent(
+                    """
+                    ---
+                    agent: code-developer
+                    agent_id: developer-agent-1
+                    status: ready
+                    inputs:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md
+                    outputs:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md
+                    input_hashes:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    output_hashes:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                    consumed_by:
+                      - coverage-reviewer
+                    open_questions: None
+                    ---
+
+                    # Agent Handoff
+
+                    ## Summary
+
+                    ## Facts Used
+
+                    ## Decisions Made
+
+                    ## Open Questions
+
+                    None
+
+                    ## Downstream Assumptions
+
+                    ## Verification Evidence
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            self.write_ready_marker(handoff)
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Summary" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any("Verification Evidence" in reason for reason in result["blocked_reasons"]))
+
+    def test_handoff_gate_blocks_missing_ready_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+            handoff = handoff_dir / "04-code-developer.md"
+            handoff.write_text(
+                textwrap.dedent(
+                    """
+                    ---
+                    agent: code-developer
+                    agent_id: developer-agent-1
+                    status: ready
+                    inputs:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md
+                    outputs:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md
+                    input_hashes:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    output_hashes:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                    consumed_by:
+                      - coverage-reviewer
+                    open_questions: None
+                    ---
+
+                    # Agent Handoff
+
+                    ## Open Questions
+
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("ready marker" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_handoff_gate_blocks_stale_ready_marker_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+            handoff = handoff_dir / "04-code-developer.md"
+            handoff.write_text(
+                textwrap.dedent(
+                    """
+                    ---
+                    agent: code-developer
+                    agent_id: developer-agent-1
+                    status: ready
+                    inputs:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md
+                    outputs:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md
+                    input_hashes:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    output_hashes:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                    consumed_by:
+                      - coverage-reviewer
+                    open_questions: None
+                    ---
+
+                    # Agent Handoff
+
+                    ## Open Questions
+
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            self.write_ready_marker(handoff, sha256="0" * 64)
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("sha256" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_handoff_gate_blocks_ready_marker_path_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+            handoff = handoff_dir / "04-code-developer.md"
+            handoff.write_text(
+                textwrap.dedent(
+                    """
+                    ---
+                    agent: code-developer
+                    agent_id: developer-agent-1
+                    status: ready
+                    inputs:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md
+                    outputs:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md
+                    input_hashes:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    output_hashes:
+                      - docs/agent-runs/run/evidence/implementation-manifest.md sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                    consumed_by:
+                      - coverage-reviewer
+                    open_questions: None
+                    ---
+
+                    # Agent Handoff
+
+                    ## Open Questions
+
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            marker = handoff.with_suffix(".ready.json")
+            marker.write_text(
+                json.dumps(
+                    {
+                        "path": "other.md",
+                        "sha256": hashlib.sha256(handoff.read_bytes()).hexdigest(),
+                        "producer_agent": "developer-agent-1",
+                        "status": "ready",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("path" in reason.lower() for reason in result["blocked_reasons"]))
+
+
+
+
+if __name__ == "__main__":
+    unittest.main()

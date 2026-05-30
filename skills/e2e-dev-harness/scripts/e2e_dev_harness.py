@@ -24,6 +24,7 @@ from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import execution_trace  # noqa: E402
 import implementation_gate  # noqa: E402
+import install_hooks  # noqa: E402
 import kg_refresh  # noqa: E402
 import handoff_gate  # noqa: E402
 import harness_verify  # noqa: E402
@@ -155,6 +156,23 @@ def design_template(feature: str, request: str = "") -> str:
 def load_run_state(repo: Path, state_path: Path) -> dict:
     path = state_path if state_path.is_absolute() else repo / state_path
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def runtime_hook_status(repo: Path) -> dict:
+    claude_dir = repo / ".claude"
+    if claude_dir.exists():
+        result = install_hooks.validate_config(claude_dir / "settings.json")
+        result["runtime"] = "claude"
+        return result
+    return {
+        "ready": True,
+        "blocked_reasons": [],
+        "warnings": [
+            "No runtime hook directory detected; use e2e_dev_harness.py pre-code before code edits when hooks are unavailable."
+        ],
+        "runtime": "generic",
+        "target": "",
+    }
 
 
 def next_action_for_lifecycle(lifecycle: str, state: dict | None = None) -> dict:
@@ -581,6 +599,7 @@ def start(args) -> tuple[int, dict]:
     run_state.write_state(repo, state_path, state)
     created.append(str(state_path))
     lock_path = state_path.parent / run_state.PHASE_LOCK
+    hooks = runtime_hook_status(repo)
     result = {
         "repo": str(repo),
         "ready": True,
@@ -593,10 +612,14 @@ def start(args) -> tuple[int, dict]:
         "phase_lock": str(lock_path),
         "artifact_registry": str(registry_path),
         "agent_schedule": str(schedule_path),
+        "hook_status": hooks,
         "created": created,
         "next": next_action_for_lifecycle("CREATED", state),
         "blocked_reasons": [],
-        "warnings": [] if design_created else ["Design document already existed; use --force to rewrite the starter template."],
+        "warnings": ([] if design_created else ["Design document already existed; use --force to rewrite the starter template."])
+        + ["Runtime hook is not ready; install hooks or use pre-code before editing code."] if not hooks["ready"] else (
+            [] if design_created else ["Design document already existed; use --force to rewrite the starter template."]
+        ) + hooks.get("warnings", []),
     }
     write_status(args.status_file, result)
     return 0, result
@@ -1430,15 +1453,23 @@ def gate(args) -> tuple[int, dict]:
         }.get(args.phase)
         run_state_path = getattr(args, "run_state", None) or getattr(args, "state", None)
         if transition_target and run_state_path:
-            resolved_state = require_repo_path(repo, run_state_path, "run state")
+            evidence = args.red_test_evidence if args.phase == "implementation" else (
+                args.unit_test_evidence or args.implementation_manifest or args.red_test_evidence
+            )
             if args.phase == "implementation":
-                evidence = resolved_state.parent / "evidence" / "implementation-gate.json"
-                gate_evidence = dict(result)
-                gate_evidence.setdefault("phase", args.phase)
-                gate_evidence.setdefault("ready", True)
-                write_status(evidence, gate_evidence)
-            else:
-                evidence = args.unit_test_evidence or args.implementation_manifest or args.red_test_evidence
+                state_file = require_repo_path(repo, run_state_path, "run state")
+                status_evidence = state_file.parent / "evidence" / "implementation-gate.json"
+                status_evidence.parent.mkdir(parents=True, exist_ok=True)
+                status_payload = dict(result)
+                status_payload.setdefault("phase", "implementation")
+                status_payload["ready"] = True
+                if args.red_test_evidence:
+                    try:
+                        status_payload["red_test_evidence"] = str(resolve_repo_path(repo, args.red_test_evidence).relative_to(repo))
+                    except ValueError:
+                        status_payload["red_test_evidence"] = str(args.red_test_evidence)
+                status_evidence.write_text(json.dumps(status_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+                evidence = status_evidence
             transition = run_state.transition_state(
                 repo,
                 run_state_path,
@@ -1641,6 +1672,7 @@ def pre_code(args) -> tuple[int, dict]:
     result["pre_code"] = True
     result["tool"] = args.tool
     result["paths_checked"] = [str(path) for path in paths]
+    result["hook_status"] = runtime_hook_status(repo)
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
 
@@ -1684,8 +1716,16 @@ def service_design(args) -> tuple[int, dict]:
 
 def agent_task(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
+    lease_seconds = getattr(args, "lease_seconds", agent_scheduler.DEFAULT_LEASE_SECONDS)
     if args.action == "claim":
-        result = agent_scheduler.claim(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state)
+        result = agent_scheduler.claim(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state, lease_seconds)
+    elif args.action == "renew":
+        result = agent_scheduler.renew(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state, lease_seconds)
+    elif args.action == "reclaim":
+        result = agent_scheduler.reclaim(
+            repo, args.schedule, args.task_id or "", args.agent or "agent", args.state,
+            getattr(args, "force", False), lease_seconds,
+        )
     elif args.action == "complete":
         result = agent_scheduler.complete(
             repo,
@@ -1738,19 +1778,24 @@ def next_step(args) -> tuple[int, dict]:
     state = load_run_state(repo, state_path)
     lifecycle = str(state.get("lifecycle", ""))
     action = next_action_for_lifecycle(lifecycle, state)
+    hooks = runtime_hook_status(repo)
+    blocked = [] if hooks["ready"] else [
+        "Runtime hook is not ready; install hooks or use e2e_dev_harness.py pre-code before any code edit."
+    ]
     result = {
         "repo": str(repo),
-        "ready": True,
+        "ready": not blocked,
         "run_state": str(state_path),
         "phase_lock": str(state_path.parent / run_state.PHASE_LOCK),
+        "hook_status": hooks,
         "lifecycle": lifecycle,
         "next": action,
         "gates": state.get("gates", {}),
-        "blocked_reasons": [],
-        "warnings": [],
+        "blocked_reasons": blocked,
+        "warnings": hooks.get("warnings", []) if hooks["ready"] else [],
     }
     write_status(args.status_file, result)
-    return 0, result
+    return (0 if result["ready"] else 2), result
 
 
 def add_prepare_args(parser: argparse.ArgumentParser) -> None:
@@ -1887,6 +1932,8 @@ def main() -> int:
     verify_parser.add_argument("--require-semantic-reviews", action="store_true")
     verify_parser.add_argument("--skip-spring-static-check", action="store_true")
     verify_parser.add_argument("--run-state", type=Path)
+    verify_parser.add_argument("--no-harness-state", action="store_true")
+    verify_parser.add_argument("--harness-state-approval", type=Path)
     verify_parser.add_argument("--skip-maven", action="store_true")
     verify_parser.add_argument("--strict-workflow", action="store_true")
     verify_parser.add_argument("--workflow-approval", type=Path)
@@ -1937,7 +1984,7 @@ def main() -> int:
     agent_task_parser = subparsers.add_parser("agent-task", help="Claim, complete, or validate scheduled agent tasks.")
     agent_task_parser.add_argument("repo", nargs="?", default=".", type=Path)
     agent_task_parser.add_argument("--schedule", required=True, type=Path)
-    agent_task_parser.add_argument("--action", choices=["claim", "complete", "validate"], required=True)
+    agent_task_parser.add_argument("--action", choices=["claim", "complete", "validate", "renew", "reclaim"], required=True)
     agent_task_parser.add_argument("--task-id")
     agent_task_parser.add_argument("--agent", default="")
     agent_task_parser.add_argument("--state", type=Path)
@@ -1945,6 +1992,8 @@ def main() -> int:
     agent_task_parser.add_argument("--require-claims", action="store_true")
     agent_task_parser.add_argument("--require-completed", action="store_true")
     agent_task_parser.add_argument("--evidence", action="append")
+    agent_task_parser.add_argument("--lease-seconds", type=int, default=agent_scheduler.DEFAULT_LEASE_SECONDS)
+    agent_task_parser.add_argument("--force", action="store_true", help="Reclaim an active (non-stale) claim.")
     agent_task_parser.add_argument("--status-file", type=Path)
 
     ac_progress_parser = subparsers.add_parser("ac-progress", help="Block R3 review until all assigned ACs have implementation and test evidence.")

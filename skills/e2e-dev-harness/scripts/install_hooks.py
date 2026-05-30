@@ -66,39 +66,18 @@ def template(runtime: str) -> dict:
     return load_json(RUNTIME_TEMPLATES[runtime])
 
 
-def guard_script_path() -> Path:
-    return SCRIPT_DIR / "phase_guard.py"
-
-
-def quote_command_path(path: Path) -> str:
-    return '"' + str(path).replace('"', '\\"') + '"'
-
-
-def runtime_guard_command(repo: Path) -> str:
-    return (
-        f"{quote_command_path(Path(sys.executable))} "
-        f"{quote_command_path(guard_script_path())} "
-        f"{quote_command_path(repo.resolve())} "
-        "--hook-input - --json"
-    )
-
-
-def rewrite_guard_command(value, repo: Path):
+def render_runtime_paths(value, repo: Path):
     if isinstance(value, dict):
-        rewritten = {}
-        for key, item in value.items():
-            if key == "command" and isinstance(item, str) and "phase_guard.py" in item:
-                rewritten[key] = runtime_guard_command(repo)
-            else:
-                rewritten[key] = rewrite_guard_command(item, repo)
-        return rewritten
+        return {key: render_runtime_paths(item, repo) for key, item in value.items()}
     if isinstance(value, list):
-        return [rewrite_guard_command(item, repo) for item in value]
+        return [render_runtime_paths(item, repo) for item in value]
+    if isinstance(value, str):
+        return (
+            value.replace("C:\\absolute\\path\\to\\python.exe", sys.executable)
+            .replace("C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py", str(SCRIPT_DIR / "phase_guard.py"))
+            .replace("C:\\absolute\\path\\to\\target-repo", str(repo.resolve()))
+        )
     return value
-
-
-def hook_for_repo(runtime: str, repo: Path) -> dict:
-    return rewrite_guard_command(template(runtime), repo)
 
 
 def command_present(value) -> bool:
@@ -111,26 +90,16 @@ def command_present(value) -> bool:
     return False
 
 
-def command_strings(value) -> list[str]:
+def repo_relative_phase_guard_present(value) -> bool:
     if isinstance(value, dict):
-        results: list[str] = []
-        for item in value.values():
-            results.extend(command_strings(item))
-        return results
+        return any(repo_relative_phase_guard_present(item) for item in value.values())
     if isinstance(value, list):
-        results: list[str] = []
-        for item in value:
-            results.extend(command_strings(item))
-        return results
-    if isinstance(value, str) and "phase_guard.py" in value:
-        return [value]
-    return []
-
-
-def guard_command_targets_existing_script(data: dict) -> bool:
-    expected = str(guard_script_path())
-    commands = command_strings(data)
-    return bool(commands) and guard_script_path().exists() and all(expected in command for command in commands)
+        return any(repo_relative_phase_guard_present(item) for item in value)
+    if isinstance(value, str):
+        normalized = value.replace("\\", "/")
+        absolute_phase_guard = str(SCRIPT_DIR / "phase_guard.py").replace("\\", "/")
+        return "skills/e2e-dev-harness/scripts/phase_guard.py" in normalized and absolute_phase_guard not in normalized
+    return False
 
 
 def claude_bash_matcher_present(data: dict) -> bool:
@@ -159,10 +128,10 @@ def validate_config(path: Path) -> dict:
         blocked.append(f"Hook config not found or unreadable: {path}")
     elif not command_present(data):
         blocked.append("Hook config must call phase_guard.py with --hook-input.")
+    elif repo_relative_phase_guard_present(data):
+        blocked.append("Hook config must use an absolute path to phase_guard.py, not a repo-relative skills/e2e-dev-harness path.")
     elif not blocking_present(data):
         blocked.append("Hook config must be blocking or define a PreToolUse blocking hook.")
-    elif not guard_command_targets_existing_script(data):
-        blocked.append("Hook command must point to the installed phase_guard.py absolute path, not a target-repo relative skills path.")
     elif path.as_posix().endswith(".claude/settings.json") and not claude_bash_matcher_present(data):
         blocked.append("Claude Code hook matcher must include Bash so shell-based code writes are checked.")
     return {
@@ -178,6 +147,7 @@ def merge_claude(existing: dict, hook: dict) -> dict:
     hooks = merged.setdefault("hooks", {})
     pre_tool = hooks.setdefault("PreToolUse", [])
     incoming = hook.get("hooks", {}).get("PreToolUse", [])
+    pre_tool[:] = [item for item in pre_tool if not command_present(item)]
     existing_serialized = {json.dumps(item, sort_keys=True) for item in pre_tool if isinstance(item, dict)}
     for item in incoming:
         serialized = json.dumps(item, sort_keys=True)
@@ -190,10 +160,9 @@ def merge_claude(existing: dict, hook: dict) -> dict:
 def install(repo: Path, runtime: str, target: Path | None = None, dry_run: bool = False) -> dict:
     repo = repo.resolve()
     target_path = repo_path(repo, target or DEFAULT_TARGETS[runtime])
-    hook = hook_for_repo(runtime, repo)
+    hook = render_runtime_paths(template(runtime), repo)
     if runtime == "claude":
-        current = rewrite_guard_command(load_json(target_path), repo)
-        output = merge_claude(current, hook)
+        output = merge_claude(load_json(target_path), hook)
     else:
         output = hook
     result = {

@@ -64,10 +64,10 @@ def find_run_state(status_path: Path) -> Path | None:
     return None
 
 
-def evidence_for_phase(status: dict, status_path: Path) -> Path | None:
+def evidence_for_phase(status: dict, status_file: Path) -> Path | None:
     phase = str(status.get("phase") or "")
     if phase == "implementation":
-        return status_path
+        return status_file
     if phase == "completion":
         for key in ("unit_test_evidence", "implementation_manifest", "red_test_evidence"):
             if status.get(key):

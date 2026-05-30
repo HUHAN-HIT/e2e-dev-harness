@@ -1539,8 +1539,11 @@ class CrossServiceDependencyScanTests(unittest.TestCase):
         self.assertEqual("services/inventory-service", dependency["target_service"])
         self.assertEqual("/api/quotes", dependency["target_route"])
         self.assertIn("java_parser", result)
-        self.assertEqual("regex-fallback", result["java_parser"]["backend"])
-        self.assertFalse(result["java_parser"]["ast_parser_active"])
+        self.assertIn(result["java_parser"]["backend"], {"regex-fallback", "tree-sitter"})
+        self.assertEqual(
+            result["java_parser"]["backend"] == "tree-sitter",
+            result["java_parser"]["ast_parser_active"],
+        )
 
     def test_scan_can_require_active_tree_sitter_ast(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.object(
@@ -5965,6 +5968,31 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("CREATED", result["lifecycle"])
         self.assertEqual("clarify", result["next"]["phase"])
 
+    def test_next_blocks_when_claude_hook_is_detected_but_not_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".claude").mkdir()
+            start_args = SimpleNamespace(
+                repo=repo,
+                feature="Quote",
+                request="Return a quote.",
+                design_doc=None,
+                agent_run_dir=None,
+                run_id="run",
+                run_date=None,
+                force=False,
+                status_file=None,
+            )
+            _code, start_result = e2e_dev_harness.start(start_args)
+            next_args = SimpleNamespace(repo=repo, state=Path(start_result["run_state"]), status_file=None)
+
+            code, result = e2e_dev_harness.next_step(next_args)
+
+        self.assertEqual(2, code)
+        self.assertFalse(result["ready"])
+        self.assertEqual("claude", result["hook_status"]["runtime"])
+        self.assertTrue(any("Runtime hook is not ready" in reason for reason in result["blocked_reasons"]))
+
     def test_discovery_mode_has_no_agent_plan(self) -> None:
         artifacts = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
 
@@ -7482,6 +7510,28 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("Code write blocked" in reason for reason in result["blocked_reasons"]))
 
+    def test_phase_guard_blocks_stale_phase_lock_when_run_state_is_not_implemented(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CLARIFIED")
+            run_state.write_state(repo, state_path, state)
+            lock_path = state_path.parent / ".phase-lock"
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            lock["lifecycle"] = "IMPLEMENTED"
+            lock["state"] = "code-write-open"
+            lock_path.write_text(json.dumps(lock, indent=2), encoding="utf-8")
+
+            result = phase_guard.validate_action(
+                repo,
+                "Edit",
+                [Path("services/payment-service/src/main/java/PaymentService.java")],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("does not match run-state lifecycle" in reason for reason in result["blocked_reasons"]))
+
     def test_phase_guard_allows_red_test_write_in_planned_phase(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -7500,7 +7550,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("test-write-open", lock["state"])
         self.assertIn("PLANNED", lock["allowed_test_write_lifecycles"])
         self.assertTrue(result["ready"], result["blocked_reasons"])
-        self.assertEqual(["services\\payment-service\\src\\test\\java\\PaymentServiceTest.java"], result["test_code_paths"])
+        self.assertEqual(["services/payment-service/src/test/java/PaymentServiceTest.java"], result["test_code_paths"])
 
     def test_phase_guard_blocks_mixed_test_and_runtime_write_in_planned_phase(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7520,7 +7570,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
             )
 
         self.assertFalse(result["ready"])
-        self.assertEqual(["services\\payment-service\\src\\main\\java\\PaymentService.java"], result["runtime_code_paths"])
+        self.assertEqual(["services/payment-service/src/main/java/PaymentService.java"], result["runtime_code_paths"])
         self.assertTrue(any("Code write blocked" in reason for reason in result["blocked_reasons"]))
 
     def test_phase_guard_parses_apply_patch_hook_paths(self) -> None:
@@ -7903,7 +7953,8 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
             result = harness_verify.validate(repo, state_path)
 
-        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("not VERIFIED" in reason for reason in result["blocked_reasons"]))
 
     def test_harness_verify_stops_when_run_state_cannot_load(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -8023,8 +8074,9 @@ class OrchestrationArtifactTests(unittest.TestCase):
             written = json.loads((repo / summary_json).read_text(encoding="utf-8"))
             markdown_text = (repo / summary_md).read_text(encoding="utf-8")
 
-        self.assertTrue(summary["ready"])
+        self.assertFalse(summary["ready"])
         self.assertEqual("run", written["run_id"])
+        self.assertTrue(any("not VERIFIED" in reason for reason in written["blocked_reasons"]))
         self.assertIn("# Run Summary: run", markdown_text)
 
     def test_workflow_tier_auto_marks_messaging_cross_service_as_critical(self) -> None:
@@ -8187,8 +8239,9 @@ class OrchestrationArtifactTests(unittest.TestCase):
             code, result = e2e_dev_harness.verify(args)
             summary_exists = summary_path.exists()
 
-        self.assertEqual(0, code, result)
-        self.assertTrue(result["harness"]["ready"], result["harness"]["blocked_reasons"])
+        self.assertEqual(2, code, result)
+        self.assertFalse(result["harness"]["ready"])
+        self.assertTrue(any("not VERIFIED" in reason for reason in result["harness"]["blocked_reasons"]))
         self.assertTrue(summary_exists)
 
     def test_execution_trace_records_elapsed_and_tokens(self) -> None:

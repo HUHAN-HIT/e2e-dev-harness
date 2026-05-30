@@ -16,8 +16,8 @@ REQUIRED = {
 }
 
 
-def env_default(new_name: str, old_name: str, fallback: str) -> str:
-    return os.environ.get(new_name) or os.environ.get(old_name, fallback)
+def env_default(primary: str, legacy: str, default: str) -> str:
+    return os.environ.get(primary, os.environ.get(legacy, default))
 
 
 def candidate_skill_dirs() -> list[Path]:

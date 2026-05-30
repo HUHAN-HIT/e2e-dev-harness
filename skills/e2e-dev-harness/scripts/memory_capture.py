@@ -18,10 +18,6 @@ if str(SCRIPT_DIR) not in sys.path:
 from common import parse_modules, posix  # noqa: E402
 
 
-def env_default(new_name: str, old_name: str, fallback: str) -> str:
-    return os.environ.get(new_name) or os.environ.get(old_name, fallback)
-
-
 MEMORY_FILES = {
     "project": "project.md",
     "decision": "decisions.md",
@@ -54,6 +50,11 @@ TODO_RE = re.compile(
     re.IGNORECASE,
 )
 LOCAL_PATH_RE = re.compile(r"\b[A-Za-z]:\\|(?:^|\s)(?:/Users/|/home/|/tmp/|~/)", re.IGNORECASE)
+
+
+def env_default(primary: str, legacy: str, default: str) -> str:
+    return os.environ.get(primary, os.environ.get(legacy, default))
+
 
 TEMPLATES = {
     "project.md": """# Project Memory

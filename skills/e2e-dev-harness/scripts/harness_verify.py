@@ -77,6 +77,11 @@ def validate(
             "policy": None,
             "completion_gate": None,
         }
+    lifecycle = str(state_data.get("lifecycle", ""))
+    if lifecycle != "VERIFIED":
+        blocked.append(
+            "Harness run is not VERIFIED; do not emit a completion summary before completion gate and strict guard pass."
+        )
     try:
         registry_path = resolve(repo, state_data.get("artifact_registry"))
     except ValueError as error:

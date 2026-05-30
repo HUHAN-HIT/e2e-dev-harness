@@ -21,8 +21,8 @@ AGENT_SCOPES = ("auto", "discovery", "affected", "all")
 DEFAULT_DISCOVERED_SERVICE_LIMIT = 20
 
 
-def env_default(new_name: str, old_name: str, fallback: str) -> str:
-    return os.environ.get(new_name) or os.environ.get(old_name, fallback)
+def env_default(primary: str, legacy: str, default: str) -> str:
+    return os.environ.get(primary, os.environ.get(legacy, default))
 
 
 def first_agent_file(directory: Path) -> Path | None:

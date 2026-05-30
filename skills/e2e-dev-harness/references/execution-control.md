@@ -8,18 +8,16 @@ The hook is the enforcement layer: it blocks code writes until the active run en
 `run_state.py` writes `docs/agent-runs/<run>/.phase-lock` beside `run-state.json`.
 The lock records the lifecycle and the phases that may write production code.
 
-Runtime production code writes are allowed only when lifecycle is `IMPLEMENTED`.
-Red-test writes under `src/test`, `test`, or `tests` are allowed during `PLANNED`, `RED_READY`, and `IMPLEMENTED` so TDD red can happen before production edits.
+Code writes are allowed only when lifecycle is `IMPLEMENTED`.
 Documentation and run artifacts under `docs/agent-runs/` remain writable so agents can prepare evidence before implementation.
 For multi-service runs, `.phase-lock` also carries selected services and claimed owners from `run-state.json`.
-`phase_guard.py` blocks runtime production-code writes when the touched service has no claimed code-developer task, and blocks a single runtime write action that touches multiple services.
-Runtime edits outside selected services, such as root `pom.xml` or shared modules, are blocked unless the phase lock includes an explicit `shared_edit_scopes` allowlist produced from service design.
+`phase_guard.py` blocks production-code writes when the touched service has no claimed code-developer task, and blocks a single write action that touches multiple services.
 The guard recognizes direct file tools, `apply_patch`, and common shell write commands. Claude Code hook matchers must include `Bash`; otherwise shell-based writes bypass the guard.
 
 ## Guard Command
 
 ```bash
-"C:/absolute/path/to/python.exe" "C:/absolute/path/to/skills/e2e-dev-harness/scripts/phase_guard.py" "C:/absolute/path/to/target-repo" \
+python skills/e2e-dev-harness/scripts/phase_guard.py . \
   --tool Edit \
   --path services/payment-service/src/main/java/com/acme/PaymentService.java \
   --run-dir docs/agent-runs/<run> \
@@ -47,7 +45,7 @@ skills/e2e-dev-harness/hooks/codex-pre-action.example.json
 skills/e2e-dev-harness/hooks/gemini-pre-action.example.json
 ```
 
-Each runtime has different hook wiring, but all installed hooks call the same `phase_guard.py` command shape: absolute Python path, absolute installed guard path, and absolute target repository path. Install with `install_hooks.py` so stale repo-relative commands are rewritten; copying a template by hand can make the hook fail before it can guard anything. The Codex and Gemini files are templates unless the host runner explicitly supports blocking pre-action or pre-tool configuration; writing the template alone is not enforcement.
+Each runtime has different hook wiring, but all examples call the same `phase_guard.py` command. The Codex and Gemini files are templates unless the host runner explicitly supports blocking pre-action or pre-tool configuration; writing the template alone is not enforcement.
 If a runtime cannot pass hook JSON through stdin, pass `--tool`, `--path`, and `--run-dir` explicitly.
 
 ## Hook Install and Check

@@ -63,6 +63,12 @@ RISK_KEYWORDS = {
     "重试",
 }
 SERVICE_SCOPES = ("auto", "discovery", "affected", "all")
+
+
+def env_default(primary: str, legacy: str, default: str) -> str:
+    return os.environ.get(primary, os.environ.get(legacy, default))
+
+
 SECTION_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(?P<title>.+?)\s*$")
 AFFECTED_SECTION_KEYWORDS = (
     "scope",
@@ -100,10 +106,6 @@ GENERIC_SERVICE_LABELS = {
 }
 LIST_ITEM_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+")
 TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
-
-
-def env_default(new_name: str, old_name: str, fallback: str) -> str:
-    return os.environ.get(new_name) or os.environ.get(old_name, fallback)
 
 
 def read_design(path: Path | None) -> str:

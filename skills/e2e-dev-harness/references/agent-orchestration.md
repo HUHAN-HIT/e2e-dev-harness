@@ -53,6 +53,16 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py agent-task . \
 
 The claim writes service ownership into run-state and `.phase-lock`, allowing `phase_guard.py` to block unclaimed service writes and one-task multi-service edits. Completion requires each service implementation task to be marked `completed` with evidence.
 
+### Claim leases and recovery
+
+A claim records `claimed_at`, `heartbeat_at`, and `lease_seconds` (default 1800). This is the portable substitute for cross-runtime agent liveness: the harness never starts or stops agent processes, but it can tell a live claim from an abandoned one.
+
+- A long-running code agent should refresh its lease: `--action renew --task-id <id> --agent <name>` (owner-only; updates `heartbeat_at`).
+- `validate_schedule` flags a claim whose lease has expired as `stale`: a warning by default, and a hard blocker under `--require-claims` so an abandoned claim cannot masquerade as active before code writes.
+- Recovery is explicit and portable. `--action claim` by a different agent automatically takes over a stale claim (recording `previous_owner`) but is blocked while the lease is still live. `--action reclaim` forces a takeover; it requires either an expired lease or `--force`, and is rejected against a live claim without `--force`.
+
+This keeps recovery deterministic and file-based without claiming non-portable process control over agents.
+
 ## Agent Roles
 
 ### Requirements Clarifier

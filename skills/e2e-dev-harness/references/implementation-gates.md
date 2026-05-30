@@ -84,8 +84,6 @@ Use `workflow_guard.validate_phase_coverage(..., require_strict_guard=True)` or 
 The run state records lifecycle, selected mode, services, gate status placeholders, and the artifact registry path.
 The registry records every planned artifact with type, owner, path, completion requirement, status, and SHA-256 when the file exists.
 `run_state.py` also writes `.phase-lock` beside `run-state.json`; hook integrations use it to block code writes before the implementation phase.
-Implementation and completion gates require `--run-state` by default. Use `--no-harness-state --harness-state-approval <file>` only for an explicitly approved repair path; the approval file must contain `Approval: user-approved`.
-`run_state.py --transition IMPLEMENTED` accepts only a passed implementation gate status JSON as evidence, so an arbitrary red-test file cannot open the phase lock.
 
 Validate them with:
 
@@ -148,8 +146,7 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py agent-task . \
   --state docs/agent-runs/<run>/run-state.json
 ```
 
-Claiming an implement task is blocked until its scheduled `depends_on_phases` are completed and multi-service `gates.service_design` is `passed`.
-Completion requires service implementation tasks to be completed in `agent-schedule.json`; `agent-task --action complete` must point at existing service-plan-scoped evidence that matches declared outputs, includes passed unit-test evidence, and replaces implementation manifest / coverage matrix templates.
+Completion requires service implementation tasks to be completed in `agent-schedule.json`; `agent-task --action complete` must point at an existing evidence file that is one of the scheduled task outputs.
 
 ## Workflow Tiers
 

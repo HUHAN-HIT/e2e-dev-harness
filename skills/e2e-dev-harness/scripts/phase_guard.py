@@ -48,8 +48,10 @@ CODE_SUFFIXES = {
 CODE_FILENAMES = {"pom.xml", "build.gradle", "settings.gradle", "Dockerfile"}
 ARTIFACT_PREFIXES = ("docs/agent-runs/",)
 DOC_PREFIXES = ("docs/design/", "docs/requirements/", "docs/review-profiles/", ".e2e/")
-TEST_PATH_MARKERS = ("/src/test/", "/test/", "/tests/")
 CLAIMED_OWNER_STATUSES = {"claimed", "in-progress", "in_progress", "completed"}
+TEST_CODE_MARKERS = ("/src/test/", "/test/", "/tests/")
+DEFAULT_ALLOWED_RUNTIME_LIFECYCLES = {"IMPLEMENTED"}
+DEFAULT_ALLOWED_TEST_LIFECYCLES = {"PLANNED", "RED_READY", "IMPLEMENTED"}
 PATCH_FILE_RE = re.compile(r"^\s*(?:\*\*\* (?:Add|Update) File:|---|\+\+\+)\s+(?P<path>.+?)\s*$", re.MULTILINE)
 SHELL_WRITE_RE = re.compile(
     r"(?:Set-Content|Add-Content|Out-File|New-Item)\b[^\r\n]*?(?:-Path|-LiteralPath|-FilePath|-Name)?\s*['\"]?(?P<cmdlet>[A-Za-z0-9_./\\:-]+\.[A-Za-z0-9]+)['\"]?"
@@ -76,6 +78,14 @@ def posix_relative(repo: Path, path: Path) -> str:
         return path.as_posix().replace("\\", "/").lstrip("/")
 
 
+def result_path(repo: Path, path: Path) -> str:
+    return posix_relative(repo, path if path.is_absolute() else repo / path)
+
+
+def result_paths(repo: Path, paths: list[Path]) -> list[str]:
+    return [result_path(repo, path) for path in paths]
+
+
 def is_code_path(repo: Path, path: Path) -> bool:
     relative = posix_relative(repo, path)
     if relative.startswith(ARTIFACT_PREFIXES):
@@ -87,8 +97,8 @@ def is_code_path(repo: Path, path: Path) -> bool:
 
 
 def is_test_code_path(repo: Path, path: Path) -> bool:
-    relative = "/" + posix_relative(repo, path if path.is_absolute() else repo / path)
-    return any(marker in relative for marker in TEST_PATH_MARKERS)
+    relative = "/" + posix_relative(repo, path).lower()
+    return any(marker in relative for marker in TEST_CODE_MARKERS) or path.name.lower().startswith("test_")
 
 
 def service_for_code_path(repo: Path, path: Path, services: list[str]) -> str:
@@ -104,17 +114,6 @@ def service_for_code_path(repo: Path, path: Path, services: list[str]) -> str:
     return sorted(matches, key=len, reverse=True)[0]
 
 
-def path_matches_scope(repo: Path, path: Path, scopes: list[str]) -> bool:
-    relative = posix_relative(repo, path if path.is_absolute() else repo / path)
-    for scope in scopes:
-        normalized = str(scope).replace("\\", "/").strip("/")
-        if not normalized:
-            continue
-        if relative == normalized or relative.startswith(normalized + "/"):
-            return True
-    return False
-
-
 def discover_lock(repo: Path, explicit: Path | None = None, run_dir: Path | None = None) -> Path | None:
     if explicit:
         return explicit if explicit.is_absolute() else repo / explicit
@@ -126,6 +125,55 @@ def discover_lock(repo: Path, explicit: Path | None = None, run_dir: Path | None
         return None
     matches = sorted(runs.glob("*/.phase-lock"), key=lambda path: path.stat().st_mtime, reverse=True)
     return matches[0] if matches else None
+
+
+def run_state_path_for_lock(repo: Path, lock: Path) -> Path:
+    return lock.parent / "run-state.json"
+
+
+def lock_state_pair(repo: Path, lock: Path) -> tuple[dict, dict, list[str]]:
+    blocked: list[str] = []
+    lock_data = load_json(lock)
+    if lock_data.get("schema") != "e2e-dev-harness.phase-lock.v1":
+        blocked.append("Phase lock is missing or invalid; rerun run_state.py or e2e_dev_harness.py gate.")
+    state_path = run_state_path_for_lock(repo, lock)
+    state_data = load_json(state_path)
+    if state_data.get("schema") != "e2e-dev-harness.run-state.v1":
+        blocked.append(f"Run state beside phase lock is missing or invalid: {state_path}")
+    if not blocked:
+        lock_run = str(lock_data.get("run_id") or "")
+        state_run = str(state_data.get("run_id") or "")
+        if lock_run and state_run and lock_run != state_run:
+            blocked.append(f"Phase lock run_id does not match run-state: {lock_run} != {state_run}")
+        lock_lifecycle = str(lock_data.get("lifecycle") or "")
+        state_lifecycle = str(state_data.get("lifecycle") or "")
+        if lock_lifecycle != state_lifecycle:
+            blocked.append(
+                "Phase lock lifecycle does not match run-state lifecycle: "
+                + f"{lock_lifecycle or '<missing>'} != {state_lifecycle or '<missing>'}. "
+                + "Rerun the last successful harness transition before writing code."
+            )
+    return lock_data, state_data, blocked
+
+
+def shared_scope_for_code_path(repo: Path, path: Path, shared_edit_scopes: list[str]) -> str:
+    relative = posix_relative(repo, path if path.is_absolute() else repo / path)
+    for scope in sorted([scope.strip("/").replace("\\", "/") for scope in shared_edit_scopes], key=len, reverse=True):
+        if relative == scope or relative.startswith(scope + "/"):
+            return scope
+    return ""
+
+
+def claimed_owners(owners: dict) -> list[str]:
+    claimed: list[str] = []
+    for service, owner in owners.items():
+        if not isinstance(owner, dict):
+            continue
+        status = str(owner.get("status", "")).lower()
+        agent = str(owner.get("agent", "")).strip()
+        if agent and status in CLAIMED_OWNER_STATUSES:
+            claimed.append(str(service))
+    return claimed
 
 
 def parse_hook_input(text: str) -> tuple[str, list[str]]:
@@ -187,22 +235,34 @@ def validate_action(
     repo = repo.resolve()
     normalized = normalize_tool(tool)
     code_paths = [path for path in paths if is_code_path(repo, path if path.is_absolute() else repo / path)]
+    test_code_paths = [path for path in code_paths if is_test_code_path(repo, path if path.is_absolute() else repo / path)]
+    runtime_code_paths = [path for path in code_paths if path not in test_code_paths]
     if normalized not in WRITE_TOOLS or not code_paths:
-        return {"ready": True, "blocked_reasons": [], "warnings": [], "code_paths": [str(path) for path in code_paths]}
+        return {"ready": True, "blocked_reasons": [], "warnings": [], "code_paths": result_paths(repo, code_paths)}
     lock = discover_lock(repo, lock_path, run_dir)
     if not lock or not lock.exists():
         return {
             "ready": False,
             "blocked_reasons": ["Code write blocked: phase lock not found for active agent run."],
             "warnings": [],
-            "code_paths": [str(path) for path in code_paths],
+            "code_paths": result_paths(repo, code_paths),
         }
-    data = load_json(lock)
+    lock_data, state_data, state_blockers = lock_state_pair(repo, lock)
+    if state_blockers:
+        return {
+            "ready": False,
+            "blocked_reasons": state_blockers,
+            "warnings": [],
+            "phase_lock": str(lock),
+            "run_state": str(run_state_path_for_lock(repo, lock)),
+            "code_paths": result_paths(repo, code_paths),
+            "test_code_paths": result_paths(repo, test_code_paths),
+            "runtime_code_paths": result_paths(repo, runtime_code_paths),
+        }
+    data = state_data
     lifecycle = str(data.get("lifecycle", ""))
-    test_code_paths = [path for path in code_paths if is_test_code_path(repo, path)]
-    runtime_code_paths = [path for path in code_paths if path not in test_code_paths]
-    allowed_runtime = set(data.get("allowed_code_write_lifecycles") or ["IMPLEMENTED"])
-    allowed_tests = set(data.get("allowed_test_write_lifecycles") or ["PLANNED", "RED_READY", "IMPLEMENTED"])
+    allowed_runtime = set(lock_data.get("allowed_code_write_lifecycles") or DEFAULT_ALLOWED_RUNTIME_LIFECYCLES)
+    allowed_test = set(lock_data.get("allowed_test_write_lifecycles") or DEFAULT_ALLOWED_TEST_LIFECYCLES)
     if runtime_code_paths and lifecycle not in allowed_runtime:
         return {
             "ready": False,
@@ -212,24 +272,26 @@ def validate_action(
             ],
             "warnings": [],
             "phase_lock": str(lock),
+            "run_state": str(run_state_path_for_lock(repo, lock)),
             "lifecycle": lifecycle,
-            "code_paths": [str(path) for path in code_paths],
-            "runtime_code_paths": [str(path) for path in runtime_code_paths],
-            "test_code_paths": [str(path) for path in test_code_paths],
+            "code_paths": result_paths(repo, code_paths),
+            "test_code_paths": result_paths(repo, test_code_paths),
+            "runtime_code_paths": result_paths(repo, runtime_code_paths),
         }
-    if test_code_paths and not runtime_code_paths and lifecycle not in allowed_tests:
+    if test_code_paths and not runtime_code_paths and lifecycle not in allowed_test:
         return {
             "ready": False,
             "blocked_reasons": [
                 f"Test write blocked: lifecycle {lifecycle or '<missing>'} is not in allowed test phases: "
-                + ", ".join(sorted(allowed_tests))
+                + ", ".join(sorted(allowed_test))
             ],
             "warnings": [],
             "phase_lock": str(lock),
+            "run_state": str(run_state_path_for_lock(repo, lock)),
             "lifecycle": lifecycle,
-            "code_paths": [str(path) for path in code_paths],
-            "runtime_code_paths": [str(path) for path in runtime_code_paths],
-            "test_code_paths": [str(path) for path in test_code_paths],
+            "code_paths": result_paths(repo, code_paths),
+            "test_code_paths": result_paths(repo, test_code_paths),
+            "runtime_code_paths": result_paths(repo, runtime_code_paths),
         }
     selected_mode = str(data.get("selected_mode", ""))
     services = [str(service).replace("\\", "/").strip("/") for service in data.get("services", []) or []]
@@ -238,27 +300,28 @@ def validate_action(
             service_for_code_path(repo, path, services)
             for path in runtime_code_paths
         }
+        touched_services.discard("")
         shared_edit_scopes = [str(scope) for scope in data.get("shared_edit_scopes", []) or []]
-        unscoped_paths = [
+        unscoped_runtime = [
             path
             for path in runtime_code_paths
-            if not service_for_code_path(repo, path, services) and not path_matches_scope(repo, path, shared_edit_scopes)
+            if not service_for_code_path(repo, path, services)
+            and not shared_scope_for_code_path(repo, path, shared_edit_scopes)
         ]
-        if unscoped_paths:
+        if unscoped_runtime:
             return {
                 "ready": False,
                 "blocked_reasons": [
-                    "Multi-service code write blocked: runtime code path is outside claimed services and no shared_edit_scopes entry allows it."
+                    "Multi-service code write blocked: runtime code path is outside claimed services and shared edit scopes."
                 ],
                 "warnings": [],
                 "phase_lock": str(lock),
+                "run_state": str(run_state_path_for_lock(repo, lock)),
                 "lifecycle": lifecycle,
-                "code_paths": [str(path) for path in code_paths],
-                "runtime_code_paths": [str(path) for path in runtime_code_paths],
-                "test_code_paths": [str(path) for path in test_code_paths],
-                "unscoped_runtime_code_paths": [str(path) for path in unscoped_paths],
+                "code_paths": result_paths(repo, code_paths),
+                "runtime_code_paths": result_paths(repo, runtime_code_paths),
+                "unscoped_runtime_paths": result_paths(repo, unscoped_runtime),
             }
-        touched_services.discard("")
         if len(touched_services) > 1:
             return {
                 "ready": False,
@@ -267,13 +330,24 @@ def validate_action(
                 ],
                 "warnings": [],
                 "phase_lock": str(lock),
+                "run_state": str(run_state_path_for_lock(repo, lock)),
                 "lifecycle": lifecycle,
-                "code_paths": [str(path) for path in code_paths],
-                "runtime_code_paths": [str(path) for path in runtime_code_paths],
-                "test_code_paths": [str(path) for path in test_code_paths],
+                "code_paths": result_paths(repo, code_paths),
                 "touched_services": sorted(touched_services),
             }
         owners = data.get("owners") if isinstance(data.get("owners"), dict) else {}
+        if not touched_services and runtime_code_paths and not claimed_owners(owners):
+            return {
+                "ready": False,
+                "blocked_reasons": [
+                    "Multi-service code write blocked: shared edit scope has no claimed code-developer task."
+                ],
+                "warnings": [],
+                "phase_lock": str(lock),
+                "run_state": str(run_state_path_for_lock(repo, lock)),
+                "lifecycle": lifecycle,
+                "code_paths": result_paths(repo, code_paths),
+            }
         for service in sorted(touched_services):
             owner = owners.get(service) if isinstance(owners.get(service), dict) else {}
             status = str(owner.get("status", "")).lower()
@@ -288,10 +362,9 @@ def validate_action(
                     ],
                     "warnings": [],
                     "phase_lock": str(lock),
+                    "run_state": str(run_state_path_for_lock(repo, lock)),
                     "lifecycle": lifecycle,
-                    "code_paths": [str(path) for path in code_paths],
-                    "runtime_code_paths": [str(path) for path in runtime_code_paths],
-                    "test_code_paths": [str(path) for path in test_code_paths],
+                    "code_paths": result_paths(repo, code_paths),
                     "touched_services": sorted(touched_services),
                 }
     return {
@@ -299,10 +372,11 @@ def validate_action(
         "blocked_reasons": [],
         "warnings": [],
         "phase_lock": str(lock),
+        "run_state": str(run_state_path_for_lock(repo, lock)),
         "lifecycle": lifecycle,
-        "code_paths": [str(path) for path in code_paths],
-        "runtime_code_paths": [str(path) for path in runtime_code_paths],
-        "test_code_paths": [str(path) for path in test_code_paths],
+        "code_paths": result_paths(repo, code_paths),
+        "test_code_paths": result_paths(repo, test_code_paths),
+        "runtime_code_paths": result_paths(repo, runtime_code_paths),
     }
 
 

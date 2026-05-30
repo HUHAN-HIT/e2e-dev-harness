@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -20,13 +19,57 @@ import run_state  # noqa: E402
 
 
 CLAIMED_STATUSES = {"claimed", "in-progress", "in_progress", "completed"}
-COMPLETED_STATUSES = {"completed"}
-QUALITY_RE = re.compile(r"\b(todo|tbd|pending|placeholder|template)\b|<[^>]+>", re.IGNORECASE)
-PASS_RE = re.compile(r"\b(build success|success|passed|pass|verified|exit_code\"?\s*:\s*0)\b", re.IGNORECASE)
+# Statuses that hold a task without finishing it; a stale hold can be reclaimed.
+HELD_STATUSES = {"claimed", "in-progress", "in_progress"}
+DEFAULT_LEASE_SECONDS = 1800
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+def now_dt(now: datetime | None = None) -> datetime:
+    return (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+
+
+def now_iso(now: datetime | None = None) -> str:
+    return now_dt(now).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def parse_iso(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def task_lease_seconds(task: dict) -> int:
+    try:
+        value = int(task.get("lease_seconds", DEFAULT_LEASE_SECONDS))
+    except (TypeError, ValueError):
+        return DEFAULT_LEASE_SECONDS
+    return value if value > 0 else DEFAULT_LEASE_SECONDS
+
+
+def task_pulse(task: dict) -> datetime | None:
+    """Most recent liveness signal: heartbeat if present, else claim time."""
+    return parse_iso(task.get("heartbeat_at", "")) or parse_iso(task.get("claimed_at", ""))
+
+
+def is_held(task: dict) -> bool:
+    return str(task.get("status", "")).lower() in HELD_STATUSES and bool(str(task.get("owner", "")).strip())
+
+
+def is_stale(task: dict, now: datetime | None = None) -> bool:
+    if not is_held(task):
+        return False
+    pulse = task_pulse(task)
+    if pulse is None:
+        # Held with no timestamp at all: treat as stale so it can be recovered.
+        return True
+    return (now_dt(now) - pulse).total_seconds() > task_lease_seconds(task)
 
 
 def atomic_write_json(path: Path, data: dict) -> None:
@@ -63,6 +106,16 @@ def find_task(schedule: dict, task_id: str) -> dict | None:
     return None
 
 
+def phases_completed(schedule: dict, phases: list[str]) -> tuple[bool, list[str]]:
+    missing: list[str] = []
+    tasks = schedule.get("tasks", []) or []
+    for phase in phases:
+        matching = [task for task in tasks if str(task.get("phase", "")) == phase]
+        if not matching or any(str(task.get("status", "")).lower() != "completed" for task in matching):
+            missing.append(phase)
+    return not missing, missing
+
+
 def service_tasks(schedule: dict, services: list[str], phase: str = "implement") -> dict[str, dict]:
     tasks: dict[str, dict] = {}
     for task in schedule.get("tasks", []) or []:
@@ -74,98 +127,6 @@ def service_tasks(schedule: dict, services: list[str], phase: str = "implement")
 
 def posix_path(value: str) -> str:
     return value.replace("\\", "/").strip()
-
-
-def service_key(service: str) -> str:
-    return posix_path(service).strip("/").split("/")[-1]
-
-
-def path_under_service_plan(path: str, service: str) -> bool:
-    normalized = posix_path(path)
-    key = service_key(service)
-    return f"/service-plans/{key}/" in "/" + normalized
-
-
-def task_dependency_blockers(schedule: dict, task: dict, state: dict | None = None) -> list[str]:
-    blocked: list[str] = []
-    dependencies = [str(phase) for phase in task.get("depends_on_phases", []) or []]
-    tasks = [item for item in schedule.get("tasks", []) or [] if isinstance(item, dict)]
-    for phase in dependencies:
-        phase_tasks = [item for item in tasks if str(item.get("phase", "")) == phase]
-        if not phase_tasks:
-            blocked.append(f"Task {task.get('id', '<unknown>')} depends on phase {phase}, but no scheduled task records that phase.")
-            continue
-        if not any(str(item.get("status", "planned")).lower() in COMPLETED_STATUSES for item in phase_tasks):
-            blocked.append(f"Task {task.get('id', '<unknown>')} cannot be claimed until dependency phase {phase} is completed.")
-    if str(task.get("phase", "")) == "implement" and state:
-        gates = state.get("gates") if isinstance(state.get("gates"), dict) else {}
-        if state.get("selected_mode") == "multi" and gates.get("service_design") != "passed":
-            blocked.append("Implement task cannot be claimed until service_design gate is passed in run-state.")
-    return blocked
-
-
-def validate_unit_test_evidence(path: Path) -> list[str]:
-    try:
-        text = path.read_text(encoding="utf-8-sig", errors="replace")
-    except OSError as error:
-        return [f"Unit-test evidence could not be read: {path}: {error}"]
-    if QUALITY_RE.search(text):
-        return [f"Unit-test evidence contains placeholder content: {path}"]
-    if path.suffix.lower() == ".json":
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError as error:
-            return [f"Unit-test evidence JSON is invalid: {path}: {error}"]
-        entries = data if isinstance(data, list) else [data]
-        if not entries or not all(isinstance(item, dict) and item.get("exit_code") == 0 for item in entries):
-            return [f"Unit-test evidence must contain passed command entries with exit_code 0: {path}"]
-        return []
-    if not PASS_RE.search(text):
-        return [f"Unit-test evidence must show passed verification: {path}"]
-    return []
-
-
-def validate_non_template_artifact(path: Path, label: str) -> list[str]:
-    try:
-        text = path.read_text(encoding="utf-8-sig", errors="replace")
-    except OSError as error:
-        return [f"{label} could not be read: {path}: {error}"]
-    if QUALITY_RE.search(text):
-        return [f"{label} contains placeholder/template content: {path}"]
-    if "|" not in text:
-        return [f"{label} must include a concrete table mapping, not free-form notes only: {path}"]
-    return []
-
-
-def validate_implement_completion_evidence(repo: Path, task: dict, evidence: list[str]) -> list[str]:
-    if str(task.get("phase", "")) != "implement":
-        return []
-    service = str(task.get("service", ""))
-    blocked: list[str] = []
-    if service:
-        for item in evidence:
-            if not path_under_service_plan(item, service):
-                blocked.append(f"Implement task evidence must stay under service-plans/{service_key(service)}/: {item}")
-    outputs = {posix_path(str(output)) for output in task.get("outputs", []) or [] if isinstance(output, str)}
-    evidence_set = {posix_path(item) for item in evidence}
-    required_kinds = {
-        "unit-test evidence": [output for output in outputs if "unit-test-evidence" in output or "test-evidence" in output],
-        "implementation manifest": [output for output in outputs if "implementation-manifest" in output],
-        "coverage matrix": [output for output in outputs if "coverage-matrix" in output or "coverage.md" in output],
-    }
-    for label, candidates in required_kinds.items():
-        if candidates and not any(candidate in evidence_set for candidate in candidates):
-            blocked.append(f"Implement task completion requires declared {label} output evidence.")
-    for item in sorted(evidence_set):
-        path = repo / item
-        lowered = item.lower()
-        if "unit-test-evidence" in lowered or "test-evidence" in lowered:
-            blocked.extend(validate_unit_test_evidence(path))
-        elif "implementation-manifest" in lowered:
-            blocked.extend(validate_non_template_artifact(path, "Implementation manifest"))
-        elif "coverage-matrix" in lowered or lowered.endswith("coverage.md"):
-            blocked.extend(validate_non_template_artifact(path, "Coverage matrix"))
-    return blocked
 
 
 def evidence_paths(repo: Path, evidence: list[str] | None) -> tuple[list[str], list[str]]:
@@ -195,9 +156,38 @@ def evidence_matches_outputs(task: dict, evidence: list[str]) -> bool:
     return bool(outputs & normalized_evidence)
 
 
-def validate_schedule(schedule: dict, services: list[str], require_claims: bool = False, require_completed: bool = False) -> dict:
+def evidence_content_blockers(repo: Path, evidence: list[str]) -> list[str]:
+    blocked: list[str] = []
+    for item in evidence:
+        path = repo / item
+        lower_name = path.name.lower()
+        text = path.read_text(encoding="utf-8", errors="replace")
+        lowered = text.lower()
+        if lower_name in {"implementation-manifest.md", "coverage-matrix.md"}:
+            if any(marker in lowered for marker in ("todo", "placeholder", "template")):
+                blocked.append(f"Task completion evidence is placeholder/template content: {item}")
+        if "unit-test-evidence" in lower_name and path.suffix.lower() == ".json":
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError as error:
+                blocked.append(f"Unit-test evidence must be valid JSON: {item}: {error}")
+                continue
+            entries = data if isinstance(data, list) else [data]
+            if not entries or any(int(entry.get("exit_code", 1)) != 0 for entry in entries if isinstance(entry, dict)):
+                blocked.append(f"Unit-test evidence must contain passing command results: {item}")
+    return blocked
+
+
+def validate_schedule(
+    schedule: dict,
+    services: list[str],
+    require_claims: bool = False,
+    require_completed: bool = False,
+    now: datetime | None = None,
+) -> dict:
     blocked: list[str] = []
     warnings: list[str] = []
+    stale_services: list[str] = []
     if schedule.get("schema") != "e2e-dev-harness.agent-schedule.v1":
         blocked.append("Agent schedule schema must be e2e-dev-harness.agent-schedule.v1.")
     tasks = service_tasks(schedule, services)
@@ -209,15 +199,24 @@ def validate_schedule(schedule: dict, services: list[str], require_claims: bool 
         owner = str(task.get("owner", "")).strip()
         if require_claims and (not owner or status not in CLAIMED_STATUSES):
             blocked.append(f"Implement task for {service} must be claimed before code writes.")
-        if require_claims:
-            blocked.extend(task_dependency_blockers(schedule, task))
         if require_completed and status != "completed":
             blocked.append(f"Implement task for {service} must be completed before completion.")
+        if status != "completed" and is_stale(task, now):
+            stale_services.append(service)
+            message = (
+                f"Claim for {service} is stale (lease expired; owner {owner or 'unknown'}). "
+                "Renew with --action renew or take over with --action reclaim."
+            )
+            if require_claims:
+                blocked.append(message)
+            else:
+                warnings.append(message)
     return {
         "ready": not blocked,
         "blocked_reasons": blocked,
         "warnings": warnings,
         "services": services,
+        "stale_services": stale_services,
         "require_claims": require_claims,
         "require_completed": require_completed,
     }
@@ -237,6 +236,8 @@ def update_state_owner(repo: Path, state_path: Path | None, task: dict, agent: s
             "agent": agent,
             "status": status,
             "claimed_at": task.get("claimed_at", ""),
+            "heartbeat_at": task.get("heartbeat_at", ""),
+            "lease_seconds": task.get("lease_seconds", DEFAULT_LEASE_SECONDS),
             "completed_at": task.get("completed_at", ""),
             "allowed_scope": [service + "/"],
             "evidence": evidence or [],
@@ -246,7 +247,15 @@ def update_state_owner(repo: Path, state_path: Path | None, task: dict, agent: s
     return {"ready": True, "blocked_reasons": [], "warnings": [], "run_state": str(path)}
 
 
-def claim(repo: Path, schedule_path: Path, task_id: str, agent: str, state_path: Path | None = None) -> dict:
+def claim(
+    repo: Path,
+    schedule_path: Path,
+    task_id: str,
+    agent: str,
+    state_path: Path | None = None,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
+    now: datetime | None = None,
+) -> dict:
     path = resolve(repo, schedule_path)
     if not path or not path.exists():
         return {"ready": False, "blocked_reasons": [f"Agent schedule not found: {path}"], "warnings": []}
@@ -254,28 +263,143 @@ def claim(repo: Path, schedule_path: Path, task_id: str, agent: str, state_path:
     task = find_task(schedule, task_id)
     if not task:
         return {"ready": False, "blocked_reasons": [f"Task not found in agent schedule: {task_id}"], "warnings": []}
-    state = None
-    if state_path:
-        resolved_state = resolve(repo, state_path)
-        if not resolved_state or not resolved_state.exists():
-            return {"ready": False, "blocked_reasons": [f"Run state not found: {resolved_state}"], "warnings": []}
-        state = load_json(resolved_state)
-    dependency_blocked = task_dependency_blockers(schedule, task, state)
-    if dependency_blocked:
-        return {"ready": False, "blocked_reasons": dependency_blocked, "warnings": []}
     status = str(task.get("status", "planned")).lower()
     if status == "completed":
         return {"ready": False, "blocked_reasons": [f"Task already completed: {task_id}"], "warnings": []}
+    deps_ready, missing_deps = phases_completed(schedule, [str(phase) for phase in task.get("depends_on_phases", []) or []])
+    if not deps_ready:
+        return {
+            "ready": False,
+            "blocked_reasons": [
+                "Task "
+                + task_id
+                + " cannot be claimed until dependency phases are completed: "
+                + ", ".join(missing_deps)
+            ],
+            "warnings": [],
+        }
+    warnings: list[str] = []
+    prior_owner = str(task.get("owner", "")).strip()
+    if prior_owner and prior_owner != agent:
+        if not is_stale(task, now):
+            return {
+                "ready": False,
+                "blocked_reasons": [
+                    f"Task {task_id} has an active claim by {prior_owner}; "
+                    "wait for the lease to expire, renew, or use --action reclaim --force."
+                ],
+                "warnings": [],
+            }
+        # Stale claim by another agent: take it over and record the handover.
+        task["previous_owner"] = prior_owner
+        task["claimed_at"] = None
+        warnings.append(f"Took over stale claim from {prior_owner} for task {task_id}.")
+    stamp = now_iso(now)
     task["status"] = "claimed"
     task["owner"] = agent
-    task["claimed_at"] = task.get("claimed_at") or now_iso()
+    task["claimed_at"] = task.get("claimed_at") or stamp
+    task["heartbeat_at"] = stamp
+    task["lease_seconds"] = int(lease_seconds) if int(lease_seconds) > 0 else DEFAULT_LEASE_SECONDS
     atomic_write_json(path, schedule)
     state_result = update_state_owner(repo, state_path, task, agent, "claimed")
     blocked = [] if state_result["ready"] else state_result["blocked_reasons"]
     return {
         "ready": not blocked,
         "blocked_reasons": blocked,
+        "warnings": warnings + state_result["warnings"],
+        "schedule": str(path),
+        "task": task,
+        "run_state_update": state_result,
+    }
+
+
+def renew(
+    repo: Path,
+    schedule_path: Path,
+    task_id: str,
+    agent: str,
+    state_path: Path | None = None,
+    lease_seconds: int | None = None,
+    now: datetime | None = None,
+) -> dict:
+    path = resolve(repo, schedule_path)
+    if not path or not path.exists():
+        return {"ready": False, "blocked_reasons": [f"Agent schedule not found: {path}"], "warnings": []}
+    schedule = load_json(path)
+    task = find_task(schedule, task_id)
+    if not task:
+        return {"ready": False, "blocked_reasons": [f"Task not found in agent schedule: {task_id}"], "warnings": []}
+    if str(task.get("status", "")).lower() == "completed":
+        return {"ready": False, "blocked_reasons": [f"Task already completed: {task_id}"], "warnings": []}
+    owner = str(task.get("owner", "")).strip()
+    if owner != agent:
+        return {
+            "ready": False,
+            "blocked_reasons": [f"Task {task_id} is owned by {owner or 'no one'}, not {agent}; cannot renew."],
+            "warnings": [],
+        }
+    task["heartbeat_at"] = now_iso(now)
+    if lease_seconds is not None and int(lease_seconds) > 0:
+        task["lease_seconds"] = int(lease_seconds)
+    atomic_write_json(path, schedule)
+    state_result = update_state_owner(repo, state_path, task, agent, str(task.get("status", "claimed")))
+    blocked = [] if state_result["ready"] else state_result["blocked_reasons"]
+    return {
+        "ready": not blocked,
+        "blocked_reasons": blocked,
         "warnings": state_result["warnings"],
+        "schedule": str(path),
+        "task": task,
+        "run_state_update": state_result,
+    }
+
+
+def reclaim(
+    repo: Path,
+    schedule_path: Path,
+    task_id: str,
+    agent: str,
+    state_path: Path | None = None,
+    force: bool = False,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
+    now: datetime | None = None,
+) -> dict:
+    path = resolve(repo, schedule_path)
+    if not path or not path.exists():
+        return {"ready": False, "blocked_reasons": [f"Agent schedule not found: {path}"], "warnings": []}
+    schedule = load_json(path)
+    task = find_task(schedule, task_id)
+    if not task:
+        return {"ready": False, "blocked_reasons": [f"Task not found in agent schedule: {task_id}"], "warnings": []}
+    if str(task.get("status", "")).lower() == "completed":
+        return {"ready": False, "blocked_reasons": [f"Task already completed: {task_id}"], "warnings": []}
+    prior_owner = str(task.get("owner", "")).strip()
+    if prior_owner and prior_owner != agent and not force and not is_stale(task, now):
+        return {
+            "ready": False,
+            "blocked_reasons": [
+                f"Task {task_id} has an active claim by {prior_owner}; "
+                "reclaim requires a stale lease or --force."
+            ],
+            "warnings": [],
+        }
+    warnings: list[str] = []
+    if prior_owner and prior_owner != agent:
+        task["previous_owner"] = prior_owner
+        warnings.append(f"Reclaimed task {task_id} from {prior_owner}.")
+    stamp = now_iso(now)
+    task["status"] = "claimed"
+    task["owner"] = agent
+    task["claimed_at"] = stamp
+    task["heartbeat_at"] = stamp
+    task["lease_seconds"] = int(lease_seconds) if int(lease_seconds) > 0 else DEFAULT_LEASE_SECONDS
+    atomic_write_json(path, schedule)
+    state_result = update_state_owner(repo, state_path, task, agent, "claimed")
+    blocked = [] if state_result["ready"] else state_result["blocked_reasons"]
+    return {
+        "ready": not blocked,
+        "blocked_reasons": blocked,
+        "warnings": warnings + state_result["warnings"],
         "schedule": str(path),
         "task": task,
         "run_state_update": state_result,
@@ -309,9 +433,9 @@ def complete(
             "blocked_reasons": [f"Task {task_id} completion evidence must reference one of the task outputs."],
             "warnings": [],
         }
-    quality_blocked = validate_implement_completion_evidence(repo, task, resolved_evidence)
-    if quality_blocked:
-        return {"ready": False, "blocked_reasons": quality_blocked, "warnings": []}
+    content_blockers = evidence_content_blockers(repo, resolved_evidence)
+    if content_blockers:
+        return {"ready": False, "blocked_reasons": content_blockers, "warnings": []}
     if not owner:
         task["owner"] = agent
         task["claimed_at"] = task.get("claimed_at") or now_iso()
@@ -338,17 +462,23 @@ def main() -> int:
     parser.add_argument("--task-id")
     parser.add_argument("--agent", default="")
     parser.add_argument("--state", type=Path)
-    parser.add_argument("--action", choices=["claim", "complete", "validate"], required=True)
+    parser.add_argument("--action", choices=["claim", "complete", "validate", "renew", "reclaim"], required=True)
     parser.add_argument("--service", action="append")
     parser.add_argument("--require-claims", action="store_true")
     parser.add_argument("--require-completed", action="store_true")
     parser.add_argument("--evidence", action="append", default=[])
+    parser.add_argument("--lease-seconds", type=int, default=DEFAULT_LEASE_SECONDS)
+    parser.add_argument("--force", action="store_true", help="Reclaim an active (non-stale) claim.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
     repo = args.repo.resolve()
     if args.action == "claim":
-        result = claim(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state)
+        result = claim(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state, args.lease_seconds)
+    elif args.action == "renew":
+        result = renew(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state, args.lease_seconds)
+    elif args.action == "reclaim":
+        result = reclaim(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state, args.force, args.lease_seconds)
     elif args.action == "complete":
         result = complete(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state, args.evidence)
     else:

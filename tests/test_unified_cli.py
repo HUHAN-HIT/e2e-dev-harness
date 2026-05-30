@@ -1,0 +1,749 @@
+"""Unified CLI integration tests."""
+from __future__ import annotations
+
+import sys
+import hashlib
+import json
+import subprocess
+import tempfile
+import textwrap
+import unittest
+
+from types import SimpleNamespace
+from pathlib import Path
+from unittest.mock import patch
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "skills" / "e2e-dev-harness" / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+import e2e_dev_harness  # noqa: E402
+
+from conftest import REVIEW_CHECKLIST, write_command_evidence  # noqa: E402
+import agent_instructions  # noqa: E402
+
+
+class UnifiedCliTests(unittest.TestCase):
+    REVIEW_CHECKLIST = REVIEW_CHECKLIST
+
+    def default_review_checklist(self, phase: str) -> str:
+        return "\n".join(f"- [x] {item}: checked." for item in self.REVIEW_CHECKLIST.get(phase, []))
+
+    def write_semantic_reviews(self, repo: Path) -> Path:
+        review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+        request_dir = repo / "docs" / "agent-runs" / "run" / "review-requests"
+        invocation_dir = repo / "docs" / "agent-runs" / "run" / "review-invocations"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        request_dir.mkdir(parents=True, exist_ok=True)
+        invocation_dir.mkdir(parents=True, exist_ok=True)
+        for phase, review_name, request_name in (
+            ("design", "R1-design-review.md", "R1-design-review-request.md"),
+            ("test", "R2-test-review.md", "R2-test-review-request.md"),
+            ("implementation", "R3-implementation-review.md", "R3-implementation-review-request.md"),
+        ):
+            request_path = request_dir / request_name
+            invocation_path = invocation_dir / f"{phase}-reviewer-invocation.json"
+            request_path.write_text(
+                textwrap.dedent(
+                    f"""
+                    # {phase.title()} Review Request
+
+                    - Phase: {phase}
+                    - Reviewer Role: independent semantic reviewer
+                    - Context Package: request-scoped; no inherited developer chat context
+                    - Allowed Inputs: design, tests, implementation refs, dependency report
+                    - Forbidden: inherited developer chat context; production-code edits; self-review
+                    - Output: docs/agent-runs/run/reviews/{review_name}
+                    - Developer Agent: developer-agent-1
+                    - Reviewer Agent: reviewer-agent-{phase}
+                    - Reviewer Invocation: docs/agent-runs/run/review-invocations/{phase}-reviewer-invocation.json
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            invocation_path.write_text(
+                json.dumps(
+                    {
+                        "developer_agent": "developer-agent-1",
+                        "reviewer_agent": f"reviewer-agent-{phase}",
+                        "reviewer_session": f"reviewer-session-{phase}",
+                        "review_request": f"docs/agent-runs/run/review-requests/{request_name}",
+                        "output": f"docs/agent-runs/run/reviews/{review_name}",
+                        "fork_context": False,
+                        "context_policy": "request-scoped; no-inherited-developer-chat-context",
+                        "status": "completed",
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            request_hash = hashlib.sha256(request_path.read_bytes()).hexdigest()
+            checklist = self.default_review_checklist(phase)
+            code_path_trace = ""
+            if phase == "implementation":
+                code_path_trace = textwrap.dedent(
+                    """
+
+                    ## Code Path Trace
+
+                    - AC-1: Controller -> ApplicationService -> Repository/Client/Sender -> response or event.
+                    - AC-2: Controller -> ApplicationService -> Validator/Repository -> error or state update.
+                    - AC-3: Controller -> ApplicationService -> Repository/Client/Sender -> verified behavior.
+                    - AC-4: Controller -> ApplicationService -> Repository/Client/Sender -> verified behavior.
+                    - AC-5: Controller -> ApplicationService -> Repository/Client/Sender -> verified behavior.
+                    """
+                )
+            (review_dir / review_name).write_text(
+                textwrap.dedent(
+                    f"""
+                    # {phase.title()} Review
+
+                    - Phase: {phase}
+                    - Reviewer: semantic-reviewer
+                    - Review Request: docs/agent-runs/run/review-requests/{request_name}
+                    - Developer Agent: developer-agent-1
+                    - Reviewer Agent: reviewer-agent-{phase}
+                    - Reviewer Session: reviewer-session-{phase}
+                    - Reviewer Invocation: docs/agent-runs/run/review-invocations/{phase}-reviewer-invocation.json
+                    - Request Hash: {request_hash}
+                    - Independence: independent-agent
+                    - Context Boundary: request-scoped; no inherited developer chat context
+                    - No Code Changes: confirmed
+                    - Scope: all-services
+                    - Inputs Reviewed: requirements; use cases; tests; implementation refs
+                    - Findings: None
+                    - Required Rework: None
+                    - Status: approved
+
+                    ## Required Review Checklist
+
+                    {checklist}
+                    {code_path_trace}
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+        return review_dir
+
+    def test_align_prepare_scopes_warns_when_explicit_scopes_differ(self) -> None:
+        agent_scope, service_scope, notes = e2e_dev_harness.align_prepare_scopes("discovery", "affected")
+
+        self.assertEqual("discovery", agent_scope)
+        self.assertEqual("affected", service_scope)
+        self.assertTrue(any("differ" in note for note in notes))
+
+    def test_prepare_reuses_single_knowledge_graph_detection(self) -> None:
+        facts = {
+            "poms": ["pom.xml"],
+            "root_modules": [],
+            "spring_entrypoints": [],
+            "spring_configs": [],
+            "design_docs_or_media_count": 0,
+            "design_docs_or_media_sample": [],
+            "graphify_graph": "graphify-out/graph.json",
+            "graphify_graph_exists": False,
+            "service_candidates": [],
+            "multi_service": False,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "AGENT.md").write_text("# Root\n", encoding="utf-8")
+            calls = []
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=None,
+                path=None,
+                service=None,
+                agent_mode="off",
+                agent_scope="auto",
+                include_agent_content=False,
+                max_agent_chars=12000,
+                max_discovered_services=agent_instructions.DEFAULT_DISCOVERED_SERVICE_LIMIT,
+                superpowers_mode="off",
+                memory_mode="off",
+                agent_orchestration_mode="auto",
+                service_scope="discovery",
+                agent_run_dir=None,
+                run_date="2026-05-23",
+                kg_mode="auto",
+                dependency_scan_mode="off",
+                write_dependency_report=False,
+                dependency_output_dir=None,
+                status_file=None,
+            )
+
+            def fake_detect(path: Path) -> dict:
+                calls.append(path)
+                return facts
+
+            with patch.object(e2e_dev_harness.kg_refresh, "detect", side_effect=fake_detect):
+                code, result = e2e_dev_harness.prepare(args)
+
+        self.assertEqual(0, code)
+        self.assertEqual(1, len(calls))
+        self.assertEqual("discovery", result["orchestration"]["selected_mode"])
+        self.assertEqual([], result["orchestration"]["agents"])
+
+    def test_prepare_runs_gitnexus_first_dependency_scan(self) -> None:
+        facts = {
+            "poms": ["pom.xml"],
+            "root_modules": [],
+            "spring_entrypoints": [],
+            "spring_configs": [],
+            "design_docs_or_media_count": 0,
+            "design_docs_or_media_sample": [],
+            "graphify_graph": "graphify-out/graph.json",
+            "graphify_graph_exists": False,
+            "service_candidates": ["services/order-service", "services/payment-service"],
+            "multi_service": True,
+        }
+        dependency_result = {
+            "ready": True,
+            "tool_priority": ["gitnexus", "deterministic-scan", "graphify"],
+            "dependencies": [],
+            "unresolved_questions": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "AGENT.md").write_text("# Root\n", encoding="utf-8")
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=None,
+                path=None,
+                service=None,
+                agent_mode="off",
+                agent_scope="auto",
+                include_agent_content=False,
+                max_agent_chars=12000,
+                max_discovered_services=agent_instructions.DEFAULT_DISCOVERED_SERVICE_LIMIT,
+                superpowers_mode="off",
+                memory_mode="off",
+                agent_orchestration_mode="off",
+                service_scope="discovery",
+                agent_run_dir=None,
+                run_date="2026-05-23",
+                kg_mode="auto",
+                dependency_scan_mode="strict",
+                write_dependency_report=False,
+                dependency_output_dir=None,
+                status_file=None,
+            )
+
+            with (
+                patch.object(e2e_dev_harness.kg_refresh, "detect", return_value=facts),
+                patch.object(e2e_dev_harness.cross_service_dependency_scan, "scan", return_value=dependency_result) as scan,
+            ):
+                code, result = e2e_dev_harness.prepare(args)
+
+        self.assertEqual(0, code)
+        scan.assert_called_once()
+        self.assertEqual("strict", scan.call_args.kwargs["gitnexus_mode"])
+        self.assertEqual(["gitnexus", "deterministic-scan", "graphify"], result["cross_service_dependencies"]["tool_priority"])
+
+    def test_dependency_report_recommends_affected_services_for_plan(self) -> None:
+        facts = {
+            "service_candidates": ["services/order-service", "services/payment-service", "services/catalog-service"],
+            "multi_service": True,
+            "design_docs_or_media_count": 0,
+            "spring_entrypoints": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            report = repo / "knowledge-graph" / "cross-service-dependencies.json"
+            report.parent.mkdir(parents=True)
+            report.write_text(
+                json.dumps(
+                    {
+                        "ready": True,
+                        "dependencies": [
+                            {
+                                "kind": "http",
+                                "source_service": "services/order-service",
+                                "target_service": "services/payment-service",
+                            }
+                        ],
+                        "unresolved_questions": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = e2e_dev_harness.orchestration_status(
+                repo,
+                "auto",
+                None,
+                service_scope="auto",
+                facts=facts,
+                dependency_report=report,
+            )
+
+        self.assertEqual("affected", result["resolved_service_scope"])
+        self.assertEqual(["services/order-service", "services/payment-service"], result["selected_services"])
+
+    def test_cli_gate_accepts_rework_dir(self) -> None:
+        design_text = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Return a quote.
+
+            ## Scope
+            - sample-service
+
+            ## Use Cases
+            - Create quote.
+
+            ## Acceptance Criteria
+            - Quote is returned.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        coverage = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Quote is returned | Create quote | services/sample-service | QuoteTest | QuoteService | reviewed | covered |
+            """
+        ).strip()
+        rework = textwrap.dedent(
+            """
+            # Rework Item
+
+            - Source: coverage-reviewer
+            - Related AC: AC-1
+            - Affected Services: services/sample-service
+            - Problem Type: missing-code
+            - Return Phase: tdd-implement
+            - Required Red Test: QuoteServiceTest covers AC-1
+            - Evidence: Completion review found the code path missing.
+            - Exit Criteria: Completion gate passes after code refs are verified.
+            - Status: open
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            red = repo / "docs" / "agent-runs" / "run" / "evidence" / "red.txt"
+            matrix = repo / "docs" / "agent-runs" / "run" / "evidence" / "coverage.md"
+            unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
+            review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
+            rework_dir = repo / "docs" / "agent-runs" / "run" / "rework"
+            design.parent.mkdir(parents=True)
+            kg.parent.mkdir(parents=True)
+            matrix.parent.mkdir(parents=True)
+            rework_dir.mkdir(parents=True)
+            design.write_text(design_text, encoding="utf-8")
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            matrix.write_text(coverage, encoding="utf-8")
+            write_command_evidence(unit, "mvn -pl services/sample-service -am test")
+            review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
+            (rework_dir / "rework-001.md").write_text(rework, encoding="utf-8")
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=design,
+                kg_status_file=kg,
+                phase="completion",
+                red_test_evidence=red,
+                coverage_matrix=matrix,
+                unit_test_evidence=unit,
+                business_review=review,
+                memory_updates=None,
+                dependency_report=None,
+                rework_dir=[rework_dir],
+                skip_spring_static_check=True,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.gate(args)
+
+        self.assertEqual(2, code)
+        self.assertEqual(1, result["rework"]["open_count"])
+
+    def test_cli_gate_accepts_implementation_manifest(self) -> None:
+        design_text = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Add a quote endpoint.
+
+            ## Scope
+            - services/sample-service
+
+            ## Use Cases
+            - Return a quote.
+
+            ## Acceptance Criteria
+            - AC-1 QuoteService returns a quote.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        coverage = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Quote is returned | Create quote | services/sample-service | QuoteServiceTest | QuoteService | reviewed | covered |
+            """
+        ).strip()
+        manifest = textwrap.dedent(
+            """
+            | id | module | artifact | artifact_type | source | required | tests | status | evidence |
+            | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+            | IM-1 | services/sample-service | services/sample-service/src/main/java/com/example/QuoteService.java | service | AC-1 explicit-requirement | yes | QuoteServiceTest | verified | done |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            artifact = repo / "services/sample-service/src/main/java/com/example/QuoteService.java"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("class QuoteService {}\n", encoding="utf-8")
+            design = repo / "docs" / "design" / "feature.md"
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            red = repo / "docs" / "agent-runs" / "run" / "evidence" / "red.txt"
+            matrix = repo / "docs" / "agent-runs" / "run" / "evidence" / "coverage.md"
+            unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
+            review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
+            manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            approval = repo / "approval.md"
+            design.parent.mkdir(parents=True)
+            kg.parent.mkdir(parents=True)
+            matrix.parent.mkdir(parents=True)
+            design.write_text(design_text, encoding="utf-8")
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            matrix.write_text(coverage, encoding="utf-8")
+            write_command_evidence(unit, "mvn -pl services/sample-service -am test")
+            review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
+            manifest_path.write_text(manifest, encoding="utf-8")
+            approval.write_text("Approval: user-approved\n", encoding="utf-8")
+            review_dir = self.write_semantic_reviews(repo)
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=design,
+                kg_status_file=kg,
+                phase="completion",
+                red_test_evidence=red,
+                coverage_matrix=matrix,
+                unit_test_evidence=unit,
+                business_review=review,
+                memory_updates=None,
+                dependency_report=None,
+                rework_dir=None,
+                review_dir=[review_dir],
+                require_semantic_reviews=False,
+                implementation_manifest=manifest_path,
+                skip_spring_static_check=True,
+                no_harness_state=True,
+                harness_state_approval=approval,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.gate(args)
+
+        self.assertEqual(0, code, result.get("blocked_reasons"))
+        self.assertTrue(result["implementation_manifest"]["ready"])
+
+    def test_cli_gate_accepts_dependency_report(self) -> None:
+        design_text = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Call payment service when an order is created.
+
+            ## Scope
+            - services/order-service
+            - services/payment-service
+
+            ## Use Cases
+            - order-service calls payment-service over HTTP.
+
+            ## Acceptance Criteria
+            - AC-1 Payment callback is delivered.
+
+            ## Change Logic
+            - Current behavior: order creation does not call payment.
+            - Target behavior: order creation invokes payment callback flow.
+            - Runtime path: OrderController -> OrderService -> PaymentClient -> PaymentController.
+            - State/data effect: sends payment request payload and stores callback status.
+
+            ## Impact Summary
+            - Source: GitNexus impact + dependency scanner
+            - Raw Evidence: docs/agent-runs/run/evidence/impact-analysis.json
+
+            | type | interface | affected callers/consumers | related AC | required tests/contracts | risk |
+            | --- | --- | --- | --- | --- | --- |
+            | HTTP | order-service -> payment-service callback | services/order-service, services/payment-service | AC-1 | PaymentCallbackTest; contract ACK | high |
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        coverage = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Payment callback is delivered | HTTP flow | services/order-service, services/payment-service | PaymentCallbackTest | PaymentClient, PaymentController | reviewed | covered |
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            red = repo / "docs" / "agent-runs" / "run" / "evidence" / "red.txt"
+            matrix = repo / "docs" / "agent-runs" / "run" / "evidence" / "coverage.md"
+            unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
+            review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
+            manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            dependency_report = repo / "knowledge-graph" / "cross-service-dependencies.json"
+            approval = repo / "approval.md"
+            for path in (
+                "services/order-service/src/main/java/com/example/PaymentClient.java",
+                "services/payment-service/src/main/java/com/example/PaymentController.java",
+            ):
+                target = repo / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("class Placeholder {}\n", encoding="utf-8")
+            design.parent.mkdir(parents=True)
+            kg.parent.mkdir(parents=True)
+            matrix.parent.mkdir(parents=True)
+            dependency_report.parent.mkdir(parents=True, exist_ok=True)
+            design.write_text(design_text, encoding="utf-8")
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            write_command_evidence(red, "mvn test -Dtest=PaymentCallbackTest", exit_code=1)
+            matrix.write_text(coverage, encoding="utf-8")
+            write_command_evidence(unit, "mvn test")
+            review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
+            manifest_path.write_text(
+                textwrap.dedent(
+                    """
+                    | id | module | artifact | artifact_type | source | required | tests | status | evidence |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | IM-1 | services/order-service | services/order-service/src/main/java/com/example/PaymentClient.java | client | AC-1 dependency-report | yes | PaymentCallbackTest | verified | done |
+                    | IM-2 | services/payment-service | services/payment-service/src/main/java/com/example/PaymentController.java | controller | AC-1 dependency-report | yes | PaymentCallbackTest | verified | done |
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            dependency_report.write_text(
+                json.dumps({"ready": True, "dependencies": [{"kind": "http"}], "unresolved_questions": []}),
+                encoding="utf-8",
+            )
+            approval.write_text("Approval: user-approved\n", encoding="utf-8")
+            review_dir = self.write_semantic_reviews(repo)
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=design,
+                kg_status_file=kg,
+                phase="completion",
+                red_test_evidence=red,
+                coverage_matrix=matrix,
+                unit_test_evidence=unit,
+                business_review=review,
+                memory_updates=None,
+                dependency_report=dependency_report,
+                implementation_manifest=manifest_path,
+                rework_dir=None,
+                review_dir=[review_dir],
+                require_semantic_reviews=False,
+                skip_spring_static_check=True,
+                no_harness_state=True,
+                harness_state_approval=approval,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.gate(args)
+
+        self.assertEqual(0, code, result.get("blocked_reasons"))
+        self.assertTrue(result["dependency_report"]["ready"])
+
+    def test_verify_strict_workflow_blocks_skip_maven(self) -> None:
+        args = SimpleNamespace(
+            repo=Path("."),
+            design_doc=None,
+            path=None,
+            service=None,
+            agent_mode="off",
+            agent_scope="auto",
+            include_agent_content=False,
+            max_agent_chars=12000,
+            max_discovered_services=agent_instructions.DEFAULT_DISCOVERED_SERVICE_LIMIT,
+            superpowers_mode="auto",
+            memory_mode="off",
+            agent_orchestration_mode="off",
+            service_scope="discovery",
+            agent_run_dir=None,
+            run_date="2026-05-23",
+            kg_mode="auto",
+            dependency_scan_mode="auto",
+            write_dependency_report=True,
+            dependency_output_dir=None,
+            run_gate=False,
+            phase="planning",
+            kg_status_file=None,
+            red_test_evidence=None,
+            coverage_matrix=None,
+            unit_test_evidence=None,
+            business_review=None,
+            memory_updates=None,
+            dependency_report=None,
+            rework_dir=None,
+            skip_spring_static_check=False,
+            skip_maven=True,
+            strict_workflow=True,
+            workflow_approval=None,
+            status_file=None,
+        )
+        prepare_result = {
+            "blocked": False,
+            "agent_instructions": {"blocked": False},
+            "superpowers": {"blocked": False, "enabled": True},
+            "memory": {"blocked": False},
+            "orchestration": {"blocked": False},
+            "knowledge_graph": {"selected_tools": ["gitnexus"]},
+            "cross_service_dependencies": {
+                "enabled": True,
+                "mode": "auto",
+                "ready": True,
+                "report_paths": {"json": "knowledge-graph/cross-service-dependencies.json"},
+            },
+        }
+
+        with patch.object(e2e_dev_harness, "prepare", return_value=(0, prepare_result)):
+            code, result = e2e_dev_harness.verify(args)
+
+        self.assertEqual(2, code)
+        self.assertFalse(result["workflow_guard"]["ready"])
+        self.assertTrue(any("Maven" in reason for reason in result["workflow_guard"]["blocked_reasons"]))
+
+    def test_verify_reports_missing_maven_without_traceback(self) -> None:
+        args = SimpleNamespace(
+            repo=Path("."),
+            design_doc=None,
+            path=None,
+            service=None,
+            agent_mode="off",
+            agent_scope="auto",
+            include_agent_content=False,
+            max_agent_chars=12000,
+            max_discovered_services=agent_instructions.DEFAULT_DISCOVERED_SERVICE_LIMIT,
+            superpowers_mode="auto",
+            memory_mode="off",
+            agent_orchestration_mode="off",
+            service_scope="discovery",
+            agent_run_dir=None,
+            run_date="2026-05-23",
+            kg_mode="auto",
+            dependency_scan_mode="auto",
+            write_dependency_report=True,
+            dependency_output_dir=None,
+            run_gate=False,
+            phase="planning",
+            kg_status_file=None,
+            red_test_evidence=None,
+            coverage_matrix=None,
+            unit_test_evidence=None,
+            business_review=None,
+            memory_updates=None,
+            dependency_report=None,
+            implementation_manifest=None,
+            rework_dir=None,
+            skip_spring_static_check=False,
+            skip_maven=False,
+            strict_workflow=False,
+            workflow_approval=None,
+            status_file=None,
+            module=None,
+        )
+        prepare_result = {"blocked": False}
+
+        with (
+            patch.object(e2e_dev_harness, "prepare", return_value=(0, prepare_result)),
+            patch.object(e2e_dev_harness.shutil, "which", return_value=None),
+            patch.object(e2e_dev_harness.subprocess, "run") as subprocess_run,
+        ):
+            code, result = e2e_dev_harness.verify(args)
+
+        self.assertEqual(127, code)
+        self.assertEqual(127, result["maven"]["exit_code"])
+        self.assertIn("Maven executable not found", result["maven"]["stderr_tail"])
+        subprocess_run.assert_not_called()
+
+    def test_verify_reports_maven_timeout_without_hanging(self) -> None:
+        args = SimpleNamespace(
+            repo=Path("."),
+            design_doc=None,
+            path=None,
+            service=None,
+            agent_mode="off",
+            agent_scope="auto",
+            include_agent_content=False,
+            max_agent_chars=12000,
+            max_discovered_services=agent_instructions.DEFAULT_DISCOVERED_SERVICE_LIMIT,
+            superpowers_mode="auto",
+            memory_mode="off",
+            agent_orchestration_mode="off",
+            service_scope="discovery",
+            agent_run_dir=None,
+            run_date="2026-05-23",
+            kg_mode="auto",
+            dependency_scan_mode="auto",
+            write_dependency_report=True,
+            dependency_output_dir=None,
+            run_gate=False,
+            phase="planning",
+            kg_status_file=None,
+            red_test_evidence=None,
+            coverage_matrix=None,
+            unit_test_evidence=None,
+            business_review=None,
+            memory_updates=None,
+            dependency_report=None,
+            implementation_manifest=None,
+            rework_dir=None,
+            skip_spring_static_check=False,
+            skip_maven=False,
+            strict_workflow=False,
+            workflow_approval=None,
+            status_file=None,
+            module=None,
+        )
+
+        with (
+            patch.object(e2e_dev_harness, "prepare", return_value=(0, {"blocked": False})),
+            patch.object(e2e_dev_harness.shutil, "which", return_value="mvn"),
+            patch.object(
+                e2e_dev_harness.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired(["mvn", "test"], 600, output="partial"),
+            ),
+        ):
+            code, result = e2e_dev_harness.verify(args)
+
+        self.assertEqual(124, code)
+        self.assertEqual(124, result["maven"]["exit_code"])
+        self.assertIn("timed out", result["maven"]["stderr_tail"])
+
+
+
+
+if __name__ == "__main__":
+    unittest.main()

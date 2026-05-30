@@ -54,12 +54,18 @@ Use `detect-changes` to map a concrete diff to indexed symbols and execution flo
 
 Use GitNexus-first evidence for hidden service dependencies:
 
-The bundled deterministic Java scanner reports `java_parser.backend: regex-fallback`
-and `ast_parser_active: false` until `tree_sitter_java` is actually wired into
-the scan logic. For high-risk Java call-path decisions, use GitNexus evidence as
-the authoritative code-graph source. If a project policy requires AST-backed
-deterministic scanning, run the scanner with `--require-tree-sitter-ast` so the
-gate blocks until an active AST parser exists.
+The bundled deterministic Java scanner extracts HTTP/DMQ seeds with a tree-sitter
+Java AST when `tree_sitter` and `tree_sitter_java` are installed
+(`java_parser.backend: tree-sitter`, `ast_parser_active: true`); otherwise it
+falls back per file to regex (`java_parser.backend: regex-fallback`,
+`ast_parser_active: false`) and says so in `java_parser.warning`. The AST path
+removes regex false positives such as annotations inside comments or string
+literals. Either way the scanner only produces seeds: GitNexus remains the
+authoritative code-graph source for high-risk Java call-path decisions, and
+ambiguous scanner edges become clarification questions, not completion evidence.
+If a project policy requires AST-backed deterministic scanning, run the scanner
+with `--require-tree-sitter-ast` so the gate blocks unless the AST parser is
+active.
 
 1. Run the deterministic scanner:
 

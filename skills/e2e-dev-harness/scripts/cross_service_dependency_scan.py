@@ -31,10 +31,36 @@ CROSS_SERVICE_RE = re.compile(
 )
 
 
+HTTP_MAPPING_ANNOTATIONS = {
+    "GetMapping",
+    "PostMapping",
+    "PutMapping",
+    "DeleteMapping",
+    "PatchMapping",
+    "RequestMapping",
+}
+LISTENER_ANNOTATIONS = {"DmqListener", "KafkaListener", "RocketMQMessageListener", "JmsListener"}
+PUBLISH_METHODS = {"send", "publish", "produce", "convertAndSend"}
+PUBLISH_RECEIVER_RE = re.compile(r"\w*[Dd]mq\w*|\w*Template|\w*Producer")
+VALUE_PLACEHOLDER_RE = re.compile(r"\$\{([^}:]+)")
+_PARSER_CACHE: list = []
+
+
+def _ts_parser():
+    """Return a cached tree-sitter Java parser, or raise if unavailable."""
+    if _PARSER_CACHE:
+        return _PARSER_CACHE[0]
+    import tree_sitter_java  # type: ignore
+    from tree_sitter import Language, Parser  # type: ignore
+
+    parser = Parser(Language(tree_sitter_java.language()))
+    _PARSER_CACHE.append(parser)
+    return parser
+
+
 def java_parser_backend() -> dict:
     try:
-        import tree_sitter  # type: ignore  # noqa: F401
-        import tree_sitter_java  # type: ignore  # noqa: F401
+        _ts_parser()
     except Exception:
         return {
             "backend": "regex-fallback",
@@ -43,11 +69,221 @@ def java_parser_backend() -> dict:
             "warning": "tree-sitter Java parser is unavailable; deterministic scan uses regex fallback and may miss nested Java syntax.",
         }
     return {
-        "backend": "regex-fallback",
+        "backend": "tree-sitter",
         "tree_sitter_available": True,
-        "ast_parser_active": False,
-        "warning": "tree-sitter Java packages are installed, but AST parsing is not wired into this scanner yet; deterministic scan uses regex fallback.",
+        "ast_parser_active": True,
     }
+
+
+def _ast_parse(text: str):
+    parser = _ts_parser()
+    data = text.encode("utf-8")
+    return parser.parse(data).root_node, data
+
+
+def _node_text(data: bytes, node) -> str:
+    return data[node.start_byte:node.end_byte].decode("utf-8", "replace")
+
+
+def _walk(node):
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        yield current
+        stack.extend(reversed(current.children))
+
+
+def _simple_name(name: str) -> str:
+    return name.rsplit(".", 1)[-1].strip()
+
+
+def _annotations(node, data: bytes):
+    """Yield (simple_annotation_name, inner_args_text) for a declaration's annotations."""
+    for child in node.children:
+        if child.type != "modifiers":
+            continue
+        for ann in child.children:
+            if ann.type not in ("annotation", "marker_annotation"):
+                continue
+            name_node = ann.child_by_field_name("name")
+            name = _simple_name(_node_text(data, name_node)) if name_node else ""
+            args_node = ann.child_by_field_name("arguments")
+            args = _node_text(data, args_node) if args_node else ""
+            if args.startswith("(") and args.endswith(")"):
+                args = args[1:-1]
+            yield name, args
+
+
+def _class_nodes(root):
+    return [n for n in _walk(root) if n.type in ("class_declaration", "interface_declaration", "enum_declaration", "record_declaration")]
+
+
+def _class_name(node, data: bytes, fallback: str) -> str:
+    name_node = node.child_by_field_name("name")
+    return _node_text(data, name_node) if name_node else fallback
+
+
+def _direct_methods(node):
+    body = node.child_by_field_name("body")
+    if not body:
+        return []
+    return [c for c in body.children if c.type in ("method_declaration", "constructor_declaration")]
+
+
+def _enclosing_class_name(node, data: bytes, fallback: str) -> str:
+    parent = node.parent
+    while parent is not None:
+        if parent.type in ("class_declaration", "interface_declaration", "enum_declaration", "record_declaration"):
+            return _class_name(parent, data, fallback)
+        parent = parent.parent
+    return fallback
+
+
+def ast_routes_for_file(text: str, service: str, rel: str) -> list[dict]:
+    root, data = _ast_parse(text)
+    routes: list[dict] = []
+    for cls in _class_nodes(root):
+        cname = _class_name(cls, data, rel)
+        class_base = ""
+        for name, args in _annotations(cls, data):
+            if name in HTTP_MAPPING_ANNOTATIONS:
+                class_base = annotation_path(args)
+        for method_node in _direct_methods(cls):
+            for name, args in _annotations(method_node, data):
+                if name not in HTTP_MAPPING_ANNOTATIONS:
+                    continue
+                method = "ANY" if name == "RequestMapping" else name.replace("Mapping", "").upper()
+                route_path = normalize_path(class_base, annotation_path(args))
+                routes.append({
+                    "service": service,
+                    "method": method,
+                    "path": route_path,
+                    "symbol": f"{cname}.{method.lower()}",
+                    "evidence_refs": [f"{rel}:@{name}"],
+                })
+    return routes
+
+
+def _string_literal_value(data: bytes, node) -> str | None:
+    for child in _walk(node):
+        if child.type == "string_literal":
+            raw = _node_text(data, child)
+            return raw[1:-1] if len(raw) >= 2 and raw[0] in "\"'" else raw
+    return None
+
+
+def ast_value_field_refs(text: str) -> dict[str, str]:
+    root, data = _ast_parse(text)
+    refs: dict[str, str] = {}
+    for node in _walk(root):
+        if node.type == "field_declaration":
+            type_node = node.child_by_field_name("type")
+            type_name = _simple_name(_node_text(data, type_node)) if type_node else ""
+            if type_name not in ("String", "URI", "URL"):
+                continue
+            value_key = None
+            for name, args in _annotations(node, data):
+                if name != "Value":
+                    continue
+                placeholder = VALUE_PLACEHOLDER_RE.search(args)
+                if placeholder:
+                    value_key = placeholder.group(1).strip()
+            if not value_key:
+                continue
+            for child in node.children:
+                if child.type == "variable_declarator":
+                    var_node = child.child_by_field_name("name")
+                    if var_node:
+                        refs[_node_text(data, var_node)] = value_key
+        elif node.type == "method_invocation":
+            name_node = node.child_by_field_name("name")
+            if not name_node or _node_text(data, name_node) != "getProperty":
+                continue
+            args_node = node.child_by_field_name("arguments")
+            key = _string_literal_value(data, args_node) if args_node else None
+            if not key:
+                continue
+            target = node.parent
+            while target is not None and target.type not in ("variable_declarator", "assignment_expression"):
+                target = target.parent
+            if target is None:
+                continue
+            lhs = target.child_by_field_name("name") or target.child_by_field_name("left")
+            if lhs is not None:
+                refs[_simple_name(_node_text(data, lhs))] = key
+    return refs
+
+
+def ast_string_constants_for_file(text: str) -> list[tuple[str, str]]:
+    root, data = _ast_parse(text)
+    out: list[tuple[str, str]] = []
+    for node in _walk(root):
+        if node.type != "field_declaration":
+            continue
+        type_node = node.child_by_field_name("type")
+        if not type_node or _simple_name(_node_text(data, type_node)) != "String":
+            continue
+        for child in node.children:
+            if child.type != "variable_declarator":
+                continue
+            name_node = child.child_by_field_name("name")
+            value_node = child.child_by_field_name("value")
+            if name_node and value_node and value_node.type == "string_literal":
+                raw = _node_text(data, value_node)
+                out.append((_node_text(data, name_node), raw[1:-1] if len(raw) >= 2 else raw))
+    return out
+
+
+def ast_messaging_for_file(text: str, service: str, rel: str, consts: dict[str, str]) -> tuple[list[dict], list[dict]]:
+    root, data = _ast_parse(text)
+    producers: list[dict] = []
+    consumers: list[dict] = []
+    for node in _walk(root):
+        if node.type == "method_invocation":
+            name_node = node.child_by_field_name("name")
+            call = _node_text(data, name_node) if name_node else ""
+            if call not in PUBLISH_METHODS:
+                continue
+            object_node = node.child_by_field_name("object")
+            receiver = _simple_name(_node_text(data, object_node)) if object_node else ""
+            if not receiver or not PUBLISH_RECEIVER_RE.fullmatch(receiver):
+                continue
+            args_node = node.child_by_field_name("arguments")
+            inner = _node_text(data, args_node) if args_node else ""
+            if inner.startswith("(") and inner.endswith(")"):
+                inner = inner[1:-1]
+            args = split_args(inner)
+            topic = resolve_expr(args[0], consts) if args else None
+            tag = resolve_expr(args[1], consts) if len(args) > 1 else None
+            if topic:
+                owner = _enclosing_class_name(node, data, rel)
+                producers.append({
+                    "service": service,
+                    "topic": topic,
+                    "tag": tag,
+                    "symbol": f"{owner}.{call}",
+                    "evidence_refs": [f"{rel}:{call}"],
+                })
+        elif node.type in ("method_declaration", "constructor_declaration"):
+            for name, args in _annotations(node, data):
+                if name not in LISTENER_ANNOTATIONS:
+                    continue
+                method_name_node = node.child_by_field_name("name")
+                listener_symbol = _node_text(data, method_name_node) if method_name_node else name
+                topic = annotation_attr(args, ("topic", "topics", "destination"), consts)
+                tag = annotation_attr(args, ("tag", "tags", "selectorExpression"), consts)
+                group = annotation_attr(args, ("group", "consumerGroup", "groupId"), consts)
+                if topic:
+                    owner = _enclosing_class_name(node, data, rel)
+                    consumers.append({
+                        "service": service,
+                        "topic": topic,
+                        "tag": tag,
+                        "group": group,
+                        "symbol": f"{owner}.{listener_symbol}",
+                        "evidence_refs": [f"{rel}:@{name}"],
+                    })
+    return producers, consumers
 
 
 def walk_files(root: Path):
@@ -156,7 +392,7 @@ def normalize_path(*parts: str) -> str:
     return "/" + combined.strip("/") if combined.strip("/") else "/"
 
 
-def extract_routes(repo: Path, services: list[str]) -> list[dict]:
+def extract_routes(repo: Path, services: list[str], ast: bool = False) -> list[dict]:
     routes: list[dict] = []
     for path in walk_files(repo):
         if path.suffix != ".java":
@@ -165,6 +401,12 @@ def extract_routes(repo: Path, services: list[str]) -> list[dict]:
         if not service:
             continue
         text = read_text(path)
+        if ast:
+            try:
+                routes.extend(ast_routes_for_file(text, service, posix(path.relative_to(repo))))
+                continue
+            except Exception:
+                pass  # graceful per-file fallback to regex
         class_match = re.search(r"\bclass\s+(\w+)", text)
         class_pos = class_match.start() if class_match else 0
         class_name = class_match.group(1) if class_match else path.stem
@@ -206,13 +448,18 @@ def resolve_url_target(value: str, services: list[str]) -> tuple[str | None, str
     return None, base_path, None
 
 
-def variable_config_refs(text: str) -> dict[str, str]:
+def variable_config_refs(text: str, ast: bool = False) -> dict[str, str]:
+    if ast:
+        try:
+            return ast_value_field_refs(text)
+        except Exception:
+            pass  # graceful fallback to regex
     refs = {var: key for key, var in VALUE_FIELD_RE.findall(text)}
     refs.update({var: key for var, key in ENV_PROPERTY_RE.findall(text)})
     return refs
 
 
-def extract_http_clients(repo: Path, services: list[str], configs: dict[str, list[dict]]) -> list[dict]:
+def extract_http_clients(repo: Path, services: list[str], configs: dict[str, list[dict]], ast: bool = False) -> list[dict]:
     clients: list[dict] = []
     referenced_keys: set[tuple[str, str]] = set()
     for path in walk_files(repo):
@@ -223,7 +470,7 @@ def extract_http_clients(repo: Path, services: list[str], configs: dict[str, lis
             continue
         text = read_text(path)
         owner = class_name(text, path)
-        refs = variable_config_refs(text)
+        refs = variable_config_refs(text, ast=ast)
         config_by_key = config_lookup(configs, service)
         for var, key in refs.items():
             entry = config_by_key.get(key)
@@ -350,14 +597,22 @@ def split_args(args: str) -> list[str]:
     return parts
 
 
-def constants(repo: Path) -> dict[str, str]:
+def constants(repo: Path, ast: bool = False) -> dict[str, str]:
     result: dict[str, str] = {}
     for path in walk_files(repo):
         if path.suffix != ".java":
             continue
         text = read_text(path)
         owner = class_name(text, path)
-        for name, value in STRING_CONSTANT_RE.findall(text):
+        pairs = None
+        if ast:
+            try:
+                pairs = ast_string_constants_for_file(text)
+            except Exception:
+                pairs = None  # graceful fallback to regex
+        if pairs is None:
+            pairs = STRING_CONSTANT_RE.findall(text)
+        for name, value in pairs:
             result[name] = value
             result[f"{owner}.{name}"] = value
     return result
@@ -378,8 +633,8 @@ def annotation_attr(args: str, names: tuple[str, ...], consts: dict[str, str]) -
     return None
 
 
-def extract_messaging(repo: Path, services: list[str]) -> tuple[list[dict], list[dict]]:
-    consts = constants(repo)
+def extract_messaging(repo: Path, services: list[str], ast: bool = False) -> tuple[list[dict], list[dict]]:
+    consts = constants(repo, ast=ast)
     producers: list[dict] = []
     consumers: list[dict] = []
     for path in walk_files(repo):
@@ -390,6 +645,16 @@ def extract_messaging(repo: Path, services: list[str]) -> tuple[list[dict], list
             continue
         text = read_text(path)
         owner = class_name(text, path)
+        if ast:
+            try:
+                file_producers, file_consumers = ast_messaging_for_file(
+                    text, service, posix(path.relative_to(repo)), consts
+                )
+                producers.extend(file_producers)
+                consumers.extend(file_consumers)
+                continue
+            except Exception:
+                pass  # graceful per-file fallback to regex
         for match in PUBLISH_RE.finditer(text):
             args = split_args(match.group(2))
             topic = resolve_expr(args[0], consts) if args else None
@@ -598,16 +863,17 @@ def scan(
     affected_services: list[str] | None = None,
 ) -> dict:
     repo = repo.resolve()
+    parser_backend = java_parser_backend()
+    ast_active = bool(parser_backend.get("ast_parser_active"))
     services = detect_services(repo)
     configs = load_config(repo, services)
-    routes = extract_routes(repo, services)
-    clients = extract_http_clients(repo, services, configs)
+    routes = extract_routes(repo, services, ast=ast_active)
+    clients = extract_http_clients(repo, services, configs, ast=ast_active)
     http_edges, http_questions = http_dependencies(clients, routes)
-    producers, consumers = extract_messaging(repo, services)
+    producers, consumers = extract_messaging(repo, services, ast=ast_active)
     dmq_edges, dmq_questions = dmq_dependencies(producers, consumers)
     dependencies = http_edges + dmq_edges
     unresolved = sorted(dict.fromkeys(http_questions + dmq_questions))
-    parser_backend = java_parser_backend()
     gitnexus, gitnexus_warnings = gitnexus_evidence(
         repo,
         dependencies,

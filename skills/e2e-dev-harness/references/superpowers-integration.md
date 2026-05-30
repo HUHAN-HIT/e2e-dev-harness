@@ -4,7 +4,7 @@ This skill treats Superpowers as a pluggable process adapter.
 
 ## Modes
 
-Set mode with `E2E_DEV_HARNESS_SUPERPOWERS_MODE` or pass `--mode` to `scripts/superpowers_probe.py`. The legacy `E2E_DEV_WORKFLOW_SUPERPOWERS_MODE` name is still accepted for backward compatibility.
+Set mode with `E2E_DEV_WORKFLOW_SUPERPOWERS_MODE` or pass `--mode` to `scripts/superpowers_probe.py`.
 
 | Mode | Behavior |
 | --- | --- |
