@@ -362,6 +362,73 @@ class CrossServiceDependencyScanTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("low-confidence" in reason.lower() for reason in result["blocked_reasons"]))
 
+    def test_dependency_report_requires_verified_gitnexus_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            report = repo / "knowledge-graph" / "cross-service-dependencies.json"
+            report.parent.mkdir(parents=True)
+            report.write_text(
+                json.dumps(
+                    {
+                        "ready": True,
+                        "tool_priority": ["gitnexus", "deterministic-scan"],
+                        "gitnexus": {"primary": True, "available": False, "verified": False},
+                        "dependencies": [{"kind": "http", "confidence": "verified"}],
+                        "unresolved_questions": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = cross_service_dependency_scan.validate_dependency_report(repo, report, require_gitnexus=True)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(result["gitnexus_required"])
+        self.assertFalse(result["gitnexus_verified"])
+        self.assertTrue(any("GitNexus impact evidence" in reason for reason in result["blocked_reasons"]))
+
+    def test_dependency_report_allows_user_approved_gitnexus_degradation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            report = repo / "knowledge-graph" / "cross-service-dependencies.json"
+            approval = repo / "docs" / "agent-runs" / "run" / "evidence" / "gitnexus-degradation.md"
+            report.parent.mkdir(parents=True)
+            approval.parent.mkdir(parents=True)
+            report.write_text(
+                json.dumps(
+                    {
+                        "ready": True,
+                        "tool_priority": ["gitnexus", "deterministic-scan"],
+                        "gitnexus": {"primary": True, "available": False, "verified": False},
+                        "dependencies": [{"kind": "dmq", "confidence": "verified"}],
+                        "unresolved_questions": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            approval.write_text(
+                textwrap.dedent(
+                    """
+                    # GitNexus Degradation
+                    Approval: user-approved
+                    Reason: GitNexus MCP server was unavailable during this run.
+                    Fallback Evidence: deterministic scanner, Maven module graph, targeted code reads, and service tests.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            result = cross_service_dependency_scan.validate_dependency_report(
+                repo,
+                report,
+                require_gitnexus=True,
+                gitnexus_degradation=approval,
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertTrue(result["gitnexus_degraded"])
+        self.assertTrue(result["gitnexus_degradation"]["ready"])
+
 
 
 class SpringStaticCheckTests(unittest.TestCase):

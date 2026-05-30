@@ -223,9 +223,13 @@ def write_service_review(
     invocation.write_text(
         json.dumps(
             {
+                "runtime": "claude-code",
+                "invocation_type": "subagent",
                 "developer_agent": developer_agent,
+                "developer_session": f"developer-session-{service}",
                 "reviewer_agent": reviewer_agent,
                 "reviewer_session": reviewer_session,
+                "context_pack": request_rel,
                 "review_request": request_rel,
                 "output": review_rel,
                 "fork_context": False,

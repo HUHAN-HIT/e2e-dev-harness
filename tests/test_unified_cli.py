@@ -66,9 +66,13 @@ class UnifiedCliTests(unittest.TestCase):
             invocation_path.write_text(
                 json.dumps(
                     {
+                        "runtime": "claude-code",
+                        "invocation_type": "subagent",
                         "developer_agent": "developer-agent-1",
+                        "developer_session": "developer-session-1",
                         "reviewer_agent": f"reviewer-agent-{phase}",
                         "reviewer_session": f"reviewer-session-{phase}",
+                        "context_pack": f"docs/agent-runs/run/review-requests/{request_name}",
                         "review_request": f"docs/agent-runs/run/review-requests/{request_name}",
                         "output": f"docs/agent-runs/run/reviews/{review_name}",
                         "fork_context": False,
@@ -544,7 +548,15 @@ class UnifiedCliTests(unittest.TestCase):
                 encoding="utf-8",
             )
             dependency_report.write_text(
-                json.dumps({"ready": True, "dependencies": [{"kind": "http"}], "unresolved_questions": []}),
+                json.dumps(
+                    {
+                        "ready": True,
+                        "tool_priority": ["gitnexus", "deterministic-scan"],
+                        "gitnexus": {"primary": True, "available": True, "verified": True},
+                        "dependencies": [{"kind": "http"}],
+                        "unresolved_questions": [],
+                    }
+                ),
                 encoding="utf-8",
             )
             approval.write_text("Approval: user-approved\n", encoding="utf-8")

@@ -41,7 +41,7 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py gate . \
   --handoff-dir docs/agent-runs/<run>/handoffs
 ```
 
-Planning checks clarification readiness, knowledge graph status, and R1 design review. Implementation additionally requires red-test evidence and R1+R2 reviews. Completion requires design doc, red-test evidence, unit-test command evidence, business review, R1+R2+R3 reviews, coverage matrix, implementation manifest, dependency report when cross-service, closed rework, and Spring static check unless explicitly skipped. Add `--require-handoffs` for multi-service, contract/data-risk, or split-agent runs.
+Planning checks clarification readiness, knowledge graph status, role handoff readiness, and R1 design review. Implementation additionally requires red-test evidence, R1+R2 reviews, and dependency discovery evidence for critical/audited work. The transition to `IMPLEMENTED` accepts only an implementation-gate status artifact that carries loaded KG status, passing TDD red validation, and passing independent design/test reviews; a hand-written `{"ready": true}` file is rejected. Completion requires design doc, red-test evidence, unit-test command evidence, business review, R1+R2+R3 reviews, coverage matrix, implementation manifest, dependency report when cross-service, closed rework, and Spring static check unless explicitly skipped. Add `--require-handoffs` for multi-service, contract/data-risk, or split-agent runs.
 
 TDD enforcement is scenario-based:
 
@@ -146,7 +146,7 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py agent-task . \
   --state docs/agent-runs/<run>/run-state.json
 ```
 
-Completion requires service implementation tasks to be completed in `agent-schedule.json`; `agent-task --action complete` must point at an existing evidence file that is one of the scheduled task outputs.
+Completion requires service implementation tasks to be completed in `agent-schedule.json`; `agent-task --action complete` must point at existing evidence that is one of the scheduled task outputs. Generated schedules require each task to reference a valid `agent-roles/*.md` template. Role handoff outputs must be ready handoffs with matching `.ready.json` markers, and downstream `agent-task --action claim` rejects incomplete handoff inputs. The scheduler blocks a single agent from owning incompatible role groups such as design, test, code, semantic review, and coverage.
 
 ## Workflow Tiers
 
@@ -219,7 +219,7 @@ Review requests must include `Phase`, `Reviewer Role`, `Context Package`, `Forbi
 
 Review reports must include `Phase`, `Reviewer`, `Review Request`, `Developer Agent`, `Reviewer Agent`, `Reviewer Session`, `Reviewer Invocation`, `Request Hash`, `Independence`, `Context Boundary`, `No Code Changes`, `Scope`, `Inputs Reviewed`, `Findings`, `Required Rework`, and `Status`.
 
-Blocking conditions include missing request/report files, phase mismatch, output mismatch, request hash mismatch, invalid invocation JSON, placeholder IDs, same-agent IDs, non-independent context, self-review, unsupported statuses, findings without required rework or a blocking/with-rework status, missing review-profile checklist items, missing R3 code-path trace, missing messaging path trace for MQ/DMQ/Kafka acceptance criteria, and missing service-local R2/R3 phases.
+Blocking conditions include missing request/report files, phase mismatch, output mismatch, request hash mismatch, invalid invocation JSON, missing runtime isolation fields, placeholder IDs, same-agent IDs, same Developer/Reviewer session IDs, non-independent context, self-review, unsupported statuses, findings without required rework or a blocking/with-rework status, missing review-profile checklist items, missing R3 code-path trace, missing messaging path trace for MQ/DMQ/Kafka acceptance criteria, and missing service-local R2/R3 phases.
 
 Allowed review statuses include `approved`, `verified`, `clear`, and `passed`. Blocking statuses include `blocked`, `changes-requested`, `needs-rework`, `open`, and `in-progress`.
 
@@ -239,7 +239,7 @@ Required checklist items must appear in the review report as checked Markdown it
 - [x] security-negative-paths: Verified authorization and failure behavior.
 ```
 
-Reviewer Invocation JSON must match Developer/Reviewer/Session, point to the same request and output, declare `fork_context: false`, use request-only/no-inherited context policy, and be `status: completed`.
+Reviewer Invocation JSON must be concrete runtime evidence, not a prose declaration. It must include `runtime`, isolated `invocation_type` (`subagent`, `separate-agent`, `separate-session`, `external-reviewer`, or `runtime-isolated-review`), `developer_session`, `reviewer_session`, `context_pack`, matching Developer/Reviewer ids, matching request and output paths, `fork_context: false`, request-only/no-inherited `context_policy`, and `status: completed`. `developer_session` and `reviewer_session` must be different, and `context_pack` must point to an in-repo context package or review request file.
 
 R3 implementation reviews must include per-AC code path trace. Messaging ACs must also include a `Messaging Path Trace` with sender/producer injection point, actual send/publish call, topic/tag/group, payload fields, and test evidence.
 
@@ -292,7 +292,7 @@ These issues should return to `clarify` or `plan`, not be explained away in the 
 
 The requirements archive summarizes the final clarified requirement, acceptance-criteria status, use-case coverage, impacted services/contracts, evidence links, review/rework outcome, promoted memory entries, and follow-up opportunities. It is recommended for every completed run and required by strict completion workflows. When `--requirements-archive` is omitted, the gate auto-discovers `docs/agent-runs/<run>/requirements-archive.md` from other artifacts in the same run. Read `requirements-archive.md`.
 
-If the design is cross-service, completion requires the dependency report. Any unresolved URL/topic/tag/service mapping question blocks completion.
+If the design is cross-service, completion requires the dependency report. Any unresolved URL/topic/tag/service mapping question blocks completion. For critical/audited completion, GitNexus evidence in that report must be verified by default. If GitNexus MCP/CLI/index access fails, pause for user approval and pass a degradation file with `Approval: user-approved`, `Reason:`, and `Fallback Evidence:` or `Compensating Evidence:` via `--gitnexus-degradation`; otherwise the gate remains blocked. Use `--require-gitnexus-evidence strict` to enforce this outside auto-classified critical/audited work, and `off` only for explicitly approved non-code/non-Java runs.
 
 If contracts are declared or `--require-contracts` is used, every HTTP/DMQ contract needs producer ACK, consumer ACK, contract tests, and non-draft status. DMQ contracts must include topic, tag, and group.
 
@@ -328,7 +328,7 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py guard . \
   --require-completion
 ```
 
-Strict guard blocks missing prepare, disabled dependency scan, disabled dependency report writing, skipped Maven, skipped Spring static check during completion, missing clarification status, missing completion gate, failed completion gate, missing independent semantic review evidence, failed Maven, and unresolved dependency questions. For multi-service, contract/data-risk, or split-agent runs, also pass `--require-handoffs`; an empty `handoffs/` directory is acceptable only when the run explicitly stayed single-agent and no downstream handoff was consumed. A skip can pass only with an approval file containing `Approval: user-approved`.
+Strict guard blocks missing prepare, disabled dependency scan, disabled dependency report writing, skipped Maven, skipped Spring static check during completion, missing clarification status, missing completion gate, failed completion gate, missing independent semantic review evidence, failed Maven, and unresolved dependency questions. For split-role, multi-service, or contract/data-risk runs, also pass `--require-handoffs`; empty `handoffs/` is not valid once downstream role work exists. A skip can pass only with an approval file containing `Approval: user-approved`.
 
 External commands run by the harness use a bounded timeout and report exit code `124` on timeout. Treat Maven, GitNexus, or `git diff` timeout as blocked evidence, not as a reason to skip the gate.
 

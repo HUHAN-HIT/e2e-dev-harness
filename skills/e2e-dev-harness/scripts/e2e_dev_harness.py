@@ -25,6 +25,7 @@ import cross_service_dependency_scan  # noqa: E402
 import execution_trace  # noqa: E402
 import implementation_gate  # noqa: E402
 import install_hooks  # noqa: E402
+import harness_doctor  # noqa: E402
 import kg_refresh  # noqa: E402
 import handoff_gate  # noqa: E402
 import harness_verify  # noqa: E402
@@ -32,6 +33,7 @@ import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
 import phase_guard  # noqa: E402
 import run_state  # noqa: E402
+import session_checkpoint  # noqa: E402
 import service_design_gate  # noqa: E402
 import superpowers_probe  # noqa: E402
 import task_tier  # noqa: E402
@@ -40,6 +42,7 @@ import workflow_guard  # noqa: E402
 
 
 DEFAULT_REVIEW_PROFILE = "skills/e2e-dev-harness/review-profiles/default.json"
+__version__ = "0.2.0"
 DEFAULT_REVIEW_CHECKLIST = {
     "design": [
         ("ac-completeness", "Acceptance criteria cover goals, non-goals, affected modules, and open questions."),
@@ -159,19 +162,57 @@ def load_run_state(repo: Path, state_path: Path) -> dict:
 
 
 def runtime_hook_status(repo: Path) -> dict:
-    claude_dir = repo / ".claude"
-    if claude_dir.exists():
-        result = install_hooks.validate_config(claude_dir / "settings.json")
+    checked: list[dict] = []
+    project_claude_dir = repo / ".claude"
+    if not project_claude_dir.exists():
+        return {
+            "ready": True,
+            "blocked_reasons": [],
+            "warnings": [
+                "No runtime hook directory detected; use e2e_dev_harness.py pre-code before code edits when hooks are unavailable."
+            ],
+            "runtime": "generic",
+            "target": "",
+        }
+    claude_targets = [
+        ("project", project_claude_dir / "settings.json"),
+        ("user", Path.home() / ".claude" / "settings.json"),
+    ]
+    for scope, target in claude_targets:
+        if not target.parent.exists():
+            continue
+        result = install_hooks.validate_config(target)
         result["runtime"] = "claude"
-        return result
+        result["scope"] = scope
+        checked.append(result)
+        if result["ready"]:
+            if scope == "user" and checked and checked[0].get("scope") == "project" and not checked[0]["ready"]:
+                result["warnings"] = result.get("warnings", []) + [
+                    "Project Claude hook config is not ready; user-level Claude hook config is enforcing phase_guard.py."
+                ]
+                result["project_hook_status"] = checked[0]
+            return result
+    if checked:
+        return {
+            "ready": False,
+            "blocked_reasons": [
+                f"{item['scope']} Claude hook: {reason}"
+                for item in checked
+                for reason in item.get("blocked_reasons", [])
+            ],
+            "warnings": [],
+            "runtime": "claude",
+            "target": ", ".join(str(item.get("target", "")) for item in checked),
+            "checked": checked,
+        }
     return {
-        "ready": True,
-        "blocked_reasons": [],
-        "warnings": [
-            "No runtime hook directory detected; use e2e_dev_harness.py pre-code before code edits when hooks are unavailable."
+        "ready": False,
+        "blocked_reasons": [
+            f"Claude hook config not found or unreadable: {project_claude_dir / 'settings.json'}"
         ],
-        "runtime": "generic",
-        "target": "",
+        "warnings": [],
+        "runtime": "claude",
+        "target": str(project_claude_dir / "settings.json"),
     }
 
 
@@ -891,6 +932,90 @@ TODO: List proposed memory updates or `None`.
 """
 
 
+ROLE_TEMPLATE_DETAILS = {
+    "requirements-clarifier": {
+        "boundary": "Clarify user intent, scope, ACs, unresolved questions, and bounded impact summary. Do not design tests or write code.",
+        "inputs": "User request, project instructions, dependency/impact summaries, prior approved requirement facts.",
+        "forbidden": "Production/test code edits, implementation planning, review approval, and speculative scope expansion.",
+        "outputs": "Ready requirements handoff, impact summary rows, resolved/open question status, proposed memory updates.",
+        "done": "All behavior/API/data/test-impacting questions are resolved or explicitly blocked, and downstream assumptions are stated.",
+    },
+    "use-case-designer": {
+        "boundary": "Map ACs to use cases, failure paths, contracts, data effects, and service/module slices. Do not write tests or code.",
+        "inputs": "Ready requirements handoff, impact summary, dependency report, project patterns.",
+        "forbidden": "Changing accepted scope, production/test code edits, and approving own design.",
+        "outputs": "Ready use-case handoff, service/use-case mapping, contract candidates, downstream assumptions.",
+        "done": "Every AC maps to at least one use case or a documented deferral with owner and approval need.",
+    },
+    "test-case-developer": {
+        "boundary": "Create test strategy, first red tests, contract tests, and test-impact commands. Do not modify production code.",
+        "inputs": "Ready requirements and use-case handoffs, service design slices, TDD references.",
+        "forbidden": "Production code edits, green implementation, semantic review approval, and changing AC scope.",
+        "outputs": "Ready test handoff, red-test evidence path, test-impact plan, test command matrix.",
+        "done": "A meaningful red test exists, fails for the expected reason, and R2 has enough evidence to review.",
+    },
+    "code-developer": {
+        "boundary": "Implement only assigned ACs and service/module scope using red-green-refactor. Do not alter requirements or review outputs.",
+        "inputs": "Ready design/test handoffs, approved R2, service plan, service design slice, failing test evidence.",
+        "forbidden": "Writing R1/R2/R3 reports, expanding scope, editing unclaimed services, or skipping AC progress.",
+        "outputs": "Implementation handoff, implementation manifest, unit-test command JSON, coverage matrix, business review notes.",
+        "done": "All assigned ACs have concrete code refs and passing tests; no undeclared file or behavior drift remains.",
+    },
+    "semantic-reviewer": {
+        "boundary": "Review one phase from request-scoped inputs only. Do not write code or patch artifacts under review.",
+        "inputs": "Review request, context pack, role handoffs, design/test/code evidence allowed by the request.",
+        "forbidden": "Inherited developer chat context, self-review, production/test code edits, and consolidated after-the-fact review.",
+        "outputs": "R1/R2/R3 review report, reviewer invocation JSON, blocking findings or rework items.",
+        "done": "Review report has request hash, concrete session isolation proof, checked profile items, and status.",
+    },
+    "coverage-reviewer": {
+        "boundary": "Verify end-to-end AC coverage and archive outcomes. Do not patch implementation directly.",
+        "inputs": "All ready role handoffs, semantic reviews, manifests, coverage matrix, command evidence, rework items.",
+        "forbidden": "Closing gaps by editing code, ignoring failed commands, or archiving unresolved rework as complete.",
+        "outputs": "Final coverage/business review, requirements archive, run summary, residual risk list.",
+        "done": "Every AC maps to use case, tests, code refs, business review, accepted review status, and closed rework.",
+    },
+}
+
+
+def role_template_text(role: str) -> str:
+    detail = ROLE_TEMPLATE_DETAILS.get(role, ROLE_TEMPLATE_DETAILS["code-developer"])
+    return f"""# Agent Role Template: {role}
+
+## Role Boundary
+
+{detail["boundary"]}
+
+## Allowed Inputs
+
+{detail["inputs"]}
+
+## Forbidden
+
+{detail["forbidden"]}
+
+## Required Outputs
+
+{detail["outputs"]}
+
+## Done When
+
+{detail["done"]}
+"""
+
+
+def create_role_template_files(repo: Path, artifacts: dict) -> list[str]:
+    created: list[str] = []
+    for role, relative_path in (artifacts.get("role_templates") or {}).items():
+        path = require_repo_path(repo, Path(relative_path), f"{role} role template")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = role_template_text(role)
+        if not path.exists() or path.read_text(encoding="utf-8", errors="replace") != text:
+            path.write_text(text, encoding="utf-8")
+            created.append(str(path))
+    return created
+
+
 def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
     role_files = {
         "requirements-clarifier": artifacts["requirements"],
@@ -899,6 +1024,7 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
         "code-developer": artifacts["implementation_plan"],
     }
     created: list[str] = []
+    created.extend(create_role_template_files(repo, artifacts))
     for role, relative_path in role_files.items():
         path = require_repo_path(repo, Path(relative_path), role)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1202,6 +1328,7 @@ def review_request_template(phase: str, title: str, output_path: str, scope: str
 ## Review Assignment
 
 Run this review in an independent reviewer agent. The reviewer may read only the allowed inputs and must write only the declared output review report or rework items requested by the gate.
+Before writing the report, create the declared Reviewer Invocation JSON with concrete `runtime`, isolated `invocation_type`, `developer_session`, `reviewer_session`, `context_pack`, `review_request`, `output`, `fork_context: false`, request-only `context_policy`, and `status: completed`. `developer_session` and `reviewer_session` must be different.
 
 ## Required Review Checklist
 
@@ -1218,6 +1345,11 @@ For implementation reviews, also include:
 
 
 def semantic_review_template(phase: str, title: str, scope: str = "all-services", request_path: str = "") -> str:
+    invocation_path = ""
+    if request_path:
+        invocation_path = request_path.replace("/review-requests/", "/review-invocations/").replace("\\review-requests\\", "\\review-invocations\\")
+        if invocation_path.endswith(".md"):
+            invocation_path = invocation_path[:-3] + "-invocation.json"
     return f"""# {title}
 
 - Phase: {phase}
@@ -1226,6 +1358,7 @@ def semantic_review_template(phase: str, title: str, scope: str = "all-services"
 - Developer Agent: <developer-agent-id>
 - Reviewer Agent: <independent-reviewer-agent-id>
 - Reviewer Session: <reviewer-session-id>
+- Reviewer Invocation: {invocation_path or '<reviewer-invocation-json-path>'}
 - Request Hash: <sha256-of-review-request-file>
 - Independence: independent-agent
 - Context Boundary: request-scoped; no inherited developer chat context
@@ -1444,6 +1577,8 @@ def gate(args) -> tuple[int, dict]:
             run_state=getattr(args, "run_state", None) or getattr(args, "state", None),
             no_harness_state=getattr(args, "no_harness_state", False),
             harness_state_approval=getattr(args, "harness_state_approval", None),
+            require_gitnexus_evidence=getattr(args, "require_gitnexus_evidence", "auto"),
+            gitnexus_degradation=getattr(args, "gitnexus_degradation", None),
         )
     )
     if result.get("ready"):
@@ -1651,6 +1786,13 @@ def guard(args) -> tuple[int, dict]:
     return (0 if result["ready"] else 2), result
 
 
+def doctor(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    result = harness_doctor.evaluate(repo, getattr(args, "strict", False))
+    write_status(args.status_file, result)
+    return (0 if result["ready"] else 2), result
+
+
 def pre_code(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
     paths = list(args.path or [])
@@ -1666,6 +1808,7 @@ def pre_code(args) -> tuple[int, dict]:
         paths,
         args.lock,
         args.run_dir,
+        command_text=args.command_text,
     )
     result["pre_code"] = True
     result["tool"] = args.tool
@@ -1792,6 +1935,11 @@ def next_step(args) -> tuple[int, dict]:
         "blocked_reasons": blocked,
         "warnings": hooks.get("warnings", []) if hooks["ready"] else [],
     }
+    checkpoint = session_checkpoint.create(repo, state_path, action)
+    result["session_checkpoint"] = checkpoint
+    if not checkpoint["ready"]:
+        result["ready"] = False
+        result["blocked_reasons"].extend("Session checkpoint: " + reason for reason in checkpoint["blocked_reasons"])
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
 
@@ -1824,6 +1972,7 @@ def add_prepare_args(parser: argparse.ArgumentParser) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="Print JSON output.")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     start_parser = subparsers.add_parser("start", help="Create a controlled harness run and starter design artifact.")
@@ -1896,6 +2045,8 @@ def main() -> int:
     gate_parser.add_argument("--run-state", type=Path)
     gate_parser.add_argument("--no-harness-state", action="store_true")
     gate_parser.add_argument("--harness-state-approval", type=Path)
+    gate_parser.add_argument("--require-gitnexus-evidence", choices=["auto", "strict", "off"], default="auto")
+    gate_parser.add_argument("--gitnexus-degradation", type=Path)
     gate_parser.add_argument("--status-file", type=Path)
 
     verify_parser = subparsers.add_parser("verify", help="Run prepare, clarification, optional gate, and optional Maven.")
@@ -1932,6 +2083,8 @@ def main() -> int:
     verify_parser.add_argument("--run-state", type=Path)
     verify_parser.add_argument("--no-harness-state", action="store_true")
     verify_parser.add_argument("--harness-state-approval", type=Path)
+    verify_parser.add_argument("--require-gitnexus-evidence", choices=["auto", "strict", "off"], default="auto")
+    verify_parser.add_argument("--gitnexus-degradation", type=Path)
     verify_parser.add_argument("--skip-maven", action="store_true")
     verify_parser.add_argument("--strict-workflow", action="store_true")
     verify_parser.add_argument("--workflow-approval", type=Path)
@@ -1951,6 +2104,12 @@ def main() -> int:
     guard_parser.add_argument("--require-completion", action="store_true")
     guard_parser.add_argument("--approval-file", type=Path)
     guard_parser.add_argument("--status-file", type=Path)
+
+    doctor_parser = subparsers.add_parser("doctor", help="Check install, runtime hooks, and local tool readiness.")
+    doctor_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    doctor_parser.add_argument("--strict", action="store_true", help="Treat warnings as blockers.")
+    doctor_parser.add_argument("--json", action="store_true", help="Print JSON output.")
+    doctor_parser.add_argument("--status-file", type=Path)
 
     pre_code_parser = subparsers.add_parser("pre-code", help="Check whether a planned code write is allowed by phase lock.")
     pre_code_parser.add_argument("repo", nargs="?", default=".", type=Path)
@@ -2022,6 +2181,8 @@ def main() -> int:
             exit_code, result = gate(args)
         elif args.command == "guard":
             exit_code, result = guard(args)
+        elif args.command == "doctor":
+            exit_code, result = doctor(args)
         elif args.command == "pre-code":
             exit_code, result = pre_code(args)
         elif args.command == "test-impact":

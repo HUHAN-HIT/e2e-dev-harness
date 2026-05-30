@@ -41,6 +41,7 @@ memory_updates_proposed: []
 ## Role Contracts
 
 Each role owns a narrow context boundary and writes only its promised outputs. Later roles consume the previous files as artifacts instead of reloading the whole conversation.
+Design, test, code, semantic review, and coverage are incompatible role groups. The same `agent_id` must not own tasks across those groups in `agent-schedule.json`; every role task references a generated `agent-roles/*.md` template, and handoff files are the communication boundary between groups.
 
 Run `scripts/handoff_gate.py` before a downstream agent consumes a handoff. Use `--require-handoffs` for multi-service, contract/data-risk, or split-agent completion gates so an empty `handoffs/` directory blocks. The gate requires a concrete `agent_id`, a pass status, non-empty inputs/outputs, input/output SHA-256 entries, `consumed_by`, `open_questions: None`, a matching ready marker, and non-template body content in `Summary`, `Facts Used`, `Decisions Made`, `Downstream Assumptions`, and `Verification Evidence`. Draft starter files are intentionally not ready until the owning agent fills them.
 
@@ -130,6 +131,7 @@ Use Case Designer:
 Test Case Developer:
 - Owns test strategy, first red test, contract tests, Maven scope, red-test evidence path.
 - Does not modify production code.
+- Must be a different agent from Requirements/Use Case design and Code Developer roles.
 
 Semantic Reviewers:
 - R1 Design Reviewer checks requirements, AC completeness, affected modules, security-sensitive paths, and reference-pattern consistency before planning.
@@ -140,7 +142,7 @@ Semantic Reviewers:
 - Review reports use fields: `Phase`, `Reviewer`, `Review Request`, `Developer Agent`, `Reviewer Agent`, `Reviewer Session`, `Reviewer Invocation`, `Request Hash`, `Independence`, `Context Boundary`, `No Code Changes`, `Scope`, `Inputs Reviewed`, `Findings`, `Required Rework`, and `Status`.
 - `Developer Agent`, `Reviewer Agent`, and `Reviewer Session` must be concrete ids, not placeholders. `Developer Agent` and `Reviewer Agent` must be different. `Independence` must be exactly `independent-agent`. `Context Boundary` must be request-scoped with no inherited developer chat context. `No Code Changes` must be confirmed/read-only.
 - The `Review Request` file must exist, match the report phase, declare the report as its exact `Output`, assign the same Developer Agent and Reviewer Agent as the report, and hash to the report `Request Hash`.
-- The `Reviewer Invocation` JSON must match Developer Agent, Reviewer Agent, and Reviewer Session; point to the same review request and output; declare `fork_context: false`; use a request-only/no-inherited context policy; and be `status: completed`.
+- The `Reviewer Invocation` JSON must contain runtime isolation proof: `runtime`, isolated `invocation_type`, `developer_session`, `reviewer_session`, `context_pack`, matching Developer/Reviewer ids, matching review request/output paths, `fork_context: false`, request-only/no-inherited `context_policy`, and `status: completed`. The developer and reviewer sessions must be different.
 - In multi-service runs, service-local R2 and R3 reviews are required for every `service-plans/<service>/` directory when those phases are required. A global R2/R3 report does not replace service-local review evidence.
 - Findings become rework items; reviewer agents do not patch implementation directly.
 - If `Findings` is not empty, `Required Rework` must name the rework or the report must use a blocking/with-rework status. Approved reports with findings and no rework are invalid.
@@ -148,6 +150,7 @@ Semantic Reviewers:
 Code Developer:
 - Owns minimal implementation, red-green-refactor, service-local verification evidence, residual risk report.
 - Does not start without approved requirements, use cases, test plan, and red-test evidence.
+- Must be a different agent from design and test roles.
 - For multi-service work, each Code Developer owns exactly one service/module and writes under `service-plans/<service>/`.
 - Does not write R1/R2/R3 semantic review reports.
 

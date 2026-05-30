@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Recommend single-agent or multi-agent orchestration for Spring 6 work."""
+"""Recommend split-role or multi-service orchestration for Spring 6 work."""
 
 from __future__ import annotations
 
@@ -295,19 +295,42 @@ def actionable_mode_reasons(reasons: list[str]) -> list[str]:
     return [reason for reason in reasons if not reason.startswith("template design doc")]
 
 
+def multi_forcing_reasons(reasons: list[str]) -> list[str]:
+    return [
+        reason
+        for reason in actionable_mode_reasons(reasons)
+        if reason.startswith("multiple service candidates")
+    ]
+
+
+def review_isolation_reasons(reasons: list[str]) -> list[str]:
+    return [
+        reason
+        for reason in actionable_mode_reasons(reasons)
+        if reason not in multi_forcing_reasons(reasons)
+    ]
+
+
 def choose_mode(requested: str, facts: dict, design_text: str, design_is_template: bool) -> tuple[str, list[str]]:
     reasons = mode_reasons(facts, design_text, design_is_template)
     if requested in {"single", "single-review"}:
-        actionable_reasons = actionable_mode_reasons(reasons)
-        if actionable_reasons:
-            return "multi", [f"{requested} escalated to multi: " + "; ".join(actionable_reasons[:3])] + reasons
+        multi_reasons = multi_forcing_reasons(reasons)
+        if multi_reasons:
+            return "multi", [f"{requested} escalated to multi: " + "; ".join(multi_reasons[:3])] + reasons
+        if requested == "single":
+            review_reasons = review_isolation_reasons(reasons)
+            if review_reasons:
+                return "single-review", ["single escalated to single-review: " + "; ".join(review_reasons[:3])] + reasons
         return requested, [f"mode explicitly set to {requested}"]
     if requested in EXPLICIT_AGENT_MODES:
         return requested, [f"mode explicitly set to {requested}"]
 
-    actionable_reasons = actionable_mode_reasons(reasons)
-    if actionable_reasons:
+    multi_reasons = multi_forcing_reasons(reasons)
+    if multi_reasons:
         return "multi", reasons
+    review_reasons = review_isolation_reasons(reasons)
+    if review_reasons:
+        return "single-review", reasons
     return "single", ["single service and low-risk design context detected"]
 
 
@@ -470,6 +493,23 @@ def service_artifacts(base: str, services: list[str] | None) -> dict:
     return result
 
 
+ROLE_TEMPLATE_FILES = {
+    "requirements-clarifier": "requirements-clarifier.md",
+    "use-case-designer": "use-case-designer.md",
+    "test-case-developer": "test-case-developer.md",
+    "code-developer": "code-developer.md",
+    "semantic-reviewer": "semantic-reviewer.md",
+    "coverage-reviewer": "coverage-reviewer.md",
+}
+
+
+def role_templates(base: str) -> dict[str, str]:
+    return {
+        role: f"{base}/agent-roles/{filename}"
+        for role, filename in ROLE_TEMPLATE_FILES.items()
+    }
+
+
 def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None = None, services: list[str] | None = None) -> dict:
     base = (agent_run_dir or f"docs/agent-runs/{default_run_id(slug, run_date)}").replace("\\", "/")
     handoffs = f"{base}/handoffs"
@@ -490,6 +530,8 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
         "use_cases": f"{handoffs}/02-use-case-designer.md",
         "test_plan": f"{handoffs}/03-test-case-developer.md",
         "implementation_plan": f"{handoffs}/04-code-developer.md",
+        "role_templates_dir": f"{base}/agent-roles",
+        "role_templates": role_templates(base),
         "service_designs_dir": f"{base}/service-designs",
         "service_design_pattern": f"{base}/service-designs/<service>.md",
         "proposed_memory_updates": f"{base}/proposed-memory-updates.md",
@@ -521,38 +563,40 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
         "coverage_matrix": f"{evidence}/coverage-matrix.md",
         "business_review": f"{evidence}/business-review.md",
         "service_plans": service_artifacts(base, services),
-    }
+}
+
+
+def role_template_key(agent_name: str) -> str:
+    if "requirements" in agent_name or "clarifier" in agent_name:
+        return "requirements-clarifier"
+    if "use-case" in agent_name or "designer" in agent_name:
+        return "use-case-designer"
+    if "test" in agent_name and "review" not in agent_name:
+        return "test-case-developer"
+    if "code-developer" in agent_name:
+        return "code-developer"
+    if "coverage" in agent_name:
+        return "coverage-reviewer"
+    if "reviewer" in agent_name or "review" in agent_name:
+        return "semantic-reviewer"
+    return ""
+
+
+def with_role_template(agent: dict, artifact_paths: dict) -> dict:
+    key = role_template_key(str(agent.get("name", "")))
+    templates = artifact_paths.get("role_templates", {})
+    if key and key in templates:
+        agent = dict(agent)
+        agent["role_template"] = templates[key]
+        agent["role_template_key"] = key
+    return agent
 
 
 def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | None = None) -> list[dict]:
     if selected_mode == "discovery":
         return []
     agents: list[dict] = []
-    if selected_mode in {"single", "single-review"}:
-        review_owner = "single-reviewer phase-boundary invocations" if selected_mode == "single-review" else "independent reviewer agents"
-        agents.append(
-            {
-                "name": "single-agent",
-                "owns": ["requirements", "impact summary", "use cases", "tests", "implementation"],
-                "inputs": ["user request", "knowledge graph summary", artifact_paths["dependency_report"]],
-                "outputs": [
-                    artifact_paths["exec_plan"],
-                    artifact_paths["requirements"],
-                    artifact_paths["impact_summary"],
-                    artifact_paths["impact_evidence"],
-                    artifact_paths["use_cases"],
-                    artifact_paths["test_plan"],
-                    artifact_paths["implementation_plan"],
-                    artifact_paths["implementation_manifest"],
-                    artifact_paths["coverage_matrix"],
-                    artifact_paths["business_review"],
-                    artifact_paths["verification_evidence"],
-                ],
-                "gate": f"Must not write semantic review reports; {review_owner} own R1/R2/R3 review artifacts.",
-            }
-        )
-    else:
-        agents.extend([
+    agents.extend([
         {
             "name": "requirements-clarifier",
             "owns": ["goal", "non-goals", "constraints", "impact summary", "acceptance criteria", "open questions"],
@@ -668,13 +712,13 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
                     "gate": "Must run as an independent reviewer agent with no inherited developer chat context.",
                 }
             )
-    elif selected_mode not in {"single", "single-review"}:
+    else:
         agents.append({
             "name": "code-developer",
             "owns": ["minimal implementation", "red-green-refactor", "verification"],
             "inputs": [artifact_paths["requirements"], artifact_paths["use_cases"], artifact_paths["test_plan"], "failing tests"],
             "outputs": [artifact_paths["implementation_plan"], "code changes", "test results"],
-            "gate": "All narrow and broadened verification commands pass.",
+            "gate": "Must be a different agent from design and test roles; all narrow and broadened verification commands pass.",
         })
     agents.append({
         "name": implementation_reviewer_name,
@@ -713,7 +757,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
         ],
         "gate": "Every acceptance criterion maps to use cases, required implementation artifacts, tests, code refs, and business review evidence.",
     })
-    return agents
+    return [with_role_template(agent, artifact_paths) for agent in agents]
 
 
 def phase_for_agent(name: str) -> str:
@@ -750,6 +794,20 @@ def depends_on_for_phase(phase: str) -> list[str]:
     return dependencies.get(phase, ["plan"])
 
 
+def role_group_for_phase(phase: str) -> str:
+    groups = {
+        "clarify": "design",
+        "design": "design",
+        "tdd-red": "test",
+        "implement": "code",
+        "r1-review": "review",
+        "r2-review": "review",
+        "r3-review": "review",
+        "completion": "coverage",
+    }
+    return groups.get(phase, "coordination")
+
+
 def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) -> dict:
     tasks: list[dict] = []
     for index, agent in enumerate(agents, start=1):
@@ -765,6 +823,9 @@ def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) 
                 "id": f"T{index:02d}",
                 "agent": name,
                 "phase": phase,
+                "role_group": role_group_for_phase(phase),
+                "role_template": agent.get("role_template", ""),
+                "role_template_key": agent.get("role_template_key", ""),
                 "service": service,
                 "parallel_group": f"service:{service}" if service and phase in {"implement", "r3-review"} else phase,
                 "depends_on_phases": depends_on_for_phase(phase),
@@ -776,6 +837,7 @@ def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) 
     return {
         "schema": "e2e-dev-harness.agent-schedule.v1",
         "selected_mode": selected_mode,
+        "require_role_templates": True,
         "services": services,
         "coordination": "machine-readable task board; agents update task status and artifact hashes instead of exchanging long free-form chat.",
         "tasks": tasks,

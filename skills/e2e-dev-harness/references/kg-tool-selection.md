@@ -9,7 +9,7 @@ Use this matrix before each implementation.
 | Cross-service HTTP or DMQ dependency analysis | Deterministic scanner plus GitNexus | Graphify for docs/ADR/architecture semantics only | Scan URLs, routes, topics, tags, groups, constants, producers, and consumers first; GitNexus verifies symbol context and impact. |
 | Design document, PDF, architecture diagram, screenshot, or mixed media input | Graphify | GitNexus when code will change | Graphify is better for multimodal/project-document understanding. |
 | Ambiguous service ownership or cross-service contract change | Both | None | Compare doc-level architecture against code-level dependencies. |
-| Tool unavailable | Fallback to repo inspection | None | Use Maven modules, `rg`, dependency trees, and targeted tests. |
+| Tool unavailable | Ask for degradation approval | Repo inspection after approval | Use Maven modules, `rg`, dependency trees, and targeted tests only as documented compensating evidence. |
 
 ## Refresh Protocol
 
@@ -79,6 +79,30 @@ active.
 5. Use Graphify only to add document/ADR/architecture context. `INFERRED` or `AMBIGUOUS` Graphify relationships are not hard completion evidence.
 
 For high-risk cross-service work, use `--gitnexus-mode strict`. If GitNexus is unavailable, the report remains useful as a seed list, but it should be treated as evidence-insufficient until reviewed with `rg`, Maven modules, and targeted code reads.
+
+## GitNexus Degradation
+
+GitNexus is a primary evidence source for critical/audited completion. Do not silently treat a deterministic scan, `rg`, or manual code reads as equivalent when GitNexus MCP/CLI is unavailable or blocked by a DB owner.
+
+If GitNexus cannot produce verified evidence, pause and ask the user whether to degrade for this run. If approved, write an evidence file such as `docs/agent-runs/<run>/evidence/gitnexus-degradation.md`:
+
+```markdown
+# GitNexus Degradation
+Approval: user-approved
+Reason: GitNexus MCP/CLI was unavailable or could not access the index.
+Fallback Evidence: deterministic scanner report, Maven module graph, targeted `rg` reads, contract review, and affected-service tests.
+```
+
+Then pass it to completion:
+
+```bash
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py gate . \
+  --phase completion \
+  --require-gitnexus-evidence auto \
+  --gitnexus-degradation docs/agent-runs/<run>/evidence/gitnexus-degradation.md
+```
+
+Use `--require-gitnexus-evidence strict` when project policy requires GitNexus evidence even outside auto-classified critical/audited work. Use `off` only for explicitly approved non-code or non-Java runs.
 
 ## Command Discovery
 

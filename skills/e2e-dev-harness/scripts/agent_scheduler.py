@@ -16,12 +16,25 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import run_state  # noqa: E402
+import handoff_gate  # noqa: E402
 
 
 CLAIMED_STATUSES = {"claimed", "in-progress", "in_progress", "completed"}
 # Statuses that hold a task without finishing it; a stale hold can be reclaimed.
 HELD_STATUSES = {"claimed", "in-progress", "in_progress"}
 DEFAULT_LEASE_SECONDS = 1800
+EXCLUSIVE_ROLE_GROUPS = {"design", "test", "code", "review", "coverage"}
+ROLE_TEMPLATE_MARKERS = ("## Role Boundary", "## Allowed Inputs", "## Forbidden", "## Required Outputs", "## Done When")
+PHASE_ROLE_GROUPS = {
+    "clarify": "design",
+    "design": "design",
+    "tdd-red": "test",
+    "implement": "code",
+    "r1-review": "review",
+    "r2-review": "review",
+    "r3-review": "review",
+    "completion": "coverage",
+}
 
 
 def now_dt(now: datetime | None = None) -> datetime:
@@ -125,6 +138,104 @@ def service_tasks(schedule: dict, services: list[str], phase: str = "implement")
     return {service: tasks.get(service, {}) for service in services}
 
 
+def role_group(task: dict) -> str:
+    explicit = str(task.get("role_group", "")).strip().lower()
+    if explicit:
+        return explicit
+    return PHASE_ROLE_GROUPS.get(str(task.get("phase", "")).strip().lower(), "")
+
+
+def same_agent(left: str, right: str) -> bool:
+    return left.strip().lower() == right.strip().lower()
+
+
+def role_conflict_blockers(schedule: dict, task: dict, agent: str) -> list[str]:
+    blocked: list[str] = []
+    target_group = role_group(task)
+    if target_group not in EXCLUSIVE_ROLE_GROUPS:
+        return blocked
+    task_id = str(task.get("id", ""))
+    for other in schedule.get("tasks", []) or []:
+        if str(other.get("id", "")) == task_id:
+            continue
+        status = str(other.get("status", "")).lower()
+        owner = str(other.get("owner", "")).strip()
+        other_group = role_group(other)
+        if (
+            owner
+            and same_agent(owner, agent)
+            and status in CLAIMED_STATUSES
+            and other_group in EXCLUSIVE_ROLE_GROUPS
+            and other_group != target_group
+        ):
+            blocked.append(
+                f"Agent {agent} cannot own both {target_group} and {other_group} role tasks "
+                f"({task_id} conflicts with {other.get('id', '')})."
+            )
+    return blocked
+
+
+def schedule_role_conflicts(schedule: dict) -> list[str]:
+    by_owner: dict[str, set[str]] = {}
+    for task in schedule.get("tasks", []) or []:
+        owner = str(task.get("owner", "")).strip()
+        status = str(task.get("status", "")).lower()
+        group = role_group(task)
+        if owner and status in CLAIMED_STATUSES and group in EXCLUSIVE_ROLE_GROUPS:
+            by_owner.setdefault(owner.lower(), set()).add(group)
+    return [
+        f"Agent {owner} owns incompatible role groups: {', '.join(sorted(groups))}."
+        for owner, groups in by_owner.items()
+        if len(groups) > 1
+    ]
+
+
+def task_input_handoff_blockers(repo: Path, task: dict) -> list[str]:
+    blocked: list[str] = []
+    for item in task.get("inputs", []) or []:
+        text = posix_path(str(item))
+        if not text.endswith(".md"):
+            continue
+        if "/handoffs/" not in text and not text.endswith("/code-agent.md") and not text.endswith("/implementation-plan.md"):
+            continue
+        path = Path(text)
+        full = path if path.is_absolute() else repo / path
+        if not full.exists():
+            blocked.append(f"Task {task.get('id', '')} input handoff is missing: {text}")
+            continue
+        result = handoff_gate.validate(repo, [path], require_files=True)
+        if not result["ready"]:
+            blocked.extend(
+                f"Task {task.get('id', '')} input handoff is not ready: {reason}"
+                for reason in result["blocked_reasons"]
+            )
+    return blocked
+
+
+def role_template_blockers(repo: Path, schedule: dict, task: dict) -> list[str]:
+    if not schedule.get("require_role_templates"):
+        return []
+    group = role_group(task)
+    if group not in EXCLUSIVE_ROLE_GROUPS:
+        return []
+    template = posix_path(str(task.get("role_template", "")))
+    if not template:
+        return [f"Task {task.get('id', '')} must declare a role_template before claim."]
+    path = Path(template)
+    full = path if path.is_absolute() else repo / path
+    try:
+        full.resolve().relative_to(repo.resolve())
+    except ValueError:
+        return [f"Task {task.get('id', '')} role_template must stay inside repo: {template}"]
+    if not full.exists() or not full.is_file():
+        return [f"Task {task.get('id', '')} role_template is missing: {template}"]
+    text = full.read_text(encoding="utf-8", errors="replace")
+    missing = [marker for marker in ROLE_TEMPLATE_MARKERS if marker not in text]
+    if missing:
+        return [f"Task {task.get('id', '')} role_template is missing required sections: {', '.join(missing)}"]
+    return []
+
+
 def posix_path(value: str) -> str:
     return value.replace("\\", "/").strip()
 
@@ -161,8 +272,16 @@ def evidence_content_blockers(repo: Path, evidence: list[str]) -> list[str]:
     for item in evidence:
         path = repo / item
         lower_name = path.name.lower()
+        normalized = posix_path(item)
         text = path.read_text(encoding="utf-8", errors="replace")
         lowered = text.lower()
+        if (
+            path.suffix.lower() == ".md"
+            and ("/handoffs/" in normalized or normalized.endswith("/code-agent.md") or normalized.endswith("/implementation-plan.md"))
+        ):
+            result = handoff_gate.validate(repo, [Path(item)], require_files=True)
+            if not result["ready"]:
+                blocked.extend(f"Task completion handoff evidence is not ready: {reason}" for reason in result["blocked_reasons"])
         if lower_name in {"implementation-manifest.md", "coverage-matrix.md"}:
             if any(marker in lowered for marker in ("todo", "placeholder", "template")):
                 blocked.append(f"Task completion evidence is placeholder/template content: {item}")
@@ -190,6 +309,11 @@ def validate_schedule(
     stale_services: list[str] = []
     if schedule.get("schema") != "e2e-dev-harness.agent-schedule.v1":
         blocked.append("Agent schedule schema must be e2e-dev-harness.agent-schedule.v1.")
+    blocked.extend(schedule_role_conflicts(schedule))
+    if schedule.get("require_role_templates"):
+        for task in schedule.get("tasks", []) or []:
+            if role_group(task) in EXCLUSIVE_ROLE_GROUPS and not str(task.get("role_template", "")).strip():
+                blocked.append(f"Task {task.get('id', '')} must declare a role_template.")
     tasks = service_tasks(schedule, services)
     for service, task in tasks.items():
         if not task:
@@ -266,6 +390,12 @@ def claim(
     status = str(task.get("status", "planned")).lower()
     if status == "completed":
         return {"ready": False, "blocked_reasons": [f"Task already completed: {task_id}"], "warnings": []}
+    role_blockers = role_conflict_blockers(schedule, task, agent)
+    if role_blockers:
+        return {"ready": False, "blocked_reasons": role_blockers, "warnings": []}
+    template_blockers = role_template_blockers(repo, schedule, task)
+    if template_blockers:
+        return {"ready": False, "blocked_reasons": template_blockers, "warnings": []}
     deps_ready, missing_deps = phases_completed(schedule, [str(phase) for phase in task.get("depends_on_phases", []) or []])
     if not deps_ready:
         return {
@@ -278,6 +408,9 @@ def claim(
             ],
             "warnings": [],
         }
+    handoff_blockers = task_input_handoff_blockers(repo, task)
+    if handoff_blockers:
+        return {"ready": False, "blocked_reasons": handoff_blockers, "warnings": []}
     warnings: list[str] = []
     prior_owner = str(task.get("owner", "")).strip()
     if prior_owner and prior_owner != agent:
@@ -373,6 +506,12 @@ def reclaim(
         return {"ready": False, "blocked_reasons": [f"Task not found in agent schedule: {task_id}"], "warnings": []}
     if str(task.get("status", "")).lower() == "completed":
         return {"ready": False, "blocked_reasons": [f"Task already completed: {task_id}"], "warnings": []}
+    role_blockers = role_conflict_blockers(schedule, task, agent)
+    if role_blockers:
+        return {"ready": False, "blocked_reasons": role_blockers, "warnings": []}
+    template_blockers = role_template_blockers(repo, schedule, task)
+    if template_blockers:
+        return {"ready": False, "blocked_reasons": template_blockers, "warnings": []}
     prior_owner = str(task.get("owner", "")).strip()
     if prior_owner and prior_owner != agent and not force and not is_stale(task, now):
         return {
@@ -424,6 +563,12 @@ def complete(
     owner = str(task.get("owner", ""))
     if owner and owner != agent:
         return {"ready": False, "blocked_reasons": [f"Task {task_id} is owned by {owner}, not {agent}."], "warnings": []}
+    role_blockers = role_conflict_blockers(schedule, task, agent)
+    if role_blockers:
+        return {"ready": False, "blocked_reasons": role_blockers, "warnings": []}
+    template_blockers = role_template_blockers(repo, schedule, task)
+    if template_blockers:
+        return {"ready": False, "blocked_reasons": template_blockers, "warnings": []}
     resolved_evidence, evidence_blocked = evidence_paths(repo, evidence)
     if evidence_blocked:
         return {"ready": False, "blocked_reasons": evidence_blocked, "warnings": []}

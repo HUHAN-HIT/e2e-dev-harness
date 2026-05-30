@@ -226,6 +226,51 @@ def validate_transition_event(
         else:
             if not isinstance(evidence_data, dict) or evidence_data.get("ready") is not True:
                 blocked.append(f"Run state transition to {target} requires ready=true evidence.")
+            elif target == "IMPLEMENTED":
+                blocked.extend(validate_implementation_gate_evidence(repo, state_path, evidence_data))
+            elif target == "VERIFIED":
+                blocked.extend(validate_completion_gate_evidence(evidence_data))
+    return blocked
+
+
+def evidence_path_exists(repo: Path, state_path: Path, value: str) -> bool:
+    path = resolve_evidence_path(repo, state_path, value)
+    return bool(path and path.exists())
+
+
+def validate_implementation_gate_evidence(repo: Path, state_path: Path, evidence: dict) -> list[str]:
+    blocked: list[str] = []
+    if str(evidence.get("phase", "")) != "implementation":
+        blocked.append("Implementation transition evidence must be a phase=implementation gate result.")
+    if evidence.get("knowledge_graph_status_loaded") is not True:
+        blocked.append("Implementation transition evidence must include loaded knowledge graph status.")
+    tdd = evidence.get("tdd") if isinstance(evidence.get("tdd"), dict) else {}
+    if tdd.get("ready") is not True:
+        blocked.append("Implementation transition evidence must include passing TDD red evidence validation.")
+    red_path = str(tdd.get("red_evidence") or "")
+    if not red_path:
+        blocked.append("Implementation transition evidence must reference the red test evidence path.")
+    elif not evidence_path_exists(repo, state_path, red_path):
+        blocked.append(f"Implementation transition red test evidence is missing: {red_path}")
+    semantic_reviews = evidence.get("semantic_reviews") if isinstance(evidence.get("semantic_reviews"), dict) else {}
+    if semantic_reviews.get("ready") is not True:
+        blocked.append("Implementation transition evidence must include passing independent design/test semantic reviews.")
+    covered = {
+        str(phase)
+        for phase in semantic_reviews.get("covered_phases", []) or []
+    }
+    missing = {"design", "test"} - covered
+    if missing:
+        blocked.append("Implementation transition semantic reviews must cover: " + ", ".join(sorted(missing)))
+    return blocked
+
+
+def validate_completion_gate_evidence(evidence: dict) -> list[str]:
+    blocked: list[str] = []
+    if str(evidence.get("phase", "")) != "completion":
+        blocked.append("Verified transition evidence must be a phase=completion gate result.")
+    if evidence.get("ready") is not True:
+        blocked.append("Verified transition evidence must have ready=true.")
     return blocked
 
 
@@ -265,6 +310,7 @@ def validate_lifecycle_provenance(repo: Path, state_path: Path, state: dict) -> 
                     "VERIFIED",
                     "completion",
                     {"passed", "ready", "approved"},
+                    require_ready_evidence=True,
                 )
             )
     return blocked
@@ -338,6 +384,8 @@ def transition_state(
                     blocked.append("Transition to IMPLEMENTED requires implementation gate evidence to be a JSON object.")
                 elif str(gate_data.get("phase", "")) != "implementation" or gate_data.get("ready") is not True:
                     blocked.append("Transition to IMPLEMENTED requires passed implementation gate evidence.")
+                else:
+                    blocked.extend(validate_implementation_gate_evidence(repo, path, gate_data))
     if target_lifecycle == "VERIFIED":
         if gate != "completion":
             blocked.append("Transition to VERIFIED requires gate=completion.")
@@ -355,6 +403,8 @@ def transition_state(
                     blocked.append("Transition to VERIFIED requires completion gate evidence to be a JSON object.")
                 elif str(gate_data.get("phase", "")) != "completion" or gate_data.get("ready") is not True:
                     blocked.append("Transition to VERIFIED requires passed completion gate evidence.")
+                else:
+                    blocked.extend(validate_completion_gate_evidence(gate_data))
     if target_lifecycle == "ARCHIVED" and current != "VERIFIED":
         blocked.append("Transition to ARCHIVED requires current lifecycle VERIFIED.")
     if blocked:

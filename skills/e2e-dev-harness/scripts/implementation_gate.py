@@ -63,11 +63,13 @@ class GateRequest:
     checkpoint_mode: str = "off"
     confirmation_dirs: list[Path] | None = None
     require_intent: bool = False
-    tdd_mode: str = "basic"
-    workflow_tier: str = "basic"
+    tdd_mode: str = "auto"
+    workflow_tier: str = "auto"
     run_state: Path | None = None
     no_harness_state: bool = False
     harness_state_approval: Path | None = None
+    require_gitnexus_evidence: str = "auto"
+    gitnexus_degradation: Path | None = None
 
 
 def read_json(path: Path) -> dict | None:
@@ -264,6 +266,7 @@ def validate_gate_request(request: GateRequest) -> dict:
     require_intent = request.require_intent
     tdd_mode = request.tdd_mode
     workflow_tier = request.workflow_tier
+    require_gitnexus_evidence = request.require_gitnexus_evidence
     repo = repo.resolve()
     blocked_reasons: list[str] = []
     warnings: list[str] = []
@@ -310,6 +313,7 @@ def validate_gate_request(request: GateRequest) -> dict:
 
     red_test_result = None
     tdd_result = None
+    dependency_result = None
     if phase == "implementation":
         tdd_result = tdd_evidence.validate(
             repo,
@@ -322,13 +326,28 @@ def validate_gate_request(request: GateRequest) -> dict:
             blocked_reasons.extend(tdd_result["blocked_reasons"])
         warnings.extend(tdd_result["warnings"])
         red_test_result = tdd_result.get("red_evidence")
+        gitnexus_required = require_gitnexus_evidence == "strict" or (
+            require_gitnexus_evidence == "auto" and effective_workflow_tier in {"critical", "audited"}
+        )
+        if effective_workflow_tier in {"critical", "audited"} and not dependency_report:
+            blocked_reasons.append(
+                "Critical/audited implementation requires dependency discovery evidence before production code; pass --dependency-report."
+            )
+        dependency_result = cross_service_dependency_scan.validate_dependency_report(
+            repo,
+            dependency_report,
+            design_doc,
+            require_gitnexus=gitnexus_required,
+            gitnexus_degradation=request.gitnexus_degradation,
+        )
+        if not dependency_result["ready"]:
+            blocked_reasons.extend(dependency_result["blocked_reasons"])
 
     coverage_result = None
     memory_result = None
     spring_result = None
     rework_result = None
     semantic_review_result = None
-    dependency_result = None
     implementation_manifest_result = None
     task_alignment_result = None
     test_impact_plan_result = None
@@ -430,7 +449,16 @@ def validate_gate_request(request: GateRequest) -> dict:
         if not test_impact_plan_result["ready"]:
             blocked_reasons.extend(test_impact_plan_result["blocked_reasons"])
         warnings.extend(test_impact_plan_result["warnings"])
-        dependency_result = cross_service_dependency_scan.validate_dependency_report(repo, dependency_report, design_doc)
+        gitnexus_required = require_gitnexus_evidence == "strict" or (
+            require_gitnexus_evidence == "auto" and effective_workflow_tier in {"critical", "audited"}
+        )
+        dependency_result = cross_service_dependency_scan.validate_dependency_report(
+            repo,
+            dependency_report,
+            design_doc,
+            require_gitnexus=gitnexus_required,
+            gitnexus_degradation=request.gitnexus_degradation,
+        )
         if not dependency_result["ready"]:
             blocked_reasons.extend(dependency_result["blocked_reasons"])
         if memory_updates:
@@ -537,6 +565,8 @@ def validate_gate(
     run_state: Path | None = None,
     no_harness_state: bool = False,
     harness_state_approval: Path | None = None,
+    require_gitnexus_evidence: str = "auto",
+    gitnexus_degradation: Path | None = None,
 ) -> dict:
     return validate_gate_request(
         GateRequest(
@@ -573,6 +603,8 @@ def validate_gate(
             run_state=run_state,
             no_harness_state=no_harness_state,
             harness_state_approval=harness_state_approval,
+            require_gitnexus_evidence=require_gitnexus_evidence,
+            gitnexus_degradation=gitnexus_degradation,
         )
     )
 
@@ -603,6 +635,8 @@ def main() -> int:
     parser.add_argument("--run-state", type=Path)
     parser.add_argument("--no-harness-state", action="store_true")
     parser.add_argument("--harness-state-approval", type=Path)
+    parser.add_argument("--require-gitnexus-evidence", choices=["auto", "strict", "off"], default="auto")
+    parser.add_argument("--gitnexus-degradation", type=Path)
     parser.add_argument("--rework-dir", action="append", type=Path)
     parser.add_argument("--review-dir", action="append", type=Path)
     parser.add_argument("--review-profile", type=Path)
@@ -650,6 +684,8 @@ def main() -> int:
             run_state=args.run_state,
             no_harness_state=args.no_harness_state,
             harness_state_approval=args.harness_state_approval,
+            require_gitnexus_evidence=args.require_gitnexus_evidence,
+            gitnexus_degradation=args.gitnexus_degradation,
         )
     )
     if args.json:

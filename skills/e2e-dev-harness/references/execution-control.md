@@ -1,7 +1,7 @@
 # Execution Control
 
-Use execution control when an agent runtime supports pre-tool or pre-action hooks.
-The hook is the enforcement layer: it blocks code exploration before `start`, and blocks code writes until implementation.
+Use execution control when an agent runtime supports pre-tool, pre-action, or stop hooks.
+The hook is the enforcement layer: it blocks code exploration before `start`, blocks code writes until implementation, forces resumed sessions to reload run-state before code writes, and blocks premature finalization after code has been written but before review/completion closure.
 
 ## Phase Lock
 
@@ -9,10 +9,24 @@ The hook is the enforcement layer: it blocks code exploration before `start`, an
 The lock records the lifecycle and the phases that may write production code.
 
 Code writes are allowed only when lifecycle is `IMPLEMENTED`.
-Documentation and run artifacts under `docs/agent-runs/` remain writable so agents can prepare evidence before implementation.
+`IMPLEMENTED` must be backed by run-state transition history and ready implementation-gate evidence; matching `.phase-lock` and `run-state.json` values are not enough.
+Documentation and run artifacts under `docs/agent-runs/` remain writable so agents can prepare evidence before implementation, except control files such as `.phase-lock`, `run-state.json`, `artifact-registry.json`, and `agent-schedule.json`.
 For multi-service runs, `.phase-lock` also carries selected services and claimed owners from `run-state.json`.
 `phase_guard.py` blocks production-code writes when the touched service has no claimed code-developer task, and blocks a single write action that touches multiple services.
-The guard recognizes direct file tools, `apply_patch`, and common shell write commands. Claude Code hook matchers must include `Read`, `Grep`, `Glob`, and `Bash`; otherwise code exploration or shell writes can bypass the guard.
+The guard recognizes direct file tools including Claude `Update`, `apply_patch`, common shell write commands, and inline Python/Node/PowerShell mutation patterns. Unknown tools touching code paths fail closed. Claude Code hook matchers must include `Read`, `Grep`, `Glob`, `Update`, and `Bash`; otherwise code exploration, update-style edits, or shell writes can bypass the guard.
+Unscoped shell mutations are denied by default because service scope cannot be enforced without target paths.
+
+## Stop Guard
+
+Claude Code can stop after a successful compile unless finalization is also guarded. Configure the Claude `Stop` hook to run:
+
+```bash
+python skills/e2e-dev-harness/scripts/harness_stop_guard.py . \
+  --hook-input - \
+  --json
+```
+
+`harness_stop_guard.py` discovers the latest `docs/agent-runs/<run>/run-state.json` unless `--run-state` or `--run-dir` is supplied. It blocks lifecycle `IMPLEMENTED`, `REVIEWED`, and `REWORK_REQUIRED`, and blocks post-code runs with open agent-schedule tasks. Use `--strict` when the runtime must block every non-terminal lifecycle.
 
 ## Guard Command
 
@@ -25,8 +39,15 @@ python skills/e2e-dev-harness/scripts/phase_guard.py . \
 ```
 
 Use `--require-active-run-for-read` in runtime hooks so `Read`/`Grep`/`Glob` on project code block until `e2e_dev_harness.py start` creates `.phase-lock`.
+Use `--require-session-checkpoint` so code writes block unless `e2e_dev_harness.py next` has written a fresh `session-checkpoint.json` matching current run-state.
 
 The command returns exit code `0` when allowed and `2` when blocked.
+
+## Resume Checkpoint
+
+`e2e_dev_harness.py next --state docs/agent-runs/<run>/run-state.json` writes `docs/agent-runs/<run>/session-checkpoint.json`.
+The checkpoint records lifecycle, run-state fingerprint, next allowed phase, and creation time.
+If context compaction or a long session leaves the agent with stale ordering assumptions, `phase_guard.py --require-session-checkpoint` blocks the next code write until `next` is rerun.
 
 When a runtime cannot enforce hooks, run the portable pre-code wrapper before any planned code edit:
 
@@ -47,7 +68,7 @@ skills/e2e-dev-harness/hooks/codex-pre-action.example.json
 skills/e2e-dev-harness/hooks/gemini-pre-action.example.json
 ```
 
-Each runtime has different hook wiring, but all examples call the same `phase_guard.py` command. The Codex and Gemini files are templates unless the host runner explicitly supports blocking pre-action or pre-tool configuration; writing the template alone is not enforcement.
+Each runtime has different hook wiring. Pre-action examples call `phase_guard.py`; Claude also installs a `Stop` hook that calls `harness_stop_guard.py`. The Codex and Gemini files are templates unless the host runner explicitly supports blocking pre-action or pre-tool configuration; writing the template alone is not enforcement.
 If a runtime cannot pass hook JSON through stdin, pass `--tool`, `--path`, and `--run-dir` explicitly.
 
 ## Hook Install and Check
@@ -61,6 +82,7 @@ python skills/e2e-dev-harness/scripts/install_hooks.py . --runtime claude --chec
 
 Supported runtimes are `claude`, `codex`, and `gemini`.
 Claude settings are merged into `.claude/settings.json`; Codex and Gemini templates are written under project-local hook folders.
+`e2e_dev_harness.py pre-code` checks project-level Claude settings first and then user-level `%USERPROFILE%\.claude\settings.json`. `PreToolUse` configuration gates reads/writes; `Stop` configuration gates finalization. `PostToolUse` can audit but cannot prevent the write.
 
 ## Post-Gate Transition
 

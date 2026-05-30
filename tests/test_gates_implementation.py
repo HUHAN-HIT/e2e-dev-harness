@@ -23,6 +23,7 @@ import service_design_gate  # noqa: E402
 import context_pack  # noqa: E402
 import harness_verify  # noqa: E402
 import artifact_registry  # noqa: E402
+import run_state  # noqa: E402
 from conftest import write_command_evidence, REVIEW_CHECKLIST, write_service_review  # noqa: E402
 import e2e_dev_harness  # noqa: E402
 import test_impact_plan  # noqa: E402
@@ -71,9 +72,13 @@ class ImplementationGateTests(unittest.TestCase):
             invocation_path.write_text(
                 json.dumps(
                     {
+                        "runtime": "claude-code",
+                        "invocation_type": "subagent",
                         "developer_agent": "developer-agent-1",
+                        "developer_session": "developer-session-1",
                         "reviewer_agent": f"reviewer-agent-{phase}",
                         "reviewer_session": f"reviewer-session-{phase}",
+                        "context_pack": f"docs/agent-runs/run/review-requests/{request_name}",
                         "review_request": f"docs/agent-runs/run/review-requests/{request_name}",
                         "output": f"docs/agent-runs/run/reviews/{review_name}",
                         "fork_context": False,
@@ -177,6 +182,56 @@ class ImplementationGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("--run-state" in reason for reason in result["blocked_reasons"]))
+
+    def test_critical_implementation_gate_requires_dependency_report_before_code(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "payment-risk.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Payment Risk
+
+                    ## Goal
+                    Add payment risk control.
+
+                    ## Scope
+                    - services/payment-service
+
+                    ## Use Cases
+                    - Block risky payment.
+
+                    ## Acceptance Criteria
+                    - AC-1 Risky payment is rejected.
+
+                    ## Test Design
+                    - Red test first.
+
+                    ## Open Questions
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            kg.parent.mkdir(parents=True)
+            kg.write_text(json.dumps({"selected_tools": ["scanner"]}), encoding="utf-8")
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single-review", ["services/payment-service"], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            run_state.write_state(repo, state_path, state)
+
+            result = implementation_gate.validate_gate_request(
+                implementation_gate.GateRequest(
+                    repo=repo,
+                    phase="implementation",
+                    design_doc=Path("docs/design/payment-risk.md"),
+                    run_state=Path("docs/agent-runs/run/run-state.json"),
+                )
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("dependency discovery evidence" in reason for reason in result["blocked_reasons"]))
 
     def test_implementation_gate_allows_explicit_no_harness_state_only_with_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1522,7 +1577,15 @@ class ImplementationGateTests(unittest.TestCase):
                 encoding="utf-8",
             )
             dependency_report.write_text(
-                json.dumps({"ready": True, "dependencies": [{"kind": "http"}], "unresolved_questions": []}),
+                json.dumps(
+                    {
+                        "ready": True,
+                        "tool_priority": ["gitnexus", "deterministic-scan"],
+                        "gitnexus": {"primary": True, "available": True, "verified": True},
+                        "dependencies": [{"kind": "http"}],
+                        "unresolved_questions": [],
+                    }
+                ),
                 encoding="utf-8",
             )
             approval.write_text("Approval: user-approved\n", encoding="utf-8")

@@ -6,10 +6,10 @@ Use this reference when a Java/Spring 6/Maven change benefits from smaller, isol
 
 | Mode | Use when | Behavior |
 | --- | --- | --- |
-| `single` | Small, single-module, low-risk work | One implementation agent may run clarification, use-case design, TDD, and implementation, but R1/R2/R3 semantic reviews still require independent reviewer agents or separate reviewer sessions. |
-| `single-review` | Single-service medium work where a compact developer context is useful but formal review is still required | One implementation agent does the development work; R1, R2, and R3 still run as separate request-scoped reviewer invocations, and Coverage Reviewer still runs before completion. Multiple services or high-risk evidence escalates to `multi`. |
-| `multi` | User asks for split agents, cross-service work, contract/data changes, or high risk | Separate agents own requirements, use cases, tests, service-scoped code, and coverage review. |
-| `auto` | Default recommendation mode | The helper chooses `single` or `multi` based on repo shape, design doc size, services, and risk keywords; `single-review` is explicit only. |
+| `single` | Small, single-module, low-risk work | Service scope stays single, but design, test, code, semantic review, and coverage still use separate role groups and ready handoffs. |
+| `single-review` | Single-service medium or high-risk work where service scope is still compact but role isolation is required | Separate agents own design, tests, code, R1/R2/R3 reviews, and coverage. Multiple affected services/modules escalate to `multi`. |
+| `multi` | User asks for split agents, cross-service work, or multiple affected services/modules | Separate agents own requirements, use cases, tests, service-scoped code, semantic reviews, and coverage review. |
+| `auto` | Default recommendation mode | The helper chooses `single`, `single-review`, or `multi`; risk keywords and large single-service designs become `single-review`, while multiple services/modules become `multi`. |
 
 The orchestration result includes `multi_agent_decision`. Treat it as the audit record for why multi-agent development was or was not used. The decision checks affected service count, HTTP/DMQ/shared contracts, data/schema/config/security/payment/refund risk, design size, and explicit user requests.
 
@@ -17,9 +17,9 @@ Agent start/stop and scheduler APIs are runtime-specific. The portable harness c
 
 Do not let an implementation agent review its own work. If the runtime cannot spawn subagents, use a separate reviewer session with only the review request and allowed artifact inputs. Same-chat/self-review is not an acceptable fallback for R1/R2/R3.
 
-Do not use `single-review` to collapse the three reviews into one after-the-fact report. It only compresses the developer side of the workflow; review timing, reviewer independence, request hashes, invocation JSON, and Coverage Reviewer remain unchanged.
+Do not use `single-review` to collapse design, test, code, or the three reviews into one after-the-fact report. It only keeps implementation service scope compact; role timing, handoffs, reviewer independence, request hashes, invocation JSON, and Coverage Reviewer remain unchanged.
 
-For `multi` and any contract/data-risk run, empty `handoffs/` or missing `service-plans/` is not a valid completed archive. Either populate the role/service handoffs with ready markers or document an explicit single-agent exception and do not pass `--require-handoffs`.
+For `multi`, `single-review`, and any contract/data-risk run, empty `handoffs/` or missing service artifacts is not a valid completed archive. Populate role/service handoffs with ready markers before downstream claim or completion.
 
 ## Service Scope
 
@@ -37,6 +37,7 @@ When `--service-scope auto` and no explicit service/path is supplied, the helper
 Every generated `service-plans/<service>/implementation-plan.md` must include agent assignment, allowed change scope, modification points, service-local change logic, TDD plan, contracts, data/transaction effects, risks, and completion evidence. The code agent owns that plan; reviewer agents validate it independently.
 
 `plan --create-archive` also writes `agent-schedule.json`. Treat it as the compact task board for agent dispatch: each task has an agent id, phase, service scope, dependency phases, input artifacts, output artifacts, and parallel group. Agents update task status with `e2e_dev_harness.py agent-task` instead of exchanging long free-form chat transcripts.
+It also writes short role templates under `agent-roles/`; generated schedules set `require_role_templates: true`, so claim is blocked if the referenced template is missing or malformed.
 
 For multi-service work, `plan --create-archive` leaves run-state at `SERVICE_DESIGN_REQUIRED`. Fill and validate every service design slice with `service-design --run-state` before service code dispatch. Service-scoped code-developer tasks in different `service:<name>` parallel groups may run concurrently only after shared contracts, service designs, service-local TDD plans, and R2 review are stable.
 

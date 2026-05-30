@@ -2,7 +2,7 @@
 
 This repository contains an agent-neutral delivery harness for serious Java/Spring/Maven requirement implementation. It is designed for Codex, Claude Code, Gemini CLI, OpenCode, CI jobs, and any runtime that can read `SKILL.md` and execute the bundled Python scripts.
 
-The harness is not just process documentation. It provides machine-checkable gates, run-state files, agent schedules, artifact registries, replay verification, workflow tiers, review profiles, and optional pre-action hook templates that can block code writes before the implementation phase when the active agent runtime actually supports blocking hooks.
+The harness is not just process documentation. It provides machine-checkable gates, run-state files, agent schedules, artifact registries, replay verification, workflow tiers, review profiles, and optional runtime hook templates that can block code writes before the implementation phase and block premature finalization when the active agent runtime actually supports blocking hooks.
 
 ## Layout
 
@@ -25,6 +25,8 @@ skills/e2e-dev-harness/
     e2e_dev_harness.py
     install_hooks.py
     phase_guard.py
+    harness_stop_guard.py
+    session_checkpoint.py
     auto_transition.py
     run_state.py
     artifact_registry.py
@@ -45,13 +47,49 @@ tests/
 
 ## Quick Start
 
+Use the Node bootstrap installer when setting up the skill for an agent runtime.
+It is a dry run by default and only writes files or runs install commands when
+`--yes` is supplied:
+
+```powershell
+node tools\install-e2e-dev-harness.mjs `
+  --target codex `
+  --install-root $env:USERPROFILE `
+  --skip-python-cli `
+  --json
+```
+
+Install the skill plus the editable Python CLI:
+
+```powershell
+node tools\install-e2e-dev-harness.mjs `
+  --target codex `
+  --install-root $env:USERPROFILE `
+  --yes
+```
+
+External tools are conservative by default. GitNexus and Graphify are detected
+but not installed unless `--install-external` is provided. Superpowers is
+probed as a skill/plugin capability; use `--strict-superpowers` to fail the
+installer when required Superpowers skills are missing.
+
+Install the local harness entry point when working from this repository:
+
+```powershell
+python -m pip install -e .[dev]
+e2e-dev-harness --version
+e2e-dev-harness doctor . --json
+```
+
+`doctor` checks Python, skill layout, project markers, pytest, Maven, GitNexus, and Claude hook readiness. Use `--strict` in CI or onboarding scripts when warnings should block adoption.
+
 Create a controlled run before analysis or implementation. This writes the
 starter design artifact, run-state, `.phase-lock`, artifact registry, and
 agent schedule. Production code writes stay locked until the implementation
 gate passes.
 
 ```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py start . `
+e2e-dev-harness start . `
   --feature "<feature>" `
   --request "<original user request>"
 ```
@@ -59,7 +97,7 @@ python skills\e2e-dev-harness\scripts\e2e_dev_harness.py start . `
 Ask the harness what is allowed next:
 
 ```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py next . `
+e2e-dev-harness next . `
   --state docs\agent-runs\<run>\run-state.json
 ```
 
@@ -107,6 +145,8 @@ docs/agent-runs/<run>/
   evidence/
 ```
 
+`next` also writes `docs/agent-runs/<run>/session-checkpoint.json`. Runtime hooks validate this checkpoint before code writes, so a resumed or compacted agent must reload the current lifecycle and next action instead of continuing from a stale chat summary.
+
 ## Workflow Tiers
 
 Use `--workflow-tier auto|basic|standard|critical|audited`.
@@ -129,6 +169,10 @@ GitNexus command roles are intentionally separated:
 - `gitnexus context` takes a code symbol such as a class, function, method, or `Class.method`; do not pass service directories.
 - `gitnexus impact` or `gitnexus detect-changes` owns affected-scope analysis.
 - In multi-service runs, generate evidence only for the services declared in the global design/service slices, not every detected module in the repository.
+
+For `critical` or `audited` completion, GitNexus evidence is a gate input, not a best-effort hint. If MCP/CLI/index access fails, pause and ask the user whether to approve degradation. Approved degradation must be recorded in an evidence file containing `Approval: user-approved`, `Reason:`, and `Fallback Evidence:` or `Compensating Evidence:`, then passed with `--gitnexus-degradation`.
+
+For `critical` or `audited` implementation, dependency discovery evidence is required before production code opens. This prevents compile-driven discovery after the implementation has already been written.
 
 ## Incremental Test Scope
 
@@ -159,7 +203,7 @@ If the plan contains `mvn -pl services\foo -am test`, the unit-test evidence mus
 
 For multi-agent runs, generate a request-scoped context pack per scheduled agent instead of passing the full conversation or all run artifacts.
 
-Multi-service work uses one global design anchor plus service-local design slices. If the global design declares multiple affected services/modules, orchestration must use `multi` even when the caller supplied `--mode single`; `single` is reserved for low-risk single-service work.
+Work is split by role even for one service: design, test, code, semantic review, and coverage must be different agent roles with ready handoff artifacts between them. `plan --create-archive` writes short role templates under `agent-roles/`, and `agent-schedule.json` requires each role task to reference one. Multi-service work adds service-local design slices and parallel service code agents. If the global design declares multiple affected services/modules, orchestration must use `multi` even when the caller supplied `--mode single`; high-risk or large single-service work uses `single-review`, not `multi`, so risk words alone do not force service splitting.
 
 ```text
 docs/agent-runs/<run>/service-designs/<service>.md
@@ -226,7 +270,7 @@ If this blocks on `AC-2`, continue TDD red/green for `AC-2`; do not ask whether 
 
 ## Hook Configuration
 
-The hook examples are templates. To enforce them, run `install_hooks.py` from the installed skill directory so the generated hook command points to the absolute `phase_guard.py` path. Do not copy the example command verbatim into another repository; `python skills/e2e-dev-harness/scripts/phase_guard.py ...` only works when that repository contains the skill source tree. Codex and Gemini enforcement still depends on whether the host runner exposes a blocking pre-action/pre-tool hook.
+The hook examples are templates. To enforce them, run `install_hooks.py` from the installed skill directory so the generated hook command points to absolute guard script paths. Do not copy the example command verbatim into another repository; `python skills/e2e-dev-harness/scripts/phase_guard.py ...` only works when that repository contains the skill source tree. Codex and Gemini enforcement still depends on whether the host runner exposes a blocking pre-action/pre-tool hook.
 You can also install or check project-local hook configuration with:
 
 ```powershell
@@ -234,13 +278,25 @@ python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime claude --json
 python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime claude --check --json
 ```
 
-The installed hooks all call the same guard shape. The first argument is the target repository, not the current shell directory:
+The installed Claude hooks use two guards. The first argument is the target repository, not the current shell directory.
+
+Code exploration/write guard:
 
 ```powershell
-"C:\absolute\path\to\python.exe" "C:\absolute\path\to\skills\e2e-dev-harness\scripts\phase_guard.py" "C:\absolute\path\to\target-repo" --hook-input - --require-active-run-for-read --json
+"C:\absolute\path\to\python.exe" "C:\absolute\path\to\skills\e2e-dev-harness\scripts\phase_guard.py" "C:\absolute\path\to\target-repo" --hook-input - --require-active-run-for-read --require-session-checkpoint --checkpoint-max-age-minutes 30 --json
 ```
 
-`phase_guard.py` reads `docs/agent-runs/<run>/.phase-lock`. With `--require-active-run-for-read`, code `Read`/`Grep`/`Glob` is blocked until `start` creates an active run. It allows red-test writes under `src/test`, `test`, or `tests` during `PLANNED`/`RED_READY`, but blocks runtime production code until lifecycle `IMPLEMENTED`. In multi-service runs it also requires a claimed service code-developer task for runtime code writes in the touched service/module. It recognizes direct file tools, `apply_patch`, and common shell write commands. It still allows harness artifacts under `docs/agent-runs/` to be written before implementation.
+Stop/finalization guard:
+
+```powershell
+"C:\absolute\path\to\python.exe" "C:\absolute\path\to\skills\e2e-dev-harness\scripts\harness_stop_guard.py" "C:\absolute\path\to\target-repo" --hook-input - --json
+```
+
+`phase_guard.py` reads `docs/agent-runs/<run>/.phase-lock`. With `--require-active-run-for-read`, code `Read`/`Grep`/`Glob` is blocked until `start` creates an active run. It allows red-test writes under `src/test`, `test`, or `tests` during `PLANNED`/`RED_READY`, but blocks runtime production code until lifecycle `IMPLEMENTED`. `IMPLEMENTED` must come from run-state transition history with ready implementation-gate evidence; editing `.phase-lock` and `run-state.json` by hand is blocked. In multi-service runs it also requires a claimed service code-developer task for runtime code writes in the touched service/module. It recognizes direct file tools including Claude `Update`, `apply_patch`, common shell write commands, and inline Python/Node/PowerShell mutation patterns; unknown tools touching code paths fail closed. Harness artifacts under `docs/agent-runs/` may be written before implementation except control files such as `.phase-lock`, `run-state.json`, `artifact-registry.json`, and `agent-schedule.json`.
+
+With `--require-session-checkpoint`, production/test code writes also require a fresh `session-checkpoint.json` produced by `e2e_dev_harness.py next`. If run-state changes or the checkpoint ages out, the hook blocks and forces the agent to reload the state machine before continuing.
+
+`harness_stop_guard.py` is wired to Claude Code `Stop`. It blocks Claude from ending a run while lifecycle is `IMPLEMENTED`, `REVIEWED`, or `REWORK_REQUIRED`, or while the post-code run still has open scheduled tasks. This is the guard that prevents "compiled successfully, summary emitted, R2/R3/completion skipped" behavior.
 
 ### Claude Code
 
@@ -258,11 +314,22 @@ Minimal project config:
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|Grep|Glob|Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "matcher": "Read|Grep|Glob|Write|Edit|Update|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --require-active-run-for-read --json"
+            "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --require-active-run-for-read --require-session-checkpoint --checkpoint-max-age-minutes 30 --json"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\harness_stop_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --json"
           }
         ]
       }
@@ -347,6 +414,22 @@ Create or locate a run archive, then check a code write before implementation:
 ```
 
 Expected before implementation:
+
+```json
+{
+  "ready": false
+}
+```
+
+Check the stop guard after code is implemented but before R3/completion:
+
+```powershell
+"C:\absolute\path\to\python.exe" "C:\absolute\path\to\skills\e2e-dev-harness\scripts\harness_stop_guard.py" "C:\absolute\path\to\target-repo" `
+  --run-dir docs\agent-runs\<run> `
+  --json
+```
+
+Expected while lifecycle is `IMPLEMENTED`:
 
 ```json
 {

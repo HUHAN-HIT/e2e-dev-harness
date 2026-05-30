@@ -918,7 +918,39 @@ def design_requires_dependency_report(design_text: str) -> bool:
     return len(services) >= 2 or bool(CROSS_SERVICE_RE.search(design_text))
 
 
-def validate_dependency_report(repo: Path, report_path: Path | None, design_doc: Path | None = None) -> dict:
+def validate_gitnexus_degradation(repo: Path, degradation_path: Path | None) -> dict:
+    resolved = degradation_path if degradation_path and degradation_path.is_absolute() else (
+        repo / degradation_path if degradation_path else None
+    )
+    blocked: list[str] = []
+    if not resolved:
+        blocked.append(
+            "GitNexus evidence is required; provide --gitnexus-degradation with explicit user approval to degrade."
+        )
+        return {"ready": False, "path": None, "blocked_reasons": blocked}
+    if not resolved.exists():
+        blocked.append(f"GitNexus degradation approval not found: {resolved}")
+        return {"ready": False, "path": str(resolved), "blocked_reasons": blocked}
+    text = read_text(resolved)
+    lowered = text.lower()
+    if "approval: user-approved" not in lowered:
+        blocked.append("GitNexus degradation requires `Approval: user-approved`.")
+    if "reason:" not in lowered:
+        blocked.append("GitNexus degradation requires `Reason:` explaining why GitNexus evidence is unavailable.")
+    if "fallback evidence:" not in lowered and "compensating evidence:" not in lowered:
+        blocked.append("GitNexus degradation requires `Fallback Evidence:` or `Compensating Evidence:`.")
+    if re.search(r"\b(todo|tbd|placeholder)\b", lowered):
+        blocked.append("GitNexus degradation approval contains placeholder text.")
+    return {"ready": not blocked, "path": str(resolved), "blocked_reasons": blocked}
+
+
+def validate_dependency_report(
+    repo: Path,
+    report_path: Path | None,
+    design_doc: Path | None = None,
+    require_gitnexus: bool = False,
+    gitnexus_degradation: Path | None = None,
+) -> dict:
     blocked: list[str] = []
     design_requires = False
     if design_doc:
@@ -954,13 +986,31 @@ def validate_dependency_report(repo: Path, report_path: Path | None, design_doc:
             blocked.append(f"Low-confidence dependency remains unresolved: {label}")
     if data.get("ready") is False and not questions:
         blocked.append(f"Dependency report is not ready: {resolved}")
+    gitnexus_verified = bool(data.get("gitnexus", {}).get("verified"))
+    gitnexus_primary = bool(data.get("gitnexus", {}).get("primary")) or "gitnexus" in [
+        str(tool).lower() for tool in data.get("tool_priority", [])
+    ]
+    gitnexus_required = bool(require_gitnexus and (gitnexus_primary or design_requires or data.get("dependencies")))
+    degradation_result = None
+    if gitnexus_required and not gitnexus_verified:
+        degradation_result = validate_gitnexus_degradation(repo, gitnexus_degradation)
+        if degradation_result["ready"]:
+            data.setdefault("warnings", [])
+        else:
+            blocked.append(
+                "Required GitNexus impact evidence is not verified; obtain GitNexus context/impact/detect-changes evidence or add approved degradation."
+            )
+            blocked.extend("GitNexus degradation: " + reason for reason in degradation_result["blocked_reasons"])
     return {
         "ready": not blocked,
         "required": design_requires,
         "path": str(resolved),
         "unresolved_questions": questions,
         "dependencies_count": len(data.get("dependencies", [])),
-        "gitnexus_verified": bool(data.get("gitnexus", {}).get("verified")),
+        "gitnexus_required": gitnexus_required,
+        "gitnexus_verified": gitnexus_verified,
+        "gitnexus_degraded": bool(degradation_result and degradation_result["ready"]),
+        "gitnexus_degradation": degradation_result,
         "blocked_reasons": blocked,
     }
 

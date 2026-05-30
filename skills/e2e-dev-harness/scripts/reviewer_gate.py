@@ -65,6 +65,20 @@ REQUEST_REQUIRED_FIELDS = {
     "reviewer_agent": "Reviewer Agent",
     "reviewer_invocation": "Reviewer Invocation",
 }
+INVOCATION_REQUIRED_FIELDS = {
+    "runtime": "Runtime",
+    "invocation_type": "Invocation Type",
+    "developer_session": "Developer Session",
+    "reviewer_session": "Reviewer Session",
+    "context_pack": "Context Pack",
+}
+ISOLATED_INVOCATION_TYPES = {
+    "subagent",
+    "separate-agent",
+    "separate-session",
+    "external-reviewer",
+    "runtime-isolated-review",
+}
 FIELD_RE = re.compile(r"^\s*-?\s*([A-Za-z][A-Za-z _-]*):\s*(.*?)\s*$")
 PLACEHOLDER_RE = re.compile(r"^\s*(<[^>]+>|\[[^\]]+\]|todo|tbd|unknown|draft|placeholder)\s*$", re.IGNORECASE)
 CHECKED_ITEM_RE = re.compile(r"^\s*[-*]\s*\[[xX]\]\s*`?([A-Za-z0-9][A-Za-z0-9._/-]*)`?")
@@ -658,12 +672,49 @@ def validate_item(
             invocation_fields = read_json(resolved_invocation)
             if not invocation_fields:
                 blocked.append(f"Reviewer Invocation {resolved_invocation} is missing or not valid JSON.")
+            missing_invocation = [
+                label
+                for key, label in INVOCATION_REQUIRED_FIELDS.items()
+                if not str(invocation_fields.get(key, "")).strip()
+            ]
+            if missing_invocation:
+                blocked.append(
+                    f"Reviewer Invocation {resolved_invocation} missing required runtime isolation fields: {', '.join(missing_invocation)}"
+                )
             if normalize_agent_id(str(invocation_fields.get("developer_agent", ""))) != normalize_agent_id(developer_agent):
                 blocked.append(f"Reviewer Invocation {resolved_invocation} Developer Agent does not match review report.")
             if normalize_agent_id(str(invocation_fields.get("reviewer_agent", ""))) != normalize_agent_id(reviewer_agent):
                 blocked.append(f"Reviewer Invocation {resolved_invocation} Reviewer Agent does not match review report.")
             if normalize_agent_id(str(invocation_fields.get("reviewer_session", ""))) != normalize_agent_id(reviewer_session):
                 blocked.append(f"Reviewer Invocation {resolved_invocation} Reviewer Session does not match review report.")
+            runtime = str(invocation_fields.get("runtime", "")).strip()
+            invocation_type = normalize_value(str(invocation_fields.get("invocation_type", "")))
+            developer_session = str(invocation_fields.get("developer_session", "")).strip()
+            invocation_reviewer_session = str(invocation_fields.get("reviewer_session", "")).strip()
+            context_pack = str(invocation_fields.get("context_pack", "")).strip()
+            for label, value in (
+                ("Runtime", runtime),
+                ("Invocation Type", invocation_type),
+                ("Developer Session", developer_session),
+                ("Reviewer Session", invocation_reviewer_session),
+                ("Context Pack", context_pack),
+            ):
+                if is_placeholder(value):
+                    blocked.append(f"Reviewer Invocation {resolved_invocation} has placeholder {label}; use concrete runtime isolation evidence.")
+            if invocation_type and invocation_type not in ISOLATED_INVOCATION_TYPES:
+                blocked.append(
+                    f"Reviewer Invocation {resolved_invocation} must use an isolated invocation_type: {', '.join(sorted(ISOLATED_INVOCATION_TYPES))}."
+                )
+            if developer_session and invocation_reviewer_session and normalize_agent_id(developer_session) == normalize_agent_id(invocation_reviewer_session):
+                blocked.append(
+                    f"Reviewer Invocation {resolved_invocation} uses the same Developer Session and Reviewer Session; same-context review is not allowed."
+                )
+            if context_pack:
+                resolved_context_pack = resolve_repo_path(repo, context_pack)
+                if not inside_repo(repo, resolved_context_pack):
+                    blocked.append(f"Reviewer Invocation {resolved_invocation} declares Context Pack outside repo: {context_pack}")
+                elif not resolved_context_pack.exists():
+                    blocked.append(f"Reviewer Invocation {resolved_invocation} references missing Context Pack: {context_pack}")
             if invocation_fields.get("fork_context") is not False:
                 blocked.append(f"Reviewer Invocation {resolved_invocation} must declare fork_context=false.")
             context_policy = str(invocation_fields.get("context_policy", "")).lower()

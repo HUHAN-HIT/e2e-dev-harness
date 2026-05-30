@@ -122,9 +122,13 @@ class ReviewerGateTests(unittest.TestCase):
         invocation.write_text(
             json.dumps(
                 {
+                    "runtime": "claude-code",
+                    "invocation_type": "subagent",
                     "developer_agent": developer_agent,
+                    "developer_session": "developer-session-1",
                     "reviewer_agent": reviewer_agent,
                     "reviewer_session": reviewer_session,
+                    "context_pack": f"docs/agent-runs/run/review-requests/{request_name}",
                     "review_request": f"docs/agent-runs/run/review-requests/{request_name}",
                     "output": f"docs/agent-runs/run/reviews/{output_name}",
                     "fork_context": False,
@@ -188,9 +192,13 @@ class ReviewerGateTests(unittest.TestCase):
         invocation.write_text(
             json.dumps(
                 {
+                    "runtime": "claude-code",
+                    "invocation_type": "subagent",
                     "developer_agent": developer_agent,
+                    "developer_session": f"developer-session-{service}",
                     "reviewer_agent": reviewer_agent,
                     "reviewer_session": reviewer_session,
+                    "context_pack": request_rel,
                     "review_request": request_rel,
                     "output": review_rel,
                     "fork_context": False,
@@ -690,6 +698,53 @@ class ReviewerGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("fork_context" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_blocks_invocation_missing_runtime_isolation_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation")
+            invocation = repo / "docs" / "agent-runs" / "run" / "review-invocations" / "implementation-reviewer-invocation.json"
+            data = json.loads(invocation.read_text(encoding="utf-8"))
+            data.pop("runtime")
+            data.pop("developer_session")
+            invocation.write_text(json.dumps(data), encoding="utf-8")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc("implementation", request=request, request_hash=self.request_hash(repo, request)),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("runtime isolation fields" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_reviewer_gate_blocks_same_developer_and_reviewer_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            review_dir = repo / "docs" / "agent-runs" / "run" / "reviews"
+            review_dir.mkdir(parents=True)
+            request = self.write_request(repo, "implementation", reviewer_session="shared-session-1")
+            invocation = repo / "docs" / "agent-runs" / "run" / "review-invocations" / "implementation-reviewer-invocation.json"
+            data = json.loads(invocation.read_text(encoding="utf-8"))
+            data["developer_session"] = "shared-session-1"
+            data["reviewer_session"] = "shared-session-1"
+            invocation.write_text(json.dumps(data), encoding="utf-8")
+            (review_dir / "R3-implementation-review.md").write_text(
+                self.review_doc(
+                    "implementation",
+                    request=request,
+                    request_hash=self.request_hash(repo, request),
+                    reviewer_session="shared-session-1",
+                ),
+                encoding="utf-8",
+            )
+
+            result = reviewer_gate.validate(repo, [review_dir], require_phases=["implementation"])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("same developer session and reviewer session" in reason.lower() for reason in result["blocked_reasons"]))
 
     def test_reviewer_gate_blocks_independence_alias(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

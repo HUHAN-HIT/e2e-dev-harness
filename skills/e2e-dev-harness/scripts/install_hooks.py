@@ -75,18 +75,29 @@ def render_runtime_paths(value, repo: Path):
         return (
             value.replace("C:\\absolute\\path\\to\\python.exe", sys.executable)
             .replace("C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py", str(SCRIPT_DIR / "phase_guard.py"))
+            .replace("C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\harness_stop_guard.py", str(SCRIPT_DIR / "harness_stop_guard.py"))
             .replace("C:\\absolute\\path\\to\\target-repo", str(repo.resolve()))
         )
     return value
 
 
-def command_present(value) -> bool:
+def phase_guard_command_present(value) -> bool:
     if isinstance(value, dict):
-        return any(command_present(item) for item in value.values())
+        return any(phase_guard_command_present(item) for item in value.values())
     if isinstance(value, list):
-        return any(command_present(item) for item in value)
+        return any(phase_guard_command_present(item) for item in value)
     if isinstance(value, str):
         return "phase_guard.py" in value and "--hook-input" in value
+    return False
+
+
+def stop_guard_command_present(value) -> bool:
+    if isinstance(value, dict):
+        return any(stop_guard_command_present(item) for item in value.values())
+    if isinstance(value, list):
+        return any(stop_guard_command_present(item) for item in value)
+    if isinstance(value, str):
+        return "harness_stop_guard.py" in value and "--hook-input" in value
     return False
 
 
@@ -100,28 +111,47 @@ def read_guard_present(value) -> bool:
     return False
 
 
-def repo_relative_phase_guard_present(value) -> bool:
+def session_checkpoint_guard_present(value) -> bool:
     if isinstance(value, dict):
-        return any(repo_relative_phase_guard_present(item) for item in value.values())
+        return any(session_checkpoint_guard_present(item) for item in value.values())
     if isinstance(value, list):
-        return any(repo_relative_phase_guard_present(item) for item in value)
+        return any(session_checkpoint_guard_present(item) for item in value)
     if isinstance(value, str):
-        normalized = value.replace("\\", "/")
-        absolute_phase_guard = str(SCRIPT_DIR / "phase_guard.py").replace("\\", "/")
-        return "skills/e2e-dev-harness/scripts/phase_guard.py" in normalized and absolute_phase_guard not in normalized
+        return "--require-session-checkpoint" in value
     return False
 
 
-def claude_bash_matcher_present(data: dict) -> bool:
+def repo_relative_guard_present(value) -> bool:
+    if isinstance(value, dict):
+        return any(repo_relative_guard_present(item) for item in value.values())
+    if isinstance(value, list):
+        return any(repo_relative_guard_present(item) for item in value)
+    if isinstance(value, str):
+        normalized = value.replace("\\", "/")
+        absolute_phase_guard = str(SCRIPT_DIR / "phase_guard.py").replace("\\", "/")
+        absolute_stop_guard = str(SCRIPT_DIR / "harness_stop_guard.py").replace("\\", "/")
+        phase_relative = "skills/e2e-dev-harness/scripts/phase_guard.py" in normalized and absolute_phase_guard not in normalized
+        stop_relative = "skills/e2e-dev-harness/scripts/harness_stop_guard.py" in normalized and absolute_stop_guard not in normalized
+        return phase_relative or stop_relative
+    return False
+
+
+def claude_matcher_has(data: dict, required: str) -> bool:
     hooks = data.get("hooks", {})
     entries = hooks.get("PreToolUse") if isinstance(hooks, dict) else []
     for entry in entries or []:
         if not isinstance(entry, dict):
             continue
         matcher = str(entry.get("matcher", ""))
-        if "Bash" in matcher:
+        if required in {part.strip() for part in matcher.split("|")}:
             return True
     return False
+
+
+def claude_stop_hook_present(data: dict) -> bool:
+    hooks = data.get("hooks", {})
+    entries = hooks.get("Stop") if isinstance(hooks, dict) else []
+    return stop_guard_command_present(entries or [])
 
 
 def blocking_present(data: dict) -> bool:
@@ -136,16 +166,22 @@ def validate_config(path: Path) -> dict:
     blocked: list[str] = []
     if not data:
         blocked.append(f"Hook config not found or unreadable: {path}")
-    elif not command_present(data):
+    elif not phase_guard_command_present(data):
         blocked.append("Hook config must call phase_guard.py with --hook-input.")
-    elif repo_relative_phase_guard_present(data):
-        blocked.append("Hook config must use an absolute path to phase_guard.py, not a repo-relative skills/e2e-dev-harness path.")
+    elif repo_relative_guard_present(data):
+        blocked.append("Hook config must use absolute paths to harness guard scripts, not repo-relative skills/e2e-dev-harness paths.")
     elif not read_guard_present(data):
         blocked.append("Hook config must include --require-active-run-for-read so code exploration starts inside an active harness run.")
+    elif path.as_posix().endswith(".claude/settings.json") and not session_checkpoint_guard_present(data):
+        blocked.append("Claude Code hook config must include --require-session-checkpoint so resumed sessions reload run-state before code writes.")
     elif not blocking_present(data):
         blocked.append("Hook config must be blocking or define a PreToolUse blocking hook.")
-    elif path.as_posix().endswith(".claude/settings.json") and not claude_bash_matcher_present(data):
+    elif path.as_posix().endswith(".claude/settings.json") and not claude_matcher_has(data, "Bash"):
         blocked.append("Claude Code hook matcher must include Bash so shell-based code writes are checked.")
+    elif path.as_posix().endswith(".claude/settings.json") and not claude_matcher_has(data, "Update"):
+        blocked.append("Claude Code hook matcher must include Update so Claude's update-style code edits are checked.")
+    elif path.as_posix().endswith(".claude/settings.json") and not claude_stop_hook_present(data):
+        blocked.append("Claude Code hook config must include a Stop hook that calls harness_stop_guard.py.")
     return {
         "ready": not blocked,
         "blocked_reasons": blocked,
@@ -158,14 +194,23 @@ def merge_claude(existing: dict, hook: dict) -> dict:
     merged = dict(existing)
     hooks = merged.setdefault("hooks", {})
     pre_tool = hooks.setdefault("PreToolUse", [])
+    stop = hooks.setdefault("Stop", [])
     incoming = hook.get("hooks", {}).get("PreToolUse", [])
-    pre_tool[:] = [item for item in pre_tool if not command_present(item)]
+    incoming_stop = hook.get("hooks", {}).get("Stop", [])
+    pre_tool[:] = [item for item in pre_tool if not phase_guard_command_present(item)]
+    stop[:] = [item for item in stop if not stop_guard_command_present(item)]
     existing_serialized = {json.dumps(item, sort_keys=True) for item in pre_tool if isinstance(item, dict)}
     for item in incoming:
         serialized = json.dumps(item, sort_keys=True)
         if serialized not in existing_serialized:
             pre_tool.append(item)
             existing_serialized.add(serialized)
+    existing_stop_serialized = {json.dumps(item, sort_keys=True) for item in stop if isinstance(item, dict)}
+    for item in incoming_stop:
+        serialized = json.dumps(item, sort_keys=True)
+        if serialized not in existing_stop_serialized:
+            stop.append(item)
+            existing_stop_serialized.add(serialized)
     return merged
 
 

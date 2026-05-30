@@ -12,15 +12,24 @@ from pathlib import Path
 
 WRITE_TOOLS = {
     "write",
+    "create",
     "edit",
+    "update",
     "multiedit",
     "notebookedit",
     "applypatch",
+    "replace",
+    "strreplace",
+    "strreplaceeditor",
+    "strreplaceedit",
+    "str_replace",
+    "str_replace_editor",
     "shellcommand",
     "shell",
     "bash",
     "powershell",
 }
+SHELL_TOOLS = {"shellcommand", "shell", "bash", "powershell"}
 READ_TOOLS = {"read", "grep", "glob", "ls", "list", "search"}
 CODE_SUFFIXES = {
     ".java",
@@ -63,6 +72,25 @@ SHELL_WRITE_RE = re.compile(
     r"|(?:^|\s)(?:>|>>)\s*['\"]?(?P<redir>[A-Za-z0-9_./\\:-]+\.[A-Za-z0-9]+)['\"]?",
     re.IGNORECASE | re.MULTILINE,
 )
+PYTHON_PATH_LITERAL_RE = re.compile(
+    r"(?:open|Path)\s*\(\s*['\"](?P<path>[A-Za-z0-9_./\\:-]+\.[A-Za-z0-9.-]+)['\"]",
+    re.IGNORECASE,
+)
+CONTROL_PATH_LITERAL_RE = re.compile(
+    r"(?P<path>(?:[A-Za-z]:)?[A-Za-z0-9_./\\:-]*docs[\\/]+agent-runs[\\/]+[A-Za-z0-9_.-]+[\\/]+(?:\.phase-lock|run-state\.json|artifact-registry\.json|agent-schedule\.json))",
+    re.IGNORECASE,
+)
+SHELL_MUTATION_RE = re.compile(
+    r"(?:\bpython(?:3)?(?:\.exe)?\s+(?:-[c]|-)\b|\bnode(?:\.exe)?\s+(?:-[e]|-)\b|\bpowershell(?:\.exe)?\b.*\b-Command\b|"
+    r"\bwith\s+open\s*\(|\bopen\s*\(|\.write_text\s*\(|\.write_bytes\s*\(|\bjson\.dump\s*\(|\byaml\.dump\s*\(|"
+    r"\bshutil\.(?:copy|copyfile|move)\s*\(|\bos\.(?:remove|unlink|rename|replace)\s*\(|"
+    r"\b(?:Set-Content|Add-Content|Out-File|New-Item|Remove-Item|Move-Item|Copy-Item)\b|(?:^|\s)(?:>|>>)\s*)",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
+CONTROL_FILENAME_RE = re.compile(r"(?:\.phase-lock|run-state\.json|artifact-registry\.json|agent-schedule\.json)", re.IGNORECASE)
+
+import run_state  # noqa: E402
+import session_checkpoint  # noqa: E402
 
 
 def load_json(path: Path) -> dict:
@@ -170,6 +198,7 @@ def lock_state_pair(repo: Path, lock: Path) -> tuple[dict, dict, list[str]]:
                 + f"{lock_lifecycle or '<missing>'} != {state_lifecycle or '<missing>'}. "
                 + "Rerun the last successful harness transition before writing code."
             )
+        blocked.extend(run_state.validate_lifecycle_provenance(repo, state_path, state_data))
     return lock_data, state_data, blocked
 
 
@@ -208,18 +237,31 @@ def parse_hook_input(text: str) -> tuple[str, list[str]]:
         if value:
             paths.append(str(value))
     patch_text = ""
-    command_text = ""
     if isinstance(tool_input, dict):
         patch_text = str(tool_input.get("patch") or tool_input.get("input") or tool_input.get("text") or "")
-        command_text = str(tool_input.get("command") or tool_input.get("cmd") or tool_input.get("script") or "")
-        if not command_text and isinstance(tool_input.get("tool_input"), dict):
-            nested = tool_input.get("tool_input")
-            command_text = str(nested.get("command") or nested.get("cmd") or nested.get("script") or "")
     if normalize_tool(tool) == "applypatch" or "*** Begin Patch" in patch_text:
         paths.extend(paths_from_patch(patch_text))
+    command_text = extract_hook_command_text(text)
     if normalize_tool(tool) in {"shellcommand", "shell", "bash", "powershell"}:
         paths.extend(paths_from_shell_command(command_text))
     return tool, paths
+
+
+def extract_hook_command_text(text: str) -> str:
+    if not text.strip():
+        return ""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return ""
+    tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else data
+    if not isinstance(tool_input, dict):
+        return ""
+    command_text = str(tool_input.get("command") or tool_input.get("cmd") or tool_input.get("script") or "")
+    if not command_text and isinstance(tool_input.get("tool_input"), dict):
+        nested = tool_input.get("tool_input")
+        command_text = str(nested.get("command") or nested.get("cmd") or nested.get("script") or "")
+    return command_text
 
 
 def paths_from_patch(text: str) -> list[str]:
@@ -239,7 +281,20 @@ def paths_from_shell_command(command: str) -> list[str]:
         value = match.group("cmdlet") or match.group("redir") or ""
         if value:
             paths.append(value)
+    for pattern in (PYTHON_PATH_LITERAL_RE, CONTROL_PATH_LITERAL_RE):
+        for match in pattern.finditer(command or ""):
+            value = match.group("path")
+            if value and value not in paths:
+                paths.append(value)
     return paths
+
+
+def shell_mutates_files(command: str) -> bool:
+    return bool(SHELL_MUTATION_RE.search(command or ""))
+
+
+def shell_mentions_harness_control(command: str) -> bool:
+    return bool(CONTROL_FILENAME_RE.search(command or ""))
 
 
 def validate_action(
@@ -249,9 +304,21 @@ def validate_action(
     lock_path: Path | None = None,
     run_dir: Path | None = None,
     require_active_run_for_read: bool = False,
+    command_text: str = "",
+    require_session_checkpoint: bool = False,
+    checkpoint_max_age_minutes: int = 30,
 ) -> dict:
     repo = repo.resolve()
     normalized = normalize_tool(tool)
+    shell_mutation = normalized in SHELL_TOOLS and shell_mutates_files(command_text)
+    if shell_mutation and shell_mentions_harness_control(command_text):
+        return {
+            "ready": False,
+            "blocked_reasons": [
+                "Harness control file write blocked: shell command appears to mutate phase/run control files; use e2e_dev_harness.py gate, service-design, or agent-task instead."
+            ],
+            "warnings": [],
+        }
     protected_paths = [path for path in paths if is_harness_control_path(repo, path if path.is_absolute() else repo / path)]
     if normalized in WRITE_TOOLS and protected_paths:
         return {
@@ -292,6 +359,25 @@ def validate_action(
     code_paths = [path for path in paths if is_code_path(repo, path if path.is_absolute() else repo / path)]
     test_code_paths = [path for path in code_paths if is_test_code_path(repo, path if path.is_absolute() else repo / path)]
     runtime_code_paths = [path for path in code_paths if path not in test_code_paths]
+    if shell_mutation and not paths:
+        return {
+            "ready": False,
+            "blocked_reasons": [
+                "Shell write blocked: command appears to mutate files but no target paths were parsed; pass explicit --path/pre-code targets or use a file tool so phase scope can be enforced."
+            ],
+            "warnings": [],
+        }
+    if normalized not in WRITE_TOOLS and normalized not in READ_TOOLS and code_paths:
+        return {
+            "ready": False,
+            "blocked_reasons": [
+                f"Code write blocked: unrecognized tool {tool or '<missing>'} touched code paths; update phase_guard WRITE_TOOLS or use a supported file tool."
+            ],
+            "warnings": [],
+            "code_paths": result_paths(repo, code_paths),
+            "test_code_paths": result_paths(repo, test_code_paths),
+            "runtime_code_paths": result_paths(repo, runtime_code_paths),
+        }
     if normalized not in WRITE_TOOLS or not code_paths:
         return {"ready": True, "blocked_reasons": [], "warnings": [], "code_paths": result_paths(repo, code_paths)}
     if not lock or not lock.exists():
@@ -314,6 +400,28 @@ def validate_action(
             "runtime_code_paths": result_paths(repo, runtime_code_paths),
         }
     data = state_data
+    if require_session_checkpoint:
+        checkpoint_result = session_checkpoint.validate(
+            repo,
+            run_state_path_for_lock(repo, lock),
+            checkpoint_max_age_minutes,
+        )
+        if not checkpoint_result["ready"]:
+            return {
+                "ready": False,
+                "blocked_reasons": [
+                    "Session resume checkpoint required before code write: " + reason
+                    for reason in checkpoint_result["blocked_reasons"]
+                ],
+                "warnings": checkpoint_result["warnings"],
+                "phase_lock": str(lock),
+                "run_state": str(run_state_path_for_lock(repo, lock)),
+                "checkpoint": checkpoint_result["checkpoint"],
+                "action": "Run e2e_dev_harness.py next --state docs/agent-runs/<run>/run-state.json before continuing.",
+                "code_paths": result_paths(repo, code_paths),
+                "test_code_paths": result_paths(repo, test_code_paths),
+                "runtime_code_paths": result_paths(repo, runtime_code_paths),
+            }
     lifecycle = str(data.get("lifecycle", ""))
     allowed_runtime = set(lock_data.get("allowed_code_write_lifecycles") or DEFAULT_ALLOWED_RUNTIME_LIFECYCLES)
     allowed_test = set(lock_data.get("allowed_test_write_lifecycles") or DEFAULT_ALLOWED_TEST_LIFECYCLES)
@@ -442,6 +550,8 @@ def main() -> int:
     parser.add_argument("--lock", type=Path)
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--require-active-run-for-read", action="store_true")
+    parser.add_argument("--require-session-checkpoint", action="store_true")
+    parser.add_argument("--checkpoint-max-age-minutes", type=int, default=30)
     parser.add_argument("--hook-input", help="JSON hook input, or '-' for stdin.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -453,7 +563,20 @@ def main() -> int:
         hook_tool, hook_paths = parse_hook_input(hook_text)
         tool = tool or hook_tool
         paths.extend(Path(path) for path in hook_paths)
-    result = validate_action(args.repo, tool, paths, args.lock, args.run_dir, args.require_active_run_for_read)
+        command_text = extract_hook_command_text(hook_text)
+    else:
+        command_text = ""
+    result = validate_action(
+        args.repo,
+        tool,
+        paths,
+        args.lock,
+        args.run_dir,
+        args.require_active_run_for_read,
+        command_text=command_text,
+        require_session_checkpoint=args.require_session_checkpoint,
+        checkpoint_max_age_minutes=args.checkpoint_max_age_minutes,
+    )
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:

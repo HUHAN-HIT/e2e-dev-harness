@@ -8,7 +8,7 @@ description: Use when a feature, bugfix, refactor, or design-doc task needs stri
 Use this skill to turn a request or design doc into a clarified, tested, verified code change.
 It is tuned for Java 21, Spring 6.x, and Maven, but the workflow name is stack-neutral.
 
-Governing rule: do not start implementation while behavior, use cases, APIs, data effects, service contracts, or test expectations are ambiguous.
+Governing rule: do not implement while behavior, APIs, data effects, contracts, or tests are ambiguous.
 
 ## Platform Compatibility
 
@@ -34,8 +34,8 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py next . \
 ```
 
 Fill the generated design doc, then run `clarify` before planning or coding.
-After clarification identifies affected services or paths, rerun prepare or plan with `--service-scope affected` plus explicit `--service` or `--path` when names are ambiguous.
-Workflow tiers (`basic`, `standard`, `critical`, `audited`) tune evidence depth and orchestration strength; all keep auditable test proof and replayable run records.
+After clarification identifies affected services or paths, rerun prepare or plan with `--service-scope affected` plus explicit `--service` or `--path` when ambiguous.
+Workflow tiers tune evidence depth; all keep auditable test proof and replayable run records.
 
 Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`. Read `references/implementation-gates.md`.
 
@@ -50,7 +50,7 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
   MQ/DMQ/Kafka requirements must name the cross-layer call chain and sender/producer injection point before implementation.
 - Prefer GitNexus for code-level cross-service evidence and explicit impact artifacts.
   Do not duplicate low-level `grep`/`rg` instructions just because GitNexus augments searches.
-  Use explicit GitNexus commands when a gate needs auditable evidence.
+  Use explicit GitNexus commands when a gate needs auditable evidence; failed required evidence blocks unless the user approves documented degradation.
   Put raw impact output in evidence files; keep only a bounded affected-interface summary in agent context.
   Use Graphify for docs, ADRs, diagrams, and semantic context. Scanner facts seed both. Read `references/kg-tool-selection.md`.
 - Memory is optional context, not authority. Capture only verified or user-approved facts; Obsidian tags and links help selection but never replace explicit text. Read `references/memory-integration.md`.
@@ -63,8 +63,12 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
 - Multi-service designs use one global design anchor plus service-local design slices.
   Each affected service gets `service-designs/<service>.md` with mapped ACs, edit scope, runtime path, TDD plan, dependency boundary, and test impact.
   Multi-service `plan --create-archive` enters `SERVICE_DESIGN_REQUIRED`; validate slices with `e2e_dev_harness.py service-design --run-state <state>` before R2/TDD red or service code-agent dispatch.
+- Design, test, code, review, and coverage are separate role groups.
+  `agent-schedule.json` assigns different agents, references generated `agent-roles/*.md`, and downstream agents consume ready handoffs instead of chat memory.
 - Review profiles are portable project policy. Auto-discover project profiles and extend bundled profiles only when useful.
   Use common issue guidance for reviewer focus. Read `references/review-profiles.md` and `references/common-review-issues.md`.
+- R1/R2/R3 are independent-agent reviews, not same-chat roleplay.
+  Reviewer Invocation JSON must prove runtime/session isolation; same agent or same session blocks.
 - Archive the final requirement summary after completion so future analysis can read outcomes without replaying every run artifact. Read `references/requirements-archive.md`.
 - Completion requires task-completion proof, not chat claims: every AC has concrete code refs and concrete test refs.
   Semantic reviews, implementation manifest, coverage matrix, unit-test JSON, business review, dependency report when cross-service,
@@ -74,25 +78,22 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
   R3 review is allowed only after `e2e_dev_harness.py ac-progress` is ready for the current service slice or global design.
 - Skipped phases are blockers in strict completion. R1/R2/R3 reviews, harness plan state, TDD red/green, completion gate, and strict guard must have machine-readable evidence; do not mark them as skipped in the final report.
 - Task drift is a blocker. Changed production files must stay inside declared design/manifest/coverage scope.
-  If a change is outside scope, introduces undeclared acceptance criteria, or changes interface-like production files without Impact Summary rows, return to `plan` or `clarify`; do not normalize the drift in the final report.
+  If a change is outside scope, adds undeclared ACs, or changes interface-like files without Impact Summary rows, return to `plan` or `clarify`.
 - Every run has `run-state.json` and `artifact-registry.json`; never edit harness control files directly.
   Valid high-phase states need transition history and gate evidence.
 - Do not run `prepare` as a substitute for `start`. `prepare` is dependency discovery only; `start` creates the active run, design template, and phase lock.
 - Runtime hooks can enforce phase locks before code-writing tools run.
   Use `install_hooks.py`, `phase_guard.py`, and hook examples when the agent runtime supports pre-action checks.
-  Claude Code hooks must include `Read/Grep/Glob/Bash`; read hooks force `start` before code exploration.
+  Claude Code hooks must include `Read/Grep/Glob/Bash` plus `Stop`; read hooks force `start`, stop hooks block ending before R3/completion/guard/archive.
   If runtime hooks are unavailable, run `e2e_dev_harness.py pre-code --path <planned-code-file> --run-dir docs/agent-runs/<run>` before each code edit.
   Read `references/execution-control.md`.
   After red-test evidence exists, run `e2e_dev_harness.py gate --phase implementation --run-state docs/agent-runs/<run>/run-state.json`;
   a passing gate opens the `IMPLEMENTED` phase automatically.
-- Harness verification can replay a run from state and policy with `harness_verify.py` or `verify --harness`.
-  Emit `run-summary.json` / `run-summary.md` for CI, reviewer agents, evaluation, and later requirement analysis.
-- Use `execution_trace.py` or `verify --trace-file` to record phase timing, decisions, artifacts, and optional token counts.
-  Use `command_evidence.py` when evidence needs exit code, elapsed time, output hashes, and environment metadata.
-  Use `context_pack.py` before dispatching service-scoped agents so each agent receives only request-scoped allowed inputs/outputs within a file and byte budget.
+- Replay a run with `harness_verify.py` or `verify --harness`; emit run summaries for CI, reviewers, evaluation, and later analysis.
+- Use `execution_trace.py`, `command_evidence.py`, and `context_pack.py` for timing/decision traces, command proof, and bounded request-scoped agent inputs.
   Use `agent-task --action claim` before any multi-service code agent writes code; phase guard blocks unclaimed service writes and cross-service edits by a single claimed task.
   Claims carry leases; renew long tasks, and reclaim stale ones before completion.
-  Use `checkpoint_gate.py` or `gate --checkpoint-mode required` to pause after clarify, R1, and TDD Red on critical or interactive work.
+  Use `checkpoint_gate.py` or `gate --checkpoint-mode required` after clarify, R1, and TDD Red on critical or interactive work.
   Agent start/stop is runtime-specific; this harness enforces portable state, hooks, gates, and rework routing instead of claiming non-portable process control.
 
 ## Workflow
@@ -117,7 +118,7 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
 ## Agent Orchestration
 
 Default to `single` only for small low-risk single-service work.
-Use explicit `single-review` only for single-service medium work where one developer context is acceptable but R1/R2/R3 still need independent request-scoped reviewer invocations.
+Use explicit `single-review` only for single-service medium work with separated design/test/code agents plus formal reviewer invocations.
 Use `multi` for cross-service, contract/data-risk, design-heavy, or user-requested context isolation.
 
 ```bash
@@ -129,8 +130,8 @@ python skills/e2e-dev-harness/scripts/orchestration_plan.py . \
 
 Important boundaries:
 
-- `auto` recommends only `single` or `multi`; `single-review` is explicit.
-- `single` and `single-review` escalate to `multi` if multiple affected services/modules, contract/data-risk, or design-heavy evidence is detected; do not keep serial single-agent coding for multi-service work.
+- `auto` recommends `single`, `single-review`, or `multi`; risk/large single-service work becomes `single-review`.
+- `single` and `single-review` escalate to `multi` if multiple affected services/modules, contract/data-risk, or design-heavy evidence is detected; do not keep serial same-agent coding for multi-service work.
 - Discovery scope lists service candidates but does not create service plans.
 - Affected scope creates service plans only from explicit `--service` / `--path`, dependency evidence, or design-declared affected services/modules.
 - Multi-service work keeps each service plan and code-agent handoff under `docs/agent-runs/<run>/service-plans/<service>/`.
@@ -162,12 +163,12 @@ python skills/e2e-dev-harness/scripts/cross_service_dependency_scan.py . \
 ```
 
 For Java/Spring code dependencies, GitNexus is the primary evidence engine. Graphify can enrich design-document and architecture semantics, but inferred or ambiguous Graphify findings become clarification questions, not completion evidence.
+If GitNexus/MCP/CLI is unavailable for required evidence, pause for user-approved degradation.
+Record `Approval: user-approved`, `Reason:`, and `Fallback Evidence:` and pass the file with `--gitnexus-degradation`.
 
 For changed requirements or code diffs, use GitNexus impact tooling explicitly:
 
-When multiple repositories are indexed, GitNexus CLI symbol and diff commands
-must target the current project root with `--repo <repo-root>`; prefer an
-absolute path, or `.` only when the command is run from the project root.
+When multiple repositories are indexed, GitNexus CLI symbol and diff commands must target the current project root with `--repo <repo-root>`; prefer an absolute path.
 
 ```bash
 gitnexus detect-changes --repo <repo-root> --scope unstaged
