@@ -1,7 +1,7 @@
 # Execution Control
 
 Use execution control when an agent runtime supports pre-tool or pre-action hooks.
-The hook is the enforcement layer: it blocks code writes until the active run enters the implementation phase.
+The hook is the enforcement layer: it blocks code exploration before `start`, and blocks code writes until implementation.
 
 ## Phase Lock
 
@@ -12,7 +12,7 @@ Code writes are allowed only when lifecycle is `IMPLEMENTED`.
 Documentation and run artifacts under `docs/agent-runs/` remain writable so agents can prepare evidence before implementation.
 For multi-service runs, `.phase-lock` also carries selected services and claimed owners from `run-state.json`.
 `phase_guard.py` blocks production-code writes when the touched service has no claimed code-developer task, and blocks a single write action that touches multiple services.
-The guard recognizes direct file tools, `apply_patch`, and common shell write commands. Claude Code hook matchers must include `Bash`; otherwise shell-based writes bypass the guard.
+The guard recognizes direct file tools, `apply_patch`, and common shell write commands. Claude Code hook matchers must include `Read`, `Grep`, `Glob`, and `Bash`; otherwise code exploration or shell writes can bypass the guard.
 
 ## Guard Command
 
@@ -23,6 +23,8 @@ python skills/e2e-dev-harness/scripts/phase_guard.py . \
   --run-dir docs/agent-runs/<run> \
   --json
 ```
+
+Use `--require-active-run-for-read` in runtime hooks so `Read`/`Grep`/`Glob` on project code block until `e2e_dev_harness.py start` creates `.phase-lock`.
 
 The command returns exit code `0` when allowed and `2` when blocked.
 

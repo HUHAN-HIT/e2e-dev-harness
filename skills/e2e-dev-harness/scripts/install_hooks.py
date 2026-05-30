@@ -90,6 +90,16 @@ def command_present(value) -> bool:
     return False
 
 
+def read_guard_present(value) -> bool:
+    if isinstance(value, dict):
+        return any(read_guard_present(item) for item in value.values())
+    if isinstance(value, list):
+        return any(read_guard_present(item) for item in value)
+    if isinstance(value, str):
+        return "--require-active-run-for-read" in value
+    return False
+
+
 def repo_relative_phase_guard_present(value) -> bool:
     if isinstance(value, dict):
         return any(repo_relative_phase_guard_present(item) for item in value.values())
@@ -130,6 +140,8 @@ def validate_config(path: Path) -> dict:
         blocked.append("Hook config must call phase_guard.py with --hook-input.")
     elif repo_relative_phase_guard_present(data):
         blocked.append("Hook config must use an absolute path to phase_guard.py, not a repo-relative skills/e2e-dev-harness path.")
+    elif not read_guard_present(data):
+        blocked.append("Hook config must include --require-active-run-for-read so code exploration starts inside an active harness run.")
     elif not blocking_present(data):
         blocked.append("Hook config must be blocking or define a PreToolUse blocking hook.")
     elif path.as_posix().endswith(".claude/settings.json") and not claude_bash_matcher_present(data):

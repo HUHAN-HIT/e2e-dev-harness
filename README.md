@@ -237,10 +237,10 @@ python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime claude --chec
 The installed hooks all call the same guard shape. The first argument is the target repository, not the current shell directory:
 
 ```powershell
-"C:\absolute\path\to\python.exe" "C:\absolute\path\to\skills\e2e-dev-harness\scripts\phase_guard.py" "C:\absolute\path\to\target-repo" --hook-input - --json
+"C:\absolute\path\to\python.exe" "C:\absolute\path\to\skills\e2e-dev-harness\scripts\phase_guard.py" "C:\absolute\path\to\target-repo" --hook-input - --require-active-run-for-read --json
 ```
 
-`phase_guard.py` reads `docs/agent-runs/<run>/.phase-lock`. It allows red-test writes under `src/test`, `test`, or `tests` during `PLANNED`/`RED_READY`, but blocks runtime production code until lifecycle `IMPLEMENTED`. In multi-service runs it also requires a claimed service code-developer task for runtime code writes in the touched service/module. It recognizes direct file tools, `apply_patch`, and common shell write commands. It still allows harness artifacts under `docs/agent-runs/` to be written before implementation.
+`phase_guard.py` reads `docs/agent-runs/<run>/.phase-lock`. With `--require-active-run-for-read`, code `Read`/`Grep`/`Glob` is blocked until `start` creates an active run. It allows red-test writes under `src/test`, `test`, or `tests` during `PLANNED`/`RED_READY`, but blocks runtime production code until lifecycle `IMPLEMENTED`. In multi-service runs it also requires a claimed service code-developer task for runtime code writes in the touched service/module. It recognizes direct file tools, `apply_patch`, and common shell write commands. It still allows harness artifacts under `docs/agent-runs/` to be written before implementation.
 
 ### Claude Code
 
@@ -258,11 +258,11 @@ Minimal project config:
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "matcher": "Read|Grep|Glob|Write|Edit|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --json"
+            "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --require-active-run-for-read --json"
           }
         ]
       }
@@ -287,8 +287,8 @@ The intended mapping is:
 ```json
 {
   "event": "pre-action",
-  "tools": ["Write", "Edit", "MultiEdit", "NotebookEdit"],
-  "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --json",
+  "tools": ["Read", "Grep", "Glob", "Write", "Edit", "MultiEdit", "NotebookEdit"],
+  "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --require-active-run-for-read --json",
   "blocking": true
 }
 ```
@@ -315,8 +315,8 @@ The intended mapping is:
 ```json
 {
   "event": "pre-tool-use",
-  "tools": ["write_file", "replace", "edit", "multi_edit"],
-  "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --json",
+  "tools": ["read_file", "grep", "glob", "write_file", "replace", "edit", "multi_edit"],
+  "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --require-active-run-for-read --json",
   "blocking": true
 }
 ```

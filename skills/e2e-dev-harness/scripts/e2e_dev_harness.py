@@ -1453,23 +1453,21 @@ def gate(args) -> tuple[int, dict]:
         }.get(args.phase)
         run_state_path = getattr(args, "run_state", None) or getattr(args, "state", None)
         if transition_target and run_state_path:
-            evidence = args.red_test_evidence if args.phase == "implementation" else (
-                args.unit_test_evidence or args.implementation_manifest or args.red_test_evidence
-            )
-            if args.phase == "implementation":
-                state_file = require_repo_path(repo, run_state_path, "run state")
-                status_evidence = state_file.parent / "evidence" / "implementation-gate.json"
-                status_evidence.parent.mkdir(parents=True, exist_ok=True)
-                status_payload = dict(result)
-                status_payload.setdefault("phase", "implementation")
-                status_payload["ready"] = True
-                if args.red_test_evidence:
+            state_file = require_repo_path(repo, run_state_path, "run state")
+            status_evidence = state_file.parent / "evidence" / f"{args.phase}-gate.json"
+            status_evidence.parent.mkdir(parents=True, exist_ok=True)
+            status_payload = dict(result)
+            status_payload.setdefault("phase", args.phase)
+            status_payload["ready"] = True
+            for attr in ("red_test_evidence", "unit_test_evidence", "implementation_manifest"):
+                value = getattr(args, attr, None)
+                if value:
                     try:
-                        status_payload["red_test_evidence"] = str(resolve_repo_path(repo, args.red_test_evidence).relative_to(repo))
+                        status_payload[attr] = str(resolve_repo_path(repo, value).relative_to(repo))
                     except ValueError:
-                        status_payload["red_test_evidence"] = str(args.red_test_evidence)
-                status_evidence.write_text(json.dumps(status_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-                evidence = status_evidence
+                        status_payload[attr] = str(value)
+            status_evidence.write_text(json.dumps(status_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            evidence = status_evidence
             transition = run_state.transition_state(
                 repo,
                 run_state_path,

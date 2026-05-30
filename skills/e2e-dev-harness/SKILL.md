@@ -75,12 +75,12 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
 - Skipped phases are blockers in strict completion. R1/R2/R3 reviews, harness plan state, TDD red/green, completion gate, and strict guard must have machine-readable evidence; do not mark them as skipped in the final report.
 - Task drift is a blocker. Changed production files must stay inside declared design/manifest/coverage scope.
   If a change is outside scope, introduces undeclared acceptance criteria, or changes interface-like production files without Impact Summary rows, return to `plan` or `clarify`; do not normalize the drift in the final report.
-- Every created agent run has `run-state.json` and `artifact-registry.json`.
-  Treat them as the portable harness state for Codex, Claude Code, or generic CLI agents.
+- Every run has `run-state.json` and `artifact-registry.json`; never edit harness control files directly.
+  Valid high-phase states need transition history and gate evidence.
 - Do not run `prepare` as a substitute for `start`. `prepare` is dependency discovery only; `start` creates the active run, design template, and phase lock.
 - Runtime hooks can enforce phase locks before code-writing tools run.
   Use `install_hooks.py`, `phase_guard.py`, and hook examples when the agent runtime supports pre-action checks.
-  Claude Code hooks must include `Bash` in the PreToolUse matcher, because shell commands can write code.
+  Claude Code hooks must include `Read/Grep/Glob/Bash`; read hooks force `start` before code exploration.
   If runtime hooks are unavailable, run `e2e_dev_harness.py pre-code --path <planned-code-file> --run-dir docs/agent-runs/<run>` before each code edit.
   Read `references/execution-control.md`.
   After red-test evidence exists, run `e2e_dev_harness.py gate --phase implementation --run-state docs/agent-runs/<run>/run-state.json`;

@@ -21,6 +21,7 @@ WRITE_TOOLS = {
     "bash",
     "powershell",
 }
+READ_TOOLS = {"read", "grep", "glob", "ls", "list", "search"}
 CODE_SUFFIXES = {
     ".java",
     ".kt",
@@ -48,11 +49,15 @@ CODE_SUFFIXES = {
 CODE_FILENAMES = {"pom.xml", "build.gradle", "settings.gradle", "Dockerfile"}
 ARTIFACT_PREFIXES = ("docs/agent-runs/",)
 DOC_PREFIXES = ("docs/design/", "docs/requirements/", "docs/review-profiles/", ".e2e/")
+CONTROL_FILENAMES = {".phase-lock", "run-state.json", "artifact-registry.json", "agent-schedule.json"}
 CLAIMED_OWNER_STATUSES = {"claimed", "in-progress", "in_progress", "completed"}
 TEST_CODE_MARKERS = ("/src/test/", "/test/", "/tests/")
 DEFAULT_ALLOWED_RUNTIME_LIFECYCLES = {"IMPLEMENTED"}
 DEFAULT_ALLOWED_TEST_LIFECYCLES = {"PLANNED", "RED_READY", "IMPLEMENTED"}
-PATCH_FILE_RE = re.compile(r"^\s*(?:\*\*\* (?:Add|Update) File:|---|\+\+\+)\s+(?P<path>.+?)\s*$", re.MULTILINE)
+PATCH_FILE_RE = re.compile(
+    r"^\s*(?:\*\*\* (?:Add|Update|Delete) File:|\*\*\* Move to:|---|\+\+\+)\s+(?P<path>.+?)\s*$",
+    re.MULTILINE,
+)
 SHELL_WRITE_RE = re.compile(
     r"(?:Set-Content|Add-Content|Out-File|New-Item)\b[^\r\n]*?(?:-Path|-LiteralPath|-FilePath|-Name)?\s*['\"]?(?P<cmdlet>[A-Za-z0-9_./\\:-]+\.[A-Za-z0-9]+)['\"]?"
     r"|(?:^|\s)(?:>|>>)\s*['\"]?(?P<redir>[A-Za-z0-9_./\\:-]+\.[A-Za-z0-9]+)['\"]?",
@@ -96,9 +101,21 @@ def is_code_path(repo: Path, path: Path) -> bool:
     return name in CODE_FILENAMES or path.suffix in CODE_SUFFIXES
 
 
+def is_harness_control_path(repo: Path, path: Path) -> bool:
+    relative = posix_relative(repo, path if path.is_absolute() else repo / path)
+    if not relative.startswith(ARTIFACT_PREFIXES):
+        return False
+    return Path(relative).name in CONTROL_FILENAMES
+
+
 def is_test_code_path(repo: Path, path: Path) -> bool:
     relative = "/" + posix_relative(repo, path).lower()
     return any(marker in relative for marker in TEST_CODE_MARKERS) or path.name.lower().startswith("test_")
+
+
+def is_repo_wide_path(repo: Path, path: Path) -> bool:
+    relative = posix_relative(repo, path if path.is_absolute() else repo / path).strip("/")
+    return relative in {"", ".", "*"}
 
 
 def service_for_code_path(repo: Path, path: Path, services: list[str]) -> str:
@@ -231,15 +248,52 @@ def validate_action(
     paths: list[Path],
     lock_path: Path | None = None,
     run_dir: Path | None = None,
+    require_active_run_for_read: bool = False,
 ) -> dict:
     repo = repo.resolve()
     normalized = normalize_tool(tool)
+    protected_paths = [path for path in paths if is_harness_control_path(repo, path if path.is_absolute() else repo / path)]
+    if normalized in WRITE_TOOLS and protected_paths:
+        return {
+            "ready": False,
+            "blocked_reasons": [
+                "Harness control file write blocked: use e2e_dev_harness.py, run_state.py, service-design, gate, or agent-task commands instead of direct file edits."
+            ],
+            "warnings": [],
+            "protected_paths": result_paths(repo, protected_paths),
+        }
+    lock = discover_lock(repo, lock_path, run_dir)
+    if require_active_run_for_read and normalized in READ_TOOLS:
+        read_targets = list(paths)
+        repo_wide = not read_targets or any(is_repo_wide_path(repo, path) for path in read_targets)
+        read_code_paths = [path for path in read_targets if is_code_path(repo, path if path.is_absolute() else repo / path)]
+        if not lock or not lock.exists():
+            if repo_wide or read_code_paths:
+                return {
+                    "ready": False,
+                    "blocked_reasons": [
+                        "Code exploration blocked: start an e2e-dev-harness run before reading/searching project code."
+                    ],
+                    "warnings": [],
+                    "action": "run e2e_dev_harness.py start . --feature <feature> --request <request>",
+                    "read_paths": result_paths(repo, read_targets),
+                }
+        else:
+            _, _, state_blockers = lock_state_pair(repo, lock)
+            if state_blockers:
+                return {
+                    "ready": False,
+                    "blocked_reasons": state_blockers,
+                    "warnings": [],
+                    "phase_lock": str(lock),
+                    "run_state": str(run_state_path_for_lock(repo, lock)),
+                    "read_paths": result_paths(repo, read_targets),
+                }
     code_paths = [path for path in paths if is_code_path(repo, path if path.is_absolute() else repo / path)]
     test_code_paths = [path for path in code_paths if is_test_code_path(repo, path if path.is_absolute() else repo / path)]
     runtime_code_paths = [path for path in code_paths if path not in test_code_paths]
     if normalized not in WRITE_TOOLS or not code_paths:
         return {"ready": True, "blocked_reasons": [], "warnings": [], "code_paths": result_paths(repo, code_paths)}
-    lock = discover_lock(repo, lock_path, run_dir)
     if not lock or not lock.exists():
         return {
             "ready": False,
@@ -387,6 +441,7 @@ def main() -> int:
     parser.add_argument("--path", action="append", type=Path)
     parser.add_argument("--lock", type=Path)
     parser.add_argument("--run-dir", type=Path)
+    parser.add_argument("--require-active-run-for-read", action="store_true")
     parser.add_argument("--hook-input", help="JSON hook input, or '-' for stdin.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -398,7 +453,7 @@ def main() -> int:
         hook_tool, hook_paths = parse_hook_input(hook_text)
         tool = tool or hook_tool
         paths.extend(Path(path) for path in hook_paths)
-    result = validate_action(args.repo, tool, paths, args.lock, args.run_dir)
+    result = validate_action(args.repo, tool, paths, args.lock, args.run_dir, args.require_active_run_for_read)
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:

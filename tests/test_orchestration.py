@@ -1223,6 +1223,72 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("valid JSON" in reason or "implementation gate" in reason for reason in result["blocked_reasons"]))
 
+    def test_run_state_blocks_verified_transition_without_completion_gate_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            implementation_gate = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-gate.json"
+            unit_evidence = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit-test.json"
+            implementation_gate.parent.mkdir(parents=True)
+            implementation_gate.write_text(json.dumps({"phase": "implementation", "ready": True}), encoding="utf-8")
+            unit_evidence.write_text(json.dumps({"command": "mvn test", "exit_code": 0}), encoding="utf-8")
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            run_state.write_state(repo, state_path, state)
+            implemented = run_state.transition_state(
+                repo,
+                state_path,
+                "IMPLEMENTED",
+                gate="implementation",
+                gate_status="passed",
+                evidence=implementation_gate,
+            )
+
+            result = run_state.transition_state(
+                repo,
+                state_path,
+                "VERIFIED",
+                gate="completion",
+                gate_status="passed",
+                evidence=unit_evidence,
+            )
+
+        self.assertTrue(implemented["ready"], implemented["blocked_reasons"])
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("completion gate evidence" in reason for reason in result["blocked_reasons"]))
+
+    def test_run_state_allows_verified_transition_with_completion_gate_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            implementation_gate = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-gate.json"
+            completion_gate = repo / "docs" / "agent-runs" / "run" / "evidence" / "completion-gate.json"
+            implementation_gate.parent.mkdir(parents=True)
+            implementation_gate.write_text(json.dumps({"phase": "implementation", "ready": True}), encoding="utf-8")
+            completion_gate.write_text(json.dumps({"phase": "completion", "ready": True}), encoding="utf-8")
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            run_state.write_state(repo, state_path, state)
+            implemented = run_state.transition_state(
+                repo,
+                state_path,
+                "IMPLEMENTED",
+                gate="implementation",
+                gate_status="passed",
+                evidence=implementation_gate,
+            )
+
+            result = run_state.transition_state(
+                repo,
+                state_path,
+                "VERIFIED",
+                gate="completion",
+                gate_status="passed",
+                evidence=completion_gate,
+            )
+
+        self.assertTrue(implemented["ready"], implemented["blocked_reasons"])
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("VERIFIED", result["lifecycle"])
+
     def test_multi_phase_guard_requires_claimed_service_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -1655,6 +1721,88 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("does not match run-state lifecycle" in reason for reason in result["blocked_reasons"]))
 
+    def test_phase_guard_blocks_direct_harness_control_file_edit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CLARIFIED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Edit",
+                [Path("docs/agent-runs/run/.phase-lock")],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Harness control file write blocked" in reason for reason in result["blocked_reasons"]))
+
+    def test_phase_guard_blocks_apply_patch_delete_of_harness_control_file(self) -> None:
+        patch_text = "*** Begin Patch\n*** Delete File: docs/agent-runs/run/run-state.json\n*** End Patch\n"
+        hook_text = json.dumps({"tool_name": "ApplyPatch", "tool_input": {"patch": patch_text}})
+        tool, paths = phase_guard.parse_hook_input(hook_text)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            result = phase_guard.validate_action(repo, tool, [Path(path) for path in paths])
+
+        self.assertEqual("ApplyPatch", tool)
+        self.assertEqual(["docs/agent-runs/run/run-state.json"], paths)
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Harness control file write blocked" in reason for reason in result["blocked_reasons"]))
+
+    def test_phase_guard_blocks_code_read_before_start_when_entry_guard_required(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Read",
+                [Path("services/payment/src/main/java/PayOrder.java")],
+                require_active_run_for_read=True,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Code exploration blocked" in reason for reason in result["blocked_reasons"]))
+
+    def test_phase_guard_allows_code_read_after_start_when_entry_guard_required(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Read",
+                [Path("services/payment/src/main/java/PayOrder.java")],
+                run_dir=Path("docs/agent-runs/run"),
+                require_active_run_for_read=True,
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_run_state_validation_blocks_forged_implemented_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            registry = repo / "docs" / "agent-runs" / "run" / "artifact-registry.json"
+            registry.parent.mkdir(parents=True)
+            registry.write_text('{"schema":"e2e-dev-harness.artifact-registry.v1","artifacts":[]}\n', encoding="utf-8")
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "IMPLEMENTED",
+            )
+            run_state.write_state(repo, state_path, state)
+
+            result = run_state.validate_state(repo, state_path)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("transition history" in reason for reason in result["blocked_reasons"]))
+
     def test_phase_guard_allows_red_test_write_in_planned_phase(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -1808,9 +1956,13 @@ class OrchestrationArtifactTests(unittest.TestCase):
                 text = (hook_dir / name).read_text(encoding="utf-8")
                 self.assertIn("phase_guard.py", text)
                 self.assertNotIn("python skills/e2e-dev-harness/scripts/phase_guard.py .", text)
+                self.assertIn("--require-active-run-for-read", text)
                 self.assertIn("blocking", text.lower() if "claude" not in name else "blocking")
                 if name == "claude-code-settings.example.json":
                     self.assertIn("Bash", text)
+                    self.assertIn("Read", text)
+                    self.assertIn("Grep", text)
+                    self.assertIn("Glob", text)
 
     def test_install_hooks_dry_run_reports_claude_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1825,6 +1977,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
         command = result["planned_config"]["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
         self.assertIn(str(ROOT / "skills" / "e2e-dev-harness" / "scripts" / "phase_guard.py"), command)
         self.assertIn(str(repo), command)
+        self.assertIn("--require-active-run-for-read", command)
 
     def test_install_hooks_rewrites_portable_runtime_templates(self) -> None:
         for runtime in ("codex", "gemini"):
@@ -1836,6 +1989,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
                 self.assertTrue(result["ready"], result["blocked_reasons"])
                 self.assertIn(str(ROOT / "skills" / "e2e-dev-harness" / "scripts" / "phase_guard.py"), command)
+                self.assertIn("--require-active-run-for-read", command)
                 self.assertIn(str(repo), command)
                 self.assertNotIn("skills/e2e-dev-harness/scripts/phase_guard.py .", command)
 

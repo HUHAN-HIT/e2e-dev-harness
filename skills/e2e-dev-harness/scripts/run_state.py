@@ -174,6 +174,7 @@ def validate_state(repo: Path, state_path: Path, strict_artifacts: bool = False)
     gates = data.get("gates", {})
     if not isinstance(gates, dict):
         blocked.append("Run state gates must be an object.")
+    blocked.extend(validate_lifecycle_provenance(repo, path, data))
     return {
         "repo": str(repo),
         "ready": not blocked,
@@ -183,6 +184,90 @@ def validate_state(repo: Path, state_path: Path, strict_artifacts: bool = False)
         "lifecycle": lifecycle,
         "artifact_registry": registry_result,
     }
+
+
+def resolve_evidence_path(repo: Path, state_path: Path, evidence: str) -> Path | None:
+    if not evidence:
+        return None
+    value = Path(str(evidence))
+    if value.is_absolute():
+        return value
+    run_dir = state_path.parent
+    candidate = (run_dir / value).resolve()
+    if candidate.exists():
+        return candidate
+    return (repo / value).resolve()
+
+
+def validate_transition_event(
+    repo: Path,
+    state_path: Path,
+    event: dict,
+    target: str,
+    gate: str,
+    statuses: set[str],
+    require_ready_evidence: bool = False,
+) -> list[str]:
+    blocked: list[str] = []
+    if str(event.get("to", "")) != target:
+        return [f"Run state lifecycle {target} is missing a transition history event."]
+    if str(event.get("gate", "")) != gate:
+        blocked.append(f"Run state transition to {target} must come from gate={gate}.")
+    if str(event.get("gate_status", "")) not in statuses:
+        blocked.append(f"Run state transition to {target} must have a passing gate_status.")
+    evidence_path = resolve_evidence_path(repo, state_path, str(event.get("evidence", "")))
+    if not evidence_path or not evidence_path.exists():
+        blocked.append(f"Run state transition to {target} references missing evidence: {event.get('evidence') or '<missing>'}")
+    elif require_ready_evidence:
+        try:
+            evidence_data = json.loads(evidence_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as error:
+            blocked.append(f"Run state transition to {target} evidence is not valid JSON: {error}")
+        else:
+            if not isinstance(evidence_data, dict) or evidence_data.get("ready") is not True:
+                blocked.append(f"Run state transition to {target} requires ready=true evidence.")
+    return blocked
+
+
+def validate_lifecycle_provenance(repo: Path, state_path: Path, state: dict) -> list[str]:
+    lifecycle = str(state.get("lifecycle", ""))
+    if lifecycle not in {"IMPLEMENTED", "REVIEWED", "VERIFIED", "ARCHIVED"}:
+        return []
+    history = state.get("history")
+    if not isinstance(history, list) or not history:
+        return [f"Run state lifecycle {lifecycle} requires transition history; do not edit run-state.json directly."]
+    blocked: list[str] = []
+    implemented_events = [event for event in history if isinstance(event, dict) and event.get("to") == "IMPLEMENTED"]
+    if not implemented_events:
+        blocked.append("Run state lifecycle requires a prior IMPLEMENTED transition history event.")
+    else:
+        blocked.extend(
+            validate_transition_event(
+                repo,
+                state_path,
+                implemented_events[-1],
+                "IMPLEMENTED",
+                "implementation",
+                {"passed", "ready", "approved"},
+                require_ready_evidence=True,
+            )
+        )
+    if lifecycle in {"VERIFIED", "ARCHIVED"}:
+        verified_events = [event for event in history if isinstance(event, dict) and event.get("to") == "VERIFIED"]
+        if not verified_events:
+            blocked.append("Run state lifecycle VERIFIED requires a completion transition history event.")
+        else:
+            blocked.extend(
+                validate_transition_event(
+                    repo,
+                    state_path,
+                    verified_events[-1],
+                    "VERIFIED",
+                    "completion",
+                    {"passed", "ready", "approved"},
+                )
+            )
+    return blocked
 
 
 def load_state(repo: Path, state_path: Path) -> tuple[Path, dict | None, list[str]]:
@@ -229,6 +314,8 @@ def transition_state(
     current = str(data.get("lifecycle", ""))
     allowed, reason = transition_allowed(current, target_lifecycle, allow_regression)
     blocked = [] if allowed else [reason]
+    if current in {"IMPLEMENTED", "REVIEWED", "VERIFIED", "ARCHIVED"}:
+        blocked.extend(validate_lifecycle_provenance(repo, path, data))
     evidence_path = None
     if evidence:
         evidence_path = evidence if evidence.is_absolute() else repo / evidence
@@ -251,8 +338,25 @@ def transition_state(
                     blocked.append("Transition to IMPLEMENTED requires implementation gate evidence to be a JSON object.")
                 elif str(gate_data.get("phase", "")) != "implementation" or gate_data.get("ready") is not True:
                     blocked.append("Transition to IMPLEMENTED requires passed implementation gate evidence.")
-    if target_lifecycle == "VERIFIED" and not evidence_path:
-        blocked.append("Transition to VERIFIED requires evidence.")
+    if target_lifecycle == "VERIFIED":
+        if gate != "completion":
+            blocked.append("Transition to VERIFIED requires gate=completion.")
+        if gate_status not in {"passed", "ready", "approved"}:
+            blocked.append("Transition to VERIFIED requires gate_status=passed.")
+        if not evidence_path:
+            blocked.append("Transition to VERIFIED requires completion gate evidence.")
+        elif evidence_path.exists():
+            try:
+                gate_data = json.loads(evidence_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError) as error:
+                blocked.append(f"Transition to VERIFIED requires valid JSON completion gate evidence: {error}")
+            else:
+                if not isinstance(gate_data, dict):
+                    blocked.append("Transition to VERIFIED requires completion gate evidence to be a JSON object.")
+                elif str(gate_data.get("phase", "")) != "completion" or gate_data.get("ready") is not True:
+                    blocked.append("Transition to VERIFIED requires passed completion gate evidence.")
+    if target_lifecycle == "ARCHIVED" and current != "VERIFIED":
+        blocked.append("Transition to ARCHIVED requires current lifecycle VERIFIED.")
     if blocked:
         return {
             "repo": str(repo),
