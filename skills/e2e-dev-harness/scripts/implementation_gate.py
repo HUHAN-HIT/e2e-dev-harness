@@ -31,6 +31,7 @@ import task_alignment_guard  # noqa: E402
 import task_tier  # noqa: E402
 import tdd_evidence  # noqa: E402
 import test_impact_plan as test_impact_plan_gate  # noqa: E402
+import kg_refresh  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -162,17 +163,17 @@ def validate_multi_service_preconditions(repo: Path, request: GateRequest, state
     }
 
 
-def find_kg_status_file(repo: Path, explicit: Path | None) -> Path:
+def find_kg_status_file(repo: Path, explicit: Path | None, state_data: dict | None = None) -> Path:
     if explicit:
         return explicit if explicit.is_absolute() else repo / explicit
-    candidates = [
-        repo / "knowledge-graph" / "knowledge-graph-refresh.json",
-        repo / "graphify-out" / "knowledge-graph-refresh.json",
-        repo / "graphify-out" / "kg-status.json",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
+    state_data = state_data or {}
+    run_id = str(state_data.get("run_id") or "").strip()
+    if run_id:
+        run_dir = resolve_repo_path(repo, Path(run_id))
+        if run_dir:
+            candidate = run_dir / "evidence" / "knowledge-graph-refresh.json"
+            if candidate.exists():
+                return candidate
     agent_run_evidence = repo / "docs" / "agent-runs"
     if agent_run_evidence.exists():
         matches = sorted(
@@ -182,6 +183,14 @@ def find_kg_status_file(repo: Path, explicit: Path | None) -> Path:
         )
         if matches:
             return matches[0]
+    candidates = [
+        repo / "knowledge-graph" / "knowledge-graph-refresh.json",
+        repo / "graphify-out" / "knowledge-graph-refresh.json",
+        repo / "graphify-out" / "kg-status.json",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
     return candidates[0]
 
 
@@ -192,6 +201,62 @@ def kg_status_file_from_registry(repo: Path, registry_data: dict) -> Path | None
         if resolved and resolved.exists():
             return resolved
     return None
+
+
+def user_approved(path: Path | None, repo: Path) -> bool:
+    text = read_text_if_exists(resolve_optional_repo_path(repo, path))
+    return "Approval: user-approved" in text
+
+
+def validate_kg_status(repo: Path, kg_status: dict | None, kg_path: Path, approval: Path | None = None) -> dict:
+    blocked: list[str] = []
+    warnings: list[str] = []
+    if not kg_status:
+        return {
+            "ready": False,
+            "blocked_reasons": [f"Knowledge graph status file not found or unreadable: {kg_path}"],
+            "warnings": [],
+            "status": None,
+            "path": str(kg_path),
+        }
+    detected = kg_status.get("detected") if isinstance(kg_status.get("detected"), dict) else {}
+    gitnexus_index = (
+        detected.get("gitnexus_index")
+        if isinstance(detected.get("gitnexus_index"), dict)
+        else kg_refresh.detect_gitnexus_index(repo)
+    )
+    selected_tools = kg_status.get("selected_tools") if isinstance(kg_status.get("selected_tools"), list) else []
+    status = str(kg_status.get("status") or "").lower()
+    reason = str(kg_status.get("reason") or "")
+    approved = user_approved(approval, repo)
+    if status == "skipped":
+        message = "Knowledge graph status is skipped"
+        if reason:
+            message += f": {reason}"
+        if approved:
+            warnings.append(message + " (user-approved degradation).")
+        else:
+            blocked.append(message + "; run kg_refresh.py or provide --gitnexus-degradation with Approval: user-approved.")
+    if reason.lower() == "no knowledge graph configured" and gitnexus_index.get("exists"):
+        blocked.append(
+            "Knowledge graph status says no graph is configured, but .gitnexus/meta.json exists for this repository; regenerate knowledge-graph-refresh.json."
+        )
+    if not selected_tools:
+        if approved:
+            warnings.append("Knowledge graph status has no selected_tools; continuing only because degradation is user-approved.")
+        else:
+            blocked.append("Knowledge graph status is invalid: selected_tools is missing or empty.")
+    if gitnexus_index.get("exists") and gitnexus_index.get("repo_path") and not gitnexus_index.get("repo_path_matches"):
+        blocked.append(".gitnexus/meta.json repoPath does not match this repository; refresh or re-index GitNexus.")
+    return {
+        "ready": not blocked,
+        "blocked_reasons": blocked,
+        "warnings": warnings,
+        "status": kg_status,
+        "path": str(kg_path),
+        "gitnexus_index": gitnexus_index,
+        "selected_tools": selected_tools,
+    }
 
 
 def resolve_optional_repo_path(repo: Path, path: Path | None) -> Path | None:
@@ -311,13 +376,13 @@ def validate_gate_request(request: GateRequest) -> dict:
     kg_path = (
         (kg_status_file if kg_status_file.is_absolute() else repo / kg_status_file)
         if kg_status_file
-        else kg_status_file_from_registry(repo, registry_data) or find_kg_status_file(repo, None)
+        else kg_status_file_from_registry(repo, registry_data) or find_kg_status_file(repo, None, state_data)
     )
     kg_status = read_json(kg_path) if kg_path.exists() else None
-    if not kg_status:
-        blocked_reasons.append(f"Knowledge graph status file not found or unreadable: {kg_path}")
-    elif not kg_status.get("selected_tools"):
-        warnings.append("Knowledge graph status exists, but no graph tools were selected.")
+    kg_status_result = validate_kg_status(repo, kg_status, kg_path, request.gitnexus_degradation)
+    if not kg_status_result["ready"]:
+        blocked_reasons.extend(kg_status_result["blocked_reasons"])
+    warnings.extend(kg_status_result["warnings"])
 
     multi_service_result = validate_multi_service_preconditions(repo, request, state_data, registry_data)
     if not multi_service_result["ready"]:
@@ -525,6 +590,7 @@ def validate_gate_request(request: GateRequest) -> dict:
         "design": design_result,
         "knowledge_graph_status_file": str(kg_path),
         "knowledge_graph_status_loaded": bool(kg_status),
+        "knowledge_graph_status": kg_status_result,
         "multi_service_preconditions": multi_service_result,
         "red_test_evidence": red_test_result,
         "tdd": tdd_result,

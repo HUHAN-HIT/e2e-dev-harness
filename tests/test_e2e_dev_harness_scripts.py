@@ -7699,6 +7699,46 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("does not match run-state lifecycle" in reason for reason in result["blocked_reasons"]))
 
+    def test_phase_guard_blocks_direct_harness_control_file_edit_with_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CLARIFIED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Edit",
+                [Path("docs/agent-runs/run/.phase-lock")],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Harness control file write blocked" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(result["not_deadlock"])
+        self.assertIn("next_valid_command", result)
+        self.assertTrue(any("disable or edit harness hooks" in action for action in result["forbidden_actions"]))
+
+    def test_phase_guard_blocks_direct_hook_config_edit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Write",
+                [Path(".claude/settings.json")],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("hook config edit blocked" in reason.lower() for reason in result["blocked_reasons"]))
+        self.assertEqual("CREATED", result["lifecycle"])
+        self.assertTrue(result["not_deadlock"])
+        self.assertIn("clarify", " ".join(result["allowed_actions"]).lower())
+
     def test_phase_guard_allows_red_test_write_in_planned_phase(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

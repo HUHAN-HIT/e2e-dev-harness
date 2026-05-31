@@ -19,6 +19,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import implementation_gate  # noqa: E402
+import kg_refresh  # noqa: E402
 import service_design_gate  # noqa: E402
 import context_pack  # noqa: E402
 import harness_verify  # noqa: E402
@@ -171,6 +172,88 @@ class ImplementationGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("Knowledge graph status" in reason for reason in result["blocked_reasons"]))
+
+    def test_kg_refresh_detects_existing_gitnexus_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            meta = repo / ".gitnexus" / "meta.json"
+            meta.parent.mkdir(parents=True)
+            meta.write_text(
+                json.dumps(
+                    {
+                        "repoPath": str(repo),
+                        "indexedAt": "2026-05-31T00:00:00Z",
+                        "stats": {"nodes": 12, "edges": 34, "processes": 5},
+                        "capabilities": {"graph": {"status": "available"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = kg_refresh.detect(repo)
+
+        self.assertTrue(result["gitnexus_index"]["exists"])
+        self.assertTrue(result["gitnexus_index"]["repo_path_matches"])
+        self.assertEqual(12, result["gitnexus_index"]["nodes"])
+        self.assertEqual("available", result["gitnexus_index"]["graph_status"])
+
+    def test_gate_blocks_stale_skipped_kg_status_when_gitnexus_index_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            meta = repo / ".gitnexus" / "meta.json"
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            meta.parent.mkdir(parents=True)
+            kg.parent.mkdir(parents=True)
+            meta.write_text(
+                json.dumps(
+                    {
+                        "repoPath": str(repo),
+                        "stats": {"nodes": 12, "edges": 34, "processes": 5},
+                        "capabilities": {"graph": {"status": "available"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            kg.write_text(
+                json.dumps({"status": "skipped", "reason": "no knowledge graph configured"}),
+                encoding="utf-8",
+            )
+
+            result = implementation_gate.validate_gate_request(
+                implementation_gate.GateRequest(repo=repo, phase="planning", kg_status_file=kg)
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("status is skipped" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any(".gitnexus/meta.json exists" in reason for reason in result["blocked_reasons"]))
+
+    def test_gate_prefers_current_run_kg_status_over_stale_root_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            root_kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            run_kg = repo / "docs" / "agent-runs" / "run" / "evidence" / "knowledge-graph-refresh.json"
+            root_kg.parent.mkdir(parents=True)
+            run_kg.parent.mkdir(parents=True)
+            root_kg.write_text(
+                json.dumps({"status": "skipped", "reason": "no knowledge graph configured"}),
+                encoding="utf-8",
+            )
+            run_kg.write_text(json.dumps({"selected_tools": ["gitnexus"]}), encoding="utf-8")
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("docs/agent-runs/run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CLARIFIED")
+            run_state.write_state(repo, state_path, state)
+
+            result = implementation_gate.validate_gate_request(
+                implementation_gate.GateRequest(
+                    repo=repo,
+                    phase="planning",
+                    run_state=Path("docs/agent-runs/run/run-state.json"),
+                    require_semantic_reviews=False,
+                )
+            )
+
+        self.assertEqual(str(run_kg), result["knowledge_graph_status_file"])
+        self.assertFalse(any("status is skipped" in reason for reason in result["blocked_reasons"]))
 
     def test_implementation_gate_requires_run_state_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

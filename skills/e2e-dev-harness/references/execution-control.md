@@ -17,6 +17,8 @@ The guard recognizes direct file tools including Claude `Update`, `apply_patch`,
 Claude Code hook matchers must include `Read`, `Grep`, `Glob`, `Task`, `Update`, and `Bash`; otherwise code exploration, code-agent dispatch, update-style edits, or shell writes can bypass the guard.
 `Task`/`TaskCreate` hooks block implementation-agent dispatch until the run has passed the implementation gate; requirements, design, test-design, handoff, and reviewer tasks remain allowed before implementation.
 Read targets outside the configured repository are allowed with a warning instead of being treated as project code, which prevents a stale or mismatched hook target from blocking recovery reads while still blocking code writes outside the target repo.
+Direct edits to harness control files and hook configuration are blocked as bypass attempts.
+When this happens, the guard returns `not_deadlock: true`, the current `lifecycle`, `allowed_actions`, `forbidden_actions`, and `next_valid_command` so the agent is routed back to the state machine instead of asking to disable hooks.
 Unscoped shell mutations are denied by default because service scope cannot be enforced without target paths.
 
 ## Stop Guard

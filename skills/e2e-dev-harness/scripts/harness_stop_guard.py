@@ -14,6 +14,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import run_state  # noqa: E402
+from common import configure_utf8_stdio, posix  # noqa: E402
 
 
 TERMINAL_LIFECYCLES = {"VERIFIED", "ARCHIVED"}
@@ -24,12 +25,123 @@ NEXT_ACTIONS = {
     "CLARIFIED": "Run plan, create the agent-run archive, and complete R1 review.",
     "SERVICE_DESIGN_REQUIRED": "Complete and validate every service design slice before TDD red.",
     "PLANNED": "Write the red test evidence, run R2 review, then open implementation through the implementation gate.",
-    "RED_READY": "Run gate --phase implementation with red evidence and run-state.",
+    "RED_READY": "Complete R2 test review if missing, then run gate --phase implementation with red evidence and run-state.",
     "IMPLEMENTED": "Continue TDD red/green for all assigned ACs, run ac-progress, R3 review, completion gate, strict guard, and archive.",
     "REVIEWED": "Run completion gate, strict guard, run summary, and requirements archive validation.",
     "REWORK_REQUIRED": "Follow the rework return phase and verify the rework item before finalizing.",
     "VERIFIED": "Archive the requirement summary and report evidence.",
     "ARCHIVED": "Run is terminal.",
+}
+
+REMAINING_PHASES = {
+    "CREATED": [
+        "clarify",
+        "R1 design review",
+        "plan/archive",
+        "TDD red",
+        "R2 test review",
+        "implementation gate",
+        "TDD green",
+        "AC progress",
+        "R3 implementation review",
+        "completion gate",
+        "strict guard",
+        "archive",
+    ],
+    "CLARIFIED": [
+        "R1 design review",
+        "plan/archive",
+        "service design split if multi-service",
+        "TDD red",
+        "R2 test review",
+        "implementation gate",
+        "TDD green",
+        "AC progress",
+        "R3 implementation review",
+        "completion gate",
+        "strict guard",
+        "archive",
+    ],
+    "SERVICE_DESIGN_REQUIRED": [
+        "service design validation",
+        "TDD red",
+        "R2 test review",
+        "implementation gate",
+        "TDD green",
+        "AC progress",
+        "R3 implementation review",
+        "completion gate",
+        "strict guard",
+        "archive",
+    ],
+    "PLANNED": [
+        "TDD red",
+        "R2 test review",
+        "implementation gate",
+        "TDD green",
+        "AC progress",
+        "R3 implementation review",
+        "completion gate",
+        "strict guard",
+        "archive",
+    ],
+    "RED_READY": [
+        "R2 test review",
+        "implementation gate",
+        "TDD green",
+        "AC progress",
+        "R3 implementation review",
+        "completion gate",
+        "strict guard",
+        "archive",
+    ],
+    "IMPLEMENTED": [
+        "continue remaining AC red/green",
+        "AC progress",
+        "R3 implementation review",
+        "completion gate",
+        "strict guard",
+        "archive",
+    ],
+    "REVIEWED": ["completion gate", "strict guard", "archive"],
+    "REWORK_REQUIRED": ["rework return phase", "re-verify", "completion gate", "strict guard", "archive"],
+    "VERIFIED": ["archive"],
+    "ARCHIVED": [],
+}
+
+COMMAND_HINTS = {
+    "CREATED": [
+        "e2e_dev_harness.py clarify . --design-doc docs/design/<feature>.md --run-state <run-state>",
+    ],
+    "CLARIFIED": [
+        "create an independent R1 design review artifact",
+        "e2e_dev_harness.py plan . --design-doc docs/design/<feature>.md --agent-run-dir docs/agent-runs/<run> --create-archive",
+    ],
+    "SERVICE_DESIGN_REQUIRED": [
+        "e2e_dev_harness.py service-design . --global-design docs/design/<feature>.md --service-design-dir docs/agent-runs/<run>/service-designs --run-state <run-state>",
+    ],
+    "PLANNED": [
+        "write the first failing test and capture red evidence",
+        "create an independent R2 test review artifact",
+    ],
+    "RED_READY": [
+        "create an independent R2 test review artifact if it is missing",
+        "e2e_dev_harness.py gate . --phase implementation --run-state <run-state> --red-test-evidence <red-evidence> --review-dir <reviews>",
+    ],
+    "IMPLEMENTED": [
+        "e2e_dev_harness.py ac-progress . --design-doc <design> --coverage-matrix <coverage> --implementation-manifest <manifest> --unit-test-evidence <green-evidence>",
+        "create independent R3 implementation review, then run gate --phase completion",
+    ],
+    "REVIEWED": [
+        "e2e_dev_harness.py gate . --phase completion --run-state <run-state> --design-doc <design> --unit-test-evidence <green-evidence>",
+        "e2e_dev_harness.py verify . --strict-workflow --run-state <run-state>",
+    ],
+    "REWORK_REQUIRED": [
+        "follow the rework item return phase before finalizing",
+    ],
+    "VERIFIED": [
+        "archive the requirement summary and report evidence",
+    ],
 }
 
 
@@ -95,6 +207,61 @@ def open_schedule_tasks(schedule_path: Path | None) -> list[dict]:
                 }
             )
     return open_tasks
+
+
+def rel(repo: Path, path: Path | None) -> str | None:
+    if not path:
+        return None
+    try:
+        return posix(path.resolve().relative_to(repo.resolve()))
+    except (OSError, ValueError):
+        return str(path)
+
+
+def stop_guidance(lifecycle: str, state_path: Path | None, repo: Path) -> dict:
+    hints = list(COMMAND_HINTS.get(lifecycle, []))
+    if state_path:
+        state_value = rel(repo, state_path) or str(state_path)
+        hints = [hint.replace("<run-state>", state_value) for hint in hints]
+    return {
+        "must_continue": lifecycle not in TERMINAL_LIFECYCLES,
+        "next_action": NEXT_ACTIONS.get(lifecycle, "Inspect run-state.json and repair lifecycle before finalizing."),
+        "remaining_phases": REMAINING_PHASES.get(lifecycle, []),
+        "recommended_commands": hints,
+        "agent_instruction": (
+            "Do not ask the user to choose between normal harness phases. "
+            "Continue with the next required phase unless a real product decision or missing external approval blocks progress."
+        ),
+        "forbidden_response": (
+            "Do not summarize as finished, do not say the system is normal after a stop-hook block, "
+            "and do not offer R3/completion while earlier required phases remain."
+        ),
+    }
+
+
+def write_blocked_stderr(result: dict) -> None:
+    if result.get("ready"):
+        return
+    print("HARNESS STOP BLOCKED", file=sys.stderr)
+    lifecycle = result.get("lifecycle")
+    if lifecycle:
+        print(f"Lifecycle: {lifecycle}", file=sys.stderr)
+    for reason in result.get("blocked_reasons", [])[:6]:
+        print(f"- {reason}", file=sys.stderr)
+    guidance = result.get("guidance") if isinstance(result.get("guidance"), dict) else {}
+    next_action = guidance.get("next_action") or result.get("next_action")
+    if next_action:
+        print(f"Next required action: {next_action}", file=sys.stderr)
+    remaining = guidance.get("remaining_phases") or []
+    if remaining:
+        print("Remaining phases: " + " -> ".join(str(item) for item in remaining[:10]), file=sys.stderr)
+    commands = guidance.get("recommended_commands") or []
+    if commands:
+        print("Recommended command/action:", file=sys.stderr)
+        print(f"  {commands[0]}", file=sys.stderr)
+    agent_instruction = guidance.get("agent_instruction")
+    if agent_instruction:
+        print(agent_instruction, file=sys.stderr)
 
 
 def evaluate(
@@ -174,6 +341,7 @@ def evaluate(
         "run_state": str(state_path),
         "lifecycle": lifecycle,
         "next_action": NEXT_ACTIONS.get(lifecycle, "Inspect run-state.json and repair lifecycle before finalizing."),
+        "guidance": stop_guidance(lifecycle, state_path, repo),
         "schedule": str(schedule_path) if schedule_path else None,
         "open_tasks": open_tasks,
     }
@@ -188,6 +356,7 @@ def parse_hook_input(source: str | None) -> None:
 
 
 def main() -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", nargs="?", default=".", type=Path)
     parser.add_argument("--run-state", type=Path)
@@ -223,6 +392,7 @@ def main() -> int:
             print(f"- {reason}")
         for warning in result["warnings"]:
             print(f"warning: {warning}")
+    write_blocked_stderr(result)
     return 0 if result["ready"] else 2
 
 

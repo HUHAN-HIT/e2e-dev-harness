@@ -15,7 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import clarification_gate  # noqa: E402
 import coverage_gate  # noqa: E402
-from common import posix  # noqa: E402
+from common import configure_utf8_stdio, posix  # noqa: E402
 
 
 REQUIRED_SECTIONS = {
@@ -33,6 +33,9 @@ CONCRETE_RUNTIME_RE = re.compile(r"(->|controller|service|repository|client|send
 TEST_REF_RE = re.compile(r"(\b[A-Z][A-Za-z0-9_]*(?:Test|Tests|IT|Spec)\b|src/test|mvn|gradle|junit|assert)", re.IGNORECASE)
 MAVEN_OR_TEST_COMMAND_RE = re.compile(r"\b(mvn|gradle|test|verify)\b", re.IGNORECASE)
 PLACEHOLDER_RE = re.compile(r"\b(todo|tbd|pending|unknown|placeholder)\b|<[^>]+>", re.IGNORECASE)
+MOJIBAKE_RE = re.compile(
+    r"[\ufffd]|(?:[鍜鍙鍚鍦鍏瀹實椋鏀绯妯潡灏缂璇瑙榛浜][\u4e00-\u9fff]{1,8})"
+)
 
 
 def resolve(repo: Path, path: Path | None) -> Path | None:
@@ -143,6 +146,19 @@ def local_tests_are_mapped(text: str) -> list[str]:
     return sorted(set(missing))
 
 
+def mojibake_samples(text: str, limit: int = 3) -> list[str]:
+    samples: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if MOJIBAKE_RE.search(stripped):
+            samples.append(stripped[:120])
+        if len(samples) >= limit:
+            break
+    return samples
+
+
 def validate(repo: Path, global_design: Path | None, service_design_dir: Path | None = None, service_designs: list[Path] | None = None) -> dict:
     repo = repo.resolve()
     blocked: list[str] = []
@@ -163,6 +179,12 @@ def validate(repo: Path, global_design: Path | None, service_design_dir: Path | 
     mapped: dict[str, list[str]] = {}
     for path in files:
         text = path.read_text(encoding="utf-8", errors="replace")
+        mojibake = mojibake_samples(text)
+        if mojibake:
+            blocked.append(
+                f"Service design {posix(path.relative_to(repo))} appears to contain mojibake/encoding-corrupted text; "
+                "rewrite it as UTF-8 before validation. Samples: " + " | ".join(mojibake)
+            )
         titles = section_titles(text)
         missing = sorted(REQUIRED_SECTIONS - titles)
         if missing:
@@ -207,6 +229,7 @@ def validate(repo: Path, global_design: Path | None, service_design_dir: Path | 
 
 
 def main() -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", nargs="?", default=".", type=Path)
     parser.add_argument("--global-design", required=True, type=Path)

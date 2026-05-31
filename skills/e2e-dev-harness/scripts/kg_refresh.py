@@ -37,6 +37,40 @@ def contains_text(path: Path, needle: str) -> bool:
         return False
 
 
+def read_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return {}
+
+
+def detect_gitnexus_index(repo: Path) -> dict:
+    meta_path = repo / ".gitnexus" / "meta.json"
+    meta = read_json(meta_path) if meta_path.exists() else {}
+    repo_path = str(meta.get("repoPath") or "")
+    stats = meta.get("stats") if isinstance(meta.get("stats"), dict) else {}
+    capabilities = meta.get("capabilities") if isinstance(meta.get("capabilities"), dict) else {}
+    graph = capabilities.get("graph") if isinstance(capabilities.get("graph"), dict) else {}
+    repo_path_matches = False
+    if repo_path:
+        try:
+            repo_path_matches = Path(repo_path).resolve() == repo.resolve()
+        except OSError:
+            repo_path_matches = False
+    return {
+        "exists": meta_path.exists(),
+        "meta_path": posix(meta_path.relative_to(repo)) if meta_path.exists() else ".gitnexus/meta.json",
+        "repo_path": repo_path,
+        "repo_path_matches": repo_path_matches,
+        "indexed_at": meta.get("indexedAt"),
+        "nodes": stats.get("nodes"),
+        "edges": stats.get("edges"),
+        "processes": stats.get("processes"),
+        "graph_status": graph.get("status"),
+    }
+
+
 def detect(repo: Path) -> dict:
     files = list(walk_files(repo))
     poms = sorted(posix(path.relative_to(repo)) for path in files if path.name == "pom.xml")
@@ -84,6 +118,7 @@ def detect(repo: Path) -> dict:
         "design_docs_or_media_sample": docs[:20],
         "graphify_graph": posix(GRAPHIFY_GRAPH),
         "graphify_graph_exists": (repo / GRAPHIFY_GRAPH).exists(),
+        "gitnexus_index": detect_gitnexus_index(repo),
         "service_candidates": sorted(service_candidates),
         "multi_service": len(service_candidates) > 1,
     }

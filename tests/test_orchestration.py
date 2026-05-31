@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -859,6 +861,146 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
         self.assertEqual(["AC-1", "AC-2"], result["mapped_acceptance_ids"])
+
+    def test_service_design_gate_blocks_mojibake_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "checkout.md"
+            service_dir = repo / "docs" / "agent-runs" / "run" / "service-designs"
+            service_dir.mkdir(parents=True)
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Checkout
+
+                    ## Acceptance Criteria
+                    - AC-1 Order is created.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            (service_dir / "order-service.md").write_text(
+                textwrap.dedent(
+                    """
+                    # Service Design Slice: services/order-service
+
+                    ## Service Scope
+                    - Service/module: services/order-service
+                    - Allowed edit scope:
+                      - services/order-service/
+                    - Explicitly out of scope: 鍏朵粬妯″潡
+
+                    ## Global Intent Summary
+                    - Create checkout order.
+
+                    ## Mapped Acceptance Criteria
+                    | AC | global requirement | service responsibility | local tests |
+                    | --- | --- | --- | --- |
+                    | AC-1 | Order is created | Persist order | OrderServiceTest |
+
+                    ## Runtime Path
+                    - Controller -> OrderService -> Repository
+
+                    ## Service-local TDD Plan
+                    - First red test: OrderServiceTest
+                    - Expected failure: missing order persistence
+                    - Required Maven command: mvn -pl services/order-service -am test
+
+                    ## Dependency Boundary
+                    - Independent service change: yes
+                    - HTTP/API dependencies: None
+                    - MQ/DMQ/Kafka dependencies: None
+
+                    ## Test Impact
+                    - mvn -pl services/order-service -am test
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            result = service_design_gate.validate(repo, design, service_dir)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("mojibake" in reason for reason in result["blocked_reasons"]))
+
+    def test_service_design_gate_cli_emits_utf8_json_on_windows_codepage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "checkout.md"
+            service_dir = repo / "docs" / "agent-runs" / "run" / "service-designs"
+            service_dir.mkdir(parents=True)
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Checkout
+
+                    ## Acceptance Criteria
+                    - AC-1 Order is created.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            (service_dir / "order-service.md").write_text(
+                textwrap.dedent(
+                    """
+                    # Service Design Slice: services/order-service
+
+                    ## Service Scope
+                    - Service/module: services/order-service
+                    - Allowed edit scope:
+                      - services/order-service/
+                    - Explicitly out of scope: 鍏朵粬妯″潡
+
+                    ## Global Intent Summary
+                    - Create checkout order.
+
+                    ## Mapped Acceptance Criteria
+                    | AC | global requirement | service responsibility | local tests |
+                    | --- | --- | --- | --- |
+                    | AC-1 | Order is created | Persist order | OrderServiceTest |
+
+                    ## Runtime Path
+                    - Controller -> OrderService -> Repository
+
+                    ## Service-local TDD Plan
+                    - First red test: OrderServiceTest
+                    - Expected failure: missing order persistence
+                    - Required Maven command: mvn -pl services/order-service -am test
+
+                    ## Dependency Boundary
+                    - Independent service change: yes
+
+                    ## Test Impact
+                    - mvn -pl services/order-service -am test
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            env = dict(os.environ)
+            env["PYTHONIOENCODING"] = "cp936"
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "service_design_gate.py"),
+                    str(repo),
+                    "--global-design",
+                    str(design),
+                    "--service-design-dir",
+                    str(service_dir),
+                    "--json",
+                ],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertNotEqual(0, completed.returncode)
+        decoded = completed.stdout.decode("utf-8")
+        self.assertIn("mojibake", decoded)
 
     def test_service_design_command_transitions_multi_run_to_planned(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2031,6 +2173,29 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("Harness control file write blocked" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(result["not_deadlock"])
+        self.assertIn("next_valid_command", result)
+        self.assertTrue(any("disable or edit harness hooks" in action for action in result["forbidden_actions"]))
+
+    def test_phase_guard_blocks_direct_hook_config_edit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Write",
+                [Path(".claude/settings.json")],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("hook config edit blocked" in reason.lower() for reason in result["blocked_reasons"]))
+        self.assertEqual("CREATED", result["lifecycle"])
+        self.assertTrue(result["not_deadlock"])
+        self.assertIn("clarify", " ".join(result["allowed_actions"]).lower())
 
     def test_phase_guard_blocks_apply_patch_delete_of_harness_control_file(self) -> None:
         patch_text = "*** Begin Patch\n*** Delete File: docs/agent-runs/run/run-state.json\n*** End Patch\n"
@@ -2454,6 +2619,36 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("not terminal" in reason for reason in result["blocked_reasons"]))
+        self.assertIn("R1 design review", result["guidance"]["remaining_phases"])
+        self.assertIn("Do not ask the user to choose", result["guidance"]["agent_instruction"])
+
+    def test_stop_guard_json_hook_writes_blocking_guidance_to_stderr(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("docs/agent-runs/run", "single", [], "docs/agent-runs/run/artifact-registry.json", "RED_READY")
+            run_state.write_state(repo, state_path, state)
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "harness_stop_guard.py"),
+                    str(repo),
+                    "--run-state",
+                    str(state_path),
+                    "--strict",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(2, completed.returncode)
+        self.assertIn('"ready": false', completed.stdout)
+        self.assertIn("HARNESS STOP BLOCKED", completed.stderr)
+        self.assertIn("R2 test review", completed.stderr)
+        self.assertIn("Do not ask the user to choose", completed.stderr)
 
     def test_stop_guard_allows_no_active_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
