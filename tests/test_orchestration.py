@@ -184,18 +184,68 @@ class OrchestrationArtifactTests(unittest.TestCase):
             state = json.loads(Path(result["run_state"]).read_text(encoding="utf-8"))
             lock = json.loads(Path(result["phase_lock"]).read_text(encoding="utf-8"))
             schedule = json.loads(Path(result["agent_schedule"]).read_text(encoding="utf-8"))
+            workflow = json.loads(Path(result["workflow_plan"]).read_text(encoding="utf-8"))
+            registry = json.loads(Path(result["artifact_registry"]).read_text(encoding="utf-8"))
             guard = phase_guard.validate_action(repo, "Write", [Path("services/refund/src/main/java/RefundService.java")])
 
         self.assertEqual(0, code)
         self.assertTrue(design_exists)
         self.assertIn("## Restated Intent", design_text)
+        self.assertIn("## System Sequence", design_text)
+        self.assertIn("sequenceDiagram", design_text)
         self.assertEqual("CREATED", state["lifecycle"])
         self.assertEqual("code-write-locked", lock["state"])
         self.assertEqual("bootstrap", schedule["selected_mode"])
         self.assertEqual("requirements-clarifier", schedule["tasks"][0]["agent"])
         self.assertEqual("clarify", schedule["tasks"][0]["phase"])
         self.assertTrue(schedule["tasks"][0]["role_template"])
+        self.assertEqual("e2e-dev-harness.workflow-plan.v1", workflow["schema"])
+        self.assertEqual("auto", workflow["phase_mode"])
+        self.assertEqual(result["workflow_plan"], str(Path(result["workflow_plan"])))
+        self.assertEqual("standard", state["workflow_profile"])
+        self.assertTrue(any(item["type"] == "workflow_plan" for item in registry["artifacts"]))
         self.assertFalse(guard["ready"])
+
+    def test_start_manual_phase_profile_writes_workflow_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            profile = repo / "phase-profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "name": "manual-risk-review",
+                        "manual_confirm_phases": ["clarify", "implementation-gate"],
+                        "dispatch_policy": {"service_code": "manual-after-IMPLEMENTED"},
+                        "custom_checkpoints": [{"id": "risk-owner", "after": "plan"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                repo=repo,
+                feature="Refund MQ",
+                request="Publish refund notification after success.",
+                design_doc=None,
+                agent_run_dir=None,
+                run_id="run",
+                run_date=None,
+                phase_mode="manual",
+                workflow_profile="manual-risk-review",
+                phase_profile=Path("phase-profile.json"),
+                force=False,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.start(args)
+            state = json.loads(Path(result["run_state"]).read_text(encoding="utf-8"))
+            workflow = json.loads(Path(result["workflow_plan"]).read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code)
+        self.assertEqual("manual", result["phase_mode"])
+        self.assertEqual("manual-risk-review", result["workflow_profile"])
+        self.assertEqual(["clarify", "implementation-gate"], workflow["manual_confirm_phases"])
+        self.assertEqual("manual-after-IMPLEMENTED", workflow["dispatch_policy"]["service_code"])
+        self.assertEqual("docs/agent-runs/run/workflow-plan.json", state["workflow_plan"])
 
     def test_next_reports_clarify_after_start(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -220,6 +270,8 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual("CREATED", result["lifecycle"])
         self.assertEqual("clarify", result["next"]["phase"])
+        self.assertEqual("e2e-dev-harness.workflow-plan.v1", result["workflow_plan"]["schema"])
+        self.assertEqual("auto", result["phase_mode"])
         self.assertEqual("phase-scoped", result["todo_policy"]["mode"])
         self.assertEqual("gitnexus", result["exploration_policy"]["preferred"])
         self.assertTrue(any("GitNexus" in item for item in result["required_todo_list"]))
@@ -1336,6 +1388,124 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(["T20", "T21"], [task["id"] for task in result["claimed_tasks"]])
         self.assertEqual(2, len(result["runtime_spawn_requests"]))
 
+    def test_dispatch_beat_in_planned_skips_stale_early_tasks_and_spawns_service_tdd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            test_template = Path("docs/agent-runs/run/agent-roles/test-case-developer.md")
+            design_template = Path("docs/agent-runs/run/agent-roles/requirements-clarifier.md")
+            review_template = Path("docs/agent-runs/run/agent-roles/semantic-reviewer.md")
+            for template in (test_template, design_template, review_template):
+                write_role_template(repo, template)
+            for service in ("order-service", "payment-service"):
+                design = run_dir / "service-designs" / f"{service}.md"
+                plan = run_dir / "service-plans" / service / "implementation-plan.md"
+                design.parent.mkdir(parents=True, exist_ok=True)
+                plan.parent.mkdir(parents=True, exist_ok=True)
+                design.write_text(f"# Service Design Slice: services/{service}\n", encoding="utf-8")
+                plan.write_text(f"# Implementation Plan: services/{service}\n", encoding="utf-8")
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state(
+                    "docs/agent-runs/run",
+                    "multi",
+                    ["services/order-service", "services/payment-service"],
+                    "docs/agent-runs/run/artifact-registry.json",
+                    "PLANNED",
+                ),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "selected_mode": "multi",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "role_group": "design",
+                                "parallel_group": "clarify",
+                                "role_template": design_template.as_posix(),
+                                "status": "planned",
+                            },
+                            {
+                                "id": "T02",
+                                "agent": "use-case-designer",
+                                "phase": "design",
+                                "role_group": "design",
+                                "parallel_group": "design",
+                                "depends_on_phases": ["clarify"],
+                                "role_template": design_template.as_posix(),
+                                "status": "planned",
+                            },
+                            {
+                                "id": "T04",
+                                "agent": "design-reviewer",
+                                "phase": "r1-review",
+                                "role_group": "review",
+                                "parallel_group": "r1-review",
+                                "depends_on_phases": ["design"],
+                                "role_template": review_template.as_posix(),
+                                "status": "planned",
+                            },
+                            {
+                                "id": "T20",
+                                "agent": "test-case-developer-order-service",
+                                "phase": "tdd-red",
+                                "role_group": "test",
+                                "service": "services/order-service",
+                                "parallel_group": "service:services/order-service",
+                                "depends_on_phases": ["design", "r1-review"],
+                                "inputs": [
+                                    "docs/agent-runs/run/handoffs/01-requirements-clarifier.md",
+                                    "docs/agent-runs/run/handoffs/02-use-case-designer.md",
+                                    "docs/agent-runs/run/handoffs/03-test-case-developer.md",
+                                    "docs/agent-runs/run/service-designs/order-service.md",
+                                    "docs/agent-runs/run/service-plans/order-service/implementation-plan.md",
+                                ],
+                                "outputs": ["docs/agent-runs/run/service-plans/order-service/red-test-evidence.txt"],
+                                "role_template": test_template.as_posix(),
+                                "status": "planned",
+                            },
+                            {
+                                "id": "T21",
+                                "agent": "test-case-developer-payment-service",
+                                "phase": "tdd-red",
+                                "role_group": "test",
+                                "service": "services/payment-service",
+                                "parallel_group": "service:services/payment-service",
+                                "depends_on_phases": ["design", "r1-review"],
+                                "inputs": [
+                                    "docs/agent-runs/run/handoffs/01-requirements-clarifier.md",
+                                    "docs/agent-runs/run/handoffs/02-use-case-designer.md",
+                                    "docs/agent-runs/run/handoffs/03-test-case-developer.md",
+                                    "docs/agent-runs/run/service-designs/payment-service.md",
+                                    "docs/agent-runs/run/service-plans/payment-service/implementation-plan.md",
+                                ],
+                                "outputs": ["docs/agent-runs/run/service-plans/payment-service/red-test-evidence.txt"],
+                                "role_template": test_template.as_posix(),
+                                "status": "planned",
+                            },
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_beat(repo, schedule, state_path, runtime="codex", max_workers=4)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(["T20", "T21"], [task["id"] for task in result["claimed_tasks"]])
+        self.assertEqual(2, len(result["runtime_spawn_requests"]))
+        self.assertTrue(all(task["phase"] == "tdd-red" for task in result["claimed_tasks"]))
+
     def test_dispatch_beat_does_not_parallelize_same_group(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -2435,11 +2605,75 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertTrue(written_exists)
         self.assertIn("## Runtime Path", text)
+        self.assertIn("## Local Sequence", text)
+        self.assertIn("sequenceDiagram", text)
         self.assertIn("## Service-local TDD Plan", text)
         self.assertIn("First red test:", text)
         self.assertIn("Expected failure:", text)
         self.assertIn("Required Maven command:", text)
         self.assertIn("Independent service change:", text)
+
+    def test_service_design_gate_requires_local_sequence_for_cross_service_dependencies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "checkout.md"
+            service_dir = repo / "docs" / "agent-runs" / "run" / "service-designs"
+            service_dir.mkdir(parents=True)
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Checkout
+
+                    ## Acceptance Criteria
+                    - AC-1 Order publishes payment reserve event.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            (service_dir / "order-service.md").write_text(
+                textwrap.dedent(
+                    """
+                    # Service Design Slice: services/order-service
+
+                    ## Service Scope
+                    - Service/module: services/order-service
+                    - Allowed edit scope:
+                      - services/order-service/
+
+                    ## Global Intent Summary
+                    - Publish payment reserve event.
+
+                    ## Mapped Acceptance Criteria
+                    | AC | global requirement | service responsibility | local tests |
+                    | --- | --- | --- | --- |
+                    | AC-1 | Publish payment reserve event | Send event after order creation | OrderServiceTest |
+
+                    ## Runtime Path
+                    - Controller -> OrderService -> RocketMQ sender
+
+                    ## Service-local TDD Plan
+                    - First red test: OrderServiceTest
+                    - Expected failure: missing event publish
+                    - Required Maven command: mvn -pl services/order-service -am test
+
+                    ## Dependency Boundary
+                    - Independent service change: no, publishes MQ event consumed by payment-service
+                    - HTTP/API dependencies: None
+                    - MQ/DMQ/Kafka dependencies: topic payment.reserve, consumer payment-service
+
+                    ## Test Impact
+                    - mvn -pl services/order-service -am test
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            result = service_design_gate.validate(repo, design, service_dir)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Local Sequence" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any(hint["action"] == "add_local_sequence" for hint in result["fix_hints"]))
 
     def test_multi_implementation_gate_blocks_before_service_design_state_passes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

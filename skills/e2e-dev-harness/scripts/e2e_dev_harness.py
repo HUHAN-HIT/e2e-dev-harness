@@ -172,6 +172,21 @@ def design_template(feature: str, request: str = "") -> str:
 ## Use Cases
 - UC-1:
 
+## System Sequence
+```mermaid
+sequenceDiagram
+    actor User
+    participant Entry as Entry point
+    participant Service as Service/domain logic
+    participant Data as Repository/client/sender
+    User->>Entry: Trigger UC-1
+    Entry->>Service: Execute AC-1 behavior
+    Service->>Data: Read/write/call/publish declared effects
+    Data-->>Service: Result or acknowledgement
+    Service-->>Entry: Outcome
+    Entry-->>User: Response or observable result
+```
+
 ## Acceptance Criteria
 - AC-1:
 
@@ -333,7 +348,7 @@ def required_todo_list_for_lifecycle(lifecycle: str, state: dict | None = None) 
             "Revise service design slices until the service-design gate passes.",
         ],
         "PLANNED": [
-            "Dispatch or complete service-local TDD red tasks.",
+            "Run e2e_dev_harness.py dispatch-beat --max-workers <N> to spawn service-local TDD red workers.",
             "Capture red-test evidence and required command output for each affected service.",
             "Dispatch or complete the independent R2 test review.",
             "Run e2e_dev_harness.py next again after TDD red and R2 complete; run-state should advance to RED_READY.",
@@ -464,7 +479,7 @@ def next_action_for_lifecycle(lifecycle: str, state: dict | None = None) -> dict
     if lifecycle == "PLANNED" and state.get("selected_mode") == "multi":
         action = dict(action)
         action["command"] = (
-            "Dispatch/complete service-local TDD red workers and R2 review. After run-state reaches RED_READY, "
+            "Run dispatch-beat --max-workers <N> to spawn service-local TDD red workers, then dispatch/complete R2 review. After run-state reaches RED_READY, "
             "run gate --phase implementation; dispatch code-developer workers only after IMPLEMENTED."
         )
         action["blocked_writes"] = [
@@ -503,6 +518,94 @@ def workflow_overview_for(lifecycle: str, state: dict | None = None) -> dict:
         "selected_mode": state.get("selected_mode", ""),
         "steps": steps,
     }
+
+
+def load_phase_profile(repo: Path, path: Path | None) -> tuple[dict, list[str]]:
+    if not path:
+        return {}, []
+    try:
+        resolved = require_repo_path(repo, path, "phase profile")
+    except ValueError as error:
+        return {}, [str(error)]
+    if not resolved.exists():
+        return {}, [f"Phase profile not found: {resolved}"]
+    try:
+        data = json.loads(resolved.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as error:
+        return {}, [f"Phase profile is invalid JSON: {error}"]
+    if not isinstance(data, dict):
+        return {}, ["Phase profile must be a JSON object."]
+    return data, []
+
+
+def workflow_plan_for_start(
+    phase_mode: str,
+    workflow_profile: str,
+    phase_profile: dict | None = None,
+    current_lifecycle: str = "CREATED",
+) -> dict:
+    profile = phase_profile or {}
+    manual_confirm = profile.get("manual_confirm_phases")
+    if not isinstance(manual_confirm, list):
+        manual_confirm = ["clarify"] if phase_mode == "manual" else []
+    dispatch_policy = profile.get("dispatch_policy") if isinstance(profile.get("dispatch_policy"), dict) else {}
+    custom_checkpoints = profile.get("custom_checkpoints") if isinstance(profile.get("custom_checkpoints"), list) else []
+    phases = []
+    for lifecycle, phase, summary in BLUEPRINT_STEPS:
+        phases.append(
+            {
+                "lifecycle": lifecycle,
+                "phase": phase,
+                "required": True,
+                "gate_summary": summary,
+                "advance_by": {
+                    "clarify": "clarify gate",
+                    "plan": "plan archive and R1 review",
+                    "service-design": "service-design gate when multi-service",
+                    "tdd-red": "TDD red task completion and R2 review completion",
+                    "implementation-gate": "gate --phase implementation",
+                    "implement-or-complete": "code-agent completion, AC progress, and R3 review",
+                    "completion": "completion gate and strict guard",
+                    "archive": "requirements archive and final evidence",
+                }.get(phase, "harness gate or transition command"),
+                "manual_confirm": phase in manual_confirm,
+            }
+        )
+    return {
+        "schema": "e2e-dev-harness.workflow-plan.v1",
+        "phase_mode": phase_mode,
+        "selected_profile": str(profile.get("name") or workflow_profile or "standard"),
+        "current_lifecycle": current_lifecycle,
+        "phases": phases,
+        "dispatch_policy": {
+            "r1_r2_r3": dispatch_policy.get("r1_r2_r3", "subagent-required"),
+            "service_tdd": dispatch_policy.get("service_tdd", "parallel-when-services-independent"),
+            "service_code": dispatch_policy.get("service_code", "after-IMPLEMENTED"),
+            "completion": dispatch_policy.get("completion", "after-R3"),
+        },
+        "manual_confirm_phases": manual_confirm,
+        "custom_checkpoints": custom_checkpoints,
+        "forbidden": [
+            "direct run-state edit",
+            "production code before IMPLEMENTED",
+            "skipping gates without approval evidence",
+            "changing core lifecycle order from a phase profile",
+        ],
+    }
+
+
+def load_workflow_plan(repo: Path, state: dict) -> dict | None:
+    value = str(state.get("workflow_plan", "")).strip()
+    if not value:
+        return None
+    path = resolve_repo_path(repo, Path(value))
+    if not path or not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def without_status_file(args):
@@ -821,6 +924,18 @@ def prepare(args) -> tuple[int, dict]:
 def start(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
     feature = args.feature or "feature"
+    phase_mode = getattr(args, "phase_mode", "auto") or "auto"
+    workflow_profile = getattr(args, "workflow_profile", "standard") or "standard"
+    phase_profile, profile_blockers = load_phase_profile(repo, getattr(args, "phase_profile", None))
+    if profile_blockers:
+        result = {
+            "repo": str(repo),
+            "ready": False,
+            "blocked_reasons": profile_blockers,
+            "warnings": [],
+        }
+        write_status(args.status_file, result)
+        return 2, result
     slug = orchestration_plan.safe_slug(feature)
     run_id = args.run_id or orchestration_plan.default_run_id(slug, args.run_date)
     run_dir = require_repo_path(repo, args.agent_run_dir or Path(f"docs/agent-runs/{run_id}"), "agent run directory")
@@ -840,6 +955,10 @@ def start(args) -> tuple[int, dict]:
         created.append(str(design_path))
     role_templates_created = create_role_template_files(repo, artifacts)
     created.extend(role_templates_created)
+    workflow_plan = workflow_plan_for_start(phase_mode, workflow_profile, phase_profile, "CREATED")
+    workflow_plan_path = require_repo_path(repo, Path(artifacts["workflow_plan"]), "workflow plan")
+    workflow_plan_path.write_text(json.dumps(workflow_plan, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    created.append(str(workflow_plan_path))
     bootstrap_agents = [
         orchestration_plan.with_role_template(
             {
@@ -867,6 +986,11 @@ def start(args) -> tuple[int, dict]:
         artifacts["artifact_registry"],
         lifecycle="CREATED",
     )
+    state["phase_mode"] = phase_mode
+    state["workflow_profile"] = workflow_plan["selected_profile"]
+    state["workflow_plan"] = artifacts["workflow_plan"]
+    state["manual_confirm_phases"] = workflow_plan["manual_confirm_phases"]
+    state["dispatch_policy"] = workflow_plan["dispatch_policy"]
     state_path = require_repo_path(repo, Path(artifacts["run_state"]), "run state")
     run_state.write_state(repo, state_path, state)
     created.append(str(state_path))
@@ -884,6 +1008,10 @@ def start(args) -> tuple[int, dict]:
         "phase_lock": str(lock_path),
         "artifact_registry": str(registry_path),
         "agent_schedule": str(schedule_path),
+        "workflow_plan": str(workflow_plan_path),
+        "phase_mode": phase_mode,
+        "workflow_profile": workflow_plan["selected_profile"],
+        "workflow": workflow_plan,
         "hook_status": hooks,
         "created": created,
         "next": next_action_for_lifecycle("CREATED", state),
@@ -1484,6 +1612,21 @@ Primary development contract: this service design is the primary input for the s
 - Service/domain path: {service_test_class_name(service).removesuffix('Test')}#method -> domain/service collaborator
 - Repository/client/sender path: repository/client/sender decided by service-design gate
 - Output or side effect: service-local state, API response, or event named in mapped ACs
+
+## Local Sequence
+```mermaid
+sequenceDiagram
+    participant Test as {test_class}
+    participant Entry as {service} entry point
+    participant Domain as service/domain logic
+    participant Edge as repository/client/sender
+    Test->>Entry: Exercise mapped AC rows
+    Entry->>Domain: Execute service-local behavior
+    Domain->>Edge: Persist, call, or publish declared side effect
+    Edge-->>Domain: Result or acknowledgement
+    Domain-->>Entry: Service-local outcome
+    Entry-->>Test: Assertion target
+```
 
 ## Service-local TDD Plan
 - First red test: {test_class} should fail before implementation
@@ -2459,6 +2602,7 @@ def next_step(args) -> tuple[int, dict]:
     state = load_run_state(repo, state_path)
     lifecycle = str(state.get("lifecycle", ""))
     action = next_action_for_lifecycle(lifecycle, state)
+    workflow_plan = load_workflow_plan(repo, state)
     hooks = runtime_hook_status(repo)
     blocked = [] if hooks["ready"] else [
         "Runtime hook is not ready; install hooks or use e2e_dev_harness.py pre-code before any code edit."
@@ -2475,6 +2619,9 @@ def next_step(args) -> tuple[int, dict]:
         "required_todo_list": action["required_todo_list"],
         "exploration_policy": action["exploration_policy"],
         "workflow_overview": workflow_overview_for(lifecycle, state),
+        "workflow_plan": workflow_plan,
+        "phase_mode": state.get("phase_mode", ""),
+        "workflow_profile": state.get("workflow_profile", ""),
         "gates": state.get("gates", {}),
         "blocked_reasons": blocked,
         "warnings": hooks.get("warnings", []) if hooks["ready"] else [],
@@ -2528,6 +2675,9 @@ def main() -> int:
     start_parser.add_argument("--agent-run-dir", type=Path)
     start_parser.add_argument("--run-id")
     start_parser.add_argument("--run-date")
+    start_parser.add_argument("--phase-mode", choices=["auto", "manual"], default="auto")
+    start_parser.add_argument("--workflow-profile", default="standard")
+    start_parser.add_argument("--phase-profile", type=Path)
     start_parser.add_argument("--force", action="store_true")
     start_parser.add_argument("--status-file", type=Path)
 

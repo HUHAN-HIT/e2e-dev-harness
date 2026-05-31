@@ -35,6 +35,15 @@ PHASE_ROLE_GROUPS = {
     "r3-review": "review",
     "completion": "coverage",
 }
+LIFECYCLE_SATISFIED_PHASES = {
+    "CLARIFIED": {"clarify"},
+    "SERVICE_DESIGN_REQUIRED": {"clarify", "design", "r1-review"},
+    "PLANNED": {"clarify", "design", "r1-review"},
+    "RED_READY": {"clarify", "design", "r1-review", "tdd-red", "r2-review"},
+    "IMPLEMENTED": {"clarify", "design", "r1-review", "tdd-red", "r2-review"},
+    "REVIEWED": {"clarify", "design", "r1-review", "tdd-red", "r2-review", "implement", "r3-review"},
+    "VERIFIED": {"clarify", "design", "r1-review", "tdd-red", "r2-review", "implement", "r3-review", "completion"},
+}
 
 
 def now_dt(now: datetime | None = None) -> datetime:
@@ -124,9 +133,36 @@ def phases_completed(schedule: dict, phases: list[str]) -> tuple[bool, list[str]
     tasks = schedule.get("tasks", []) or []
     for phase in phases:
         matching = [task for task in tasks if str(task.get("phase", "")) == phase]
+        if phase == "tdd-red":
+            service_matching = [task for task in matching if str(task.get("service", "")).strip()]
+            if service_matching:
+                matching = service_matching
         if not matching or any(str(task.get("status", "")).lower() != "completed" for task in matching):
             missing.append(phase)
     return not missing, missing
+
+
+def lifecycle_satisfied_phases(repo: Path, state_path: Path | None) -> set[str]:
+    state_file = resolve(repo, state_path)
+    if not state_file or not state_file.exists():
+        return set()
+    try:
+        state = load_json(state_file)
+    except (OSError, json.JSONDecodeError):
+        return set()
+    lifecycle = str(state.get("lifecycle", "")).strip().upper()
+    return LIFECYCLE_SATISFIED_PHASES.get(lifecycle, set())
+
+
+def service_design_primary_task(task: dict) -> bool:
+    if not str(task.get("service", "")).strip():
+        return False
+    if str(task.get("phase", "")).strip() not in {"tdd-red", "implement", "r3-review"}:
+        return False
+    return any(
+        isinstance(item, str) and "/service-designs/" in item.replace("\\", "/") and item.endswith(".md")
+        for item in task.get("inputs", []) or []
+    )
 
 
 def service_tasks(schedule: dict, services: list[str], phase: str = "implement") -> dict[str, dict]:
@@ -419,8 +455,10 @@ def claim(
     template_blockers = role_template_blockers(repo, schedule, task)
     if template_blockers:
         return {"ready": False, "blocked_reasons": template_blockers, "warnings": []}
-    deps_ready, missing_deps = phases_completed(schedule, [str(phase) for phase in task.get("depends_on_phases", []) or []])
-    if not deps_ready:
+    _deps_ready, missing_deps = phases_completed(schedule, [str(phase) for phase in task.get("depends_on_phases", []) or []])
+    satisfied = lifecycle_satisfied_phases(repo, state_path)
+    missing_deps = [phase for phase in missing_deps if phase not in satisfied]
+    if missing_deps:
         return {
             "ready": False,
             "blocked_reasons": [
@@ -431,7 +469,7 @@ def claim(
             ],
             "warnings": [],
         }
-    handoff_blockers = task_input_handoff_blockers(repo, task)
+    handoff_blockers = [] if service_design_primary_task(task) and satisfied else task_input_handoff_blockers(repo, task)
     if handoff_blockers:
         return {"ready": False, "blocked_reasons": handoff_blockers, "warnings": []}
     warnings: list[str] = []

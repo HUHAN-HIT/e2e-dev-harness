@@ -48,52 +48,57 @@ tests/
 
 ## Quick Start
 
-Install the local harness CLI once:
+For day-to-day harness development, sync the latest skill copy into all local
+agent runtimes with one command:
 
 ```powershell
-python -m pip install -e .[dev,ast]
-e2eh --version
+node tools\install-e2e-dev-harness.mjs --sync --yes
 ```
 
-Then enter a business repository root and configure the latest skill copies,
-Claude hook, external dependencies, and doctor check with the short CLI:
+`--sync` expands to `--target all --skip-python-cli --skip-external`, so it
+copies the skill into Codex, Claude, and Agents without reinstalling the Python
+CLI, external tools, or project hooks.
+
+For a business repository that should enforce harness hooks, use the project
+preset from the harness source repository:
 
 ```powershell
-cd C:\path\to\business-repo
-e2eh install --full --yes
+node tools\install-e2e-dev-harness.mjs --project C:\path\to\business-repo --yes
 ```
 
-Preview first by omitting `--yes`:
+`--project` syncs all runtime skill copies, installs project-local hooks, and
+runs `doctor` against the business repository. Preview either installer command
+by omitting `--yes`:
 
 ```powershell
-e2eh install --full
+node tools\install-e2e-dev-harness.mjs --project C:\path\to\business-repo
 ```
 
-The Node bootstrap installer remains available when you do not want to install
-the Python CLI first. It is a dry run by default and only writes files or runs
-install commands when `--yes` is supplied:
+Use targeted maintenance presets when needed:
 
 ```powershell
-node tools\install-e2e-dev-harness.mjs `
-  --target codex `
-  --install-root $env:USERPROFILE `
-  --skip-python-cli `
-  --json
+node tools\install-e2e-dev-harness.mjs --hooks-only --project-root C:\path\to\business-repo --yes
+node tools\install-e2e-dev-harness.mjs --doctor-only --project-root C:\path\to\business-repo
 ```
 
-Install the skill plus the editable Python CLI:
+Use `--full` only for full bootstrap, including editable Python CLI and
+optional external dependency installation:
 
 ```powershell
-node tools\install-e2e-dev-harness.mjs `
-  --target codex `
-  --install-root $env:USERPROFILE `
-  --yes
+node tools\install-e2e-dev-harness.mjs --project C:\path\to\business-repo --full --yes
 ```
 
 External tools are conservative by default. GitNexus and Graphify are detected
 but not installed unless `--install-external` is provided. Superpowers is
 probed as a skill/plugin capability; use `--strict-superpowers` to fail the
 installer when required Superpowers skills are missing.
+
+The editable Python CLI remains available when you want global command aliases:
+
+```powershell
+python -m pip install -e .[dev,ast]
+e2eh --version
+```
 
 Full installer usage is documented in
 [`docs/e2e-dev-harness-installer.md`](docs/e2e-dev-harness-installer.md).
@@ -251,7 +256,7 @@ docs/agent-runs/<run>/service-plans/<service>/implementation-plan.md
 docs/agent-runs/<run>/service-plans/<service>/test-impact-plan.json
 ```
 
-Multi-service `plan --create-archive` writes run-state lifecycle `SERVICE_DESIGN_REQUIRED`. Validate the service slices before R2/TDD red or dispatching code agents; the command below transitions the run-state to `PLANNED` only when every global AC is mapped into concrete service slices with runtime path, first red test, expected failure, required Maven command, dependency boundary, and test impact:
+Multi-service `plan --create-archive` writes run-state lifecycle `SERVICE_DESIGN_REQUIRED`. Validate the service slices before R2/TDD red or dispatching code agents; the command below transitions the run-state to `PLANNED` only when every global AC is mapped into concrete service slices with runtime path, first red test, expected failure, required Maven command, dependency boundary, and test impact. The global design template includes `System Sequence`; service slices include `Local Sequence`, and cross-service, contract, shared-state, or event dependencies must keep that local sequence concrete enough to drive the first red test and dependency-edge implementation.
 
 ```powershell
 python skills\e2e-dev-harness\scripts\e2e_dev_harness.py service-design . `
@@ -358,9 +363,10 @@ If this blocks on `AC-2`, continue TDD red/green for `AC-2`; do not ask whether 
 
 The hook examples are templates. To enforce them, run `install_hooks.py` from the installed skill directory so the generated hook command points to absolute guard script paths. Do not copy the example command verbatim into another repository; `python skills/e2e-dev-harness/scripts/phase_guard.py ...` only works when that repository contains the skill source tree. Codex and Gemini enforcement still depends on whether the host runner exposes a blocking pre-action/pre-tool hook.
 For one-command setup from the harness source repository, prefer the bootstrap
-installer with `--project <business-repo> --full`; this
-updates the skill runtime copy and writes the hook config into the business
-repository instead of the harness source repository.
+installer with `--project <business-repo> --yes`; this updates the skill
+runtime copy, writes the hook config into the business repository instead of the
+harness source repository, and runs `doctor`. Use `--hooks-only` when the skill
+copy is already current and only hook wiring needs repair.
 You can also install or check project-local hook configuration with:
 
 ```powershell

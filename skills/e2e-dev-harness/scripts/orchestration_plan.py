@@ -520,6 +520,7 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
     return {
         "agent_run_dir": base,
         "run_state": f"{base}/run-state.json",
+        "workflow_plan": f"{base}/workflow-plan.json",
         "artifact_registry": f"{base}/artifact-registry.json",
         "agent_schedule": f"{base}/agent-schedule.json",
         "run_summary": f"{base}/run-summary.json",
@@ -596,6 +597,8 @@ def with_role_template(agent: dict, artifact_paths: dict) -> dict:
 def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | None = None) -> list[dict]:
     if selected_mode == "discovery":
         return []
+    service_plans = artifact_paths.get("service_plans", {})
+    has_service_slices = bool(service_plans and selected_mode not in {"single", "single-review"})
     agents: list[dict] = []
     agents.extend([
         {
@@ -617,14 +620,17 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
             "outputs": [artifact_paths["use_cases"]],
             "gate": "Every acceptance criterion maps to a use case or is explicitly deferred.",
         },
-        {
-            "name": "test-case-developer",
-            "owns": ["test strategy", "first red test", "contract tests", "Maven test scope"],
-            "inputs": [artifact_paths["requirements"], artifact_paths["use_cases"], "superpowers:test-driven-development"],
-            "outputs": [artifact_paths["test_plan"]],
-            "gate": "First red test must be written and observed failing for the expected reason.",
-        },
     ])
+    if not has_service_slices:
+        agents.append(
+            {
+                "name": "test-case-developer",
+                "owns": ["test strategy", "first red test", "contract tests", "Maven test scope"],
+                "inputs": [artifact_paths["requirements"], artifact_paths["use_cases"], "superpowers:test-driven-development"],
+                "outputs": [artifact_paths["test_plan"]],
+                "gate": "First red test must be written and observed failing for the expected reason.",
+            }
+        )
     design_reviewer_name = "single-reviewer-r1-design" if selected_mode == "single-review" else "design-reviewer"
     test_reviewer_name = "single-reviewer-r2-test" if selected_mode == "single-review" else "test-reviewer"
     implementation_reviewer_name = (
@@ -648,31 +654,39 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
         {
             "name": test_reviewer_name,
             "owns": ["semantic review of red tests, happy/failure paths, security and contract coverage"],
-            "inputs": [
-                artifact_paths["test_review_request"],
-                artifact_paths["requirements"],
-                artifact_paths["impact_summary"],
-                artifact_paths["use_cases"],
-                artifact_paths["test_plan"],
-                artifact_paths["test_impact_plan"],
-            ],
+            "inputs": (
+                [
+                    artifact_paths["test_review_request"],
+                    artifact_paths["impact_summary"],
+                    artifact_paths["dependency_report"],
+                ]
+                + [
+                    item
+                    for paths in service_plans.values()
+                    for item in (paths["service_design"], paths["red_test_evidence"], paths["test_impact_plan"])
+                ]
+                if has_service_slices
+                else [
+                    artifact_paths["test_review_request"],
+                    artifact_paths["requirements"],
+                    artifact_paths["impact_summary"],
+                    artifact_paths["use_cases"],
+                    artifact_paths["test_plan"],
+                    artifact_paths["test_impact_plan"],
+                ]
+            ),
             "outputs": [artifact_paths["test_review"]],
             "gate": "Production code waits until test review is approved or rework is routed.",
         },
     ])
-    service_plans = artifact_paths.get("service_plans", {})
-    if service_plans and selected_mode not in {"single", "single-review"}:
+    if has_service_slices:
         for service, paths in service_plans.items():
             agents.append(
                 {
                     "name": f"test-case-developer-{service_slug(service)}",
                     "owns": [f"service-local first red test for {service}", "service-local TDD evidence"],
                     "inputs": [
-                        artifact_paths["requirements"],
                         artifact_paths["impact_summary"],
-                        artifact_paths["use_cases"],
-                        artifact_paths["test_plan"],
-                        artifact_paths["test_impact_plan"],
                         paths["service_design"],
                         paths["service_plan"],
                         paths["test_impact_plan"],
@@ -690,11 +704,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
                     "name": f"code-developer-{service_slug(service)}",
                     "owns": [f"implementation for {service}", "service-local tests", "service-local verification evidence"],
                     "inputs": [
-                        artifact_paths["requirements"],
                         artifact_paths["impact_summary"],
-                        artifact_paths["use_cases"],
-                        artifact_paths["test_plan"],
-                        artifact_paths["test_impact_plan"],
                         paths["service_design"],
                         paths["service_plan"],
                         paths["test_impact_plan"],

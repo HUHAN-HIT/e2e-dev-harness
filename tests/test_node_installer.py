@@ -152,6 +152,85 @@ class NodeInstallerTests(unittest.TestCase):
             self.assertTrue(payload["install_external"])
             self.assertEqual("claude", payload["runtime"])
 
+    def test_sync_preset_is_fast_skill_copy_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install_root = Path(tmp) / "home"
+
+            code, payload = self.run_installer(
+                "--install-root",
+                str(install_root),
+                "--sync",
+            )
+
+            self.assertEqual(0, code, payload)
+            self.assertEqual(["sync"], payload["presets"])
+            self.assertEqual(["codex", "claude", "agents"], payload["targets"])
+            self.assertTrue(payload["skip_python_cli"])
+            self.assertFalse(payload["install_external"])
+            self.assertEqual(["copy-skill"], [action["id"] for action in payload["actions"]])
+
+    def test_project_preset_installs_hooks_and_doctor_without_pip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install_root = Path(tmp) / "home"
+            project = Path(tmp) / "business-project"
+            project.mkdir()
+
+            code, payload = self.run_installer(
+                "--install-root",
+                str(install_root),
+                "--project",
+                str(project),
+            )
+
+            self.assertEqual(0, code, payload)
+            self.assertEqual(["project"], payload["presets"])
+            self.assertEqual(["codex", "claude", "agents"], payload["targets"])
+            self.assertTrue(payload["skip_python_cli"])
+            self.assertEqual(str(project.resolve()), payload["project_root"])
+            actions = [action["id"] for action in payload["actions"]]
+            self.assertIn("copy-skill", actions)
+            self.assertIn("install-hooks", actions)
+            self.assertIn("doctor", actions)
+            self.assertNotIn("install-python-cli", actions)
+
+    def test_hooks_only_skips_skill_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install_root = Path(tmp) / "home"
+            project = Path(tmp) / "business-project"
+            project.mkdir()
+
+            code, payload = self.run_installer(
+                "--install-root",
+                str(install_root),
+                "--project-root",
+                str(project),
+                "--hooks-only",
+            )
+
+            self.assertEqual(0, code, payload)
+            self.assertEqual(["hooks-only"], payload["presets"])
+            self.assertTrue(payload["skip_skill_copy"])
+            self.assertEqual(["install-hooks"], [action["id"] for action in payload["actions"]])
+
+    def test_doctor_only_skips_skill_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install_root = Path(tmp) / "home"
+            project = Path(tmp) / "business-project"
+            project.mkdir()
+
+            code, payload = self.run_installer(
+                "--install-root",
+                str(install_root),
+                "--project-root",
+                str(project),
+                "--doctor-only",
+            )
+
+            self.assertEqual(0, code, payload)
+            self.assertEqual(["doctor-only"], payload["presets"])
+            self.assertTrue(payload["skip_skill_copy"])
+            self.assertEqual(["doctor"], [action["id"] for action in payload["actions"]])
+
     def test_yes_installs_project_hooks_to_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             install_root = Path(tmp) / "home"

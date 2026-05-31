@@ -5,10 +5,9 @@ description: Use when a feature, bugfix, refactor, or design-doc task needs stri
 
 # E2E Dev Harness
 
-Turn a request or design doc into a clarified, tested, verified code change.
-Tuned for Java 21, Spring 6.x, and Maven; stack-neutral workflow name.
+Turn a request or design doc into a clarified, tested code change.
 
-Governing rule: do not implement while behavior, APIs, data effects, contracts, or tests are ambiguous.
+Do not implement while behavior, APIs, data effects, contracts, or tests are ambiguous.
 
 ## Platform Compatibility
 
@@ -59,7 +58,8 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
   Generate `evidence/test-impact-plan.json` from changed files and dependency evidence; completion must prove every required command passed in unit-test JSON.
   Root/shared build or source changes expand to full `mvn test`.
 - Multi-service designs use one global design anchor plus service-local design slices.
-  Each affected service gets `service-designs/<service>.md` with mapped ACs, edit scope, runtime path, TDD plan, dependency boundary, and test impact.
+  Global design includes `System Sequence`; each `service-designs/<service>.md` includes mapped ACs, edit scope, runtime path, local sequence, TDD plan, dependency boundary, and test impact.
+  Local sequence is required for cross-service, contract, shared-state, or event dependencies.
   Multi-service `plan --create-archive` enters `SERVICE_DESIGN_REQUIRED`; validate slices with `e2e_dev_harness.py service-design --run-state <state>` before R2/TDD red or service code-agent dispatch.
 - Design, test, code, review, and coverage are separate role groups.
   `agent-schedule.json` assigns different agents, references generated `agent-roles/*.md`, and downstream agents consume ready handoffs instead of chat memory.

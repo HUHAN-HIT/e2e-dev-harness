@@ -35,6 +35,20 @@ function parseArgs(argv) {
     checkOnly: false,
     extras: ["dev", "ast"],
     full: false,
+    sync: false,
+    hooksOnly: false,
+    doctorOnly: false,
+    skipSkillCopy: false,
+    presets: [],
+    explicit: {
+      target: false,
+      skipPythonCli: false,
+      skipExternal: false,
+      installExternal: false,
+      withHooks: false,
+      runtime: false,
+      doctor: false,
+    },
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -46,22 +60,50 @@ function parseArgs(argv) {
     };
 
     if (arg === "--repo") args.repo = value();
-    else if (arg === "--project-root" || arg === "--project" || arg === "--hook-repo") args.projectRoot = value();
+    else if (arg === "--project") {
+      args.projectRoot = value();
+      args.projectPreset = true;
+    }
+    else if (arg === "--project-root" || arg === "--hook-repo") args.projectRoot = value();
     else if (arg === "--install-root") args.installRoot = value();
     else if (arg === "--source-skill-dir") args.sourceSkillDir = value();
-    else if (arg === "--target") args.target = value().toLowerCase();
+    else if (arg === "--target") {
+      args.target = value().toLowerCase();
+      args.explicit.target = true;
+    }
     else if (arg === "--yes") args.yes = true;
     else if (arg === "--json") args.json = true;
-    else if (arg === "--skip-python-cli") args.skipPythonCli = true;
-    else if (arg === "--skip-external") args.skipExternal = true;
-    else if (arg === "--install-external") args.installExternal = true;
-    else if (arg === "--with-hooks") args.withHooks = true;
-    else if (arg === "--runtime") args.runtime = value().toLowerCase();
-    else if (arg === "--doctor") args.doctor = true;
+    else if (arg === "--skip-python-cli") {
+      args.skipPythonCli = true;
+      args.explicit.skipPythonCli = true;
+    }
+    else if (arg === "--skip-external") {
+      args.skipExternal = true;
+      args.explicit.skipExternal = true;
+    }
+    else if (arg === "--install-external") {
+      args.installExternal = true;
+      args.explicit.installExternal = true;
+    }
+    else if (arg === "--with-hooks") {
+      args.withHooks = true;
+      args.explicit.withHooks = true;
+    }
+    else if (arg === "--runtime") {
+      args.runtime = value().toLowerCase();
+      args.explicit.runtime = true;
+    }
+    else if (arg === "--doctor") {
+      args.doctor = true;
+      args.explicit.doctor = true;
+    }
     else if (arg === "--strict-superpowers") args.strictSuperpowers = true;
     else if (arg === "--superpowers-dir") args.superpowersDir = value();
     else if (arg === "--check-only") args.checkOnly = true;
     else if (arg === "--full") args.full = true;
+    else if (arg === "--sync") args.sync = true;
+    else if (arg === "--hooks-only") args.hooksOnly = true;
+    else if (arg === "--doctor-only") args.doctorOnly = true;
     else if (arg === "--no-dev") args.extras = args.extras.filter((item) => item !== "dev");
     else if (arg === "--no-ast") args.extras = args.extras.filter((item) => item !== "ast");
     else if (arg === "--help" || arg === "-h") args.help = true;
@@ -74,11 +116,41 @@ function parseArgs(argv) {
   if (args.installExternal && args.skipExternal) {
     throw new Error("--install-external and --skip-external cannot be used together");
   }
+  if (args.sync) {
+    args.presets.push("sync");
+    if (!args.explicit.target) args.target = "all";
+    if (!args.explicit.skipPythonCli) args.skipPythonCli = true;
+    if (!args.explicit.skipExternal && !args.explicit.installExternal) args.skipExternal = true;
+  }
+  if (args.projectPreset) {
+    args.presets.push("project");
+    if (!args.explicit.target) args.target = "all";
+    if (!args.explicit.skipPythonCli) args.skipPythonCli = true;
+    if (!args.explicit.skipExternal && !args.explicit.installExternal) args.skipExternal = true;
+    if (!args.explicit.withHooks) args.withHooks = true;
+    if (!args.explicit.doctor) args.doctor = true;
+  }
+  if (args.hooksOnly) {
+    args.presets.push("hooks-only");
+    args.skipSkillCopy = true;
+    if (!args.explicit.skipPythonCli) args.skipPythonCli = true;
+    if (!args.explicit.skipExternal && !args.explicit.installExternal) args.skipExternal = true;
+    if (!args.explicit.withHooks) args.withHooks = true;
+  }
+  if (args.doctorOnly) {
+    args.presets.push("doctor-only");
+    args.skipSkillCopy = true;
+    if (!args.explicit.skipPythonCli) args.skipPythonCli = true;
+    if (!args.explicit.skipExternal && !args.explicit.installExternal) args.skipExternal = true;
+    if (!args.explicit.doctor) args.doctor = true;
+  }
   if (args.full) {
-    args.target = "all";
+    args.presets.push("full");
+    if (!args.explicit.target) args.target = "all";
     args.installExternal = true;
+    args.skipExternal = false;
     args.withHooks = true;
-    args.runtime = "claude";
+    if (!args.explicit.runtime) args.runtime = "claude";
     args.doctor = true;
   }
   return args;
@@ -89,6 +161,8 @@ function helpText() {
     "Usage: node tools/install-e2e-dev-harness.mjs [options]",
     "",
     "Options:",
+    "  --sync                             Fast preset: --target all --skip-python-cli --skip-external",
+    "  --project <path>                   Project preset: sync all skills, install hooks, run doctor",
     "  --full                             Preset: --target all --install-external --with-hooks --runtime claude --doctor",
     "  --target codex|claude|agents|all   Runtime skill target (default: codex)",
     "  --install-root <path>              Root that contains .codex/.claude/.agents",
@@ -101,6 +175,8 @@ function helpText() {
     "  --skip-external                    Check external dependencies only",
     "  --with-hooks --runtime claude      Install runtime hooks",
     "  --doctor                           Run harness doctor against project root",
+    "  --hooks-only                       Install hooks without copying skills or running pip",
+    "  --doctor-only                      Run doctor without copying skills or running pip",
     "  --strict-superpowers               Fail when required Superpowers skills are missing",
     "  --superpowers-dir <path>           Check a provided Superpowers skills directory",
     "  --check-only                       Run checks without planning writes",
@@ -238,7 +314,7 @@ function pythonCommand(script, args) {
 
 function actions(options, repo, projectRoot, installRoot, sourceSkillDir, targets, status) {
   const planned = [];
-  if (!options.checkOnly) {
+  if (!options.checkOnly && !options.skipSkillCopy) {
     planned.push({
       id: "copy-skill",
       description: `Copy ${SKILL_NAME} into selected runtime skill directories.`,
@@ -338,6 +414,7 @@ function textOutput(payload) {
   const lines = [
     `E2E Dev Harness installer: ${payload.ready ? "READY" : "BLOCKED"}`,
     `Mode: ${payload.mode}`,
+    `Preset: ${payload.presets.length ? payload.presets.join(", ") : "custom"}`,
     `Targets: ${payload.targets.join(", ")}`,
     `Install root: ${payload.install_root}`,
     `Project root: ${payload.project_root}`,
@@ -349,6 +426,19 @@ function textOutput(payload) {
     if (action.command) lines.push(`  ${action.command}`);
   }
   if (!payload.executed) lines.push("", "Dry-run only. Re-run with --yes to execute.");
+  if (payload.ready) {
+    lines.push("", "Next:");
+    if (payload.presets.includes("sync")) {
+      lines.push("- Start a run: e2e_dev_harness.py start . --feature <feature> --request <request>");
+    } else if (payload.presets.includes("project")) {
+      lines.push("- Verify hooks: e2e_dev_harness.py doctor <project-root>");
+      lines.push("- Start a run in the project: e2e_dev_harness.py start <project-root> --feature <feature> --request <request>");
+    } else if (payload.presets.includes("hooks-only")) {
+      lines.push("- Verify hooks: e2e_dev_harness.py doctor <project-root>");
+    } else if (payload.presets.includes("doctor-only")) {
+      lines.push("- Fix any blocked doctor checks, then rerun this installer.");
+    }
+  }
   if (payload.blocked_reasons.length) {
     lines.push("", "Blocked:");
     for (const reason of payload.blocked_reasons) lines.push(`- ${reason}`);
@@ -385,6 +475,7 @@ function main() {
   if (!checkResult.skill_layout.available) blocked.push(`Source skill is missing SKILL.md: ${sourceSkillDir}`);
   if (!options.skipPythonCli && !checkResult.python.available) blocked.push("Python is required to install the editable CLI.");
   if (options.withHooks && !checkResult.python.available) blocked.push("Python is required to install hooks.");
+  if (options.doctor && !checkResult.python.available) blocked.push("Python is required to run doctor.");
   if (options.strictSuperpowers && !checkResult.superpowers.available) blocked.push("Required Superpowers skills are missing.");
 
   const payload = {
@@ -394,7 +485,10 @@ function main() {
     install_root: installRoot,
     source_skill_dir: sourceSkillDir,
     full: options.full,
+    presets: options.presets,
     install_external: options.installExternal,
+    skip_python_cli: options.skipPythonCli,
+    skip_skill_copy: options.skipSkillCopy,
     runtime: options.runtime,
     mode: options.yes ? "execute" : "dry-run",
     executed: false,

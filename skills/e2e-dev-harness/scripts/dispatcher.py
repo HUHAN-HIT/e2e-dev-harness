@@ -180,17 +180,73 @@ def next_open_task(schedule: dict) -> dict | None:
     return None
 
 
-def task_ready_blockers(repo: Path, schedule: dict, task: dict, agent: str) -> list[str]:
+def lifecycle_value(state: dict | None) -> str:
+    return str((state or {}).get("lifecycle", "")).strip().upper()
+
+
+LIFECYCLE_ALLOWED_PHASES = {
+    "CREATED": {"clarify"},
+    "CLARIFIED": {"design", "r1-review"},
+    "SERVICE_DESIGN_REQUIRED": {"design", "r1-review"},
+    "PLANNED": {"tdd-red", "r2-review"},
+    "RED_READY": set(),
+    "IMPLEMENTED": {"implement", "r3-review", "completion"},
+    "REVIEWED": {"completion"},
+    "REWORK_REQUIRED": {"clarify", "design", "r1-review", "tdd-red", "r2-review", "implement", "r3-review", "completion"},
+}
+
+LIFECYCLE_SATISFIED_PHASES = {
+    "CLARIFIED": {"clarify"},
+    "SERVICE_DESIGN_REQUIRED": {"clarify", "design", "r1-review"},
+    "PLANNED": {"clarify", "design", "r1-review"},
+    "RED_READY": {"clarify", "design", "r1-review", "tdd-red", "r2-review"},
+    "IMPLEMENTED": {"clarify", "design", "r1-review", "tdd-red", "r2-review"},
+    "REVIEWED": {"clarify", "design", "r1-review", "tdd-red", "r2-review", "implement", "r3-review"},
+    "VERIFIED": {"clarify", "design", "r1-review", "tdd-red", "r2-review", "implement", "r3-review", "completion"},
+}
+
+
+def phase_dispatch_blocker(task: dict, state: dict | None) -> str:
+    lifecycle = lifecycle_value(state)
+    allowed = LIFECYCLE_ALLOWED_PHASES.get(lifecycle)
+    if allowed is None:
+        return ""
+    phase = str(task.get("phase", "")).strip()
+    if phase not in allowed:
+        return f"Task phase {phase or '<missing>'} is not dispatchable while lifecycle is {lifecycle}."
+    return ""
+
+
+def missing_dependency_phases(schedule: dict, task: dict, state: dict | None) -> list[str]:
+    phases = [str(phase) for phase in task.get("depends_on_phases", []) or []]
+    if not phases:
+        return []
+    _ready, missing = agent_scheduler.phases_completed(schedule, phases)
+    satisfied = LIFECYCLE_SATISFIED_PHASES.get(lifecycle_value(state), set())
+    return [phase for phase in missing if phase not in satisfied]
+
+
+def service_design_primary_task(task: dict) -> bool:
+    if not str(task.get("service", "")).strip():
+        return False
+    phase = str(task.get("phase", "")).strip()
+    if phase not in {"tdd-red", "implement", "r3-review"}:
+        return False
+    return any(
+        isinstance(item, str) and "/service-designs/" in item.replace("\\", "/") and item.endswith(".md")
+        for item in task.get("inputs", []) or []
+    )
+
+
+def task_ready_blockers(repo: Path, schedule: dict, task: dict, agent: str, state: dict | None = None) -> list[str]:
     blocked: list[str] = []
     blocked.extend(agent_scheduler.role_conflict_blockers(schedule, task, agent))
     blocked.extend(agent_scheduler.role_template_blockers(repo, schedule, task))
-    deps_ready, missing_deps = agent_scheduler.phases_completed(
-        schedule,
-        [str(phase) for phase in task.get("depends_on_phases", []) or []],
-    )
-    if not deps_ready:
+    missing_deps = missing_dependency_phases(schedule, task, state)
+    if missing_deps:
         blocked.append("Dependency phases are incomplete: " + ", ".join(missing_deps))
-    blocked.extend(agent_scheduler.task_input_handoff_blockers(repo, task))
+    if not (lifecycle_value(state) in {"PLANNED", "RED_READY", "IMPLEMENTED", "REVIEWED", "VERIFIED"} and service_design_primary_task(task)):
+        blocked.extend(agent_scheduler.task_input_handoff_blockers(repo, task))
     status = str(task.get("status", "planned")).lower()
     owner = str(task.get("owner", "")).strip()
     if owner and owner != agent and status in agent_scheduler.CLAIMED_STATUSES and not agent_scheduler.is_stale(task):
@@ -266,11 +322,22 @@ def ready_tasks(
     active_by_task = active_dispatches(state_data)
     active_groups = active_parallel_groups(state_data)
     limit = max(1, int(max_workers or 1))
-    for task in schedule.get("tasks", []) or []:
+    allowed = LIFECYCLE_ALLOWED_PHASES.get(lifecycle_value(state_data), set())
+    raw_tasks = [task for task in schedule.get("tasks", []) or [] if isinstance(task, dict)]
+    def priority(task: dict) -> int:
+        return 0 if str(task.get("phase", "")).strip() in allowed else 1
+
+    ordered_tasks = sorted(
+        enumerate(raw_tasks),
+        key=lambda item: (priority(item[1]), item[0]),
+    )
+    for _index, task in ordered_tasks:
         if not isinstance(task, dict) or task_done(task):
             continue
+        if allowed and selected and priority(task) > 0:
+            break
         agent = str(task.get("agent", "")) or "agent"
-        blockers = task_ready_blockers(repo, schedule, task, agent)
+        blockers = task_ready_blockers(repo, schedule, task, agent, state_data)
         group = task_parallel_group(task)
         task_id = str(task.get("id", ""))
         if task_id in active_by_task:

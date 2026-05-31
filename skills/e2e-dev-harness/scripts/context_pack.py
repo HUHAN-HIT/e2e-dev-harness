@@ -69,7 +69,7 @@ def estimate_inputs(repo: Path, inputs: list) -> tuple[int, list[dict], list[str
 
 def primary_inputs_for_task(task: dict, inputs: list[str]) -> list[str]:
     phase = str(task.get("phase", ""))
-    if phase != "implement":
+    if phase not in {"tdd-red", "implement"}:
         return []
     return [
         value

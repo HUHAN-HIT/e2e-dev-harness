@@ -50,6 +50,18 @@ SECTION_TEMPLATES = {
         "| AC-1 |  |  | <ServiceTest> |\n"
     ),
     "Runtime Path": "## Runtime Path\n- Controller#method -> Service#method -> Repository/Client/Sender#method\n",
+    "Local Sequence": (
+        "## Local Sequence\n"
+        "```mermaid\n"
+        "sequenceDiagram\n"
+        "    participant Entry\n"
+        "    participant Service\n"
+        "    participant Edge as Repository/Client/Sender\n"
+        "    Entry->>Service: Execute mapped AC behavior\n"
+        "    Service->>Edge: Persist, call, or publish declared side effect\n"
+        "    Edge-->>Service: Result or acknowledgement\n"
+        "```\n"
+    ),
     "Service-local TDD Plan": (
         "## Service-local TDD Plan\n"
         "- First red test: <ServiceTest> should fail before implementation\n"
@@ -149,6 +161,38 @@ def meaningful_lines(body: str) -> list[str]:
 def runtime_path_is_concrete(text: str) -> bool:
     body = section_body(text, "Runtime Path")
     return any(CONCRETE_RUNTIME_RE.search(line) for line in meaningful_lines(body))
+
+
+def local_sequence_is_concrete(text: str) -> bool:
+    body = section_body(text, "Local Sequence")
+    lines = meaningful_lines(body)
+    return any("sequencediagram" in line.lower() for line in lines) or any(
+        re.search(r"\bparticipant\b|->>|-->>|->", line, re.IGNORECASE) for line in lines
+    )
+
+
+def dependency_boundary_has_runtime_coupling(text: str) -> bool:
+    body = section_body(text, "Dependency Boundary")
+    for raw_line in body.splitlines():
+        line = raw_line.strip().strip("-* ")
+        normalized = line.lower()
+        if not normalized:
+            continue
+        value = line.split(":", 1)[1].strip().lower() if ":" in line else ""
+        if "independent service change" in normalized and re.search(r"\b(no|false)\b|not independent", value):
+            return True
+        labels = (
+            "http/api dependencies",
+            "mq/dmq/kafka dependencies",
+            "shared db/schema/config/security dependencies",
+            "required contracts",
+        )
+        if not any(label in normalized for label in labels):
+            continue
+        cleaned = value.strip(" .;")
+        if cleaned and cleaned not in EMPTY_VALUES and not cleaned.startswith(("none", "n/a", "not applicable", "no ")):
+            return True
+    return False
 
 
 def tdd_plan_is_concrete(text: str) -> bool:
@@ -314,6 +358,18 @@ def validate(repo: Path, global_design: Path | None, service_design_dir: Path | 
                 path=rel_path,
                 section="Runtime Path",
                 template=SECTION_TEMPLATES["Runtime Path"],
+            )
+        if dependency_boundary_has_runtime_coupling(text) and not local_sequence_is_concrete(text):
+            blocked.append(
+                f"Service design {rel_path} must declare a concrete Local Sequence for cross-service, contract, shared-state, or event dependencies."
+            )
+            add_fix_hint(
+                fix_hints,
+                "add_local_sequence",
+                "Add ## Local Sequence with a Mermaid sequenceDiagram that shows the service-local entry point, collaborator, and dependency edge.",
+                path=rel_path,
+                section="Local Sequence",
+                template=SECTION_TEMPLATES["Local Sequence"],
             )
         if not tdd_plan_is_concrete(text):
             blocked.append(f"Service design {rel_path} must declare first red test, expected failure, and required Maven command.")
