@@ -7,3 +7,6 @@ eval-output/
 .claude/
 test/.pytest_cache
 test/__pycache__
+.git
+.test-tmp
+.tmp-gitnexus-hook-test

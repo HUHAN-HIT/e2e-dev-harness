@@ -250,7 +250,11 @@ def stop_guidance(lifecycle: str, state_path: Path | None, repo: Path) -> dict:
 
 def is_waiting_dispatch(lifecycle: str, data: dict) -> bool:
     dispatch = data.get("dispatch") if isinstance(data.get("dispatch"), dict) else {}
-    return lifecycle == "WAITING_DISPATCH" or str(dispatch.get("status", "")).lower() == "waiting_dispatch"
+    return lifecycle == "WAITING_DISPATCH" or str(dispatch.get("status", "")).lower() in {
+        "waiting_dispatch",
+        "awaiting_runtime_spawn",
+        "worker_running",
+    }
 
 
 def write_blocked_stderr(result: dict) -> None:
@@ -349,7 +353,7 @@ def evaluate(
         warnings.append(f"Agent schedule has {len(open_tasks)} open task(s).")
 
     provenance = run_state.validate_lifecycle_provenance(repo, state_path, data)
-    if provenance and lifecycle in {"IMPLEMENTED", "REVIEWED", "VERIFIED", "ARCHIVED"}:
+    if provenance and lifecycle in {"IMPLEMENTED", "REVIEWED", "VERIFIED", "ARCHIVED"} and not dispatch_waiting:
         blocked.extend("Stop blocked: " + reason for reason in provenance)
 
     return {

@@ -39,6 +39,7 @@ import execution_trace  # noqa: E402
 import harness_policy  # noqa: E402
 import harness_verify  # noqa: E402
 import implementation_gate  # noqa: E402
+import reviewer_gate  # noqa: E402
 import service_design_gate  # noqa: E402
 import task_tier  # noqa: E402
 
@@ -220,6 +221,32 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("CREATED", result["lifecycle"])
         self.assertEqual("clarify", result["next"]["phase"])
         self.assertTrue(checkpoint_exists)
+
+    def test_next_includes_global_workflow_overview(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "single-review",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            run_state.write_state(repo, state_path, state)
+
+            code, result = e2e_dev_harness.next_step(
+                SimpleNamespace(repo=repo, state=state_path, status_file=None)
+            )
+
+        steps = result["workflow_overview"]["steps"]
+        lifecycles = [step["lifecycle"] for step in steps]
+        current = [step for step in steps if step["current"]]
+        self.assertEqual(0, code)
+        self.assertEqual("PLANNED", result["workflow_overview"]["current_lifecycle"])
+        self.assertEqual(["CREATED", "CLARIFIED", "SERVICE_DESIGN_REQUIRED", "PLANNED", "RED_READY", "IMPLEMENTED", "REVIEWED", "VERIFIED"], lifecycles)
+        self.assertEqual("tdd-red", current[0]["phase"])
+        self.assertTrue(all(step["gate_summary"] for step in steps))
 
     def test_phase_guard_requires_fresh_session_checkpoint_when_configured(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -835,8 +862,18 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(result["supports_task_hook"])
         self.assertTrue(result["supports_isolated_review"])
         self.assertEqual("native-subagent", result["dispatch_mode"])
+        self.assertEqual("Task", result["spawn_tool"])
+        self.assertTrue(result["spawn_requires_tool_call"])
 
-    def test_dispatch_next_claims_task_and_writes_context_pack_invocation_prompt(self) -> None:
+    def test_runtime_capabilities_mark_codex_as_tool_spawn_dispatcher(self) -> None:
+        result = dispatcher.runtime_capabilities("codex")
+
+        self.assertTrue(result["supports_subagent"])
+        self.assertTrue(result["supports_isolated_review"])
+        self.assertEqual("codex-multi-agent-v1", result["dispatch_mode"])
+        self.assertEqual("multi_agent_v1.spawn_agent", result["spawn_tool"])
+
+    def test_dispatch_next_for_claude_returns_task_spawn_request_and_waits_for_hook_ack(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             run_dir = repo / "docs" / "agent-runs" / "run"
@@ -899,10 +936,229 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("code-developer-order-service", schedule_data["tasks"][0]["owner"])
         self.assertTrue(context_pack_exists)
         self.assertTrue(invocation_exists)
-        self.assertEqual("worker_running", updated_state["dispatch"]["status"])
+        self.assertEqual("awaiting_runtime_spawn", updated_state["dispatch"]["status"])
         self.assertEqual("T10", updated_state["dispatch"]["current_task_id"])
+        self.assertTrue(result["requires_fresh_worker"])
+        self.assertEqual("spawn_fresh_worker", result["coordinator_action"])
+        self.assertIn("Use only the context pack", result["worker_context_policy"])
         self.assertIn("Task prompt", result["task_prompt"])
         self.assertIn("e2e-dev-harness isolated worker task", result["task_prompt"])
+        self.assertIn("Coordinator must not execute this task", result["task_prompt"])
+        self.assertIn("fresh isolated worker", result["task_prompt"])
+        self.assertEqual("Task", result["runtime_spawn_request"]["tool"])
+        self.assertEqual(result["task_prompt"], result["runtime_spawn_request"]["arguments"]["prompt"])
+        self.assertIn("dispatch-ack", result["runtime_spawn_request"]["ack_command"])
+
+    def test_dispatch_next_for_codex_returns_spawn_agent_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/code-developer.md")
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            output = Path("docs/agent-runs/run/service-plans/order-service/code-agent.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, handoff)
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "multi",
+                ["services/order-service"],
+                "docs/agent-runs/run/artifact-registry.json",
+                "IMPLEMENTED",
+            )
+            run_state.write_state(repo, state_path, state)
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T10",
+                                "agent": "code-developer-order-service",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/order-service",
+                                "inputs": [handoff.as_posix()],
+                                "outputs": [output.as_posix()],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_next(repo, schedule, state_path, runtime="codex")
+            updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        spawn = result["runtime_spawn_request"]
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("awaiting_runtime_spawn", result["dispatch"]["status"])
+        self.assertEqual("awaiting_runtime_spawn", updated_state["dispatch"]["status"])
+        self.assertEqual("multi_agent_v1.spawn_agent", spawn["tool"])
+        self.assertEqual("worker", spawn["arguments"]["agent_type"])
+        self.assertFalse(spawn["arguments"]["fork_context"])
+        self.assertEqual(result["task_prompt"], spawn["arguments"]["message"])
+        self.assertIn("dispatch-complete", spawn["completion_command"])
+
+    def test_dispatch_ack_records_real_spawned_worker_handle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "multi",
+                ["services/order-service"],
+                "docs/agent-runs/run/artifact-registry.json",
+                "IMPLEMENTED",
+            )
+            state["dispatch"] = {
+                "status": "awaiting_runtime_spawn",
+                "runtime": "codex",
+                "current_task_id": "T10",
+                "current_agent": "code-developer-order-service",
+                "invocation_path": "docs/agent-runs/run/dispatch-invocations/T10.json",
+                "context_pack": "docs/agent-runs/run/context-packs/T10.json",
+            }
+            run_state.write_state(repo, state_path, state)
+
+            result = dispatcher.dispatch_ack(
+                repo,
+                state_path,
+                task_id="T10",
+                agent="code-developer-order-service",
+                worker_handle="019-worker",
+                worker_session="codex-thread-019-worker",
+            )
+            updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("worker_running", updated_state["dispatch"]["status"])
+        self.assertEqual("019-worker", updated_state["dispatch"]["worker_handle"])
+        self.assertEqual("codex-thread-019-worker", updated_state["dispatch"]["worker_session"])
+
+    def test_dispatch_ack_syncs_worker_session_to_invocation_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            invocation = run_dir / "review-invocations" / "R1-design-review-invocation.json"
+            invocation.parent.mkdir(parents=True, exist_ok=True)
+            invocation.write_text(
+                json.dumps(
+                    {
+                        "runtime": "claude-code",
+                        "invocation_type": "subagent",
+                        "developer_agent": "coordinator-agent",
+                        "reviewer_agent": "design-reviewer",
+                        "worker_agent": "design-reviewer",
+                        "developer_session": "coordinator-session",
+                        "reviewer_session": "design-reviewer-session",
+                        "worker_session": "design-reviewer-session",
+                        "context_pack": "docs/agent-runs/run/context-packs/T04.json",
+                        "task_id": "T04",
+                        "fork_context": False,
+                        "context_policy": "request-only; no-inherited developer chat context",
+                        "status": "dispatched",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "single-review",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            state["dispatch"] = {
+                "status": "awaiting_runtime_spawn",
+                "runtime": "claude-code",
+                "current_task_id": "T04",
+                "current_agent": "design-reviewer",
+                "invocation_path": "docs/agent-runs/run/review-invocations/R1-design-review-invocation.json",
+                "context_pack": "docs/agent-runs/run/context-packs/T04.json",
+            }
+            run_state.write_state(repo, state_path, state)
+
+            result = dispatcher.dispatch_ack(
+                repo,
+                state_path,
+                task_id="T04",
+                agent="design-reviewer",
+                worker_handle="claude-task-123",
+                worker_session="claude-task-session-123",
+            )
+            invocation_data = json.loads(invocation.read_text(encoding="utf-8"))
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("claude-task-session-123", invocation_data["worker_session"])
+        self.assertEqual("claude-task-session-123", invocation_data["reviewer_session"])
+        self.assertEqual("claude-task-123", invocation_data["worker_handle"])
+        self.assertEqual("running", invocation_data["status"])
+
+    def test_dispatch_complete_blocks_unconfirmed_spawned_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            evidence = Path("docs/agent-runs/run/service-plans/order-service/code-agent.md")
+            role_template = Path("docs/agent-runs/run/agent-roles/code-developer.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, evidence, "code-developer-order-service")
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "multi",
+                ["services/order-service"],
+                "docs/agent-runs/run/artifact-registry.json",
+                "IMPLEMENTED",
+            )
+            state["dispatch"] = {
+                "status": "awaiting_runtime_spawn",
+                "runtime": "claude-code",
+                "current_task_id": "T10",
+                "current_agent": "code-developer-order-service",
+                "invocation_path": "docs/agent-runs/run/dispatch-invocations/T10-code-developer-order-service.json",
+                "context_pack": "docs/agent-runs/run/context-packs/T10.json",
+            }
+            run_state.write_state(repo, state_path, state)
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T10",
+                                "agent": "code-developer-order-service",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/order-service",
+                                "inputs": [],
+                                "outputs": [evidence.as_posix()],
+                                "role_template": role_template.as_posix(),
+                                "status": "claimed",
+                                "owner": "code-developer-order-service",
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_complete(repo, schedule, state_path, "T10", "code-developer-order-service", [evidence.as_posix()])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("not been confirmed" in reason for reason in result["blocked_reasons"]))
 
     def test_dispatch_next_budget_block_does_not_claim_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -989,6 +1245,9 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("WAITING_DISPATCH", updated_state["lifecycle"])
         self.assertEqual("waiting_dispatch", updated_state["dispatch"]["status"])
         self.assertIn("manual_dispatch_packet", result)
+        self.assertTrue(result["requires_fresh_worker"])
+        self.assertEqual("pause_for_manual_worker", result["coordinator_action"])
+        self.assertIn("fresh manual worker", result["worker_context_policy"])
 
     def test_dispatch_next_skips_blocked_task_and_claims_next_ready_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1140,9 +1399,18 @@ class OrchestrationArtifactTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
+            ack = dispatcher.dispatch_ack(
+                repo,
+                state_path,
+                task_id="T01",
+                agent="requirements-clarifier",
+                worker_handle="manual-worker-1",
+                worker_session="manual-session-1",
+            )
             result = dispatcher.dispatch_complete(repo, schedule, state_path, "T01", "requirements-clarifier", [evidence.as_posix()])
             updated_state = json.loads(state_path.read_text(encoding="utf-8"))
 
+        self.assertTrue(ack["ready"], ack["blocked_reasons"])
         self.assertTrue(result["ready"], result["blocked_reasons"])
         self.assertEqual("CREATED", updated_state["lifecycle"])
         self.assertEqual("worker_completed", updated_state["dispatch"]["status"])
@@ -1208,6 +1476,44 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("AC-2" in reason for reason in result["blocked_reasons"]))
+
+    def test_service_design_gate_returns_fix_hints_for_format_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "checkout.md"
+            service_dir = repo / "docs" / "agent-runs" / "run" / "service-designs"
+            service_dir.mkdir(parents=True)
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Checkout
+
+                    ## Acceptance Criteria
+                    - AC-1 Order is created.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            (service_dir / "order-service.md").write_text(
+                textwrap.dedent(
+                    """
+                    # Service Design Slice: services/order-service
+
+                    ## Service Scope
+                    - Service/module: services/order-service
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            result = service_design_gate.validate(repo, design, service_dir)
+
+        self.assertFalse(result["ready"])
+        hints = result["fix_hints"]
+        self.assertTrue(any(hint["action"] == "add_section" and hint["section"] == "Runtime Path" for hint in hints))
+        self.assertTrue(any(hint["action"] == "fill_tdd_plan" and "First red test" in hint["template"] for hint in hints))
+        self.assertTrue(any(hint["action"] == "close_dependency_boundary" and "Independent service change:" in hint["template"] for hint in hints))
 
     def test_service_design_gate_allows_complete_service_slices(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1491,6 +1797,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
                     global_design=design,
                     service_design_dir=service_dir,
                     service_design=None,
+                    emit_template=None,
                     run_state=state_path,
                     status_file=None,
                 )
@@ -1501,6 +1808,47 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(result["ready"], result["blocked_reasons"])
         self.assertEqual("PLANNED", updated["lifecycle"])
         self.assertEqual("passed", updated["gates"]["service_design"])
+
+    def test_service_design_emit_template_writes_gate_aligned_starter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "checkout.md"
+            service_dir = repo / "docs" / "agent-runs" / "run" / "service-designs"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Checkout
+
+                    ## Acceptance Criteria
+                    - AC-1 Order is created.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            _code, result = e2e_dev_harness.service_design(
+                SimpleNamespace(
+                    repo=repo,
+                    global_design=design,
+                    service_design_dir=service_dir,
+                    service_design=None,
+                    emit_template=["services/payment-service"],
+                    run_state=None,
+                    status_file=None,
+                )
+            )
+            written = repo / result["templates_written"][0]
+            written_exists = written.exists()
+            text = written.read_text(encoding="utf-8")
+
+        self.assertTrue(written_exists)
+        self.assertIn("## Runtime Path", text)
+        self.assertIn("## Service-local TDD Plan", text)
+        self.assertIn("First red test:", text)
+        self.assertIn("Expected failure:", text)
+        self.assertIn("Required Maven command:", text)
+        self.assertIn("Independent service change:", text)
 
     def test_multi_implementation_gate_blocks_before_service_design_state_passes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2735,6 +3083,9 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("Code exploration blocked" in reason for reason in result["blocked_reasons"]))
+        self.assertIn("Read", result["allowed_direct_exploration_tools"])
+        self.assertIn("Grep", result["allowed_direct_exploration_tools"])
+        self.assertIn("start", result["direct_exploration_guidance"].lower())
 
     def test_phase_guard_allows_code_read_after_start_when_entry_guard_required(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2806,6 +3157,10 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("Code-agent dispatch blocked" in reason for reason in result["blocked_reasons"]))
+        self.assertIn("Read", result["allowed_direct_exploration_tools"])
+        self.assertIn("Grep", result["allowed_direct_exploration_tools"])
+        self.assertIn("direct", result["direct_exploration_guidance"].lower())
+        self.assertIn("do not spawn", result["agent_dispatch_guidance"].lower())
 
     def test_phase_guard_blocks_code_agent_dispatch_without_dispatch_packet_after_implementation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2871,6 +3226,74 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertTrue(dispatch_result["ready"], dispatch_result["blocked_reasons"])
         self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_phase_guard_auto_confirms_dispatcher_generated_review_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            schedule = run_dir / "agent-schedule.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/semantic-reviewer.md")
+            review_request = Path("docs/agent-runs/run/review-requests/R1-design-review-request.md")
+            write_role_template(repo, role_template)
+            (repo / review_request).parent.mkdir(parents=True, exist_ok=True)
+            (repo / review_request).write_text(
+                textwrap.dedent(
+                    """
+                    # R1 Review Request
+
+                    - Phase: design
+                    - Reviewer Role: independent semantic reviewer
+                    - Context Package: request-scoped; no inherited developer chat context
+                    - Forbidden: inherited developer chat context; production-code edits; self-review
+                    - Output: docs/agent-runs/run/reviews/R1-design-review.md
+                    - Developer Agent: coordinator-agent
+                    - Reviewer Agent: design-reviewer
+                    - Reviewer Invocation: docs/agent-runs/run/review-invocations/R1-design-review-invocation.json
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            state = run_state.build_state("run", "single-review", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            run_state.write_state(repo, state_path, state)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T04",
+                                "agent": "design-reviewer",
+                                "phase": "r1-review",
+                                "role_group": "review",
+                                "inputs": [review_request.as_posix()],
+                                "outputs": ["docs/agent-runs/run/reviews/R1-design-review.md"],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            dispatch_result = dispatcher.dispatch_next(repo, schedule, state_path, runtime="codex")
+            before_hook = json.loads(state_path.read_text(encoding="utf-8"))
+
+            result = phase_guard.validate_action(
+                repo,
+                "Task",
+                [],
+                run_dir=Path("docs/agent-runs/run"),
+                task_text=dispatch_result["task_prompt"],
+            )
+            after_hook = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(dispatch_result["ready"], dispatch_result["blocked_reasons"])
+        self.assertEqual("awaiting_runtime_spawn", before_hook["dispatch"]["status"])
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("worker_running", after_hook["dispatch"]["status"])
+        self.assertEqual("phase_guard", after_hook["dispatch"]["spawn_confirmed_by"])
 
     def test_phase_guard_allows_non_code_reviewer_task_before_implementation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3126,6 +3549,32 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(result["dispatch_waiting"])
         self.assertFalse(result["completion_ready"])
         self.assertIn("independent subagent", result["warnings"][0])
+
+    def test_stop_guard_treats_runtime_spawn_statuses_as_dispatch_waiting(self) -> None:
+        for status in ("awaiting_runtime_spawn", "worker_running"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+                state = run_state.build_state(
+                    "docs/agent-runs/run",
+                    "multi",
+                    ["services/order-service"],
+                    "docs/agent-runs/run/artifact-registry.json",
+                    "IMPLEMENTED",
+                )
+                state["dispatch"] = {
+                    "status": status,
+                    "runtime": "claude-code",
+                    "current_task_id": "T10",
+                    "current_agent": "code-developer-order-service",
+                }
+                run_state.write_state(repo, state_path, state)
+
+                result = harness_stop_guard.evaluate(repo, run_state_path=state_path, strict=True)
+
+            self.assertTrue(result["ready"], result["blocked_reasons"])
+            self.assertTrue(result["dispatch_waiting"])
+            self.assertFalse(result["completion_ready"])
 
     def test_stop_guard_json_hook_writes_blocking_guidance_to_stderr(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4548,8 +4997,138 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("design", groups["requirements-clarifier"])
         self.assertEqual("test", groups["test-case-developer"])
         self.assertEqual("code", groups["code-developer"])
+        phases = {task["agent"]: task["phase"] for task in schedule["tasks"]}
+        self.assertEqual("r1-review", phases["single-reviewer-r1-design"])
+        self.assertEqual("r2-review", phases["single-reviewer-r2-test"])
+        self.assertEqual("r3-review", phases["single-reviewer-r3-implementation"])
+        self.assertEqual("review", groups["single-reviewer-r2-test"])
         coverage = next(agent for agent in agents if agent["name"] == "coverage-reviewer")
         self.assertIn(artifacts["requirements_archive"], coverage["outputs"])
+
+    def test_plan_archive_writes_concrete_review_request_agent_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Goal
+                    - Return a quote.
+
+                    ## Scope
+                    - services/sample-service
+
+                    ## Use Cases
+                    - Create quote.
+
+                    ## Acceptance Criteria
+                    - AC-1 Quote is returned.
+
+                    ## Test Design
+                    - Unit test first.
+
+                    ## Open Questions
+                    None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                repo=repo,
+                mode="single-review",
+                design_doc=Path("docs/design/feature.md"),
+                agent_run_dir="docs/agent-runs/run",
+                run_date="2026-05-31",
+                path=["services/sample-service"],
+                service=None,
+                service_scope="affected",
+                dependency_report=None,
+                workflow_tier="auto",
+                create_archive=True,
+                write_exec_plan=None,
+                status_file=None,
+            )
+
+            kg_facts = {"service_candidates": [], "multi_service": False, "design_docs_or_media_count": 1}
+            kg_artifact = {"path": str(repo / "docs" / "agent-runs" / "run" / "evidence" / "knowledge-graph-refresh.json"), "status": {}}
+            with patch.object(e2e_dev_harness.kg_refresh, "detect", return_value=kg_facts), \
+                    patch.object(e2e_dev_harness, "write_kg_status_artifact", return_value=kg_artifact):
+                code, result = e2e_dev_harness.plan(args)
+
+            self.assertEqual(0, code, result)
+            request_dir = repo / "docs" / "agent-runs" / "run" / "review-requests"
+            expected_reviewers = {
+                "R1-design-review-request.md": "single-reviewer-r1-design",
+                "R2-test-review-request.md": "single-reviewer-r2-test",
+                "R3-implementation-review-request.md": "single-reviewer-r3-implementation",
+            }
+            for file_name, reviewer_agent in expected_reviewers.items():
+                text = (request_dir / file_name).read_text(encoding="utf-8")
+                fields = reviewer_gate.parse_item(request_dir / file_name)
+                self.assertNotIn("<developer-agent-id>", text)
+                self.assertNotIn("<independent-reviewer-agent-id>", text)
+                self.assertEqual("coordinator-agent", fields["developer_agent"])
+                self.assertEqual(reviewer_agent, fields["reviewer_agent"])
+
+    def test_dispatch_review_uses_invocation_path_declared_by_review_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            request = run_dir / "review-requests" / "R1-design-review-request.md"
+            output = run_dir / "reviews" / "R1-design-review.md"
+            declared_invocation = run_dir / "review-invocations" / "R1-design-review-invocation.json"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            request.parent.mkdir(parents=True)
+            output.parent.mkdir(parents=True)
+            request.write_text(
+                textwrap.dedent(
+                    """
+                    # R1 Review Request
+
+                    - Phase: design
+                    - Reviewer Role: independent semantic reviewer
+                    - Context Package: request-scoped; no inherited developer chat context
+                    - Forbidden: inherited developer chat context; production-code edits; self-review
+                    - Output: docs/agent-runs/run/reviews/R1-design-review.md
+                    - Developer Agent: coordinator-agent
+                    - Reviewer Agent: design-reviewer
+                    - Reviewer Invocation: docs/agent-runs/run/review-invocations/R1-design-review-invocation.json
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "design-reviewer",
+                                "phase": "r1-review",
+                                "role_group": "review",
+                                "inputs": ["docs/agent-runs/run/review-requests/R1-design-review-request.md"],
+                                "outputs": ["docs/agent-runs/run/reviews/R1-design-review.md"],
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = run_state.build_state("docs/agent-runs/run", "single-review", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            run_state.write_state(repo, state_path, state)
+
+            result = dispatcher.dispatch_next(repo, schedule, state_path)
+
+            self.assertTrue(result["ready"], result)
+            self.assertEqual("docs/agent-runs/run/review-invocations/R1-design-review-invocation.json", result["invocation_path"])
+            self.assertTrue(declared_invocation.exists())
 
     def test_orchestration_plan_cli_accepts_single_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

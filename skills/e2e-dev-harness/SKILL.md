@@ -16,9 +16,7 @@ This skill is agent-neutral for Codex, Claude Code, Gemini CLI, OpenCode, and ru
 
 ## Fast Path
 
-Start every non-trivial run by creating a controlled harness run. This must
-happen before dependency analysis or implementation so `.phase-lock` can block
-production-code writes until the implementation gate passes:
+Start every non-trivial run before dependency analysis or implementation so `.phase-lock` can block production-code writes until the implementation gate passes:
 
 ```bash
 python skills/e2e-dev-harness/scripts/e2e_dev_harness.py start . \
@@ -33,9 +31,7 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py next . \
   --state docs/agent-runs/<run>/run-state.json
 ```
 
-Fill the generated design doc, then run `clarify` before planning or coding.
-After clarification identifies affected services or paths, rerun prepare or plan with `--service-scope affected` plus explicit `--service` or `--path` when ambiguous.
-Workflow tiers tune evidence depth; all keep auditable test proof and replayable run records.
+Fill the design doc, run `clarify`, then plan with `--service-scope affected` plus explicit `--service` or `--path` when ambiguous.
 
 Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`. Read `references/implementation-gates.md`.
 
@@ -95,7 +91,10 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
   Use `agent-task --action claim` before any multi-service code agent writes code; phase guard blocks unclaimed service writes and cross-service edits by a single claimed task.
   Claims carry leases; renew long tasks, and reclaim stale ones before completion.
   Use `checkpoint_gate.py` or `gate --checkpoint-mode required` after clarify, R1, and TDD Red on critical or interactive work.
-  Agent start/stop is runtime-specific; use `dispatch-next`/`dispatch-complete` for Claude/Superpowers Task handoffs. If no isolated worker exists, `dispatch-next` records `WAITING_DISPATCH`; do not collapse into the coordinator session.
+  Use `dispatch-next`/`dispatch-ack`/`dispatch-complete` for runtime handoffs.
+  `dispatch-next` emits a runtime spawn request for Claude Code `Task` or Codex `multi_agent_v1.spawn_agent`; call that tool,
+  let the Task hook confirm or record the worker id with `dispatch-ack`, then accept `dispatch-complete`.
+  The coordinator must not do dispatched work locally or paste full worker context into chat; keep only task id, context-pack path, invocation path, worker handle, and final evidence paths.
 
 ## Workflow
 
@@ -136,8 +135,10 @@ Important boundaries:
 - Discovery scope lists service candidates but does not create service plans.
 - Affected scope creates service plans only from explicit `--service` / `--path`, dependency evidence, or design-declared affected services/modules.
 - Multi-service work keeps each service plan and code-agent handoff under `docs/agent-runs/<run>/service-plans/<service>/`.
-- Service code agents consume `service-designs/<service>.md` first, then the service implementation plan and service-local test impact plan; they should not reload the full global design unless the slice is incomplete.
-- Before dispatching a service code agent, create `docs/agent-runs/<run>/context-packs/<agent-or-service>.json` from `agent-schedule.json`; do not pass inherited developer chat as context.
+- Service code agents consume `service-designs/<service>.md`, service implementation plan, and service-local test impact plan; do not reload the full global design unless the slice is incomplete.
+- Before dispatching, create `context-packs/<task>.json` from `agent-schedule.json`; never pass inherited developer chat as worker context.
+- `dispatch-next --runtime claude-code` emits a Claude Code `Task` request; invoke it with the returned prompt. The Task hook or `dispatch-ack` must confirm the worker before `dispatch-complete`.
+- `dispatch-next --runtime codex` emits a `multi_agent_v1.spawn_agent` request; call it with `fork_context=false`, then `dispatch-ack` the returned worker id before `dispatch-complete`.
 - Before a service code agent writes code, claim its task with `e2e_dev_harness.py agent-task --action claim --schedule docs/agent-runs/<run>/agent-schedule.json --task-id <id> --agent <agent> --state docs/agent-runs/<run>/run-state.json`.
 - Completion requires each service implement task to be completed with `agent-task --action complete` and an existing evidence file that matches one of the task outputs; the completion gate replays `agent-schedule.json`.
 - The orchestration result records `multi_agent_decision` with criteria, evidence, and required artifacts.
@@ -151,20 +152,9 @@ For role contracts, handoff schema, atomic handoff, and reviewer invocation deta
 
 ## Cross-Service Dependencies
 
-Run dependency discovery before planning implementation.
-The deterministic scanner extracts HTTP/DMQ seeds: routes, configured URLs, `@Value`, `Environment.getProperty`, client calls, producer/listener annotations, topic constants, tags, groups, and payload hints.
-It uses a tree-sitter Java AST when `tree_sitter_java` is installed (`java_parser.backend: tree-sitter`).
-That drops regex false positives like commented-out or string-literal annotations, and falls back per file to regex otherwise.
-The scanner only emits seeds; GitNexus stays the authoritative impact engine.
-
-```bash
-python skills/e2e-dev-harness/scripts/cross_service_dependency_scan.py . \
-  --gitnexus-mode auto \
-  --json
-```
-
-For Java/Spring code dependencies, GitNexus is the primary evidence engine. Graphify can enrich design-document and architecture semantics, but inferred or ambiguous Graphify findings become clarification questions, not completion evidence.
-If GitNexus/MCP/CLI is unavailable for required evidence, pause for user-approved degradation.
+Run dependency discovery before implementation planning.
+The deterministic scanner extracts HTTP/MQ seeds and GitNexus remains authoritative; Graphify enriches docs/architecture semantics only.
+Unavailable required evidence needs user-approved degradation.
 Record `Approval: user-approved`, `Reason:`, and `Fallback Evidence:` and pass the file with `--gitnexus-degradation`.
 
 For changed requirements or code diffs, use GitNexus impact tooling explicitly:

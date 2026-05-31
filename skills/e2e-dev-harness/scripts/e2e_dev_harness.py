@@ -20,7 +20,7 @@ import ac_progress_gate  # noqa: E402
 import agent_scheduler  # noqa: E402
 import artifact_registry  # noqa: E402
 import clarification_gate  # noqa: E402
-from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, configure_utf8_stdio  # noqa: E402
+from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, configure_utf8_stdio, posix  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import dispatcher  # noqa: E402
 import execution_trace  # noqa: E402
@@ -66,6 +66,11 @@ DEFAULT_REVIEW_CHECKLIST = {
         ("security-negative-paths", "Security-sensitive happy/failure paths are implemented and tested."),
         ("project-pattern-consistency", "Code follows existing project patterns and avoids local anti-patterns."),
     ],
+}
+DEFAULT_REVIEWER_AGENTS = {
+    "design": "design-reviewer",
+    "test": "test-reviewer",
+    "implementation": "implementation-reviewer",
 }
 
 
@@ -267,6 +272,18 @@ def runtime_hook_status(repo: Path) -> dict:
     }
 
 
+BLUEPRINT_STEPS = (
+    ("CREATED", "clarify", "Fill the design doc; clarification gate needs goals, use cases, acceptance criteria, test design, and resolved open questions."),
+    ("CLARIFIED", "plan", "Run plan --create-archive and complete the independent R1 design review."),
+    ("SERVICE_DESIGN_REQUIRED", "service-design", "Fill and validate each service-designs/<service>.md (service-design gate); use --emit-template to start."),
+    ("PLANNED", "tdd-red", "Write the first red test, capture red evidence, and complete the independent R2 test review."),
+    ("RED_READY", "implementation-gate", "Run gate --phase implementation to open production-code writes."),
+    ("IMPLEMENTED", "implement-or-complete", "TDD red/green for every assigned AC until ac-progress is ready, then the independent R3 implementation review."),
+    ("REVIEWED", "completion", "Run the completion gate, strict guard, run summary, and requirements archive."),
+    ("VERIFIED", "archive", "Refresh the registry, archive requirements, and report evidence."),
+)
+
+
 def next_action_for_lifecycle(lifecycle: str, state: dict | None = None) -> dict:
     state = state or {}
     actions = {
@@ -345,6 +362,31 @@ def next_action_for_lifecycle(lifecycle: str, state: dict | None = None) -> dict
             "multi-service code writes without a claimed service code-developer task",
         ]
     return action
+
+
+def workflow_overview_for(lifecycle: str, state: dict | None = None) -> dict:
+    state = state or {}
+    order = [item[0] for item in BLUEPRINT_STEPS]
+    current_index = order.index(lifecycle) if lifecycle in order else -1
+    steps: list[dict] = []
+    for index, (step_lifecycle, phase, summary) in enumerate(BLUEPRINT_STEPS):
+        steps.append(
+            {
+                "lifecycle": step_lifecycle,
+                "phase": phase,
+                "gate_summary": summary,
+                "current": step_lifecycle == lifecycle,
+                "completed": current_index >= 0 and index < current_index,
+                "pending": current_index == -1 or index > current_index,
+                "gate_status": (state.get("gates", {}) or {}).get(phase, ""),
+            }
+        )
+    return {
+        "schema": "e2e-dev-harness.workflow-overview.v1",
+        "current_lifecycle": lifecycle,
+        "selected_mode": state.get("selected_mode", ""),
+        "steps": steps,
+    }
 
 
 def without_status_file(args):
@@ -1089,7 +1131,22 @@ def create_role_template_files(repo: Path, artifacts: dict) -> list[str]:
     return created
 
 
-def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
+def normalize_artifact_path(value: str) -> str:
+    return str(value).replace("\\", "/")
+
+
+def reviewer_agent_for_output(agent_schedule: dict | None, output_path: str, phase: str) -> str:
+    normalized_output = normalize_artifact_path(output_path)
+    for task in (agent_schedule or {}).get("tasks", []) or []:
+        if not isinstance(task, dict):
+            continue
+        outputs = {normalize_artifact_path(str(item)) for item in task.get("outputs", []) or []}
+        if normalized_output in outputs:
+            return str(task.get("agent", "")).strip() or DEFAULT_REVIEWER_AGENTS.get(phase, "semantic-reviewer")
+    return DEFAULT_REVIEWER_AGENTS.get(phase, "semantic-reviewer")
+
+
+def create_handoff_files(repo: Path, artifacts: dict, agent_schedule: dict | None = None) -> list[str]:
     role_files = {
         "requirements-clarifier": artifacts["requirements"],
         "use-case-designer": artifacts["use_cases"],
@@ -1110,18 +1167,21 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
             "R1 design semantic review request",
             artifacts["design_review"],
             "all-services",
+            reviewer_agent=reviewer_agent_for_output(agent_schedule, artifacts["design_review"], "design"),
         ),
         artifacts["test_review_request"]: review_request_template(
             "test",
             "R2 test semantic review request",
             artifacts["test_review"],
             "all-services",
+            reviewer_agent=reviewer_agent_for_output(agent_schedule, artifacts["test_review"], "test"),
         ),
         artifacts["implementation_review_request"]: review_request_template(
             "implementation",
             "R3 implementation semantic review request",
             artifacts["implementation_review"],
             "all-services",
+            reviewer_agent=reviewer_agent_for_output(agent_schedule, artifacts["implementation_review"], "implementation"),
         ),
         artifacts["impact_summary"]: impact_summary_template("all-services", artifacts["impact_evidence"]),
         artifacts["impact_evidence"]: impact_evidence_template(),
@@ -1154,12 +1214,14 @@ def create_handoff_files(repo: Path, artifacts: dict) -> list[str]:
                 f"test-review-request-{service}",
                 paths["test_review"],
                 service,
+                reviewer_agent=reviewer_agent_for_output(agent_schedule, paths["test_review"], "test"),
             ),
             "implementation_review_request": review_request_template(
                 "implementation",
                 f"implementation-review-request-{service}",
                 paths["implementation_review"],
                 service,
+                reviewer_agent=reviewer_agent_for_output(agent_schedule, paths["implementation_review"], "implementation"),
             ),
         }
         for key, text in service_review_requests.items():
@@ -1378,8 +1440,17 @@ def review_checklist_template(phase: str) -> str:
     return "\n".join(lines) or "- [ ] phase-specific-review: Complete the phase-specific review focus."
 
 
-def review_request_template(phase: str, title: str, output_path: str, scope: str = "all-services") -> str:
-    invocation_path = output_path.replace("/reviews/", "/review-invocations/").replace("\\reviews\\", "\\review-invocations\\")
+def review_request_template(
+    phase: str,
+    title: str,
+    output_path: str,
+    scope: str = "all-services",
+    developer_agent: str = "coordinator-agent",
+    reviewer_agent: str | None = None,
+    invocation_path: str | None = None,
+) -> str:
+    reviewer_agent = reviewer_agent or DEFAULT_REVIEWER_AGENTS.get(phase, "semantic-reviewer")
+    invocation_path = invocation_path or output_path.replace("/reviews/", "/review-invocations/").replace("\\reviews\\", "\\review-invocations\\")
     if invocation_path.endswith(".md"):
         invocation_path = invocation_path[:-3] + "-invocation.json"
     checklist = review_checklist_template(phase)
@@ -1393,8 +1464,8 @@ def review_request_template(phase: str, title: str, output_path: str, scope: str
 - Forbidden: inherited developer chat context; production-code edits; self-review; writing implementation artifacts
 - Output: {output_path}
 - Scope: {scope}
-- Developer Agent: <developer-agent-id>
-- Reviewer Agent: <independent-reviewer-agent-id>
+- Developer Agent: {developer_agent}
+- Reviewer Agent: {reviewer_agent}
 - Reviewer Invocation: {invocation_path}
 - AC Progress Gate: required before R3; all assigned ACs must be present in coverage matrix, implementation manifest, and passing green/unit command evidence.
 
@@ -1567,7 +1638,7 @@ def plan(args) -> tuple[int, dict]:
         require_repo_path(repo, Path(result["handoff_artifacts"]["service_designs_dir"]), "service designs directory").mkdir(parents=True, exist_ok=True)
         if args.design_doc:
             result["handoff_artifacts"]["design_doc"] = str(args.design_doc).replace("\\", "/")
-        result["handoff_files_created"] = create_handoff_files(repo, result["handoff_artifacts"])
+        result["handoff_files_created"] = create_handoff_files(repo, result["handoff_artifacts"], result.get("agent_schedule"))
         proposed = require_repo_path(repo, Path(result["handoff_artifacts"]["proposed_memory_updates"]), "proposed memory updates")
         if not proposed.exists():
             proposed.write_text("# Proposed Memory Updates\n\n", encoding="utf-8")
@@ -2011,7 +2082,23 @@ def test_impact(args) -> tuple[int, dict]:
 
 def service_design(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
+    templates_written: list[str] = []
+    service_design_dir = getattr(args, "service_design_dir", None)
+    emit_templates = getattr(args, "emit_template", None) or []
+    if emit_templates:
+        target_dir = require_repo_path(repo, service_design_dir or Path("docs/agent-runs/service-designs"), "service design directory")
+        target_dir.mkdir(parents=True, exist_ok=True)
+        global_design_text = posix(getattr(args, "global_design", ""))
+        for service in emit_templates:
+            slug = orchestration_plan.service_slug(str(service))
+            target = target_dir / f"{slug}.md"
+            if not target.exists():
+                target.write_text(service_design_template(str(service), global_design_text), encoding="utf-8")
+            templates_written.append(posix(target.relative_to(repo)))
+        args.service_design_dir = target_dir
     result = service_design_gate.validate(repo, args.global_design, args.service_design_dir, args.service_design)
+    if templates_written:
+        result["templates_written"] = templates_written
     run_state_path = getattr(args, "run_state", None)
     if run_state_path and result["ready"]:
         transition = run_state.transition_state(
@@ -2102,6 +2189,20 @@ def dispatch_complete(args) -> tuple[int, dict]:
     return (0 if result["ready"] else 2), result
 
 
+def dispatch_ack(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    result = dispatcher.dispatch_ack(
+        repo,
+        args.state,
+        args.task_id,
+        args.agent,
+        args.worker_handle,
+        args.worker_session or "",
+    )
+    write_status(args.status_file, result)
+    return (0 if result["ready"] else 2), result
+
+
 def dispatch_status(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
     result = dispatcher.dispatch_status(repo, args.schedule, args.state)
@@ -2150,6 +2251,7 @@ def next_step(args) -> tuple[int, dict]:
         "hook_status": hooks,
         "lifecycle": lifecycle,
         "next": action,
+        "workflow_overview": workflow_overview_for(lifecycle, state),
         "gates": state.get("gates", {}),
         "blocked_reasons": blocked,
         "warnings": hooks.get("warnings", []) if hooks["ready"] else [],
@@ -2369,6 +2471,7 @@ def main() -> int:
     service_design_parser.add_argument("--global-design", required=True, type=Path)
     service_design_parser.add_argument("--service-design-dir", type=Path)
     service_design_parser.add_argument("--service-design", action="append", type=Path)
+    service_design_parser.add_argument("--emit-template", action="append", help="Write a pre-filled service-design template for the given service; can be repeated.")
     service_design_parser.add_argument("--run-state", type=Path)
     service_design_parser.add_argument("--status-file", type=Path)
 
@@ -2411,6 +2514,15 @@ def main() -> int:
     dispatch_complete_parser.add_argument("--agent", default="")
     dispatch_complete_parser.add_argument("--evidence", action="append")
     dispatch_complete_parser.add_argument("--status-file", type=Path)
+
+    dispatch_ack_parser = subparsers.add_parser("dispatch-ack", help="Record the runtime worker handle after a spawn request succeeds.")
+    dispatch_ack_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    dispatch_ack_parser.add_argument("--state", required=True, type=Path)
+    dispatch_ack_parser.add_argument("--task-id", required=True)
+    dispatch_ack_parser.add_argument("--agent", required=True)
+    dispatch_ack_parser.add_argument("--worker-handle", required=True)
+    dispatch_ack_parser.add_argument("--worker-session", default="")
+    dispatch_ack_parser.add_argument("--status-file", type=Path)
 
     dispatch_status_parser = subparsers.add_parser("dispatch-status", help="Summarize dispatch state and open scheduled tasks.")
     dispatch_status_parser.add_argument("repo", nargs="?", default=".", type=Path)
@@ -2464,6 +2576,8 @@ def main() -> int:
             exit_code, result = dispatch_next(args)
         elif args.command == "dispatch-complete":
             exit_code, result = dispatch_complete(args)
+        elif args.command == "dispatch-ack":
+            exit_code, result = dispatch_ack(args)
         elif args.command == "dispatch-status":
             exit_code, result = dispatch_status(args)
         elif args.command == "ac-progress":

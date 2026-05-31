@@ -49,16 +49,24 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-complete . \
 their blockers. It validates handoff readiness, dependencies, role template, and
 context-pack budget before claiming; a blocked context pack must not leave a task
 claim behind. It then writes `context-packs/<task-id>.json`, claims the scheduled
-task, writes an invocation record, and returns the prompt to pass to a fresh
-Claude Code `Task` subagent. Implementation Task hooks require that
-generated Task ID and context pack after the implementation gate, so a coordinator
-cannot bypass the scheduler with a free-form "implement this service" Task.
+task, writes an invocation record, and returns a `runtime_spawn_request`. For
+Claude Code this request is a fresh `Task`; for Codex it is
+`multi_agent_v1.spawn_agent` with `fork_context=false`. The dispatch remains
+`awaiting_runtime_spawn` until the Task hook confirms the generated Task prompt
+or `dispatch-ack` records a concrete worker handle. `dispatch-complete` rejects
+unconfirmed tasks, so the coordinator cannot mark locally executed work as a
+dispatched worker result.
+
+Implementation Task hooks require the generated Task ID and context pack after
+the implementation gate, so a coordinator cannot bypass the scheduler with a
+free-form "implement this service" Task.
 
 When a runtime cannot spawn an independent worker, dispatch enters
 `WAITING_DISPATCH` and records `dispatch.status=waiting_dispatch`. This is a
 pause state, not a completion state: Stop hooks may allow the coordinator to end
-so a fresh session can be started, but completion/guard commands still require
-closed scheduled tasks, independent semantic reviews, ready handoffs, and evidence.
+so a fresh session can be started, but `dispatch-ack` must record the fresh worker
+before `dispatch-complete`. Completion/guard commands still require closed
+scheduled tasks, independent semantic reviews, ready handoffs, and evidence.
 
 Do not let an implementation agent review its own work. If the runtime cannot spawn subagents, use a separate reviewer session with only the review request and allowed artifact inputs. Same-chat/self-review is not an acceptable fallback for R1/R2/R3.
 

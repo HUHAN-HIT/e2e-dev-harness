@@ -28,6 +28,20 @@ CLAUDE_CAPABILITIES = {
     "supports_isolated_review": True,
     "supports_blocking_stop": True,
     "dispatch_mode": "native-subagent",
+    "spawn_tool": "Task",
+    "spawn_requires_tool_call": True,
+    "spawn_acknowledgement": "phase_guard_task_hook_or_dispatch_ack",
+}
+
+CODEX_CAPABILITIES = {
+    "runtime": "codex",
+    "supports_subagent": True,
+    "supports_task_hook": False,
+    "supports_isolated_review": True,
+    "supports_blocking_stop": False,
+    "dispatch_mode": "codex-multi-agent-v1",
+    "spawn_tool": "multi_agent_v1.spawn_agent",
+    "spawn_requires_tool_call": True,
 }
 
 MANUAL_CAPABILITIES = {
@@ -47,6 +61,7 @@ def normalize_runtime(runtime: str | None) -> str:
         "claude-code": "claude-code",
         "manual": "manual",
         "codex": "codex",
+        "codex-app": "codex",
         "gemini": "gemini",
         "opencode": "opencode",
     }
@@ -57,6 +72,8 @@ def runtime_capabilities(runtime: str | None = "claude-code") -> dict:
     normalized = normalize_runtime(runtime)
     if normalized == "claude-code":
         return dict(CLAUDE_CAPABILITIES)
+    if normalized == "codex":
+        return dict(CODEX_CAPABILITIES)
     if normalized == "manual":
         return dict(MANUAL_CAPABILITIES)
     data = dict(MANUAL_CAPABILITIES)
@@ -183,6 +200,27 @@ def invocation_dir_for_task(run_dir: Path, task: dict) -> Path:
     return run_dir / "dispatch-invocations"
 
 
+def declared_reviewer_invocation(repo: Path, task: dict) -> Path | None:
+    review_request = first_matching(task.get("inputs", []), "/review-requests/")
+    if not review_request:
+        return None
+    request_path = resolve(repo, review_request)
+    if not request_path or not request_path.exists():
+        return None
+    fields = reviewer_gate.parse_item(request_path)
+    invocation = str(fields.get("reviewer_invocation", "")).strip()
+    if not invocation:
+        return None
+    invocation_path = resolve(repo, invocation)
+    if not invocation_path:
+        return None
+    try:
+        invocation_path.resolve().relative_to(repo.resolve())
+    except ValueError:
+        return None
+    return invocation_path
+
+
 def write_invocation(
     repo: Path,
     run_dir: Path,
@@ -194,7 +232,7 @@ def write_invocation(
 ) -> Path:
     task_id = str(task.get("id", "task"))
     worker_agent = str(task.get("agent") or f"agent-{task_id}")
-    path = invocation_dir_for_task(run_dir, task) / f"{task_id}-{worker_agent}.json"
+    path = declared_reviewer_invocation(repo, task) or invocation_dir_for_task(run_dir, task) / f"{task_id}-{worker_agent}.json"
     data = {
         "runtime": runtime,
         "invocation_type": "subagent",
@@ -232,6 +270,7 @@ def task_prompt(task: dict, pack: dict, invocation_path: Path, repo: Path) -> st
     agent = str(task.get("agent", ""))
     lines = [
         "Task prompt: e2e-dev-harness isolated worker task",
+        "Coordinator must not execute this task in the current context; send this prompt to a fresh isolated worker.",
         "",
         f"Task ID: {task_id}",
         f"Agent: {agent}",
@@ -241,6 +280,7 @@ def task_prompt(task: dict, pack: dict, invocation_path: Path, repo: Path) -> st
         f"Context Pack: {pack.get('context_pack_path', pack.get('path', ''))}",
         "",
         "Rules:",
+        "- Use only the context pack and allowed inputs below.",
         "- Use only the allowed inputs from the context pack.",
         "- Do not inherit or rely on coordinator chat context.",
         "- Write only scheduled outputs.",
@@ -254,6 +294,125 @@ def task_prompt(task: dict, pack: dict, invocation_path: Path, repo: Path) -> st
     lines.append("Required outputs:")
     lines.extend(f"- {item}" for item in pack.get("allowed_outputs", []) or [])
     return "\n".join(lines)
+
+
+def worker_agent_type(task: dict) -> str:
+    return "worker"
+
+
+def spawn_request_for_runtime(
+    capabilities: dict,
+    task: dict,
+    prompt: str,
+    schedule_path: Path,
+    state_path: Path | None,
+    repo: Path,
+) -> dict | None:
+    task_id = str(task.get("id", ""))
+    agent = str(task.get("agent", "")) or "agent"
+    evidence_args = " ".join(f"--evidence {item}" for item in task.get("outputs", []) or ["<evidence-path>"])
+    state_arg = f" --state {rel(repo, resolve(repo, state_path) or state_path)}" if state_path else ""
+    completion_command = (
+        "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-complete . "
+        f"--schedule {rel(repo, resolve(repo, schedule_path) or schedule_path)}"
+        f"{state_arg} --task-id {task_id} --agent {agent} {evidence_args}"
+    )
+    ack_command = (
+        "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-ack ."
+        f"{state_arg} --task-id {task_id} --agent {agent}"
+        " --worker-handle <runtime-worker-id> --worker-session <runtime-worker-session>"
+    )
+    if capabilities.get("spawn_tool") == "Task":
+        return {
+            "schema": "e2e-dev-harness.runtime-spawn-request.v1",
+            "runtime": capabilities.get("runtime", ""),
+            "tool": "Task",
+            "arguments": {
+                "description": f"{task_id} {agent}",
+                "prompt": prompt,
+                "subagent_type": "general-purpose",
+            },
+            "task_id": task_id,
+            "agent": agent,
+            "ack_command": ack_command,
+            "completion_command": completion_command,
+            "context_policy": "fresh Claude Code Task only; no inherited coordinator chat beyond this prompt and context pack.",
+        }
+    if capabilities.get("spawn_tool") != "multi_agent_v1.spawn_agent":
+        return None
+    return {
+        "schema": "e2e-dev-harness.runtime-spawn-request.v1",
+        "runtime": capabilities.get("runtime", ""),
+        "tool": "multi_agent_v1.spawn_agent",
+        "arguments": {
+            "agent_type": worker_agent_type(task),
+            "fork_context": False,
+            "message": prompt,
+        },
+        "task_id": task_id,
+        "agent": agent,
+        "ack_command": ack_command,
+        "completion_command": completion_command,
+        "context_policy": "fresh worker only; fork_context=false; use context pack instead of coordinator chat.",
+    }
+
+
+def sync_invocation_for_ack(repo: Path, dispatch: dict, worker_handle: str, worker_session: str) -> None:
+    invocation_path = resolve(repo, dispatch.get("invocation_path", ""))
+    if not invocation_path or not invocation_path.exists():
+        return
+    data = read_json(invocation_path)
+    if not data:
+        return
+    session = worker_session.strip() or worker_handle.strip()
+    data["worker_handle"] = worker_handle.strip()
+    data["worker_session"] = session
+    if str(data.get("reviewer_agent", "")).strip():
+        data["reviewer_session"] = session
+    data["status"] = "running"
+    data["spawn_acknowledged_at"] = run_state.now_iso()
+    atomic_write_json(invocation_path, data)
+
+
+def mark_invocation_completed(repo: Path, dispatch: dict, evidence: list[str] | None) -> None:
+    invocation_path = resolve(repo, dispatch.get("invocation_path", ""))
+    if not invocation_path or not invocation_path.exists():
+        return
+    data = read_json(invocation_path)
+    if not data:
+        return
+    data["status"] = "completed"
+    data["completed_at"] = run_state.now_iso()
+    if evidence:
+        data["evidence"] = evidence
+        if not str(data.get("output", "")).strip():
+            data["output"] = evidence[0]
+    atomic_write_json(invocation_path, data)
+
+
+def dispatch_completion_blockers(repo: Path, state_path: Path | None, task_id: str, agent: str) -> tuple[list[str], dict]:
+    _state_path, state = load_state(repo, state_path)
+    dispatch = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
+    if not dispatch or str(dispatch.get("current_task_id", "")).strip() != task_id:
+        return [], dispatch
+    blocked: list[str] = []
+    if str(dispatch.get("current_agent", "")).strip() != agent:
+        blocked.append(f"Dispatch agent mismatch: expected {dispatch.get('current_agent', '')}, got {agent}.")
+    status = str(dispatch.get("status", "")).strip()
+    if status in {"awaiting_runtime_spawn", "waiting_dispatch", "worker_dispatched", "dispatched"}:
+        blocked.append(
+            "Dispatched task has not been confirmed by a fresh worker; call the runtime spawn tool and let the Task hook confirm, "
+            "or run dispatch-ack with the worker handle before dispatch-complete."
+        )
+    elif status != "worker_running":
+        blocked.append(f"Dispatch status must be worker_running before dispatch-complete; got {status or '<missing>'}.")
+    elif not (
+        str(dispatch.get("worker_handle", "")).strip()
+        or str(dispatch.get("spawn_confirmed_by", "")).strip()
+        or str(dispatch.get("spawn_acknowledged_at", "")).strip()
+    ):
+        blocked.append("Dispatch has no worker confirmation proof; record dispatch-ack or runtime hook confirmation before dispatch-complete.")
+    return blocked, dispatch
 
 
 def waiting_dispatch_result(
@@ -288,6 +447,9 @@ def waiting_dispatch_result(
         "blocked_reasons": [packet["reason"]],
         "warnings": state_update.get("warnings", []),
         "capabilities": capabilities,
+        "requires_fresh_worker": True,
+        "coordinator_action": "pause_for_manual_worker",
+        "worker_context_policy": "Use a fresh manual worker session with only the context pack and allowed inputs; do not continue in coordinator context.",
         "dispatch": dispatch,
         "manual_dispatch_packet": packet,
         "run_state_update": state_update,
@@ -357,8 +519,9 @@ def dispatch_next(
     claimed_schedule = read_json(schedule_file)
     claimed_task = agent_scheduler.find_task(claimed_schedule, task_id) or task
     invocation = write_invocation(repo, run_dir, claimed_task, capabilities["runtime"], context_path, coordinator_agent, developer_session)
+    dispatch_status = "awaiting_runtime_spawn" if capabilities.get("spawn_requires_tool_call") else "worker_running"
     dispatch = {
-        "status": "worker_running",
+        "status": dispatch_status,
         "runtime": capabilities["runtime"],
         "current_task_id": task_id,
         "current_agent": agent,
@@ -367,11 +530,15 @@ def dispatch_next(
     }
     state_update = update_dispatch_state(repo, state_path, dispatch)
     prompt = task_prompt(claimed_task, pack, invocation, repo)
+    spawn_request = spawn_request_for_runtime(capabilities, claimed_task, prompt, schedule_path, state_path, repo)
     return {
         "ready": state_update["ready"],
         "blocked_reasons": state_update["blocked_reasons"],
         "warnings": claim["warnings"] + pack["warnings"] + state_update["warnings"],
         "capabilities": capabilities,
+        "requires_fresh_worker": True,
+        "coordinator_action": "spawn_fresh_worker",
+        "worker_context_policy": "Use only the context pack and allowed inputs; do not continue in coordinator context.",
         "dispatch": dispatch,
         "task": {"id": task_id, "agent": agent, "phase": claimed_task.get("phase", ""), "service": claimed_task.get("service", "")},
         "claim": claim,
@@ -379,6 +546,7 @@ def dispatch_next(
         "context_pack": rel(repo, context_path),
         "invocation_path": rel(repo, invocation),
         "task_prompt": prompt,
+        **({"runtime_spawn_request": spawn_request} if spawn_request else {}),
     }
 
 
@@ -394,6 +562,10 @@ def dispatch_complete(
     schedule_file = resolve(repo, schedule_path)
     schedule = read_json(schedule_file)
     task = agent_scheduler.find_task(schedule, task_id) if schedule else {}
+    dispatch_blockers, active_dispatch = dispatch_completion_blockers(repo, state_path, task_id, agent)
+    if dispatch_blockers:
+        return {"ready": False, "blocked_reasons": dispatch_blockers, "warnings": [], "dispatch": active_dispatch}
+    mark_invocation_completed(repo, active_dispatch, evidence or [])
     reviewer_result = None
     if task and str(task.get("phase", "")).lower() in {"r1-review", "r2-review", "r3-review"}:
         phase_map = {"r1-review": "design", "r2-review": "test", "r3-review": "implementation"}
@@ -427,6 +599,51 @@ def dispatch_complete(
         update = update_dispatch_state(repo, state_path, dispatch, lifecycle=previous_lifecycle or None)
         complete["run_state_update"] = update
     return complete
+
+
+def dispatch_ack(
+    repo: Path,
+    state_path: Path | None,
+    task_id: str,
+    agent: str,
+    worker_handle: str,
+    worker_session: str = "",
+) -> dict:
+    repo = repo.resolve()
+    state_file, state = load_state(repo, state_path)
+    if not state_file or not state:
+        return {"ready": False, "blocked_reasons": ["Run state is required to acknowledge a spawned worker."], "warnings": []}
+    dispatch = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
+    blocked: list[str] = []
+    if str(dispatch.get("status", "")) not in {"awaiting_runtime_spawn", "waiting_dispatch"}:
+        blocked.append("Dispatch is not awaiting runtime spawn acknowledgement.")
+    if str(dispatch.get("current_task_id", "")) != task_id:
+        blocked.append(f"Dispatch task mismatch: expected {dispatch.get('current_task_id', '')}, got {task_id}.")
+    if str(dispatch.get("current_agent", "")) != agent:
+        blocked.append(f"Dispatch agent mismatch: expected {dispatch.get('current_agent', '')}, got {agent}.")
+    if not worker_handle.strip():
+        blocked.append("Worker handle is required.")
+    if blocked:
+        return {"ready": False, "blocked_reasons": blocked, "warnings": [], "dispatch": dispatch}
+    acknowledged = dict(dispatch)
+    acknowledged.update(
+        {
+            "status": "worker_running",
+            "worker_handle": worker_handle.strip(),
+            "worker_session": worker_session.strip() or worker_handle.strip(),
+            "spawn_acknowledged_at": run_state.now_iso(),
+            "spawn_confirmed_by": "dispatch_ack",
+        }
+    )
+    sync_invocation_for_ack(repo, dispatch, worker_handle, worker_session)
+    update = update_dispatch_state(repo, state_path, acknowledged)
+    return {
+        "ready": update["ready"],
+        "blocked_reasons": update["blocked_reasons"],
+        "warnings": update["warnings"],
+        "dispatch": acknowledged,
+        "run_state_update": update,
+    }
 
 
 def dispatch_status(repo: Path, schedule_path: Path, state_path: Path | None = None) -> dict:

@@ -208,6 +208,15 @@ def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -
     base = {
         "not_deadlock": True,
         "next_valid_command": f"e2e_dev_harness.py next . --state {state_path}",
+        "allowed_direct_exploration_tools": ["Read", "Grep", "Glob", "List", "Search"],
+        "direct_exploration_guidance": (
+            "If you need code facts for clarification, start the harness run first, then use direct Read/Grep/Glob/List/Search "
+            "in the coordinator context and write bounded findings into the design doc."
+        ),
+        "agent_dispatch_guidance": (
+            "Do not spawn Task/subagent workers during clarification or ad hoc exploration; dispatcher-generated workers require "
+            "dispatch-next, a context pack, and a scheduled task."
+        ),
         "forbidden_actions": [
             "edit run-state.json directly",
             "edit .phase-lock directly",
@@ -376,6 +385,14 @@ def first_match(pattern: re.Pattern[str], text: str, group: str) -> str:
     return match.group(group).strip() if match else ""
 
 
+def dispatcher_task_id(text: str) -> str:
+    return first_match(DISPATCH_TASK_ID_RE, text, "task")
+
+
+def dispatcher_context_pack(text: str) -> str:
+    return first_match(DISPATCH_CONTEXT_PACK_RE, text, "path")
+
+
 def schedule_task(schedule: dict, task_id: str) -> dict:
     for task in schedule.get("tasks", []) or []:
         if isinstance(task, dict) and str(task.get("id", "")) == task_id:
@@ -423,6 +440,34 @@ def validate_dispatch_context(repo: Path, state_data: dict, task_text: str) -> l
     if dispatch and str(dispatch.get("current_task_id", "")) not in {"", task_id}:
         blocked.append("Code-agent dispatch blocked: run-state dispatch current_task_id does not match Task prompt.")
     return blocked
+
+
+def auto_confirm_dispatcher_task(repo: Path, lock: Path, state_data: dict, task_text: str) -> str:
+    task_id = dispatcher_task_id(task_text)
+    if not task_id:
+        return ""
+    state_path = run_state_path_for_lock(repo, lock)
+    current_state = load_json(state_path) or state_data
+    dispatch = current_state.get("dispatch") if isinstance(current_state.get("dispatch"), dict) else {}
+    status = str(dispatch.get("status", ""))
+    if status not in {"awaiting_runtime_spawn", "worker_dispatched", "dispatched"}:
+        return ""
+    if str(dispatch.get("current_task_id", "")) not in {"", task_id}:
+        return ""
+    confirmed = dict(dispatch)
+    confirmed.update(
+        {
+            "status": "worker_running",
+            "worker_handle": str(dispatch.get("worker_handle") or f"phase-guard-auto-confirm:{task_id}"),
+            "worker_session": str(dispatch.get("worker_session") or f"phase-guard-auto-confirm:{task_id}"),
+            "spawn_confirmed_by": "phase_guard",
+            "spawn_acknowledged_at": run_state.now_iso(),
+        }
+    )
+    current_state["dispatch"] = confirmed
+    current_state["updated_at"] = run_state.now_iso()
+    run_state.write_state(repo, state_path, current_state)
+    return f"Dispatcher task {task_id} auto-confirmed by phase_guard."
 
 
 def parse_hook_input(text: str) -> tuple[str, list[str]]:
@@ -635,6 +680,42 @@ def validate_action(
     if normalized in TASK_TOOLS:
         text = task_text.strip()
         code_task = bool(CODE_TASK_RE.search(text))
+        dispatcher_task = bool(dispatcher_task_id(text) and dispatcher_context_pack(text))
+        if dispatcher_task and not code_task:
+            if not lock or not lock.exists():
+                return {
+                    "ready": False,
+                    "blocked_reasons": [
+                        "Dispatcher task blocked: start an e2e-dev-harness run before assigning dispatcher-generated worker tasks."
+                    ],
+                    "warnings": warnings,
+                    "action": "run e2e_dev_harness.py start . --feature <feature> --request <request>",
+                    **guidance_from_lock(repo, lock),
+                }
+            lock_data, state_data, state_blockers = lock_state_pair(repo, lock)
+            if state_blockers:
+                return {
+                    "ready": False,
+                    "blocked_reasons": state_blockers,
+                    "warnings": warnings,
+                    "phase_lock": str(lock),
+                    "run_state": str(run_state_path_for_lock(repo, lock)),
+                    **guidance_from_lock(repo, lock),
+                }
+            dispatch_blockers = validate_dispatch_context(repo, state_data, text)
+            if dispatch_blockers:
+                return {
+                    "ready": False,
+                    "blocked_reasons": dispatch_blockers,
+                    "warnings": warnings,
+                    "phase_lock": str(lock),
+                    "run_state": str(run_state_path_for_lock(repo, lock)),
+                    "lifecycle": str(state_data.get("lifecycle", "")),
+                    **guidance_from_lock(repo, lock),
+                }
+            confirmation = auto_confirm_dispatcher_task(repo, lock, state_data, text)
+            if confirmation:
+                warnings.append(confirmation)
         if code_task:
             if not lock or not lock.exists():
                 return {
@@ -683,6 +764,9 @@ def validate_action(
                     "lifecycle": lifecycle,
                     **guidance_from_lock(repo, lock),
                 }
+            confirmation = auto_confirm_dispatcher_task(repo, lock, state_data, text)
+            if confirmation:
+                warnings.append(confirmation)
         return {"ready": True, "blocked_reasons": [], "warnings": warnings}
     if require_active_run_for_read and normalized in READ_TOOLS:
         read_targets = list(paths)

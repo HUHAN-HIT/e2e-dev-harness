@@ -765,8 +765,6 @@ def phase_for_agent(name: str) -> str:
         return "clarify"
     if "use-case" in name or "designer" in name:
         return "design"
-    if "test" in name:
-        return "tdd-red"
     if "code-developer" in name:
         return "implement"
     if "coverage" in name:
@@ -777,6 +775,8 @@ def phase_for_agent(name: str) -> str:
         if "test" in name:
             return "r2-review"
         return "r3-review"
+    if "test" in name:
+        return "tdd-red"
     return "plan"
 
 

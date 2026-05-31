@@ -33,9 +33,41 @@ CONCRETE_RUNTIME_RE = re.compile(r"(->|controller|service|repository|client|send
 TEST_REF_RE = re.compile(r"(\b[A-Z][A-Za-z0-9_]*(?:Test|Tests|IT|Spec)\b|src/test|mvn|gradle|junit|assert)", re.IGNORECASE)
 MAVEN_OR_TEST_COMMAND_RE = re.compile(r"\b(mvn|gradle|test|verify)\b", re.IGNORECASE)
 PLACEHOLDER_RE = re.compile(r"\b(todo|tbd|pending|unknown|placeholder)\b|<[^>]+>", re.IGNORECASE)
-MOJIBAKE_RE = re.compile(
-    r"[\ufffd]|(?:[鍜鍙鍚鍦鍏瀹實椋鏀绯妯潡灏缂璇瑙榛浜][\u4e00-\u9fff]{1,8})"
+MOJIBAKE_LEAD_CHARS = (
+    "\u59af\u5be6\u690b\u699b\u6d5c\u6f61\u7039\u704f\u7459\u7487"
+    "\u7eef\u7f02\u934f\u9359\u935a\u935c\u9366\u93c0"
 )
+MOJIBAKE_RE = re.compile(r"[\ufffd]|(?:[" + re.escape(MOJIBAKE_LEAD_CHARS) + r"][\u4e00-\u9fff]{1,8})")
+
+
+SECTION_TEMPLATES = {
+    "Service Scope": "## Service Scope\n- Service/module: <service>\n- Allowed edit scope:\n  - <service>/\n- Explicitly out of scope:\n",
+    "Global Intent Summary": "## Global Intent Summary\n- Restated user intent:\n- This service's responsibility:\n",
+    "Mapped Acceptance Criteria": (
+        "## Mapped Acceptance Criteria\n"
+        "| AC | global requirement | service responsibility | local tests |\n"
+        "| --- | --- | --- | --- |\n"
+        "| AC-1 |  |  | <ServiceTest> |\n"
+    ),
+    "Runtime Path": "## Runtime Path\n- Controller#method -> Service#method -> Repository/Client/Sender#method\n",
+    "Service-local TDD Plan": (
+        "## Service-local TDD Plan\n"
+        "- First red test: <ServiceTest> should fail before implementation\n"
+        "- Expected failure: <missing behavior/assertion>\n"
+        "- Minimal green implementation:\n"
+        "- Refactor checks:\n"
+        "- Required Maven command: mvn -pl <service> -am test\n"
+    ),
+    "Dependency Boundary": (
+        "## Dependency Boundary\n"
+        "- Independent service change: yes/no with reason\n"
+        "- HTTP/API dependencies: None or contract path\n"
+        "- MQ/DMQ/Kafka dependencies: None or topic/contract\n"
+        "- Shared DB/schema/config/security dependencies: None or migration/config path\n"
+        "- Required contracts or explicit non-applicability:\n"
+    ),
+    "Test Impact": "## Test Impact\n- Service-local test impact plan: mvn -pl <service> -am test\n- Broadened verification:\n",
+}
 
 
 def resolve(repo: Path, path: Path | None) -> Path | None:
@@ -159,68 +191,189 @@ def mojibake_samples(text: str, limit: int = 3) -> list[str]:
     return samples
 
 
+def add_fix_hint(
+    fix_hints: list[dict],
+    action: str,
+    message: str,
+    path: str = "",
+    section: str = "",
+    template: str = "",
+) -> None:
+    hint = {"action": action, "message": message}
+    if path:
+        hint["path"] = path
+    if section:
+        hint["section"] = section
+    if template:
+        hint["template"] = template
+    if hint not in fix_hints:
+        fix_hints.append(hint)
+
+
 def validate(repo: Path, global_design: Path | None, service_design_dir: Path | None = None, service_designs: list[Path] | None = None) -> dict:
     repo = repo.resolve()
     blocked: list[str] = []
     warnings: list[str] = []
+    fix_hints: list[dict] = []
     design_path = resolve(repo, global_design)
     global_acs: set[str] = set()
     if not design_path or not design_path.exists():
         blocked.append("Global design document is required for service design validation.")
+        add_fix_hint(
+            fix_hints,
+            "provide_global_design",
+            "Pass --global-design pointing at the clarified design doc with Acceptance Criteria.",
+        )
     else:
         global_acs = {item["id"].upper() for item in clarification_gate.extract_acceptance_items(design_path)}
         if not global_acs:
             blocked.append("Global design has no acceptance criteria to map into service designs.")
+            add_fix_hint(
+                fix_hints,
+                "add_acceptance_criteria",
+                "Add AC-N acceptance criteria to the global design before writing service slices.",
+                path=posix(design_path.relative_to(repo)),
+            )
 
     files = explicit_service_files(repo, service_designs, service_design_dir)
     if not files:
         blocked.append("No service design files found; expected service-designs/<service>.md.")
+        add_fix_hint(
+            fix_hints,
+            "create_service_design",
+            "Create one service-designs/<service>.md file per affected service, or run service-design --emit-template <service>.",
+        )
 
     mapped: dict[str, list[str]] = {}
     for path in files:
+        rel_path = posix(path.relative_to(repo))
         text = path.read_text(encoding="utf-8", errors="replace")
         mojibake = mojibake_samples(text)
         if mojibake:
             blocked.append(
-                f"Service design {posix(path.relative_to(repo))} appears to contain mojibake/encoding-corrupted text; "
+                f"Service design {rel_path} appears to contain mojibake/encoding-corrupted text; "
                 "rewrite it as UTF-8 before validation. Samples: " + " | ".join(mojibake)
+            )
+            add_fix_hint(
+                fix_hints,
+                "rewrite_utf8",
+                "Rewrite the service design as clean UTF-8 text; do not patch over mojibake samples.",
+                path=rel_path,
             )
         titles = section_titles(text)
         missing = sorted(REQUIRED_SECTIONS - titles)
         if missing:
-            blocked.append(f"Service design {posix(path.relative_to(repo))} missing sections: {', '.join(missing)}")
+            blocked.append(f"Service design {rel_path} missing sections: {', '.join(missing)}")
+            for title in missing:
+                add_fix_hint(
+                    fix_hints,
+                    "add_section",
+                    f"Add the ## {title} section to the service design.",
+                    path=rel_path,
+                    section=title,
+                    template=SECTION_TEMPLATES.get(title, f"## {title}\n"),
+                )
         ids = mapped_acceptance_ids(text)
         for ac_id in ids:
-            mapped.setdefault(ac_id, []).append(posix(path.relative_to(repo)))
+            mapped.setdefault(ac_id, []).append(rel_path)
         unknown = sorted(ids - global_acs) if global_acs else []
         if unknown:
-            blocked.append(f"Service design {posix(path.relative_to(repo))} maps unknown global AC ids: {', '.join(unknown)}")
+            blocked.append(f"Service design {rel_path} maps unknown global AC ids: {', '.join(unknown)}")
+            add_fix_hint(
+                fix_hints,
+                "replace_unknown_ac_ids",
+                "Map only AC ids that exist in the global design document.",
+                path=rel_path,
+                section="Mapped Acceptance Criteria",
+            )
         if not ids:
-            blocked.append(f"Service design {posix(path.relative_to(repo))} must map at least one global AC.")
+            blocked.append(f"Service design {rel_path} must map at least one global AC.")
+            add_fix_hint(
+                fix_hints,
+                "map_acceptance_criteria",
+                "Add at least one global AC id and local test in the Mapped Acceptance Criteria table.",
+                path=rel_path,
+                section="Mapped Acceptance Criteria",
+                template=SECTION_TEMPLATES["Mapped Acceptance Criteria"],
+            )
         if not has_allowed_edit_scope(text):
-            blocked.append(f"Service design {posix(path.relative_to(repo))} must declare a concrete allowed edit scope.")
+            blocked.append(f"Service design {rel_path} must declare a concrete allowed edit scope.")
+            add_fix_hint(
+                fix_hints,
+                "declare_allowed_edit_scope",
+                "Under Service Scope, add an Allowed edit scope entry with the service path.",
+                path=rel_path,
+                section="Service Scope",
+            )
         if not runtime_path_is_concrete(text):
-            blocked.append(f"Service design {posix(path.relative_to(repo))} must declare a concrete Runtime Path.")
+            blocked.append(f"Service design {rel_path} must declare a concrete Runtime Path.")
+            add_fix_hint(
+                fix_hints,
+                "fill_runtime_path",
+                "Describe the concrete call path from entry point to service/repository/client/sender.",
+                path=rel_path,
+                section="Runtime Path",
+                template=SECTION_TEMPLATES["Runtime Path"],
+            )
         if not tdd_plan_is_concrete(text):
-            blocked.append(f"Service design {posix(path.relative_to(repo))} must declare first red test, expected failure, and required Maven command.")
+            blocked.append(f"Service design {rel_path} must declare first red test, expected failure, and required Maven command.")
+            add_fix_hint(
+                fix_hints,
+                "fill_tdd_plan",
+                "Fill first red test, expected failure, and required Maven command exactly in Service-local TDD Plan.",
+                path=rel_path,
+                section="Service-local TDD Plan",
+                template=SECTION_TEMPLATES["Service-local TDD Plan"],
+            )
         if not test_impact_is_concrete(text):
-            blocked.append(f"Service design {posix(path.relative_to(repo))} must declare concrete Test Impact command.")
+            blocked.append(f"Service design {rel_path} must declare concrete Test Impact command.")
+            add_fix_hint(
+                fix_hints,
+                "fill_test_impact",
+                "Add the concrete Maven/Gradle command used to validate this service slice.",
+                path=rel_path,
+                section="Test Impact",
+                template=SECTION_TEMPLATES["Test Impact"],
+            )
         missing_tests = local_tests_are_mapped(text)
         if missing_tests:
             blocked.append(
-                f"Service design {posix(path.relative_to(repo))} must map local tests for ACs: "
+                f"Service design {rel_path} must map local tests for ACs: "
                 + ", ".join(missing_tests)
             )
+            add_fix_hint(
+                fix_hints,
+                "map_local_tests",
+                "Fill the local tests column with concrete test class or src/test paths for each mapped AC.",
+                path=rel_path,
+                section="Mapped Acceptance Criteria",
+            )
         if not dependency_boundary_closed(text):
-            blocked.append(f"Service design {posix(path.relative_to(repo))} must close Dependency Boundary and state independent service change.")
+            blocked.append(f"Service design {rel_path} must close Dependency Boundary and state independent service change.")
+            add_fix_hint(
+                fix_hints,
+                "close_dependency_boundary",
+                "Replace placeholders and include the literal Independent service change: line with a yes/no decision and reason.",
+                path=rel_path,
+                section="Dependency Boundary",
+                template=SECTION_TEMPLATES["Dependency Boundary"],
+            )
 
     missing_global = sorted(ac_id for ac_id in global_acs if ac_id not in mapped)
     if missing_global:
         blocked.append("Global acceptance criteria not mapped to any service design: " + ", ".join(missing_global))
+        add_fix_hint(
+            fix_hints,
+            "map_uncovered_global_acs",
+            "Assign every global AC to at least one service design and include a concrete local test.",
+            section="Mapped Acceptance Criteria",
+            template=SECTION_TEMPLATES["Mapped Acceptance Criteria"],
+        )
     return {
         "repo": str(repo),
         "ready": not blocked,
         "blocked_reasons": blocked,
+        "fix_hints": fix_hints,
         "warnings": warnings,
         "global_acceptance_ids": sorted(global_acs),
         "mapped_acceptance_ids": sorted(mapped),
