@@ -57,6 +57,16 @@ def latest_run_state(repo: Path) -> Path | None:
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
+def latest_run_dir(repo: Path) -> Path | None:
+    run_root = repo / "docs" / "agent-runs"
+    if not run_root.exists():
+        return None
+    candidates = [path for path in run_root.iterdir() if path.is_dir()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
 def schedule_path_for_state(state_path: Path, explicit_schedule: Path | None = None, repo: Path | None = None) -> Path | None:
     if explicit_schedule:
         return explicit_schedule if explicit_schedule.is_absolute() or repo is None else repo / explicit_schedule
@@ -103,6 +113,17 @@ def evaluate(
     if not state_path:
         state_path = latest_run_state(repo)
     if not state_path:
+        run_dir_candidate = latest_run_dir(repo)
+        if run_dir_candidate:
+            return {
+                "ready": False,
+                "blocked_reasons": [
+                    f"Stop blocked: harness run directory exists without run-state.json: {run_dir_candidate}"
+                ],
+                "warnings": [],
+                "repo": str(repo),
+                "run_state": str(run_dir_candidate / "run-state.json"),
+            }
         return {
             "ready": True,
             "blocked_reasons": [],

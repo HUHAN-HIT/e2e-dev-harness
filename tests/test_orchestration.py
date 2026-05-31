@@ -199,6 +199,16 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("claude", result["hook_status"]["runtime"])
         self.assertTrue(any("Runtime hook is not ready" in reason for reason in result["blocked_reasons"]))
 
+    def test_runtime_hook_status_accepts_ready_opencode_plugin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            install_hooks.install(repo, "opencode")
+
+            result = e2e_dev_harness.runtime_hook_status(repo)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("opencode", result["runtime"])
+
     def test_discovery_mode_has_no_agent_plan(self) -> None:
         artifacts = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
 
@@ -2081,6 +2091,31 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("Harness control file write blocked" in reason for reason in result["blocked_reasons"]))
 
+    def test_phase_guard_allows_harness_cli_referencing_run_state(self) -> None:
+        hook_text = json.dumps(
+            {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py clarify "
+                        "--design-doc docs/design/URCS.md "
+                        "--run-state docs/agent-runs/run/run-state.json 2>&1"
+                    )
+                },
+            }
+        )
+        tool, paths = phase_guard.parse_hook_input(hook_text)
+        command_text = phase_guard.extract_hook_command_text(hook_text)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+            result = phase_guard.validate_action(repo, tool, [Path(path) for path in paths], command_text=command_text)
+
+        self.assertIn("docs/agent-runs/run/run-state.json", paths)
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
     def test_phase_guard_blocks_unscoped_inline_shell_mutation(self) -> None:
         hook_text = json.dumps(
             {
@@ -2136,6 +2171,77 @@ class OrchestrationArtifactTests(unittest.TestCase):
                 [Path("services/payment/src/main/java/PayOrder.java")],
                 run_dir=Path("docs/agent-runs/run"),
                 require_active_run_for_read=True,
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_phase_guard_parses_common_read_path_fields(self) -> None:
+        hook_text = json.dumps(
+            {
+                "tool_name": "Read",
+                "tool_input": {
+                    "filePath": "services/payment/src/main/java/PayOrder.java",
+                    "absolutePath": "C:/repo/services/payment/src/main/java/PayOrder.java",
+                },
+            }
+        )
+
+        tool, paths = phase_guard.parse_hook_input(hook_text)
+
+        self.assertEqual("Read", tool)
+        self.assertIn("services/payment/src/main/java/PayOrder.java", paths)
+        self.assertIn("C:/repo/services/payment/src/main/java/PayOrder.java", paths)
+
+    def test_phase_guard_allows_read_outside_target_repo_with_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            outside = Path(tmp) / "other" / "PayOrder.java"
+            outside.parent.mkdir()
+            outside.write_text("class PayOrder {}", encoding="utf-8")
+
+            result = phase_guard.validate_action(
+                repo,
+                "Read",
+                [outside],
+                require_active_run_for_read=True,
+                require_session_checkpoint=True,
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertTrue(any("outside the configured harness repository" in warning for warning in result["warnings"]))
+
+    def test_phase_guard_blocks_code_agent_dispatch_before_implementation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CLARIFIED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Task",
+                [],
+                run_dir=Path("docs/agent-runs/run"),
+                task_text="Implement the payment service and write production code.",
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Code-agent dispatch blocked" in reason for reason in result["blocked_reasons"]))
+
+    def test_phase_guard_allows_non_code_reviewer_task_before_implementation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CLARIFIED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Task",
+                [],
+                run_dir=Path("docs/agent-runs/run"),
+                task_text="Run R1 design review and check requirements coverage.",
             )
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
@@ -2337,11 +2443,34 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
 
+    def test_stop_guard_strict_blocks_clarified_run_before_planning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CLARIFIED")
+            run_state.write_state(repo, state_path, state)
+
+            result = harness_stop_guard.evaluate(repo, run_state_path=state_path, strict=True)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("not terminal" in reason for reason in result["blocked_reasons"]))
+
     def test_stop_guard_allows_no_active_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             result = harness_stop_guard.evaluate(Path(tmp))
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_stop_guard_blocks_run_directory_without_run_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            (run_dir / "evidence").mkdir(parents=True)
+
+            result = harness_stop_guard.evaluate(repo)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("run-state" in reason for reason in result["blocked_reasons"]))
 
     def test_hook_examples_call_phase_guard(self) -> None:
         hook_dir = ROOT / "skills" / "e2e-dev-harness" / "hooks"
@@ -2350,17 +2479,23 @@ class OrchestrationArtifactTests(unittest.TestCase):
             "claude-code-settings.example.json",
             "codex-pre-action.example.json",
             "gemini-pre-action.example.json",
+            "opencode-plugin.example.js",
         ):
             with self.subTest(name=name):
                 text = (hook_dir / name).read_text(encoding="utf-8")
                 self.assertIn("phase_guard.py", text)
                 self.assertNotIn("python skills/e2e-dev-harness/scripts/phase_guard.py .", text)
                 self.assertIn("--require-active-run-for-read", text)
+                if name == "opencode-plugin.example.js":
+                    self.assertIn("tool.execute.before", text)
+                    self.assertIn("throw new Error", text)
                 if name == "claude-code-settings.example.json":
                     self.assertIn("--require-session-checkpoint", text)
-                self.assertIn("blocking", text.lower() if "claude" not in name else "blocking")
+                if name != "opencode-plugin.example.js":
+                    self.assertIn("blocking", text.lower() if "claude" not in name else "blocking")
                 if name == "claude-code-settings.example.json":
                     self.assertIn("harness_stop_guard.py", text)
+                    self.assertIn("--strict", text)
                     self.assertIn("Bash", text)
                     self.assertIn("Update", text)
                     self.assertIn("Read", text)
@@ -2387,6 +2522,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
         stop_command = result["planned_config"]["hooks"]["Stop"][0]["hooks"][0]["command"]
         self.assertIn(str(ROOT / "skills" / "e2e-dev-harness" / "scripts" / "harness_stop_guard.py"), stop_command)
         self.assertIn(str(repo), stop_command)
+        self.assertIn("--strict", stop_command)
 
     def test_install_hooks_rewrites_portable_runtime_templates(self) -> None:
         for runtime in ("codex", "gemini"):
@@ -2401,6 +2537,35 @@ class OrchestrationArtifactTests(unittest.TestCase):
                 self.assertIn("--require-active-run-for-read", command)
                 self.assertIn(str(repo), command)
                 self.assertNotIn("skills/e2e-dev-harness/scripts/phase_guard.py .", command)
+
+    def test_install_hooks_installs_opencode_plugin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+
+            result = install_hooks.install(repo, "opencode")
+            target = repo / ".opencode" / "plugins" / "e2e-dev-harness.js"
+            validation = install_hooks.validate_config(target)
+            text = target.read_text(encoding="utf-8")
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertTrue(validation["ready"], validation["blocked_reasons"])
+        self.assertIn("tool.execute.before", text)
+        self.assertIn(str(ROOT / "skills" / "e2e-dev-harness" / "scripts" / "phase_guard.py").replace("\\", "\\\\"), text)
+        self.assertIn(str(repo).replace("\\", "\\\\"), text)
+        self.assertIn("--require-active-run-for-read", text)
+        self.assertIn("--require-session-checkpoint", text)
+
+    def test_install_hooks_rejects_nonblocking_opencode_plugin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            target = repo / ".opencode" / "plugins" / "e2e-dev-harness.js"
+            target.parent.mkdir(parents=True)
+            target.write_text("export const X = { 'tool.execute.after': () => {} };\n", encoding="utf-8")
+
+            result = install_hooks.validate_config(target)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("tool.execute.before" in reason for reason in result["blocked_reasons"]))
 
     def test_install_hooks_merges_claude_settings_idempotently(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2452,6 +2617,91 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("absolute path" in reason for reason in result["blocked_reasons"]))
 
+    def test_install_hooks_rejects_wrong_installed_phase_guard_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            settings = repo / ".claude" / "settings.json"
+            settings.parent.mkdir(parents=True)
+            wrong_phase_guard = Path.home() / ".claude" / "skills" / "e2e-dev-harness" / "phase_guard.py"
+            settings.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            "PreToolUse": [
+                                {
+                                    "matcher": "Read|Grep|Glob|Write|Edit|Update|MultiEdit|NotebookEdit|Bash",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": f'"{sys.executable}" "{wrong_phase_guard}" "{repo}" --hook-input - --require-active-run-for-read --require-session-checkpoint --json',
+                                        }
+                                    ],
+                                }
+                            ],
+                            "Stop": [
+                                {
+                                    "matcher": "",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": f'"{sys.executable}" "{ROOT / "skills" / "e2e-dev-harness" / "scripts" / "harness_stop_guard.py"}" "{repo}" --hook-input - --strict --json',
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = install_hooks.validate_config(settings)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("installed phase_guard.py" in reason for reason in result["blocked_reasons"]))
+
+    def test_install_hooks_rejects_posttooluse_only_phase_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            settings = repo / ".claude" / "settings.json"
+            settings.parent.mkdir(parents=True)
+            settings.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            "PostToolUse": [
+                                {
+                                    "matcher": "Bash",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": f'"{sys.executable}" "{ROOT / "skills" / "e2e-dev-harness" / "scripts" / "phase_guard.py"}" "{repo}" --hook-input - --require-active-run-for-read --json',
+                                        }
+                                    ],
+                                }
+                            ],
+                            "Stop": [
+                                {
+                                    "matcher": "",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": f'"{sys.executable}" "{ROOT / "skills" / "e2e-dev-harness" / "scripts" / "harness_stop_guard.py"}" "{repo}" --hook-input - --strict --json',
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = install_hooks.validate_config(settings)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("PreToolUse" in reason for reason in result["blocked_reasons"]))
+
     def test_install_hooks_rejects_missing_claude_stop_guard(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -2463,7 +2713,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
                         "hooks": {
                             "PreToolUse": [
                                 {
-                                    "matcher": "Read|Grep|Glob|Write|Edit|Update|MultiEdit|NotebookEdit|Bash",
+                                    "matcher": "Read|Grep|Glob|Task|Write|Edit|Update|MultiEdit|NotebookEdit|Bash",
                                     "hooks": [
                                         {
                                             "type": "command",
@@ -2494,7 +2744,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
                         "hooks": {
                             "PreToolUse": [
                                 {
-                                    "matcher": "Read|Grep|Glob|Write|Edit|MultiEdit|NotebookEdit|Bash",
+                                    "matcher": "Read|Grep|Glob|Task|Write|Edit|MultiEdit|NotebookEdit|Bash",
                                     "hooks": [
                                         {
                                             "type": "command",
@@ -2524,6 +2774,141 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("Update" in reason for reason in result["blocked_reasons"]))
+
+    def test_install_hooks_rejects_missing_claude_task_matcher(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            settings = repo / ".claude" / "settings.json"
+            settings.parent.mkdir(parents=True)
+            settings.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            "PreToolUse": [
+                                {
+                                    "matcher": "Read|Grep|Glob|Write|Edit|Update|MultiEdit|NotebookEdit|Bash",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": f"\"{sys.executable}\" \"{ROOT / 'skills' / 'e2e-dev-harness' / 'scripts' / 'phase_guard.py'}\" \"{repo}\" --hook-input - --require-active-run-for-read --require-session-checkpoint --json",
+                                        }
+                                    ],
+                                }
+                            ],
+                            "Stop": [
+                                {
+                                    "matcher": "",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": f"\"{sys.executable}\" \"{ROOT / 'skills' / 'e2e-dev-harness' / 'scripts' / 'harness_stop_guard.py'}\" \"{repo}\" --hook-input - --strict --json",
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = install_hooks.validate_config(settings)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Task" in reason for reason in result["blocked_reasons"]))
+
+    def test_install_hooks_rejects_unscoped_gateguard_fact_force(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            settings = repo / ".claude" / "settings.json"
+            settings.parent.mkdir(parents=True)
+            settings.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            "PreToolUse": [
+                                {
+                                    "matcher": "Read|Grep|Glob|Task|Write|Edit|Update|MultiEdit|NotebookEdit|Bash",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": f"\"{sys.executable}\" \"{ROOT / 'skills' / 'e2e-dev-harness' / 'scripts' / 'phase_guard.py'}\" \"{repo}\" --hook-input - --require-active-run-for-read --require-session-checkpoint --json",
+                                        }
+                                    ],
+                                },
+                                {
+                                    "matcher": "Write|Edit|Update|MultiEdit|Bash",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": "python gateguard-fact-force.py --all-writes",
+                                        }
+                                    ],
+                                },
+                            ],
+                            "Stop": [
+                                {
+                                    "matcher": "",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": f"\"{sys.executable}\" \"{ROOT / 'skills' / 'e2e-dev-harness' / 'scripts' / 'harness_stop_guard.py'}\" \"{repo}\" --hook-input - --strict --json",
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = install_hooks.validate_config(settings)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("gateguard-fact-force" in reason for reason in result["blocked_reasons"]))
+
+    def test_install_hooks_rejects_non_strict_claude_stop_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            settings = repo / ".claude" / "settings.json"
+            settings.parent.mkdir(parents=True)
+            settings.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            "PreToolUse": [
+                                {
+                                    "matcher": "Read|Grep|Glob|Task|Write|Edit|Update|MultiEdit|NotebookEdit|Bash",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": f"\"{sys.executable}\" \"{ROOT / 'skills' / 'e2e-dev-harness' / 'scripts' / 'phase_guard.py'}\" \"{repo}\" --hook-input - --require-active-run-for-read --require-session-checkpoint --json",
+                                        }
+                                    ],
+                                }
+                            ],
+                            "Stop": [
+                                {
+                                    "matcher": "",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": f"\"{sys.executable}\" \"{ROOT / 'skills' / 'e2e-dev-harness' / 'scripts' / 'harness_stop_guard.py'}\" \"{repo}\" --hook-input - --json",
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = install_hooks.validate_config(settings)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("--strict" in reason for reason in result["blocked_reasons"]))
 
     def test_install_hooks_rewrites_stale_repo_relative_phase_guard_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2560,6 +2945,65 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertIn(str(ROOT / "skills" / "e2e-dev-harness" / "scripts" / "phase_guard.py"), command)
         self.assertIn(str(repo), command)
         self.assertNotIn("python skills/e2e-dev-harness/scripts/phase_guard.py .", command)
+
+    def test_pre_code_blocks_when_project_hook_config_is_broken(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "IMPLEMENTED")
+            write_implemented_state(repo, state_path, state)
+            settings = repo / ".claude" / "settings.json"
+            settings.parent.mkdir(parents=True)
+            settings.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            "PreToolUse": [
+                                {
+                                    "matcher": "Read|Grep|Glob|Write|Edit|Update|MultiEdit|NotebookEdit|Bash",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": r"\python C:\Users\14907\.claude\skills\e2e-dev-harness\phase_guard.py . --hook-input - --require-active-run-for-read --require-session-checkpoint --json",
+                                        }
+                                    ],
+                                }
+                            ],
+                            "Stop": [
+                                {
+                                    "matcher": "",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": r"\python C:\Users\14907\.claude\skills\e2e-dev-harness\phase_guard.py . --hook-input - --strict --json",
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            home = repo / "home"
+            home.mkdir()
+            args = SimpleNamespace(
+                repo=repo,
+                tool="Edit",
+                path=[Path("services/payment-service/src/main/java/PaymentService.java")],
+                patch=None,
+                command_text="",
+                lock=None,
+                run_dir=Path("docs/agent-runs/run"),
+                status_file=None,
+            )
+
+            with patch.object(e2e_dev_harness.Path, "home", return_value=home):
+                code, result = e2e_dev_harness.pre_code(args)
+
+        self.assertEqual(2, code)
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Runtime hook config is present but not enforcing" in reason for reason in result["blocked_reasons"]))
 
     def test_auto_transition_from_ready_gate_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2841,6 +3285,115 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertIn("gitnexus-impact", result["required_gates"])
         self.assertIn("contracts", result["required_gates"])
         self.assertIn("strict-guard", result["required_gates"])
+
+    def test_workflow_tier_auto_keeps_single_service_rest_endpoint_standard(self) -> None:
+        design_text = "Add one REST API endpoint in order-service for an admin lookup screen."
+        facts = {"service_candidates": ["services/order-service"], "multi_service": False}
+
+        result = task_tier.evaluate("auto", design_text, facts, {"dependencies": []})
+
+        self.assertEqual("standard", result["tier"])
+        self.assertIn("r1-review", result["required_gates"])
+        self.assertNotIn("contracts", result["required_gates"])
+        self.assertNotIn("strict-guard", result["required_gates"])
+
+    def test_workflow_tier_auto_marks_cross_service_http_api_as_critical(self) -> None:
+        design_text = "Add a REST API client from order-service to payment-service."
+        facts = {"service_candidates": ["services/order-service", "services/payment-service"], "multi_service": True}
+        dependency_report = {
+            "dependencies": [{"kind": "http", "source_service": "services/order-service"}],
+            "unresolved_questions": [],
+        }
+
+        result = task_tier.evaluate("auto", design_text, facts, dependency_report)
+
+        self.assertEqual("critical", result["tier"])
+        self.assertIn("contracts", result["required_gates"])
+        self.assertIn("strict-guard", result["required_gates"])
+
+    def test_workflow_tier_auto_marks_chinese_payment_risk_control_as_critical(self) -> None:
+        design_text = "统一支付风控系统：黑名单、商户评级、限额规则、观察模式、降级策略。"
+        facts = {"service_candidates": ["jeepay-payment"], "multi_service": False}
+
+        result = task_tier.evaluate("auto", design_text, facts, {"dependencies": []})
+
+        self.assertEqual("critical", result["tier"])
+        self.assertIn("gitnexus-impact", result["required_gates"])
+        self.assertIn("strict-guard", result["required_gates"])
+
+    def test_plan_archive_writes_registered_knowledge_graph_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "services" / "order-service" / "src" / "main").mkdir(parents=True)
+            (repo / "services" / "order-service" / "pom.xml").write_text("<project />\n", encoding="utf-8")
+            (repo / "pom.xml").write_text(
+                "<project><modules><module>services/order-service</module></modules></project>\n",
+                encoding="utf-8",
+            )
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text("# Feature\n\n## Scope\n- services/order-service\n", encoding="utf-8")
+            args = SimpleNamespace(
+                repo=repo,
+                mode="single",
+                design_doc=Path("docs/design/feature.md"),
+                agent_run_dir="docs/agent-runs/run",
+                run_date="2026-05-31",
+                service_scope="affected",
+                service=["services/order-service"],
+                path=None,
+                dependency_report=None,
+                create_archive=True,
+                write_exec_plan=False,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.plan(args)
+            kg_path = repo / result["handoff_artifacts"]["knowledge_graph_status"]
+            kg_exists = kg_path.exists()
+            kg_status = json.loads(kg_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code, result.get("blocked_reasons"))
+        self.assertTrue(kg_exists)
+        self.assertIn("selected_tools", kg_status)
+
+    def test_implementation_gate_uses_run_state_registry_knowledge_graph_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            kg = run_dir / "evidence" / "knowledge-graph-refresh.json"
+            kg.parent.mkdir(parents=True)
+            kg.write_text(json.dumps({"selected_tools": ["gitnexus"], "available_tools": {"gitnexus": "gitnexus"}}), encoding="utf-8")
+            registry = artifact_registry.build_registry(
+                repo,
+                "docs/agent-runs/run",
+                {
+                    "run_state": "docs/agent-runs/run/run-state.json",
+                    "artifact_registry": "docs/agent-runs/run/artifact-registry.json",
+                    "knowledge_graph_status": "docs/agent-runs/run/evidence/knowledge-graph-refresh.json",
+                },
+                "single",
+                [],
+            )
+            registry_path = run_dir / "artifact-registry.json"
+            artifact_registry.write_registry(repo, registry_path, registry)
+            state = run_state.build_state("docs/agent-runs/run", "single", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            run_state.write_state(repo, run_dir / "run-state.json", state)
+
+            result = implementation_gate.validate_gate_request(
+                implementation_gate.GateRequest(
+                    repo=repo,
+                    phase="implementation",
+                    run_state=Path("docs/agent-runs/run/run-state.json"),
+                    tdd_mode="off",
+                    require_semantic_reviews=False,
+                    require_gitnexus_evidence="off",
+                    workflow_tier="basic",
+                )
+            )
+
+        self.assertFalse(any("Knowledge graph status file not found" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(result["knowledge_graph_status_loaded"])
 
     def test_workflow_tier_basic_still_keeps_harness_record(self) -> None:
         result = task_tier.evaluate("basic", "Update validation message.", {}, {})

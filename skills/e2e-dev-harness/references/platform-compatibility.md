@@ -9,7 +9,8 @@ Use this skill as an agent-neutral workflow package. The stable contract is the 
 | Codex | project `skills/`, `~/.codex/skills`, or `~/.agents/skills` | Use the native skill loader when available; otherwise read `SKILL.md` and run bundled Python scripts directly. |
 | Claude Code | project `skills/` or `~/.claude/skills` | Use the `Skill` tool when available. If unavailable, read `SKILL.md`, then load referenced files only when needed. |
 | Gemini CLI | project `skills/` or `~/.gemini/skills` | Activate/read the skill, then use the same Python CLI and artifact conventions. |
-| OpenCode/other agents | project `skills/` or configured skill path | Treat `SKILL.md` as the entrypoint and scripts as deterministic gates. |
+| OpenCode | project `skills/`, `.opencode/skills`, or configured skill path | Treat `SKILL.md` as the entrypoint and install `.opencode/plugins/e2e-dev-harness.js` with `install_hooks.py --runtime opencode` for pre-tool blocking. |
+| Other agents | project `skills/` or configured skill path | Treat `SKILL.md` as the entrypoint and scripts as deterministic gates. |
 
 ## Tool Name Equivalents
 
@@ -17,6 +18,7 @@ Use this skill as an agent-neutral workflow package. The stable contract is the 
 - Subagents: prefer native subagent/session support. If unavailable, use a fresh separate reviewer session with only the review request and allowed input files.
 - Task tracking: use the runtime's todo/checklist tool when available. If unavailable, write checklist progress into the agent-run artifact.
 - Shell commands: run the Python scripts directly; they avoid Codex-only APIs.
+- OpenCode plugins: use `.opencode/plugins/e2e-dev-harness.js` to map `tool.execute.before` to `phase_guard.py`; keep design/test/review agents non-writing through OpenCode permissions when possible.
 
 ## Portability Rules
 

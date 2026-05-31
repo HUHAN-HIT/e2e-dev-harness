@@ -20,7 +20,7 @@ import ac_progress_gate  # noqa: E402
 import agent_scheduler  # noqa: E402
 import artifact_registry  # noqa: E402
 import clarification_gate  # noqa: E402
-from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS  # noqa: E402
+from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, configure_utf8_stdio  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import execution_trace  # noqa: E402
 import implementation_gate  # noqa: E402
@@ -43,6 +43,11 @@ import workflow_guard  # noqa: E402
 
 DEFAULT_REVIEW_PROFILE = "skills/e2e-dev-harness/review-profiles/default.json"
 __version__ = "0.2.0"
+INSTALL_TARGETS = {
+    "codex": (".codex", "skills", "e2e-dev-harness"),
+    "claude": (".claude", "skills", "e2e-dev-harness"),
+    "agents": (".agents", "skills", "e2e-dev-harness"),
+}
 DEFAULT_REVIEW_CHECKLIST = {
     "design": [
         ("ac-completeness", "Acceptance criteria cover goals, non-goals, affected modules, and open questions."),
@@ -94,6 +99,41 @@ def write_status(path: Path | None, result: dict) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def install_targets(target: str) -> list[str]:
+    return list(INSTALL_TARGETS) if target == "all" else [target]
+
+
+def copy_skill_tree(source: Path, destination: Path) -> dict:
+    def ignore(_dir: str, names: list[str]) -> set[str]:
+        return {
+            name for name in names
+            if name == "__pycache__" or name == ".pytest_cache" or name.endswith(".egg-info")
+        }
+
+    if destination.exists():
+        shutil.rmtree(destination)
+    shutil.copytree(source, destination, ignore=ignore)
+    files = sum(1 for path in destination.rglob("*") if path.is_file())
+    dirs = sum(1 for path in destination.rglob("*") if path.is_dir())
+    return {"path": str(destination), "files": files, "directories": dirs}
+
+
+def run_install_command(command: list[str], cwd: Path) -> dict:
+    completed = subprocess.run(
+        command,
+        cwd=str(cwd),
+        text=True,
+        capture_output=True,
+        timeout=DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
+    )
+    return {
+        "command": " ".join(str(part) for part in command),
+        "exit_code": completed.returncode,
+        "stdout_tail": (completed.stdout or "")[-4000:],
+        "stderr_tail": (completed.stderr or "")[-4000:],
+    }
 
 
 def optional_text(path: Path | None) -> str:
@@ -164,7 +204,48 @@ def load_run_state(repo: Path, state_path: Path) -> dict:
 def runtime_hook_status(repo: Path) -> dict:
     checked: list[dict] = []
     project_claude_dir = repo / ".claude"
-    if not project_claude_dir.exists():
+    project_opencode_dir = repo / ".opencode"
+    claude_targets = [
+        ("project", project_claude_dir / "settings.json"),
+        ("user", Path.home() / ".claude" / "settings.json"),
+    ]
+    if project_claude_dir.exists():
+        for scope, target in claude_targets:
+            if not target.parent.exists():
+                continue
+            result = install_hooks.validate_config(target, repo)
+            result["runtime"] = "claude"
+            result["scope"] = scope
+            checked.append(result)
+            if result["ready"]:
+                if scope == "user" and checked and checked[0].get("scope") == "project" and not checked[0]["ready"]:
+                    result["warnings"] = result.get("warnings", []) + [
+                        "Project Claude hook config is not ready; user-level Claude hook config is enforcing phase_guard.py."
+                    ]
+                    result["project_hook_status"] = checked[0]
+                return result
+    if project_opencode_dir.exists():
+        opencode_target = project_opencode_dir / "plugins" / "e2e-dev-harness.js"
+        result = install_hooks.validate_config(opencode_target, repo)
+        result["runtime"] = "opencode"
+        result["scope"] = "project"
+        checked.append(result)
+        if result["ready"]:
+            return result
+    if checked:
+        return {
+            "ready": False,
+            "blocked_reasons": [
+                f"{item['scope']} {item.get('runtime', 'runtime')} hook: {reason}"
+                for item in checked
+                for reason in item.get("blocked_reasons", [])
+            ],
+            "warnings": [],
+            "runtime": ",".join(sorted({str(item.get("runtime", "runtime")) for item in checked})),
+            "target": ", ".join(str(item.get("target", "")) for item in checked),
+            "checked": checked,
+        }
+    if not project_claude_dir.exists() and not project_opencode_dir.exists():
         return {
             "ready": True,
             "blocked_reasons": [],
@@ -174,45 +255,14 @@ def runtime_hook_status(repo: Path) -> dict:
             "runtime": "generic",
             "target": "",
         }
-    claude_targets = [
-        ("project", project_claude_dir / "settings.json"),
-        ("user", Path.home() / ".claude" / "settings.json"),
-    ]
-    for scope, target in claude_targets:
-        if not target.parent.exists():
-            continue
-        result = install_hooks.validate_config(target)
-        result["runtime"] = "claude"
-        result["scope"] = scope
-        checked.append(result)
-        if result["ready"]:
-            if scope == "user" and checked and checked[0].get("scope") == "project" and not checked[0]["ready"]:
-                result["warnings"] = result.get("warnings", []) + [
-                    "Project Claude hook config is not ready; user-level Claude hook config is enforcing phase_guard.py."
-                ]
-                result["project_hook_status"] = checked[0]
-            return result
-    if checked:
-        return {
-            "ready": False,
-            "blocked_reasons": [
-                f"{item['scope']} Claude hook: {reason}"
-                for item in checked
-                for reason in item.get("blocked_reasons", [])
-            ],
-            "warnings": [],
-            "runtime": "claude",
-            "target": ", ".join(str(item.get("target", "")) for item in checked),
-            "checked": checked,
-        }
     return {
         "ready": False,
         "blocked_reasons": [
-            f"Claude hook config not found or unreadable: {project_claude_dir / 'settings.json'}"
+            "Runtime hook config not found or unreadable."
         ],
         "warnings": [],
-        "runtime": "claude",
-        "target": str(project_claude_dir / "settings.json"),
+        "runtime": "runtime",
+        "target": "",
     }
 
 
@@ -392,6 +442,14 @@ def kg_status(repo: Path, mode: str, facts: dict | None = None) -> dict:
         "available_tools": availability,
         "suggested_commands": kg_refresh.suggested_commands(selected, facts, availability),
     }
+
+
+def write_kg_status_artifact(repo: Path, target: Path, mode: str, facts: dict | None = None) -> dict:
+    status = kg_status(repo, mode, facts)
+    resolved = require_repo_path(repo, target, "knowledge graph status")
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(json.dumps(status, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return {"path": str(resolved), "status": status}
 
 
 def dependency_scan_status(repo: Path, args) -> dict:
@@ -1501,6 +1559,14 @@ def plan(args) -> tuple[int, dict]:
         schedule_path = require_repo_path(repo, Path(result["handoff_artifacts"]["agent_schedule"]), "agent schedule")
         schedule_path.write_text(json.dumps(result["agent_schedule"], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         result["agent_schedule_written"] = str(schedule_path)
+        kg_artifact = write_kg_status_artifact(
+            repo,
+            Path(result["handoff_artifacts"]["knowledge_graph_status"]),
+            "auto",
+            kg_facts,
+        )
+        result["knowledge_graph_status_written"] = kg_artifact["path"]
+        result["knowledge_graph"] = kg_artifact["status"]
         result["agent_run_archive_created"] = str(run_dir)
     if args.write_exec_plan or args.create_archive:
         target = require_repo_path(repo, args.write_exec_plan or Path(result["handoff_artifacts"]["exec_plan"]), "exec plan")
@@ -1793,6 +1859,94 @@ def doctor(args) -> tuple[int, dict]:
     return (0 if result["ready"] else 2), result
 
 
+def install_project(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    full = bool(getattr(args, "full", False))
+    target = "all" if full else args.target
+    targets = install_targets(target)
+    install_root = Path(args.install_root or Path.home()).resolve()
+    source_skill = Path(args.source_skill_dir or SCRIPT_DIR.parent).resolve()
+    install_external = bool(getattr(args, "install_external", False) or (full and not getattr(args, "skip_external", False)))
+    with_hooks = bool(getattr(args, "with_hooks", False) or full)
+    run_doctor = bool(getattr(args, "doctor", False) or full)
+    runtime = getattr(args, "runtime", "claude")
+    actions: list[dict] = []
+    action_results: list[dict] = []
+    blockers: list[str] = []
+    installed_skills: list[dict] = []
+
+    if not (source_skill / "SKILL.md").exists():
+        blockers.append(f"Source skill is missing SKILL.md: {source_skill}")
+
+    skill_targets = [
+        {"target": name, "path": str(install_root.joinpath(*INSTALL_TARGETS[name]))}
+        for name in targets
+    ]
+    actions.append({"id": "copy-skill", "description": "Copy e2e-dev-harness into runtime skill directories.", "targets": skill_targets})
+
+    if install_external:
+        if not shutil.which("gitnexus"):
+            actions.append({"id": "install-gitnexus", "command": "npm install -g gitnexus", "cwd": str(repo)})
+        if not shutil.which("graphify"):
+            actions.append({"id": "install-graphify", "command": f"{sys.executable} -m pip install --user graphifyy", "cwd": str(repo)})
+
+    if with_hooks:
+        actions.append({
+            "id": "install-hooks",
+            "description": f"Install {runtime} hook configuration into the current project.",
+            "command": f"{sys.executable} {SCRIPT_DIR / 'install_hooks.py'} {repo} --runtime {runtime} --json",
+            "cwd": str(repo),
+        })
+
+    if run_doctor:
+        actions.append({
+            "id": "doctor",
+            "description": "Run e2e-dev-harness doctor against the current project.",
+            "command": f"{sys.executable} {Path(__file__).resolve()} doctor {repo} --json",
+            "cwd": str(repo),
+        })
+
+    result = {
+        "schema": "e2e-dev-harness.install.v1",
+        "project_root": str(repo),
+        "source_skill_dir": str(source_skill),
+        "install_root": str(install_root),
+        "targets": targets,
+        "full": full,
+        "runtime": runtime,
+        "executed": bool(args.yes),
+        "actions": actions,
+        "action_results": action_results,
+        "installed_skills": installed_skills,
+        "ready": not blockers,
+        "blocked_reasons": blockers,
+        "warnings": [],
+    }
+
+    if result["ready"] and args.yes:
+        for skill_target in skill_targets:
+            copied = copy_skill_tree(source_skill, Path(skill_target["path"]))
+            installed_skills.append({"target": skill_target["target"], **copied})
+        for action in actions:
+            if action["id"] == "copy-skill":
+                continue
+            if action["id"] == "install-hooks":
+                hook_result = install_hooks.install(repo, runtime)
+                action_results.append({"action": action["id"], "exit_code": 0 if hook_result["ready"] else 2, "result": hook_result})
+            elif action["id"] == "doctor":
+                doctor_result = harness_doctor.evaluate(repo)
+                action_results.append({"action": action["id"], "exit_code": 0 if doctor_result["ready"] else 2, "result": doctor_result})
+            else:
+                command = ["npm", "install", "-g", "gitnexus"] if action["id"] == "install-gitnexus" else [sys.executable, "-m", "pip", "install", "--user", "graphifyy"]
+                action_results.append({"action": action["id"], **run_install_command(command, repo)})
+            if action_results[-1]["exit_code"] != 0:
+                result["ready"] = False
+                result["blocked_reasons"].append(f"Action failed: {action['id']}")
+                break
+    write_status(args.status_file, result)
+    return (0 if result["ready"] else 2), result
+
+
 def pre_code(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
     paths = list(args.path or [])
@@ -1810,10 +1964,16 @@ def pre_code(args) -> tuple[int, dict]:
         args.run_dir,
         command_text=args.command_text,
     )
+    hook_status = runtime_hook_status(repo)
     result["pre_code"] = True
     result["tool"] = args.tool
     result["paths_checked"] = [str(path) for path in paths]
-    result["hook_status"] = runtime_hook_status(repo)
+    result["hook_status"] = hook_status
+    if not hook_status["ready"]:
+        result["ready"] = False
+        result.setdefault("blocked_reasons", []).append(
+            "Runtime hook config is present but not enforcing; repair hooks with install_hooks.py or remove the broken runtime hook directory before relying on portable pre-code."
+        )
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
 
@@ -1970,6 +2130,7 @@ def add_prepare_args(parser: argparse.ArgumentParser) -> None:
 
 
 def main() -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="Print JSON output.")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -2111,6 +2272,20 @@ def main() -> int:
     doctor_parser.add_argument("--json", action="store_true", help="Print JSON output.")
     doctor_parser.add_argument("--status-file", type=Path)
 
+    install_parser = subparsers.add_parser("install", help="Install latest skill copies and project-local hooks for the current project.")
+    install_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    install_parser.add_argument("--target", choices=["codex", "claude", "agents", "all"], default="codex")
+    install_parser.add_argument("--install-root", type=Path, default=Path.home())
+    install_parser.add_argument("--source-skill-dir", type=Path)
+    install_parser.add_argument("--runtime", choices=["claude", "codex", "gemini", "opencode"], default="claude")
+    install_parser.add_argument("--full", action="store_true", help="Preset: --target all --install-external --with-hooks --runtime claude --doctor.")
+    install_parser.add_argument("--yes", action="store_true", help="Execute planned writes and install commands.")
+    install_parser.add_argument("--install-external", action="store_true")
+    install_parser.add_argument("--skip-external", action="store_true")
+    install_parser.add_argument("--with-hooks", action="store_true")
+    install_parser.add_argument("--doctor", action="store_true")
+    install_parser.add_argument("--status-file", type=Path)
+
     pre_code_parser = subparsers.add_parser("pre-code", help="Check whether a planned code write is allowed by phase lock.")
     pre_code_parser.add_argument("repo", nargs="?", default=".", type=Path)
     pre_code_parser.add_argument("--tool", default="Edit")
@@ -2183,6 +2358,8 @@ def main() -> int:
             exit_code, result = guard(args)
         elif args.command == "doctor":
             exit_code, result = doctor(args)
+        elif args.command == "install":
+            exit_code, result = install_project(args)
         elif args.command == "pre-code":
             exit_code, result = pre_code(args)
         elif args.command == "test-impact":

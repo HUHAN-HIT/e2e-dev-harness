@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 import hashlib
 import json
+import os
 import subprocess
 import tempfile
 import textwrap
@@ -137,6 +138,104 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertEqual("discovery", agent_scope)
         self.assertEqual("affected", service_scope)
         self.assertTrue(any("differ" in note for note in notes))
+
+    def test_pyproject_exposes_short_cli_alias(self) -> None:
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+        self.assertIn("e2eh = \"e2e_dev_harness:main\"", pyproject)
+
+    def test_clarify_cli_emits_utf8_json_on_windows_hooks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Goal
+                    - Add risk control.
+
+                    ## Scope
+                    - Affected services/modules: payment
+
+                    ## Use Cases
+                    - UC-1: User submits a payment.
+
+                    ## Acceptance Criteria
+                    - AC-1: 是否需要支持 Aliyun RocketMQ 供应商？
+
+                    ## Test Design
+                    - First red test: RiskControlServiceTest
+
+                    ## Impact Summary
+                    - Source: manual non-applicability evidence
+                    - Raw Evidence: docs/agent-runs/run/evidence/manual-impact.json
+
+                    | type | interface | affected callers/consumers | related AC | required tests/contracts | risk |
+                    | --- | --- | --- | --- | --- | --- |
+                    | manual | payment | controller | AC-1 | unit | low |
+
+                    ## Change Logic
+                    - Current behavior: no risk control.
+                    - Target behavior: add risk control.
+                    - Runtime path: Controller -> Service -> Repository.
+                    - State/data/API/event effects: database state changes.
+
+                    ## Open Questions
+                    - Q1: 是否需要支持 Aliyun RocketMQ 供应商？
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            env = dict(os.environ)
+            env["PYTHONIOENCODING"] = "cp936"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "e2e_dev_harness.py"),
+                    "clarify",
+                    str(repo),
+                    "--design-doc",
+                    "docs/design/feature.md",
+                ],
+                cwd=str(repo),
+                env=env,
+                capture_output=True,
+            )
+            output = completed.stdout.decode("utf-8")
+            payload = json.loads(output)
+
+        self.assertEqual(2, completed.returncode)
+        self.assertIn("是否需要支持 Aliyun RocketMQ 供应商", payload["unresolved_open_questions"][0])
+
+    def test_install_command_full_defaults_to_current_project(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            source_skill = ROOT / "skills" / "e2e-dev-harness"
+            args = SimpleNamespace(
+                repo=repo,
+                target="all",
+                install_root=repo / "home",
+                source_skill_dir=source_skill,
+                runtime="claude",
+                full=True,
+                yes=False,
+                install_external=False,
+                skip_external=True,
+                with_hooks=False,
+                doctor=False,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.install_project(args)
+
+        self.assertEqual(0, code, result)
+        self.assertEqual(str(repo.resolve()), result["project_root"])
+        self.assertFalse(result["executed"])
+        self.assertEqual(["codex", "claude", "agents"], result["targets"])
+        self.assertIn("copy-skill", [action["id"] for action in result["actions"]])
 
     def test_prepare_reuses_single_knowledge_graph_detection(self) -> None:
         facts = {

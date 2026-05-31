@@ -56,6 +56,7 @@ def skill_layout_check() -> dict:
         SCRIPT_DIR / "harness_stop_guard.py",
         SCRIPT_DIR / "session_checkpoint.py",
         SKILL_DIR / "hooks" / "claude-code-settings.example.json",
+        SKILL_DIR / "hooks" / "opencode-plugin.example.js",
         SKILL_DIR / "review-profiles" / "default.json",
     ]
     missing = [str(path) for path in required if not path.exists()]
@@ -128,8 +129,8 @@ def gitnexus_check() -> dict:
 def claude_hook_check(repo: Path) -> dict:
     project_target = repo / ".claude" / "settings.json"
     user_target = Path.home() / ".claude" / "settings.json"
-    project = install_hooks.validate_config(project_target)
-    user = install_hooks.validate_config(user_target)
+    project = install_hooks.validate_config(project_target, repo)
+    user = install_hooks.validate_config(user_target, repo)
     if project["ready"]:
         return check("claude-hooks", "pass", "info", f"Project Claude PreToolUse and Stop hooks are ready: {project_target}")
     if user["ready"]:
@@ -166,6 +167,29 @@ def claude_hook_check(repo: Path) -> dict:
     )
 
 
+def opencode_hook_check(repo: Path) -> dict:
+    target = repo / ".opencode" / "plugins" / "e2e-dev-harness.js"
+    result = install_hooks.validate_config(target, repo)
+    if result["ready"]:
+        return check("opencode-hooks", "pass", "info", f"Project OpenCode tool.execute.before plugin is ready: {target}")
+    if target.parent.exists():
+        return check(
+            "opencode-hooks",
+            "fail",
+            "error",
+            "Project OpenCode plugin directory exists but no enforcing e2e-dev-harness plugin is ready: "
+            + "; ".join(result.get("blocked_reasons", [])),
+            "Run install_hooks.py . --runtime opencode --json and confirm .opencode/plugins/e2e-dev-harness.js is loaded.",
+        )
+    return check(
+        "opencode-hooks",
+        "warn",
+        "warning",
+        "No OpenCode plugin directory was found.",
+        "Run install_hooks.py . --runtime opencode --json when using OpenCode, or use pre-code before code edits.",
+    )
+
+
 def evaluate(repo: Path, strict: bool = False) -> dict:
     repo = repo.resolve()
     checks = [
@@ -176,6 +200,7 @@ def evaluate(repo: Path, strict: bool = False) -> dict:
         maven_check(repo),
         gitnexus_check(),
         claude_hook_check(repo),
+        opencode_hook_check(repo),
     ]
     blockers = [
         item for item in checks

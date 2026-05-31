@@ -37,6 +37,24 @@ class HarnessDoctorTests(unittest.TestCase):
         self.assertEqual("pass", checks["maven"]["status"])
         self.assertEqual("pass", checks["gitnexus"]["status"])
         self.assertEqual("warn", checks["claude-hooks"]["status"])
+        self.assertEqual("warn", checks["opencode-hooks"]["status"])
+
+    def test_doctor_reports_ready_opencode_plugin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            harness_doctor.shutil,
+            "which",
+            side_effect=lambda name: f"C:/tools/{name}.exe" if name in {"pytest", "mvn", "gitnexus"} else "",
+        ):
+            repo = Path(tmp)
+            (repo / "pom.xml").write_text("<project />\n", encoding="utf-8")
+            import install_hooks  # noqa: PLC0415
+
+            install_hooks.install(repo, "opencode")
+
+            result = harness_doctor.evaluate(repo)
+
+        checks = {item["id"]: item for item in result["checks"]}
+        self.assertEqual("pass", checks["opencode-hooks"]["status"])
 
     def test_doctor_strict_treats_warnings_as_blockers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.object(

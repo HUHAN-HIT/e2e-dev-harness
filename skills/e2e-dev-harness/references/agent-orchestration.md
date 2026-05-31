@@ -15,6 +15,20 @@ The orchestration result includes `multi_agent_decision`. Treat it as the audit 
 
 Agent start/stop and scheduler APIs are runtime-specific. The portable harness control plane is phase locks, blocking hooks, handoff ready markers, state transitions, rework routing, and execution traces. Do not claim that the harness can launch or terminate agents unless the active runtime provides that integration; instead, record which runtime/session owns each role and block unsafe next actions through gates.
 
+## L0 Serial Isolated Dispatch
+
+Use this as the first operational layer before attempting true parallel execution. The coordinator reads `agent-schedule.json` and dispatches one ready task at a time into a fresh runtime context: a Claude Code subagent, a separate Claude session, a Codex thread/worktree session, or another runtime-isolated worker. The worker receives only its role template, context pack, declared inputs, and the current task id; it must not inherit the coordinator's full chat history.
+
+For each task:
+
+1. Confirm all `depends_on_phases` and input handoff ready markers are satisfied.
+2. Run `e2e_dev_harness.py agent-task --action claim` with the scheduled `task_id`, `agent`, `agent-schedule.json`, and `run-state.json`.
+3. Dispatch the worker in a fresh runtime context and include the claim result in its prompt.
+4. Require the worker to write only scheduled outputs and to return structured evidence paths.
+5. Run `e2e_dev_harness.py agent-task --action complete --evidence <scheduled-output>` before the next dependent task starts.
+
+This L0 mode is intentionally serial. It still gives the harness the main multi-agent benefits: context isolation, role separation, explicit handoffs, leases, and machine-checkable ownership. Runtime adapters may parallelize independent `parallel_group` tasks later, but only after service designs, red-test evidence, contracts, and R2 review are stable.
+
 Do not let an implementation agent review its own work. If the runtime cannot spawn subagents, use a separate reviewer session with only the review request and allowed artifact inputs. Same-chat/self-review is not an acceptable fallback for R1/R2/R3.
 
 Do not use `single-review` to collapse design, test, code, or the three reviews into one after-the-fact report. It only keeps implementation service scope compact; role timing, handoffs, reviewer independence, request hashes, invocation JSON, and Coverage Reviewer remain unchanged.

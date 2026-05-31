@@ -86,9 +86,20 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("claude-code-settings.example.json", text)
         self.assertIn("codex-pre-action.example.json", text)
         self.assertIn("gemini-pre-action.example.json", text)
+        self.assertIn("opencode-plugin.example.js", text)
+        self.assertIn(".opencode/plugins", text)
         self.assertIn("phase_guard.py", text)
         self.assertIn(".phase-lock", text)
         self.assertIn("templates", text)
+
+    def test_orchestration_reference_documents_l0_serial_isolated_dispatch(self) -> None:
+        text = (ROOT / "skills" / "e2e-dev-harness" / "references" / "agent-orchestration.md").read_text(encoding="utf-8")
+
+        self.assertIn("L0 Serial Isolated Dispatch", text)
+        self.assertIn("fresh runtime context", text)
+        self.assertIn("agent-task", text)
+        self.assertIn("claim", text)
+        self.assertIn("complete", text)
 
     def test_github_actions_harness_is_windows_first(self) -> None:
         text = (ROOT / "skills" / "e2e-dev-harness" / "ci" / "github-actions-harness.yml").read_text(encoding="utf-8")

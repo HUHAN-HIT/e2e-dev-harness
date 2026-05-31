@@ -13,6 +13,7 @@ skills/e2e-dev-harness/
     claude-code-settings.example.json
     codex-pre-action.example.json
     gemini-pre-action.example.json
+    opencode-plugin.example.js
   ci/
     github-actions-harness.yml
   references/
@@ -72,6 +73,9 @@ External tools are conservative by default. GitNexus and Graphify are detected
 but not installed unless `--install-external` is provided. Superpowers is
 probed as a skill/plugin capability; use `--strict-superpowers` to fail the
 installer when required Superpowers skills are missing.
+
+Full installer usage is documented in
+[`docs/e2e-dev-harness-installer.md`](docs/e2e-dev-harness-installer.md).
 
 Install the local harness entry point when working from this repository:
 
@@ -231,6 +235,8 @@ python skills\e2e-dev-harness\scripts\context_pack.py . `
 
 The pack lists allowed inputs, allowed outputs, dependency phase, and budget. A pack that exceeds file or byte limits is blocked, forcing the coordinator to summarize inputs before dispatch.
 
+For Claude Code project integrations, start with L0 serial isolated dispatch instead of trying true parallelism first: read `agent-schedule.json`, claim the next ready task, spawn a fresh subagent/session with only its role template and context pack, complete the task with a scheduled evidence file, then dispatch the next dependent task. This keeps role isolation and handoff gates active without making the core skill depend on a specific runtime scheduler.
+
 Before a multi-service code agent writes code, claim the scheduled service task. Phase guard blocks unclaimed service writes and blocks one claimed task from editing multiple services:
 
 ```powershell
@@ -276,6 +282,8 @@ You can also install or check project-local hook configuration with:
 ```powershell
 python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime claude --json
 python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime claude --check --json
+python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime opencode --json
+python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime opencode --check --json
 ```
 
 The installed Claude hooks use two guards. The first argument is the target repository, not the current shell directory.
@@ -389,6 +397,24 @@ The intended mapping is:
 ```
 
 If the runner uses different tool names, keep the command and update only the tool matcher list.
+
+### OpenCode
+
+Install the project plugin instead of copying the template by hand:
+
+```powershell
+python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime opencode --json
+```
+
+This writes:
+
+```text
+.opencode/plugins/e2e-dev-harness.js
+```
+
+The plugin registers `tool.execute.before`, passes OpenCode tool input to `phase_guard.py`, normalizes common path fields such as `filePath` and `patchText`, and throws on guard failure so the tool execution is blocked. It includes `--require-active-run-for-read` and `--require-session-checkpoint`; run `e2e_dev_harness.py start` and `e2e_dev_harness.py next` before code exploration or edits.
+
+For role isolation, keep reviewer and design agents with write permissions disabled in OpenCode agent configuration. Code agents may receive edit permission, but the plugin remains the phase/scope gate.
 
 ### Post-Gate Transition Adapter
 

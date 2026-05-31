@@ -24,6 +24,8 @@ ast = ["tree_sitter>=0.22", "tree_sitter_java>=0.21"]
 [project.scripts]
 e2e-dev-harness = "e2e_dev_harness:main"
 e2e_dev_harness = "e2e_dev_harness:main"
+e2eh = "e2e_dev_harness:main"
+e2e-harness = "e2e_dev_harness:main"
 
 [tool.setuptools]
 package-dir = { "" = "skills/e2e-dev-harness/scripts" }

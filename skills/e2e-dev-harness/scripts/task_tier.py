@@ -56,16 +56,19 @@ PAYMENT_KEYWORDS = {
     "对账",
 }
 CONTRACT_KEYWORDS = {
-    "api",
-    "http",
-    "rest",
-    "client",
     "contract",
     "schema",
     "compatibility",
     "接口",
     "契约",
     "兼容",
+}
+WEAK_CONTRACT_KEYWORDS = {
+    "api",
+    "http",
+    "rest",
+    "client",
+    "endpoint",
 }
 DATA_KEYWORDS = {
     "database",
@@ -144,7 +147,8 @@ def dependency_kinds(report: dict) -> set[str]:
 def classify_auto(design_text: str, facts: dict, dependency_report: dict) -> tuple[str, list[str]]:
     reasons: list[str] = []
     service_count = len(facts.get("service_candidates", [])) if isinstance(facts, dict) else 0
-    if facts.get("multi_service") or service_count > 1:
+    multi_service = (bool(facts.get("multi_service")) or service_count > 1) if isinstance(facts, dict) else False
+    if multi_service:
         reasons.append("multiple service candidates detected")
     kinds = dependency_kinds(dependency_report)
     if kinds:
@@ -155,10 +159,15 @@ def classify_auto(design_text: str, facts: dict, dependency_report: dict) -> tup
     risk_reasons: list[str] = []
     risk_reasons.extend(keyword_reasons(design_text, PAYMENT_KEYWORDS, "payment/refund"))
     risk_reasons.extend(keyword_reasons(design_text, CONTRACT_KEYWORDS, "contract/API"))
+    weak_contract_reasons = keyword_reasons(design_text, WEAK_CONTRACT_KEYWORDS, "contract/API")
+    if weak_contract_reasons and (multi_service or kinds):
+        risk_reasons.extend(weak_contract_reasons)
     risk_reasons.extend(keyword_reasons(design_text, DATA_KEYWORDS, "data"))
     risk_reasons.extend(keyword_reasons(design_text, MESSAGING_KEYWORDS, "messaging"))
     if kinds or reasons or risk_reasons:
         return "critical", reasons + risk_reasons
+    if weak_contract_reasons:
+        return "standard", ["single-service API surface detected"] + weak_contract_reasons
     if design_text.strip():
         return "standard", ["design-backed requirement detected"]
     return "basic", ["minimal scoped change detected"]

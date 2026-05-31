@@ -99,6 +99,108 @@ class NodeInstallerTests(unittest.TestCase):
             self.assertIn("gitnexus", payload["checks"])
             self.assertIn("graphify", payload["checks"])
 
+    def test_project_root_routes_hooks_and_doctor_to_business_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install_root = Path(tmp) / "home"
+            project = Path(tmp) / "business-project"
+            project.mkdir()
+
+            code, payload = self.run_installer(
+                "--install-root",
+                str(install_root),
+                "--target",
+                "claude",
+                "--project-root",
+                str(project),
+                "--skip-python-cli",
+                "--skip-external",
+                "--with-hooks",
+                "--runtime",
+                "claude",
+                "--doctor",
+            )
+
+            self.assertEqual(0, code, payload)
+            self.assertEqual(str(project.resolve()), payload["project_root"])
+            actions = {action["id"]: action for action in payload["actions"]}
+            self.assertIn("install-hooks", actions)
+            self.assertIn("doctor", actions)
+            self.assertIn(str(project.resolve()), actions["install-hooks"]["command"])
+            self.assertIn(str(project.resolve()), actions["doctor"]["command"])
+            self.assertNotEqual(actions["install-hooks"]["cwd"], str(project.resolve()))
+
+    def test_full_preset_keeps_common_setup_short(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install_root = Path(tmp) / "home"
+            project = Path(tmp) / "business-project"
+            project.mkdir()
+
+            code, payload = self.run_installer(
+                "--install-root",
+                str(install_root),
+                "--project",
+                str(project),
+                "--full",
+            )
+
+            self.assertEqual(0, code, payload)
+            self.assertEqual(str(ROOT.resolve()), payload["repo"])
+            self.assertEqual(["codex", "claude", "agents"], payload["targets"])
+            self.assertEqual(str(project.resolve()), payload["project_root"])
+            self.assertIn("install-hooks", [action["id"] for action in payload["actions"]])
+            self.assertIn("doctor", [action["id"] for action in payload["actions"]])
+            self.assertTrue(payload["install_external"])
+            self.assertEqual("claude", payload["runtime"])
+
+    def test_yes_installs_project_hooks_to_project_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install_root = Path(tmp) / "home"
+            project = Path(tmp) / "business-project"
+            project.mkdir()
+
+            code, payload = self.run_installer(
+                "--install-root",
+                str(install_root),
+                "--target",
+                "claude",
+                "--project-root",
+                str(project),
+                "--skip-python-cli",
+                "--skip-external",
+                "--with-hooks",
+                "--runtime",
+                "claude",
+                "--yes",
+            )
+
+            self.assertEqual(0, code, payload)
+            self.assertTrue((project / ".claude" / "settings.json").exists())
+            self.assertFalse((ROOT / ".claude" / "settings.json").exists())
+            self.assertIn("install-hooks", [result["action"] for result in payload["action_results"]])
+
+    def test_project_root_must_exist_when_hooks_are_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install_root = Path(tmp) / "home"
+            project = Path(tmp) / "missing-project"
+
+            code, payload = self.run_installer(
+                "--install-root",
+                str(install_root),
+                "--target",
+                "claude",
+                "--project-root",
+                str(project),
+                "--skip-python-cli",
+                "--skip-external",
+                "--with-hooks",
+                "--runtime",
+                "claude",
+            )
+
+            self.assertEqual(2, code)
+            self.assertFalse(payload["ready"])
+            self.assertTrue(any("Project root does not exist" in reason for reason in payload["blocked_reasons"]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,8 @@ import re
 import sys
 from pathlib import Path
 
+from common import configure_utf8_stdio
+
 
 REQUIRED = {
     "restated_intent": [r"restated intent", r"user intent", r"intent confirmation", r"\u610f\u56fe\u56de\u663e", r"\u7528\u6237\u610f\u56fe"],
@@ -422,6 +424,7 @@ def validate(path: Path, require_intent: bool = False) -> dict:
 
 
 def main() -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("design_doc", type=Path)
     parser.add_argument("--require-intent", action="store_true", help="Require a Restated Intent/User Intent section.")

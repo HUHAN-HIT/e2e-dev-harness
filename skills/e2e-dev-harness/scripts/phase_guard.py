@@ -31,6 +31,7 @@ WRITE_TOOLS = {
 }
 SHELL_TOOLS = {"shellcommand", "shell", "bash", "powershell"}
 READ_TOOLS = {"read", "grep", "glob", "ls", "list", "search"}
+TASK_TOOLS = {"task", "taskcreate", "agent", "subagent"}
 CODE_SUFFIXES = {
     ".java",
     ".kt",
@@ -59,6 +60,12 @@ CODE_FILENAMES = {"pom.xml", "build.gradle", "settings.gradle", "Dockerfile"}
 ARTIFACT_PREFIXES = ("docs/agent-runs/",)
 DOC_PREFIXES = ("docs/design/", "docs/requirements/", "docs/review-profiles/", ".e2e/")
 CONTROL_FILENAMES = {".phase-lock", "run-state.json", "artifact-registry.json", "agent-schedule.json"}
+HOOK_CONFIG_PATHS = {
+    ".claude/settings.json",
+    ".codex/hooks/e2e-dev-harness-pre-action.json",
+    ".gemini/hooks/e2e-dev-harness-pre-tool-use.json",
+    ".opencode/plugins/e2e-dev-harness.js",
+}
 CLAIMED_OWNER_STATUSES = {"claimed", "in-progress", "in_progress", "completed"}
 TEST_CODE_MARKERS = ("/src/test/", "/test/", "/tests/")
 DEFAULT_ALLOWED_RUNTIME_LIFECYCLES = {"IMPLEMENTED"}
@@ -88,6 +95,27 @@ SHELL_MUTATION_RE = re.compile(
     re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
 CONTROL_FILENAME_RE = re.compile(r"(?:\.phase-lock|run-state\.json|artifact-registry\.json|agent-schedule\.json)", re.IGNORECASE)
+HOOK_PATH_KEYS = {
+    "file_path",
+    "filepath",
+    "filePath",
+    "path",
+    "paths",
+    "target",
+    "targets",
+    "notebook_path",
+    "notebookPath",
+    "absolute_path",
+    "absolutePath",
+    "glob",
+    "pattern",
+}
+TASK_TEXT_KEYS = {"description", "prompt", "task", "subagent_type", "title", "todos", "content"}
+CODE_TASK_RE = re.compile(
+    r"(?:\b(?:implement|code|coding|write\s+code|edit\s+code|modify\s+code|create\s+(?:class|entity|service|controller|mapper))\b|"
+    r"开发|实现|编码|写代码|修改代码|创建(?:实体|服务|控制器|类))",
+    re.IGNORECASE,
+)
 
 import run_state  # noqa: E402
 import session_checkpoint  # noqa: E402
@@ -111,8 +139,23 @@ def posix_relative(repo: Path, path: Path) -> str:
         return path.as_posix().replace("\\", "/").lstrip("/")
 
 
+def resolve_for_repo(repo: Path, path: Path) -> Path:
+    return path if path.is_absolute() else repo / path
+
+
+def is_inside_repo(repo: Path, path: Path) -> bool:
+    resolved = resolve_for_repo(repo, path)
+    if not resolved.is_absolute():
+        return True
+    try:
+        resolved.resolve().relative_to(repo.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def result_path(repo: Path, path: Path) -> str:
-    return posix_relative(repo, path if path.is_absolute() else repo / path)
+    return posix_relative(repo, resolve_for_repo(repo, path))
 
 
 def result_paths(repo: Path, paths: list[Path]) -> list[str]:
@@ -120,13 +163,20 @@ def result_paths(repo: Path, paths: list[Path]) -> list[str]:
 
 
 def is_code_path(repo: Path, path: Path) -> bool:
-    relative = posix_relative(repo, path)
+    resolved = resolve_for_repo(repo, path)
+    if not is_inside_repo(repo, resolved):
+        return False
+    relative = posix_relative(repo, resolved)
     if relative.startswith(ARTIFACT_PREFIXES):
         return False
     if relative.startswith(DOC_PREFIXES):
         return False
-    name = path.name
-    return name in CODE_FILENAMES or path.suffix in CODE_SUFFIXES
+    name = resolved.name
+    return name in CODE_FILENAMES or resolved.suffix in CODE_SUFFIXES
+
+
+def is_code_like_path(path: Path) -> bool:
+    return path.name in CODE_FILENAMES or path.suffix in CODE_SUFFIXES
 
 
 def is_harness_control_path(repo: Path, path: Path) -> bool:
@@ -134,6 +184,99 @@ def is_harness_control_path(repo: Path, path: Path) -> bool:
     if not relative.startswith(ARTIFACT_PREFIXES):
         return False
     return Path(relative).name in CONTROL_FILENAMES
+
+
+def is_hook_config_path(repo: Path, path: Path) -> bool:
+    relative = posix_relative(repo, resolve_for_repo(repo, path))
+    return relative in HOOK_CONFIG_PATHS
+
+
+def state_path_display(repo: Path, lock: Path | None) -> str:
+    if not lock:
+        return "docs/agent-runs/<run>/run-state.json"
+    return posix_relative(repo, run_state_path_for_lock(repo, lock))
+
+
+def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -> dict:
+    state_path = state_path_display(repo, lock)
+    base = {
+        "not_deadlock": True,
+        "next_valid_command": f"e2e_dev_harness.py next . --state {state_path}",
+        "forbidden_actions": [
+            "edit run-state.json directly",
+            "edit .phase-lock directly",
+            "edit artifact-registry.json directly",
+            "disable or edit harness hooks",
+            "ask the user to bypass hooks instead of following the next harness phase",
+        ],
+    }
+    actions = {
+        "": {
+            "allowed_actions": ["run e2e_dev_harness.py start . --feature <feature> --request <request>"],
+            "phase_guidance": "No active phase lock was found. Start a controlled harness run before code exploration or implementation.",
+        },
+        "CREATED": {
+            "allowed_actions": [
+                "edit docs/design/<feature>.md",
+                "run e2e_dev_harness.py clarify . --design-doc <design> --run-state " + state_path,
+                "run e2e_dev_harness.py next . --state " + state_path,
+            ],
+            "phase_guidance": "Current lifecycle is CREATED. Fill the design document and pass clarify before planning or coding.",
+        },
+        "CLARIFIED": {
+            "allowed_actions": [
+                "run e2e_dev_harness.py plan . --design-doc <design> --run-state " + state_path,
+                "create R1 design review artifacts",
+                "run e2e_dev_harness.py next . --state " + state_path,
+            ],
+            "phase_guidance": "Current lifecycle is CLARIFIED. Plan and review design before TDD or implementation.",
+        },
+        "SERVICE_DESIGN_REQUIRED": {
+            "allowed_actions": [
+                "fill docs/agent-runs/<run>/service-designs/<service>.md",
+                "run e2e_dev_harness.py service-design . --run-state " + state_path,
+                "run e2e_dev_harness.py next . --state " + state_path,
+            ],
+            "phase_guidance": "Current lifecycle requires service design slices before service code agents can proceed.",
+        },
+        "PLANNED": {
+            "allowed_actions": [
+                "write red tests only",
+                "capture red-test evidence",
+                "create R2 test review artifacts",
+                "run e2e_dev_harness.py gate . --phase implementation --run-state " + state_path,
+            ],
+            "phase_guidance": "Current lifecycle is PLANNED. Production code is still locked; complete TDD red and R2 before implementation gate.",
+        },
+        "RED_READY": {
+            "allowed_actions": [
+                "run e2e_dev_harness.py gate . --phase implementation --run-state " + state_path,
+                "run e2e_dev_harness.py next . --state " + state_path,
+            ],
+            "phase_guidance": "Current lifecycle is RED_READY. Open production-code writes only through the implementation gate.",
+        },
+        "IMPLEMENTED": {
+            "allowed_actions": [
+                "continue TDD green/refactor within declared scope",
+                "run e2e_dev_harness.py ac-progress ...",
+                "create R3 review artifacts after all assigned ACs are covered",
+            ],
+            "phase_guidance": "Current lifecycle is IMPLEMENTED. Continue assigned ACs to completion; do not stop after compile only.",
+        },
+    }
+    selected = actions.get(lifecycle, actions[""])
+    return {**base, **selected, "lifecycle": lifecycle or "<missing>"}
+
+
+def guidance_from_lock(repo: Path, lock: Path | None) -> dict:
+    if not lock or not lock.exists():
+        return guidance_for_lifecycle(repo, None, "")
+    lock_data = load_json(lock)
+    lifecycle = str(lock_data.get("lifecycle") or "")
+    guidance = guidance_for_lifecycle(repo, lock, lifecycle)
+    guidance["phase_lock"] = str(lock)
+    guidance["run_state"] = str(run_state_path_for_lock(repo, lock))
+    return guidance
 
 
 def is_test_code_path(repo: Path, path: Path) -> bool:
@@ -232,10 +375,8 @@ def parse_hook_input(text: str) -> tuple[str, list[str]]:
     tool = str(data.get("tool_name") or data.get("tool") or "")
     tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else data
     paths: list[str] = []
-    for key in ("file_path", "path", "target", "notebook_path"):
-        value = tool_input.get(key) if isinstance(tool_input, dict) else None
-        if value:
-            paths.append(str(value))
+    if isinstance(tool_input, dict):
+        paths.extend(collect_hook_paths(tool_input))
     patch_text = ""
     if isinstance(tool_input, dict):
         patch_text = str(tool_input.get("patch") or tool_input.get("input") or tool_input.get("text") or "")
@@ -245,6 +386,44 @@ def parse_hook_input(text: str) -> tuple[str, list[str]]:
     if normalize_tool(tool) in {"shellcommand", "shell", "bash", "powershell"}:
         paths.extend(paths_from_shell_command(command_text))
     return tool, paths
+
+
+def collect_hook_paths(value) -> list[str]:
+    paths: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in HOOK_PATH_KEYS:
+                paths.extend(path_values(item))
+            elif isinstance(item, (dict, list)):
+                paths.extend(collect_hook_paths(item))
+    elif isinstance(value, list):
+        for item in value:
+            paths.extend(collect_hook_paths(item))
+    seen: set[str] = set()
+    unique: list[str] = []
+    for path in paths:
+        if path not in seen:
+            unique.append(path)
+            seen.add(path)
+    return unique
+
+
+def path_values(value) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, Path):
+        return [str(value)]
+    if isinstance(value, list):
+        paths: list[str] = []
+        for item in value:
+            paths.extend(path_values(item))
+        return paths
+    if isinstance(value, dict):
+        for nested_key in ("path", "file_path", "filePath", "absolute_path", "absolutePath"):
+            nested = value.get(nested_key)
+            if nested:
+                return path_values(nested)
+    return []
 
 
 def extract_hook_command_text(text: str) -> str:
@@ -262,6 +441,36 @@ def extract_hook_command_text(text: str) -> str:
         nested = tool_input.get("tool_input")
         command_text = str(nested.get("command") or nested.get("cmd") or nested.get("script") or "")
     return command_text
+
+
+def extract_task_text(text: str) -> str:
+    if not text.strip():
+        return ""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return ""
+    tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else data
+    return " ".join(collect_task_text(tool_input))
+
+
+def collect_task_text(value) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        text: list[str] = []
+        for item in value:
+            text.extend(collect_task_text(item))
+        return text
+    if isinstance(value, dict):
+        text: list[str] = []
+        for key, item in value.items():
+            if key in TASK_TEXT_KEYS:
+                text.extend(collect_task_text(item))
+            elif isinstance(item, (dict, list)):
+                text.extend(collect_task_text(item))
+        return text
+    return []
 
 
 def paths_from_patch(text: str) -> list[str]:
@@ -305,35 +514,93 @@ def validate_action(
     run_dir: Path | None = None,
     require_active_run_for_read: bool = False,
     command_text: str = "",
+    task_text: str = "",
     require_session_checkpoint: bool = False,
     checkpoint_max_age_minutes: int = 30,
 ) -> dict:
     repo = repo.resolve()
     normalized = normalize_tool(tool)
     shell_mutation = normalized in SHELL_TOOLS and shell_mutates_files(command_text)
+    warnings: list[str] = []
+    outside_repo_paths = [path for path in paths if path.is_absolute() and not is_inside_repo(repo, path)]
+    outside_repo_code_paths = [path for path in outside_repo_paths if is_code_like_path(path)]
+    if outside_repo_paths and normalized in READ_TOOLS:
+        warnings.append(
+            "Read target is outside the configured harness repository; phase_guard will not treat it as project code. "
+            + "If this is unexpected, reinstall hooks with the correct target repository."
+        )
+    if outside_repo_code_paths and normalized in WRITE_TOOLS:
+        return {
+            "ready": False,
+            "blocked_reasons": [
+                "Code write blocked: tool target is outside the configured harness repository. "
+                + "Reinstall hooks for the active project or run the correct project's harness."
+            ],
+            "warnings": warnings,
+            "repo": str(repo),
+            "outside_repo_paths": [str(path) for path in outside_repo_code_paths],
+        }
     if shell_mutation and shell_mentions_harness_control(command_text):
         return {
             "ready": False,
             "blocked_reasons": [
                 "Harness control file write blocked: shell command appears to mutate phase/run control files; use e2e_dev_harness.py gate, service-design, or agent-task instead."
             ],
-            "warnings": [],
+            "warnings": warnings,
         }
-    protected_paths = [path for path in paths if is_harness_control_path(repo, path if path.is_absolute() else repo / path)]
-    if normalized in WRITE_TOOLS and protected_paths:
+    protected_paths = [path for path in paths if is_harness_control_path(repo, resolve_for_repo(repo, path))]
+    if normalized in WRITE_TOOLS and protected_paths and (normalized not in SHELL_TOOLS or shell_mutation):
         return {
             "ready": False,
             "blocked_reasons": [
                 "Harness control file write blocked: use e2e_dev_harness.py, run_state.py, service-design, gate, or agent-task commands instead of direct file edits."
             ],
-            "warnings": [],
+            "warnings": warnings,
             "protected_paths": result_paths(repo, protected_paths),
         }
     lock = discover_lock(repo, lock_path, run_dir)
+    if normalized in TASK_TOOLS:
+        text = task_text.strip()
+        code_task = bool(CODE_TASK_RE.search(text))
+        if code_task:
+            if not lock or not lock.exists():
+                return {
+                    "ready": False,
+                    "blocked_reasons": [
+                        "Code-agent dispatch blocked: start an e2e-dev-harness run and pass clarify/plan/TDD gates before assigning implementation work."
+                    ],
+                    "warnings": warnings,
+                    "action": "run e2e_dev_harness.py start . --feature <feature> --request <request>",
+                }
+            lock_data, state_data, state_blockers = lock_state_pair(repo, lock)
+            if state_blockers:
+                return {
+                    "ready": False,
+                    "blocked_reasons": state_blockers,
+                    "warnings": warnings,
+                    "phase_lock": str(lock),
+                    "run_state": str(run_state_path_for_lock(repo, lock)),
+                }
+            lifecycle = str(state_data.get("lifecycle", ""))
+            allowed_runtime = set(lock_data.get("allowed_code_write_lifecycles") or DEFAULT_ALLOWED_RUNTIME_LIFECYCLES)
+            if lifecycle not in allowed_runtime:
+                return {
+                    "ready": False,
+                    "blocked_reasons": [
+                        f"Code-agent dispatch blocked: lifecycle {lifecycle or '<missing>'} is not in allowed implementation phases: "
+                        + ", ".join(sorted(allowed_runtime))
+                        + ". Complete clarify, plan, TDD red, R2 review, and implementation gate before dispatching code developers."
+                    ],
+                    "warnings": warnings,
+                    "phase_lock": str(lock),
+                    "run_state": str(run_state_path_for_lock(repo, lock)),
+                    "lifecycle": lifecycle,
+                }
+        return {"ready": True, "blocked_reasons": [], "warnings": warnings}
     if require_active_run_for_read and normalized in READ_TOOLS:
         read_targets = list(paths)
         repo_wide = not read_targets or any(is_repo_wide_path(repo, path) for path in read_targets)
-        read_code_paths = [path for path in read_targets if is_code_path(repo, path if path.is_absolute() else repo / path)]
+        read_code_paths = [path for path in read_targets if is_code_path(repo, resolve_for_repo(repo, path))]
         if not lock or not lock.exists():
             if repo_wide or read_code_paths:
                 return {
@@ -341,7 +608,7 @@ def validate_action(
                     "blocked_reasons": [
                         "Code exploration blocked: start an e2e-dev-harness run before reading/searching project code."
                     ],
-                    "warnings": [],
+                    "warnings": warnings,
                     "action": "run e2e_dev_harness.py start . --feature <feature> --request <request>",
                     "read_paths": result_paths(repo, read_targets),
                 }
@@ -351,13 +618,13 @@ def validate_action(
                 return {
                     "ready": False,
                     "blocked_reasons": state_blockers,
-                    "warnings": [],
+                    "warnings": warnings,
                     "phase_lock": str(lock),
                     "run_state": str(run_state_path_for_lock(repo, lock)),
                     "read_paths": result_paths(repo, read_targets),
                 }
-    code_paths = [path for path in paths if is_code_path(repo, path if path.is_absolute() else repo / path)]
-    test_code_paths = [path for path in code_paths if is_test_code_path(repo, path if path.is_absolute() else repo / path)]
+    code_paths = [path for path in paths if is_code_path(repo, resolve_for_repo(repo, path))]
+    test_code_paths = [path for path in code_paths if is_test_code_path(repo, resolve_for_repo(repo, path))]
     runtime_code_paths = [path for path in code_paths if path not in test_code_paths]
     if shell_mutation and not paths:
         return {
@@ -365,7 +632,7 @@ def validate_action(
             "blocked_reasons": [
                 "Shell write blocked: command appears to mutate files but no target paths were parsed; pass explicit --path/pre-code targets or use a file tool so phase scope can be enforced."
             ],
-            "warnings": [],
+            "warnings": warnings,
         }
     if normalized not in WRITE_TOOLS and normalized not in READ_TOOLS and code_paths:
         return {
@@ -373,18 +640,18 @@ def validate_action(
             "blocked_reasons": [
                 f"Code write blocked: unrecognized tool {tool or '<missing>'} touched code paths; update phase_guard WRITE_TOOLS or use a supported file tool."
             ],
-            "warnings": [],
+            "warnings": warnings,
             "code_paths": result_paths(repo, code_paths),
             "test_code_paths": result_paths(repo, test_code_paths),
             "runtime_code_paths": result_paths(repo, runtime_code_paths),
         }
     if normalized not in WRITE_TOOLS or not code_paths:
-        return {"ready": True, "blocked_reasons": [], "warnings": [], "code_paths": result_paths(repo, code_paths)}
+        return {"ready": True, "blocked_reasons": [], "warnings": warnings, "code_paths": result_paths(repo, code_paths)}
     if not lock or not lock.exists():
         return {
             "ready": False,
             "blocked_reasons": ["Code write blocked: phase lock not found for active agent run."],
-            "warnings": [],
+            "warnings": warnings,
             "code_paths": result_paths(repo, code_paths),
         }
     lock_data, state_data, state_blockers = lock_state_pair(repo, lock)
@@ -392,7 +659,7 @@ def validate_action(
         return {
             "ready": False,
             "blocked_reasons": state_blockers,
-            "warnings": [],
+            "warnings": warnings,
             "phase_lock": str(lock),
             "run_state": str(run_state_path_for_lock(repo, lock)),
             "code_paths": result_paths(repo, code_paths),
@@ -413,7 +680,7 @@ def validate_action(
                     "Session resume checkpoint required before code write: " + reason
                     for reason in checkpoint_result["blocked_reasons"]
                 ],
-                "warnings": checkpoint_result["warnings"],
+                "warnings": warnings + checkpoint_result["warnings"],
                 "phase_lock": str(lock),
                 "run_state": str(run_state_path_for_lock(repo, lock)),
                 "checkpoint": checkpoint_result["checkpoint"],
@@ -432,7 +699,7 @@ def validate_action(
                 f"Code write blocked: lifecycle {lifecycle or '<missing>'} is not in allowed phases: "
                 + ", ".join(sorted(allowed_runtime))
             ],
-            "warnings": [],
+            "warnings": warnings,
             "phase_lock": str(lock),
             "run_state": str(run_state_path_for_lock(repo, lock)),
             "lifecycle": lifecycle,
@@ -447,7 +714,7 @@ def validate_action(
                 f"Test write blocked: lifecycle {lifecycle or '<missing>'} is not in allowed test phases: "
                 + ", ".join(sorted(allowed_test))
             ],
-            "warnings": [],
+            "warnings": warnings,
             "phase_lock": str(lock),
             "run_state": str(run_state_path_for_lock(repo, lock)),
             "lifecycle": lifecycle,
@@ -476,7 +743,7 @@ def validate_action(
                 "blocked_reasons": [
                     "Multi-service code write blocked: runtime code path is outside claimed services and shared edit scopes."
                 ],
-                "warnings": [],
+                "warnings": warnings,
                 "phase_lock": str(lock),
                 "run_state": str(run_state_path_for_lock(repo, lock)),
                 "lifecycle": lifecycle,
@@ -490,7 +757,7 @@ def validate_action(
                 "blocked_reasons": [
                     "Multi-service code write blocked: one claimed code-developer task may edit only one service/module."
                 ],
-                "warnings": [],
+                "warnings": warnings,
                 "phase_lock": str(lock),
                 "run_state": str(run_state_path_for_lock(repo, lock)),
                 "lifecycle": lifecycle,
@@ -504,7 +771,7 @@ def validate_action(
                 "blocked_reasons": [
                     "Multi-service code write blocked: shared edit scope has no claimed code-developer task."
                 ],
-                "warnings": [],
+                "warnings": warnings,
                 "phase_lock": str(lock),
                 "run_state": str(run_state_path_for_lock(repo, lock)),
                 "lifecycle": lifecycle,
@@ -522,7 +789,7 @@ def validate_action(
                         + service
                         + " has no claimed code-developer task in run-state owners."
                     ],
-                    "warnings": [],
+                    "warnings": warnings,
                     "phase_lock": str(lock),
                     "run_state": str(run_state_path_for_lock(repo, lock)),
                     "lifecycle": lifecycle,
@@ -532,7 +799,7 @@ def validate_action(
     return {
         "ready": True,
         "blocked_reasons": [],
-        "warnings": [],
+        "warnings": warnings,
         "phase_lock": str(lock),
         "run_state": str(run_state_path_for_lock(repo, lock)),
         "lifecycle": lifecycle,
@@ -564,8 +831,10 @@ def main() -> int:
         tool = tool or hook_tool
         paths.extend(Path(path) for path in hook_paths)
         command_text = extract_hook_command_text(hook_text)
+        task_text = extract_task_text(hook_text)
     else:
         command_text = ""
+        task_text = ""
     result = validate_action(
         args.repo,
         tool,
@@ -574,11 +843,18 @@ def main() -> int:
         args.run_dir,
         args.require_active_run_for_read,
         command_text=command_text,
+        task_text=task_text,
         require_session_checkpoint=args.require_session_checkpoint,
         checkpoint_max_age_minutes=args.checkpoint_max_age_minutes,
     )
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
+        if not result["ready"]:
+            summary = "; ".join(result.get("blocked_reasons") or ["blocked"])
+            print("Phase guard BLOCKED: " + summary, file=sys.stderr)
+            action = result.get("action")
+            if action:
+                print("Next action: " + str(action), file=sys.stderr)
     else:
         print("Phase guard: " + ("READY" if result["ready"] else "BLOCKED"))
         for reason in result["blocked_reasons"]:

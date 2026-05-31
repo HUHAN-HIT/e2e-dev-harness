@@ -5,8 +5,8 @@ description: Use when a feature, bugfix, refactor, or design-doc task needs stri
 
 # E2E Dev Harness
 
-Use this skill to turn a request or design doc into a clarified, tested, verified code change.
-It is tuned for Java 21, Spring 6.x, and Maven, but the workflow name is stack-neutral.
+Turn a request or design doc into a clarified, tested, verified code change.
+Tuned for Java 21, Spring 6.x, and Maven; stack-neutral workflow name.
 
 Governing rule: do not implement while behavior, APIs, data effects, contracts, or tests are ambiguous.
 
@@ -85,6 +85,7 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
 - Runtime hooks can enforce phase locks before code-writing tools run.
   Use `install_hooks.py`, `phase_guard.py`, and hook examples when the agent runtime supports pre-action checks.
   Claude Code hooks must include `Read/Grep/Glob/Bash` plus `Stop`; read hooks force `start`, stop hooks block ending before R3/completion/guard/archive.
+  OpenCode installs `.opencode/plugins/e2e-dev-harness.js` via `install_hooks.py --runtime opencode`.
   If runtime hooks are unavailable, run `e2e_dev_harness.py pre-code --path <planned-code-file> --run-dir docs/agent-runs/<run>` before each code edit.
   Read `references/execution-control.md`.
   After red-test evidence exists, run `e2e_dev_harness.py gate --phase implementation --run-state docs/agent-runs/<run>/run-state.json`;

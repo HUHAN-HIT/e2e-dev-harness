@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|Grep|Glob|Write|Edit|Update|MultiEdit|NotebookEdit|Bash",
+        "matcher": "Read|Grep|Glob|Task|TaskCreate|Write|Edit|Update|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\harness_stop_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --json"
+            "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\harness_stop_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --strict --json"
           }
         ]
       }

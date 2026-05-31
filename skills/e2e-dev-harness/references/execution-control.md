@@ -13,7 +13,10 @@ Code writes are allowed only when lifecycle is `IMPLEMENTED`.
 Documentation and run artifacts under `docs/agent-runs/` remain writable so agents can prepare evidence before implementation, except control files such as `.phase-lock`, `run-state.json`, `artifact-registry.json`, and `agent-schedule.json`.
 For multi-service runs, `.phase-lock` also carries selected services and claimed owners from `run-state.json`.
 `phase_guard.py` blocks production-code writes when the touched service has no claimed code-developer task, and blocks a single write action that touches multiple services.
-The guard recognizes direct file tools including Claude `Update`, `apply_patch`, common shell write commands, and inline Python/Node/PowerShell mutation patterns. Unknown tools touching code paths fail closed. Claude Code hook matchers must include `Read`, `Grep`, `Glob`, `Update`, and `Bash`; otherwise code exploration, update-style edits, or shell writes can bypass the guard.
+The guard recognizes direct file tools including Claude `Update`, `apply_patch`, common shell write commands, and inline Python/Node/PowerShell mutation patterns. Unknown tools touching code paths fail closed.
+Claude Code hook matchers must include `Read`, `Grep`, `Glob`, `Task`, `Update`, and `Bash`; otherwise code exploration, code-agent dispatch, update-style edits, or shell writes can bypass the guard.
+`Task`/`TaskCreate` hooks block implementation-agent dispatch until the run has passed the implementation gate; requirements, design, test-design, handoff, and reviewer tasks remain allowed before implementation.
+Read targets outside the configured repository are allowed with a warning instead of being treated as project code, which prevents a stale or mismatched hook target from blocking recovery reads while still blocking code writes outside the target repo.
 Unscoped shell mutations are denied by default because service scope cannot be enforced without target paths.
 
 ## Stop Guard
@@ -23,10 +26,11 @@ Claude Code can stop after a successful compile unless finalization is also guar
 ```bash
 python skills/e2e-dev-harness/scripts/harness_stop_guard.py . \
   --hook-input - \
+  --strict \
   --json
 ```
 
-`harness_stop_guard.py` discovers the latest `docs/agent-runs/<run>/run-state.json` unless `--run-state` or `--run-dir` is supplied. It blocks lifecycle `IMPLEMENTED`, `REVIEWED`, and `REWORK_REQUIRED`, and blocks post-code runs with open agent-schedule tasks. Use `--strict` when the runtime must block every non-terminal lifecycle.
+`harness_stop_guard.py` discovers the latest `docs/agent-runs/<run>/run-state.json` unless `--run-state` or `--run-dir` is supplied. Runtime hooks must pass `--strict` so every non-terminal lifecycle blocks finalization; this prevents a resumed or impatient agent from stopping after clarify, planning, compile, or partial implementation.
 
 ## Guard Command
 
@@ -66,9 +70,10 @@ Example configurations live under:
 skills/e2e-dev-harness/hooks/claude-code-settings.example.json
 skills/e2e-dev-harness/hooks/codex-pre-action.example.json
 skills/e2e-dev-harness/hooks/gemini-pre-action.example.json
+skills/e2e-dev-harness/hooks/opencode-plugin.example.js
 ```
 
-Each runtime has different hook wiring. Pre-action examples call `phase_guard.py`; Claude also installs a `Stop` hook that calls `harness_stop_guard.py`. The Codex and Gemini files are templates unless the host runner explicitly supports blocking pre-action or pre-tool configuration; writing the template alone is not enforcement.
+Each runtime has different hook wiring. Pre-action examples call `phase_guard.py`; Claude also installs a `Stop` hook that calls `harness_stop_guard.py`. OpenCode installs a project plugin under `.opencode/plugins/e2e-dev-harness.js` and blocks via `tool.execute.before`. The Codex and Gemini files are templates unless the host runner explicitly supports blocking pre-action or pre-tool configuration; writing the template alone is not enforcement.
 If a runtime cannot pass hook JSON through stdin, pass `--tool`, `--path`, and `--run-dir` explicitly.
 
 ## Hook Install and Check
@@ -78,11 +83,13 @@ Use `install_hooks.py` to install or validate project-local hook configuration:
 ```bash
 python skills/e2e-dev-harness/scripts/install_hooks.py . --runtime claude --json
 python skills/e2e-dev-harness/scripts/install_hooks.py . --runtime claude --check --json
+python skills/e2e-dev-harness/scripts/install_hooks.py . --runtime opencode --json
 ```
 
-Supported runtimes are `claude`, `codex`, and `gemini`.
+Supported runtimes are `claude`, `codex`, `gemini`, and `opencode`.
 Claude settings are merged into `.claude/settings.json`; Codex and Gemini templates are written under project-local hook folders.
 `e2e_dev_harness.py pre-code` checks project-level Claude settings first and then user-level `%USERPROFILE%\.claude\settings.json`. `PreToolUse` configuration gates reads/writes; `Stop` configuration gates finalization. `PostToolUse` can audit but cannot prevent the write.
+Do not stack broad write-blocking hooks such as `gateguard-fact-force` on the same project unless they explicitly allow harness artifacts, design docs, red-test evidence, handoffs, and review reports; `install_hooks.py --check` reports this as a conflict because it can prevent the harness from producing the evidence needed to advance phases.
 
 ## Post-Gate Transition
 

@@ -185,6 +185,15 @@ def find_kg_status_file(repo: Path, explicit: Path | None) -> Path:
     return candidates[0]
 
 
+def kg_status_file_from_registry(repo: Path, registry_data: dict) -> Path | None:
+    value = registry_entry(registry_data, "knowledge_graph_status")
+    if value:
+        resolved = resolve_repo_path(repo, value)
+        if resolved and resolved.exists():
+            return resolved
+    return None
+
+
 def resolve_optional_repo_path(repo: Path, path: Path | None) -> Path | None:
     if not path:
         return None
@@ -299,7 +308,11 @@ def validate_gate_request(request: GateRequest) -> dict:
         if phase == "completion":
             blocked_reasons.append("Completion phase requires a design document via --design-doc for acceptance coverage checking.")
 
-    kg_path = find_kg_status_file(repo, kg_status_file)
+    kg_path = (
+        (kg_status_file if kg_status_file.is_absolute() else repo / kg_status_file)
+        if kg_status_file
+        else kg_status_file_from_registry(repo, registry_data) or find_kg_status_file(repo, None)
+    )
     kg_status = read_json(kg_path) if kg_path.exists() else None
     if not kg_status:
         blocked_reasons.append(f"Knowledge graph status file not found or unreadable: {kg_path}")

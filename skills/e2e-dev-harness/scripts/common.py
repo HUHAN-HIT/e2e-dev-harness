@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -13,6 +14,18 @@ DEFAULT_SUBPROCESS_TIMEOUT_SECONDS = 600
 
 SKIP_DIRS = {".git", ".idea", ".vscode", "target", "build", "node_modules", ".gradle", "graphify-out", "agent-runs"}
 SHELL_CONTROL_TOKENS = {"&&", "||", "|", ";", "<", ">", ">>", "2>", "2>>", "&"}
+
+
+def configure_utf8_stdio() -> None:
+    """Make CLI output stable for Windows agent hooks that expect UTF-8."""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
 
 
 def posix(pathlike) -> str:

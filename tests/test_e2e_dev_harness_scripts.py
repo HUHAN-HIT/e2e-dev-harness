@@ -7831,6 +7831,31 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("Harness control file write blocked" in reason for reason in result["blocked_reasons"]))
 
+    def test_phase_guard_allows_harness_cli_referencing_run_state(self) -> None:
+        hook_text = json.dumps(
+            {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py clarify "
+                        "--design-doc docs/design/URCS.md "
+                        "--run-state docs/agent-runs/run/run-state.json 2>&1"
+                    )
+                },
+            }
+        )
+        tool, paths = phase_guard.parse_hook_input(hook_text)
+        command_text = phase_guard.extract_hook_command_text(hook_text)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+            result = phase_guard.validate_action(repo, tool, [Path(path) for path in paths], command_text=command_text)
+
+        self.assertIn("docs/agent-runs/run/run-state.json", paths)
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
     def test_phase_guard_blocks_unscoped_inline_shell_mutation(self) -> None:
         hook_text = json.dumps(
             {
@@ -7962,15 +7987,20 @@ class OrchestrationArtifactTests(unittest.TestCase):
             "claude-code-settings.example.json",
             "codex-pre-action.example.json",
             "gemini-pre-action.example.json",
+            "opencode-plugin.example.js",
         ):
             with self.subTest(name=name):
                 text = (hook_dir / name).read_text(encoding="utf-8")
                 self.assertIn("phase_guard.py", text)
                 self.assertNotIn("python skills/e2e-dev-harness/scripts/phase_guard.py .", text)
                 self.assertIn("--require-active-run-for-read", text)
+                if name == "opencode-plugin.example.js":
+                    self.assertIn("tool.execute.before", text)
+                    self.assertIn("throw new Error", text)
                 if name == "claude-code-settings.example.json":
                     self.assertIn("--require-session-checkpoint", text)
-                self.assertIn("blocking", text.lower() if "claude" not in name else "blocking")
+                if name != "opencode-plugin.example.js":
+                    self.assertIn("blocking", text.lower() if "claude" not in name else "blocking")
                 if name == "claude-code-settings.example.json":
                     self.assertIn("harness_stop_guard.py", text)
                     self.assertIn("Bash", text)
@@ -8012,6 +8042,35 @@ class OrchestrationArtifactTests(unittest.TestCase):
                 self.assertIn(str(ROOT / "skills" / "e2e-dev-harness" / "scripts" / "phase_guard.py"), command)
                 self.assertIn(str(repo), command)
                 self.assertNotIn("skills/e2e-dev-harness/scripts/phase_guard.py .", command)
+
+    def test_install_hooks_installs_opencode_plugin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+
+            result = install_hooks.install(repo, "opencode")
+            target = repo / ".opencode" / "plugins" / "e2e-dev-harness.js"
+            validation = install_hooks.validate_config(target)
+            text = target.read_text(encoding="utf-8")
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertTrue(validation["ready"], validation["blocked_reasons"])
+        self.assertIn("tool.execute.before", text)
+        self.assertIn(str(ROOT / "skills" / "e2e-dev-harness" / "scripts" / "phase_guard.py").replace("\\", "\\\\"), text)
+        self.assertIn(str(repo).replace("\\", "\\\\"), text)
+        self.assertIn("--require-active-run-for-read", text)
+        self.assertIn("--require-session-checkpoint", text)
+
+    def test_install_hooks_rejects_nonblocking_opencode_plugin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            target = repo / ".opencode" / "plugins" / "e2e-dev-harness.js"
+            target.parent.mkdir(parents=True)
+            target.write_text("export const X = { 'tool.execute.after': () => {} };\n", encoding="utf-8")
+
+            result = install_hooks.validate_config(target)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("tool.execute.before" in reason for reason in result["blocked_reasons"]))
 
     def test_install_hooks_merges_claude_settings_idempotently(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -8074,7 +8133,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
                         "hooks": {
                             "PreToolUse": [
                                 {
-                                    "matcher": "Read|Grep|Glob|Write|Edit|Update|MultiEdit|NotebookEdit|Bash",
+                                    "matcher": "Read|Grep|Glob|Task|Write|Edit|Update|MultiEdit|NotebookEdit|Bash",
                                     "hooks": [
                                         {
                                             "type": "command",
@@ -8105,7 +8164,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
                         "hooks": {
                             "PreToolUse": [
                                 {
-                                    "matcher": "Read|Grep|Glob|Write|Edit|MultiEdit|NotebookEdit|Bash",
+                                    "matcher": "Read|Grep|Glob|Task|Write|Edit|MultiEdit|NotebookEdit|Bash",
                                     "hooks": [
                                         {
                                             "type": "command",
@@ -8450,6 +8509,31 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertEqual("critical", result["tier"])
         self.assertIn("gitnexus-impact", result["required_gates"])
+        self.assertIn("contracts", result["required_gates"])
+        self.assertIn("strict-guard", result["required_gates"])
+
+    def test_workflow_tier_auto_keeps_single_service_rest_endpoint_standard(self) -> None:
+        design_text = "Add one REST API endpoint in order-service for an admin lookup screen."
+        facts = {"service_candidates": ["services/order-service"], "multi_service": False}
+
+        result = task_tier.evaluate("auto", design_text, facts, {"dependencies": []})
+
+        self.assertEqual("standard", result["tier"])
+        self.assertIn("r1-review", result["required_gates"])
+        self.assertNotIn("contracts", result["required_gates"])
+        self.assertNotIn("strict-guard", result["required_gates"])
+
+    def test_workflow_tier_auto_marks_cross_service_http_api_as_critical(self) -> None:
+        design_text = "Add a REST API client from order-service to payment-service."
+        facts = {"service_candidates": ["services/order-service", "services/payment-service"], "multi_service": True}
+        dependency_report = {
+            "dependencies": [{"kind": "http", "source_service": "services/order-service"}],
+            "unresolved_questions": [],
+        }
+
+        result = task_tier.evaluate("auto", design_text, facts, dependency_report)
+
+        self.assertEqual("critical", result["tier"])
         self.assertIn("contracts", result["required_gates"])
         self.assertIn("strict-guard", result["required_gates"])
 
@@ -9010,6 +9094,8 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("claude-code-settings.example.json", text)
         self.assertIn("codex-pre-action.example.json", text)
         self.assertIn("gemini-pre-action.example.json", text)
+        self.assertIn("opencode-plugin.example.js", text)
+        self.assertIn(".opencode/plugins", text)
         self.assertIn("phase_guard.py", text)
         self.assertIn(".phase-lock", text)
         self.assertIn("templates", text)

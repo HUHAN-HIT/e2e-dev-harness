@@ -17,7 +17,8 @@ const TARGETS = {
 
 function parseArgs(argv) {
   const args = {
-    repo: process.cwd(),
+    repo: REPO_ROOT,
+    projectRoot: null,
     installRoot: os.homedir(),
     sourceSkillDir: null,
     target: "codex",
@@ -28,10 +29,12 @@ function parseArgs(argv) {
     installExternal: false,
     withHooks: false,
     runtime: "claude",
+    doctor: false,
     strictSuperpowers: false,
     superpowersDir: null,
     checkOnly: false,
     extras: ["dev", "ast"],
+    full: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -43,6 +46,7 @@ function parseArgs(argv) {
     };
 
     if (arg === "--repo") args.repo = value();
+    else if (arg === "--project-root" || arg === "--project" || arg === "--hook-repo") args.projectRoot = value();
     else if (arg === "--install-root") args.installRoot = value();
     else if (arg === "--source-skill-dir") args.sourceSkillDir = value();
     else if (arg === "--target") args.target = value().toLowerCase();
@@ -53,9 +57,11 @@ function parseArgs(argv) {
     else if (arg === "--install-external") args.installExternal = true;
     else if (arg === "--with-hooks") args.withHooks = true;
     else if (arg === "--runtime") args.runtime = value().toLowerCase();
+    else if (arg === "--doctor") args.doctor = true;
     else if (arg === "--strict-superpowers") args.strictSuperpowers = true;
     else if (arg === "--superpowers-dir") args.superpowersDir = value();
     else if (arg === "--check-only") args.checkOnly = true;
+    else if (arg === "--full") args.full = true;
     else if (arg === "--no-dev") args.extras = args.extras.filter((item) => item !== "dev");
     else if (arg === "--no-ast") args.extras = args.extras.filter((item) => item !== "ast");
     else if (arg === "--help" || arg === "-h") args.help = true;
@@ -68,6 +74,13 @@ function parseArgs(argv) {
   if (args.installExternal && args.skipExternal) {
     throw new Error("--install-external and --skip-external cannot be used together");
   }
+  if (args.full) {
+    args.target = "all";
+    args.installExternal = true;
+    args.withHooks = true;
+    args.runtime = "claude";
+    args.doctor = true;
+  }
   return args;
 }
 
@@ -76,15 +89,18 @@ function helpText() {
     "Usage: node tools/install-e2e-dev-harness.mjs [options]",
     "",
     "Options:",
+    "  --full                             Preset: --target all --install-external --with-hooks --runtime claude --doctor",
     "  --target codex|claude|agents|all   Runtime skill target (default: codex)",
     "  --install-root <path>              Root that contains .codex/.claude/.agents",
-    "  --repo <path>                      Repository root for CLI and hook commands",
+    "  --repo <path>                      Harness source repository root (default: installer repo)",
+    "  --project-root, --project <path>   Business project root for hooks and doctor",
     "  --yes                              Execute planned writes and commands",
     "  --json                             Print JSON",
     "  --skip-python-cli                  Do not install editable Python CLI",
     "  --install-external                 Install missing GitNexus/Graphify",
     "  --skip-external                    Check external dependencies only",
     "  --with-hooks --runtime claude      Install runtime hooks",
+    "  --doctor                           Run harness doctor against project root",
     "  --strict-superpowers               Fail when required Superpowers skills are missing",
     "  --superpowers-dir <path>           Check a provided Superpowers skills directory",
     "  --check-only                       Run checks without planning writes",
@@ -210,7 +226,17 @@ function graphifyInstallCommand() {
   return "python -m pip install --user graphifyy";
 }
 
-function actions(options, repo, installRoot, sourceSkillDir, targets, status) {
+function quoteArg(value) {
+  const text = String(value);
+  if (!/[\s"]/u.test(text)) return text;
+  return `"${text.replace(/"/g, '\\"')}"`;
+}
+
+function pythonCommand(script, args) {
+  return ["python", quoteArg(script), ...args.map(quoteArg)].join(" ");
+}
+
+function actions(options, repo, projectRoot, installRoot, sourceSkillDir, targets, status) {
   const planned = [];
   if (!options.checkOnly) {
     planned.push({
@@ -250,11 +276,23 @@ function actions(options, repo, installRoot, sourceSkillDir, targets, status) {
     }
   }
   if (options.withHooks && !options.checkOnly) {
+    const hookScript = path.join(sourceSkillDir, "scripts", "install_hooks.py");
     planned.push({
       id: "install-hooks",
-      description: `Install ${options.runtime} hook configuration.`,
-      command: `python skills/${SKILL_NAME}/scripts/install_hooks.py . --runtime ${options.runtime} --json`,
+      description: `Install ${options.runtime} hook configuration into the project root.`,
+      command: pythonCommand(hookScript, [projectRoot, "--runtime", options.runtime, "--json"]),
       cwd: repo,
+      project_root: projectRoot,
+    });
+  }
+  if (options.doctor && !options.checkOnly) {
+    const cliScript = path.join(sourceSkillDir, "scripts", "e2e_dev_harness.py");
+    planned.push({
+      id: "doctor",
+      description: "Run e2e-dev-harness doctor against the project root.",
+      command: pythonCommand(cliScript, ["doctor", projectRoot, "--json"]),
+      cwd: repo,
+      project_root: projectRoot,
     });
   }
   return planned;
@@ -284,6 +322,7 @@ function writeManifest(installRoot, payload) {
     schema: "e2e-dev-harness.installer.v1",
     installed_at: new Date().toISOString(),
     repo: payload.repo,
+    project_root: payload.project_root,
     source_skill_dir: payload.source_skill_dir,
     targets: payload.targets,
     installed_skills: payload.installed_skills,
@@ -301,6 +340,7 @@ function textOutput(payload) {
     `Mode: ${payload.mode}`,
     `Targets: ${payload.targets.join(", ")}`,
     `Install root: ${payload.install_root}`,
+    `Project root: ${payload.project_root}`,
     "",
     "Actions:",
   ];
@@ -330,14 +370,18 @@ function main() {
   }
 
   const repo = path.resolve(options.repo);
+  const projectRoot = path.resolve(options.projectRoot || options.repo);
   const installRoot = path.resolve(options.installRoot);
   const sourceSkillDir = path.resolve(options.sourceSkillDir || path.join(repo, "skills", SKILL_NAME));
   const targets = resolveTargets(options.target);
   const checkResult = checks(options, repo, sourceSkillDir);
-  const plannedActions = actions(options, repo, installRoot, sourceSkillDir, targets, checkResult);
+  const plannedActions = actions(options, repo, projectRoot, installRoot, sourceSkillDir, targets, checkResult);
   const blocked = [];
 
   if (!fs.existsSync(repo)) blocked.push(`Repository root does not exist: ${repo}`);
+  if ((options.withHooks || options.doctor) && !fs.existsSync(projectRoot)) {
+    blocked.push(`Project root does not exist: ${projectRoot}`);
+  }
   if (!checkResult.skill_layout.available) blocked.push(`Source skill is missing SKILL.md: ${sourceSkillDir}`);
   if (!options.skipPythonCli && !checkResult.python.available) blocked.push("Python is required to install the editable CLI.");
   if (options.withHooks && !checkResult.python.available) blocked.push("Python is required to install hooks.");
@@ -346,8 +390,12 @@ function main() {
   const payload = {
     schema: "e2e-dev-harness.installer-plan.v1",
     repo,
+    project_root: projectRoot,
     install_root: installRoot,
     source_skill_dir: sourceSkillDir,
+    full: options.full,
+    install_external: options.installExternal,
+    runtime: options.runtime,
     mode: options.yes ? "execute" : "dry-run",
     executed: false,
     targets,
