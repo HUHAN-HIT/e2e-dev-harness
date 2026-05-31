@@ -67,6 +67,17 @@ def estimate_inputs(repo: Path, inputs: list) -> tuple[int, list[dict], list[str
     return total_chars, files, warnings
 
 
+def primary_inputs_for_task(task: dict, inputs: list[str]) -> list[str]:
+    phase = str(task.get("phase", ""))
+    if phase != "implement":
+        return []
+    return [
+        value
+        for value in inputs
+        if isinstance(value, str) and "/service-designs/" in value.replace("\\", "/") and value.endswith(".md")
+    ]
+
+
 def build_pack(
     repo: Path,
     schedule_path: Path,
@@ -87,6 +98,7 @@ def build_pack(
         task = {}
     inputs = task.get("inputs", []) if isinstance(task.get("inputs"), list) else []
     outputs = task.get("outputs", []) if isinstance(task.get("outputs"), list) else []
+    primary_inputs = primary_inputs_for_task(task, inputs)
     input_chars, input_files, input_warnings = estimate_inputs(repo, inputs)
     warnings.extend(input_warnings)
     if len(input_files) > max_files:
@@ -108,6 +120,8 @@ def build_pack(
             "status": task.get("status", ""),
         },
         "context_policy": "request-scoped; no inherited developer chat context",
+        "input_contract": "service-design-primary" if primary_inputs else "request-scoped",
+        "primary_inputs": primary_inputs,
         "budget": {"max_files": max_files, "max_chars": max_chars, "input_files": len(input_files), "input_bytes": input_chars},
         "allowed_inputs": inputs,
         "allowed_outputs": outputs,

@@ -220,6 +220,11 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual("CREATED", result["lifecycle"])
         self.assertEqual("clarify", result["next"]["phase"])
+        self.assertEqual("phase-scoped", result["todo_policy"]["mode"])
+        self.assertEqual("gitnexus", result["exploration_policy"]["preferred"])
+        self.assertTrue(any("GitNexus" in item for item in result["required_todo_list"]))
+        self.assertTrue(any("design" in item.lower() for item in result["required_todo_list"]))
+        self.assertFalse(any("implement" in item.lower() or "code" in item.lower() for item in result["required_todo_list"]))
         self.assertTrue(checkpoint_exists)
 
     def test_next_includes_global_workflow_overview(self) -> None:
@@ -275,6 +280,78 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(any("Session resume checkpoint" in reason for reason in blocked["blocked_reasons"]))
         self.assertTrue(checkpoint["ready"], checkpoint["blocked_reasons"])
         self.assertTrue(allowed["ready"], allowed["blocked_reasons"])
+
+    def test_phase_guard_blocks_code_todo_list_before_clarify(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "TodoWrite",
+                [],
+                run_dir=Path("docs/agent-runs/run"),
+                task_text="填充 URCS 设计文档并完成 clarify 门禁 完成 jeepay-core 模块开发（实体+常量+模型） 完成 jeepay-service 模块开发",
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Todo list blocked" in reason for reason in result["blocked_reasons"]))
+        self.assertIn("required_todo_list", result)
+
+    def test_phase_guard_allows_phase_scoped_todo_list_before_clarify(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "TodoWrite",
+                [],
+                run_dir=Path("docs/agent-runs/run"),
+                task_text="填充设计文档 运行 clarify 门禁 根据门禁结果修正文档",
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_phase_guard_blocks_exploration_todo_without_gitnexus_first(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "TodoWrite",
+                [],
+                run_dir=Path("docs/agent-runs/run"),
+                task_text="Analyze affected modules and dependency impact with rg/Read before filling the design.",
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("GitNexus-first" in reason for reason in result["blocked_reasons"]))
+        self.assertEqual("gitnexus", result["exploration_policy"]["preferred"])
+
+    def test_phase_guard_allows_exploration_todo_with_gitnexus_first(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "TodoWrite",
+                [],
+                run_dir=Path("docs/agent-runs/run"),
+                task_text="Run GitNexus query/impact for affected modules, then use rg only for missing seed discovery.",
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
 
     def test_phase_guard_blocks_stale_session_checkpoint_after_state_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -589,6 +666,11 @@ class OrchestrationArtifactTests(unittest.TestCase):
             for module in ("jeepay-core", "jeepay-service", "jeepay-payment"):
                 paths = result["handoff_artifacts"]["service_plans"][module]
                 self.assertTrue((repo / paths["service_design"]).exists())
+                service_design_text = (repo / paths["service_design"]).read_text(encoding="utf-8")
+                self.assertIn("Primary development contract", service_design_text)
+                self.assertIn("AC-1", service_design_text)
+                self.assertIn("VNPay order can be created", service_design_text)
+                self.assertIn(f"mvn -pl {module} -am test", service_design_text)
                 self.assertTrue((repo / paths["service_plan"]).exists())
                 self.assertTrue((repo / paths["code_agent"]).exists())
                 self.assertTrue((repo / paths["implementation_manifest"]).exists())
@@ -825,6 +907,46 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(result["ready"], result["blocked_reasons"])
         self.assertEqual("request-scoped; no inherited developer chat context", result["context_policy"])
         self.assertEqual(1, result["budget"]["input_files"])
+
+    def test_context_pack_marks_service_design_primary_for_code_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            service_design = repo / "docs" / "agent-runs" / "run" / "service-designs" / "order-service.md"
+            service_plan = repo / "docs" / "agent-runs" / "run" / "service-plans" / "order-service" / "implementation-plan.md"
+            service_design.parent.mkdir(parents=True)
+            service_plan.parent.mkdir(parents=True)
+            service_design.write_text("# Service Design Slice: order-service\n", encoding="utf-8")
+            service_plan.write_text("# Implementation Plan\n", encoding="utf-8")
+            schedule = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T10",
+                                "agent": "code-developer-order-service",
+                                "phase": "implement",
+                                "service": "services/order-service",
+                                "inputs": [
+                                    "docs/agent-runs/run/handoffs/01-requirements-clarifier.md",
+                                    "docs/agent-runs/run/service-designs/order-service.md",
+                                    "docs/agent-runs/run/service-plans/order-service/implementation-plan.md",
+                                ],
+                                "outputs": ["docs/agent-runs/run/service-plans/order-service/code-agent.md"],
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = context_pack.build_pack(repo, schedule, task_id="T10", max_files=4, max_chars=1000)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(["docs/agent-runs/run/service-designs/order-service.md"], result["primary_inputs"])
+        self.assertEqual("service-design-primary", result["input_contract"])
 
     def test_context_pack_blocks_budget_overflow(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3628,6 +3750,96 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(result["ready"], result["blocked_reasons"])
         self.assertEqual("worker_running", after_hook["dispatch"]["status"])
         self.assertEqual("phase_guard", after_hook["dispatch"]["spawn_confirmed_by"])
+
+    def test_phase_guard_blocks_direct_reviewer_report_write_without_active_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            schedule = run_dir / "agent-schedule.json"
+            review = Path("docs/agent-runs/run/reviews/R1-design-review.md")
+            state = run_state.build_state("run", "single-review", [], "docs/agent-runs/run/artifact-registry.json", "CLARIFIED")
+            run_state.write_state(repo, state_path, state)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T04",
+                                "agent": "design-reviewer",
+                                "phase": "r1-review",
+                                "role_group": "review",
+                                "outputs": [review.as_posix()],
+                                "status": "claimed",
+                                "owner": "design-reviewer",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = phase_guard.validate_action(
+                repo,
+                "Write",
+                [review],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Review report write blocked" in reason for reason in result["blocked_reasons"]))
+
+    def test_phase_guard_allows_reviewer_report_write_from_active_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            schedule = run_dir / "agent-schedule.json"
+            review = Path("docs/agent-runs/run/reviews/R1-design-review.md")
+            state = run_state.build_state("run", "single-review", [], "docs/agent-runs/run/artifact-registry.json", "CLARIFIED")
+            state["dispatches"] = {
+                "T04": {
+                    "status": "worker_running",
+                    "current_task_id": "T04",
+                    "current_agent": "design-reviewer",
+                    "parallel_group": "r1-review",
+                    "context_pack": "docs/agent-runs/run/context-packs/T04.json",
+                    "invocation_path": "docs/agent-runs/run/review-invocations/R1-design-review-invocation.json",
+                    "worker_handle": "review-worker-1",
+                    "spawn_acknowledged_at": "2026-05-31T00:00:00Z",
+                }
+            }
+            state["dispatch"] = state["dispatches"]["T04"]
+            run_state.write_state(repo, state_path, state)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T04",
+                                "agent": "design-reviewer",
+                                "phase": "r1-review",
+                                "role_group": "review",
+                                "outputs": [review.as_posix()],
+                                "status": "claimed",
+                                "owner": "design-reviewer",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = phase_guard.validate_action(
+                repo,
+                "Write",
+                [review],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
 
     def test_phase_guard_allows_non_code_reviewer_task_before_implementation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -32,6 +32,7 @@ WRITE_TOOLS = {
 SHELL_TOOLS = {"shellcommand", "shell", "bash", "powershell"}
 READ_TOOLS = {"read", "grep", "glob", "ls", "list", "search"}
 TASK_TOOLS = {"task", "taskcreate", "agent", "subagent"}
+TODO_TOOLS = {"todowrite", "todo", "updatetodo", "updatetodos", "tasklist"}
 CODE_SUFFIXES = {
     ".java",
     ".kt",
@@ -68,6 +69,8 @@ HOOK_CONFIG_PATHS = {
 }
 CLAIMED_OWNER_STATUSES = {"claimed", "in-progress", "in_progress", "completed"}
 TEST_CODE_MARKERS = ("/src/test/", "/test/", "/tests/")
+REVIEW_DISPATCH_PHASES = {"r1-review", "r2-review", "r3-review"}
+REVIEW_REPORT_NAME_RE = re.compile(r"^R[123](?:[-_].*)?\.md$", re.IGNORECASE)
 DEFAULT_ALLOWED_RUNTIME_LIFECYCLES = {"IMPLEMENTED"}
 DEFAULT_ALLOWED_TEST_LIFECYCLES = {"PLANNED", "RED_READY", "IMPLEMENTED"}
 PATCH_FILE_RE = re.compile(
@@ -114,6 +117,21 @@ TASK_TEXT_KEYS = {"description", "prompt", "task", "subagent_type", "title", "to
 CODE_TASK_RE = re.compile(
     r"(?:\b(?:implement|code|coding|write\s+code|edit\s+code|modify\s+code|create\s+(?:class|entity|service|controller|mapper))\b|"
     r"开发|实现|编码|写代码|修改代码|创建(?:实体|服务|控制器|类))",
+    re.IGNORECASE,
+)
+CODE_TODO_RE = re.compile(
+    r"\b(?:implement|implementation|coding|write\s+code|edit\s+code|modify\s+code|production\s+code|"
+    r"entity|mapper|repository|controller|dto|dao|mq|dmq|kafka)\b|"
+    r"(?:开发|实现|编码|代码|生产代码|实体|常量|模型|控制器|仓储|消息队列|模块开发|修改[^。；\n]{0,12}代码)",
+    re.IGNORECASE,
+)
+EXPLORATION_TODO_RE = re.compile(
+    r"\b(?:explore|analyze|analyse|trace|impact|dependency|dependencies|affected|call\s*path|"
+    r"service\s+ownership|route|topic|contract)\b|(?:探索|分析|影响|依赖|调用链|链路|范围|服务归属|接口|主题|契约)",
+    re.IGNORECASE,
+)
+GITNEXUS_TODO_RE = re.compile(
+    r"\b(?:gitnexus|knowledge\s*graph|kg_refresh|kg\s+status|context/impact|query/context/impact)\b",
     re.IGNORECASE,
 )
 
@@ -197,6 +215,77 @@ def is_hook_config_path(repo: Path, path: Path) -> bool:
     return relative in HOOK_CONFIG_PATHS
 
 
+def required_todo_list_for_lifecycle(lifecycle: str) -> list[str]:
+    state_path = "docs/agent-runs/<run>/run-state.json"
+    lists = {
+        "CREATED": [
+            "Run kg_refresh or inspect GitNexus status before repository exploration.",
+            "Use GitNexus query/context/impact for bounded impact evidence; use rg/Read only for seed discovery.",
+            "Fill docs/design/<feature>.md with clarified requirements and bounded impact facts.",
+            f"Run e2e_dev_harness.py clarify --design-doc <design> --run-state {state_path}.",
+            "Revise the design doc until the clarification gate passes.",
+        ],
+        "CLARIFIED": [
+            "Use GitNexus evidence to confirm affected services, routes, topics, and dependency impact.",
+            "Run e2e_dev_harness.py plan --design-doc <design> --create-archive.",
+            "Dispatch or complete the independent R1 design review.",
+            "Run e2e_dev_harness.py next before TDD or implementation work.",
+        ],
+        "SERVICE_DESIGN_REQUIRED": [
+            "Use GitNexus context/impact for each service runtime path and dependency boundary.",
+            "Fill every service-designs/<service>.md slice with mapped ACs and runtime path.",
+            f"Run e2e_dev_harness.py service-design --run-state {state_path}.",
+            "Revise service design slices until the service-design gate passes.",
+        ],
+        "PLANNED": [
+            "Write the first failing service-local test only.",
+            "Capture red-test evidence and required command output.",
+            "Dispatch or complete the independent R2 test review.",
+        ],
+        "RED_READY": [
+            f"Run e2e_dev_harness.py gate --phase implementation --run-state {state_path}.",
+            "Do not edit production files until the implementation gate opens.",
+        ],
+        "IMPLEMENTED": [
+            "Continue TDD red/green/refactor for all assigned ACs in declared scope.",
+            "Run e2e_dev_harness.py ac-progress for the active service or global design.",
+            "Dispatch or complete R3 only after all assigned ACs pass ac-progress.",
+        ],
+        "REVIEWED": [
+            "Run the completion gate and strict guard.",
+            "Write run summary and requirements archive evidence.",
+            "Resolve any rework before reporting completion.",
+        ],
+        "VERIFIED": [
+            "Refresh artifact registry and requirements archive.",
+            "Report final evidence paths and residual risks.",
+        ],
+        "REWORK_REQUIRED": [
+            "Read the rework item return_phase.",
+            "Return to the earliest required phase before editing files.",
+            "Close rework with evidence before continuing.",
+        ],
+    }
+    return lists.get(
+        lifecycle,
+        [
+            "Inspect run-state.json and repair the lifecycle.",
+            f"Run e2e_dev_harness.py next --state {state_path} after repair.",
+        ],
+    )
+
+
+def exploration_policy_for_lifecycle(lifecycle: str) -> dict:
+    return {
+        "schema": "e2e-dev-harness.exploration-policy.v1",
+        "preferred": "gitnexus",
+        "direct_tools_allowed_for": ["seed discovery", "small quoted evidence after GitNexus points to a file"],
+        "required_for": ["impact analysis", "call path tracing", "cross-service dependencies", "route/topic/contract ownership"],
+        "fallback": "If GitNexus is unavailable, write degradation evidence before treating rg/Read findings as workflow evidence.",
+        "lifecycle": lifecycle or "<missing>",
+    }
+
+
 def state_path_display(repo: Path, lock: Path | None) -> str:
     if not lock:
         return "docs/agent-runs/<run>/run-state.json"
@@ -205,13 +294,22 @@ def state_path_display(repo: Path, lock: Path | None) -> str:
 
 def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -> dict:
     state_path = state_path_display(repo, lock)
+    todo_list = required_todo_list_for_lifecycle(lifecycle)
     base = {
         "not_deadlock": True,
         "next_valid_command": f"e2e_dev_harness.py next . --state {state_path}",
+        "todo_policy": {
+            "schema": "e2e-dev-harness.todo-policy.v1",
+            "mode": "phase-scoped",
+            "lifecycle": lifecycle or "<missing>",
+            "rule": "TodoList must describe only the current lifecycle phase; do not include future implementation/code tasks before the implementation gate.",
+        },
+        "required_todo_list": todo_list,
+        "exploration_policy": exploration_policy_for_lifecycle(lifecycle),
         "allowed_direct_exploration_tools": ["Read", "Grep", "Glob", "List", "Search"],
         "direct_exploration_guidance": (
-            "If you need code facts for clarification, start the harness run first, then use direct Read/Grep/Glob/List/Search "
-            "in the coordinator context and write bounded findings into the design doc."
+            "Start the harness run first, then use GitNexus first for impact analysis, call paths, cross-service dependencies, and route/topic/contract ownership. "
+            "Use direct Read/Grep/Glob/List/Search only to discover missing seeds or quote small evidence after GitNexus points to a file."
         ),
         "agent_dispatch_guidance": (
             "Do not spawn Task/subagent workers during clarification or ad hoc exploration; dispatcher-generated workers require "
@@ -398,6 +496,139 @@ def schedule_task(schedule: dict, task_id: str) -> dict:
         if isinstance(task, dict) and str(task.get("id", "")) == task_id:
             return task
     return {}
+
+
+def normalized_repo_path_text(repo: Path, value: str) -> str:
+    text = str(value).strip()
+    if not text:
+        return ""
+    path = Path(text)
+    return posix_relative(repo, path if path.is_absolute() else repo / path)
+
+
+def is_review_report_path(repo: Path, path: Path) -> bool:
+    relative = posix_relative(repo, resolve_for_repo(repo, path)).replace("\\", "/")
+    name = relative.rsplit("/", 1)[-1]
+    return (
+        relative.startswith("docs/agent-runs/")
+        and "/reviews/" in f"/{relative}"
+        and REVIEW_REPORT_NAME_RE.match(name) is not None
+    )
+
+
+def task_for_review_output(repo: Path, schedule: dict, review_path: Path) -> dict:
+    target = posix_relative(repo, resolve_for_repo(repo, review_path)).replace("\\", "/")
+    for task in schedule.get("tasks", []) or []:
+        if not isinstance(task, dict):
+            continue
+        outputs = task.get("outputs") if isinstance(task.get("outputs"), list) else []
+        normalized_outputs = {
+            normalized_repo_path_text(repo, str(output)).replace("\\", "/")
+            for output in outputs
+            if str(output).strip()
+        }
+        if target in normalized_outputs:
+            return task
+    return {}
+
+
+def dispatch_for_task(state_data: dict, task_id: str) -> dict:
+    dispatches = state_data.get("dispatches") if isinstance(state_data.get("dispatches"), dict) else {}
+    dispatch = dispatches.get(task_id) if isinstance(dispatches.get(task_id), dict) else {}
+    if dispatch:
+        return dispatch
+    latest = state_data.get("dispatch") if isinstance(state_data.get("dispatch"), dict) else {}
+    if str(latest.get("current_task_id", "")) == task_id:
+        return latest
+    return {}
+
+
+def review_report_write_blockers(repo: Path, lock: Path | None, review_paths: list[Path]) -> list[str]:
+    if not review_paths:
+        return []
+    if not lock or not lock.exists():
+        return [
+            "Review report write blocked: start an e2e-dev-harness run, then use dispatch-beat/dispatch-next to launch an isolated reviewer worker before writing R1/R2/R3 review reports."
+        ]
+    _, state_data, state_blockers = lock_state_pair(repo, lock)
+    if state_blockers:
+        return state_blockers
+    schedule_path = lock.parent / "agent-schedule.json"
+    schedule = load_json(schedule_path)
+    if schedule.get("schema") != "e2e-dev-harness.agent-schedule.v1":
+        return [
+            f"Review report write blocked: dispatcher schedule is missing or invalid beside run-state: {posix_relative(repo, schedule_path)}."
+        ]
+    blocked: list[str] = []
+    for review_path in review_paths:
+        relative = posix_relative(repo, resolve_for_repo(repo, review_path)).replace("\\", "/")
+        task = task_for_review_output(repo, schedule, review_path)
+        task_id = str(task.get("id", "")).strip()
+        if not task_id:
+            blocked.append(
+                f"Review report write blocked: {relative} is not owned by any scheduled reviewer task output; use dispatch-beat/dispatch-next from the harness schedule."
+            )
+            continue
+        phase = str(task.get("phase", "")).lower()
+        role_group = str(task.get("role_group", "")).lower()
+        if phase not in REVIEW_DISPATCH_PHASES or role_group != "review":
+            blocked.append(
+                f"Review report write blocked: {relative} must be produced by an R1/R2/R3 review task, not phase {phase or '<missing>'}."
+            )
+            continue
+        owner = str(task.get("owner", "")).strip()
+        task_status = str(task.get("status", "")).lower()
+        expected_agent = str(task.get("agent", "")).strip()
+        if not owner or task_status not in CLAIMED_OWNER_STATUSES:
+            blocked.append(f"Review report write blocked: reviewer task {task_id} must be claimed before writing {relative}.")
+            continue
+        dispatch = dispatch_for_task(state_data, task_id)
+        if str(dispatch.get("status", "")) != "worker_running":
+            blocked.append(
+                f"Review report write blocked: {relative} must be written by active reviewer worker for task {task_id}. Run dispatch-beat/dispatch-next, spawn the requested worker, then dispatch-ack or let the hook auto-confirm before writing."
+            )
+            continue
+        if str(dispatch.get("current_task_id", "")) not in {"", task_id}:
+            blocked.append(f"Review report write blocked: active dispatch does not match reviewer task {task_id}.")
+            continue
+        current_agent = str(dispatch.get("current_agent", "")).strip()
+        if expected_agent and current_agent and current_agent != expected_agent:
+            blocked.append(
+                f"Review report write blocked: active dispatch agent {current_agent} does not match scheduled reviewer {expected_agent} for task {task_id}."
+            )
+            continue
+        if not (dispatch.get("worker_handle") or dispatch.get("spawn_confirmed_by") or dispatch.get("spawn_acknowledged_at")):
+            blocked.append(f"Review report write blocked: reviewer task {task_id} has no runtime spawn confirmation.")
+    return blocked
+
+
+def todo_list_blockers(repo: Path, lock: Path | None, task_text: str) -> tuple[list[str], str]:
+    text = task_text.strip()
+    if not text:
+        return [], ""
+    has_code_todo = CODE_TODO_RE.search(text) is not None
+    if not lock or not lock.exists():
+        if has_code_todo or EXPLORATION_TODO_RE.search(text):
+            return [
+                "Todo list blocked: start an e2e-dev-harness run before planning implementation/code tasks or codebase exploration."
+            ], ""
+        return [], ""
+    _, state_data, state_blockers = lock_state_pair(repo, lock)
+    if state_blockers:
+        return state_blockers, ""
+    lifecycle = str(state_data.get("lifecycle", ""))
+    if lifecycle != "IMPLEMENTED":
+        if has_code_todo:
+            return [
+                "Todo list blocked: current lifecycle "
+                + (lifecycle or "<missing>")
+                + " requires a phase-scoped TodoList. Do not list implementation/code/module-development tasks until the implementation gate opens."
+            ], lifecycle
+        if EXPLORATION_TODO_RE.search(text) and not GITNEXUS_TODO_RE.search(text):
+            return [
+                "Todo list blocked: GitNexus-first exploration is required for impact analysis, call paths, dependencies, affected services, routes, topics, or contracts. Add a GitNexus/knowledge graph evidence step before direct rg/Read exploration."
+            ], lifecycle
+    return [], lifecycle
 
 
 def validate_dispatch_context(repo: Path, state_data: dict, task_text: str) -> list[str]:
@@ -684,6 +915,28 @@ def validate_action(
             "protected_paths": result_paths(repo, hook_config_paths),
             **guidance_from_lock(repo, lock),
         }
+    review_report_paths = [path for path in paths if is_review_report_path(repo, path)]
+    if normalized in WRITE_TOOLS and review_report_paths and (normalized not in SHELL_TOOLS or shell_mutation):
+        review_blockers = review_report_write_blockers(repo, lock, review_report_paths)
+        if review_blockers:
+            return {
+                "ready": False,
+                "blocked_reasons": review_blockers,
+                "warnings": warnings,
+                "review_report_paths": result_paths(repo, review_report_paths),
+                **guidance_from_lock(repo, lock),
+            }
+    if normalized in TODO_TOOLS:
+        todo_blockers, todo_lifecycle = todo_list_blockers(repo, lock, task_text)
+        if todo_blockers:
+            guidance = guidance_for_lifecycle(repo, lock, todo_lifecycle) if todo_lifecycle else guidance_from_lock(repo, lock)
+            return {
+                "ready": False,
+                "blocked_reasons": todo_blockers,
+                "warnings": warnings,
+                **guidance,
+            }
+        return {"ready": True, "blocked_reasons": [], "warnings": warnings, **guidance_from_lock(repo, lock)}
     if normalized in TASK_TOOLS:
         text = task_text.strip()
         code_task = bool(CODE_TASK_RE.search(text))

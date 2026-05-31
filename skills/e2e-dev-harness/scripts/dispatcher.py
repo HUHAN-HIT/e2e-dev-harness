@@ -391,8 +391,17 @@ def task_prompt(task: dict, pack: dict, invocation_path: Path, repo: Path) -> st
         "- Return the evidence paths that should be passed to dispatch-complete.",
         "- Do not perform R1/R2/R3 self-review from the same developer session.",
         "",
-        "Allowed inputs:",
     ]
+    primary_inputs = pack.get("primary_inputs", []) if isinstance(pack.get("primary_inputs"), list) else []
+    if primary_inputs:
+        lines.insert(
+            lines.index("- Do not inherit or rely on coordinator chat context."),
+            "- Treat primary_inputs as the service development contract; use global inputs only as bounded supporting context.",
+        )
+        lines.append("Primary inputs:")
+        lines.extend(f"- {item}" for item in primary_inputs)
+        lines.append("")
+    lines.append("Allowed inputs:")
     lines.extend(f"- {item}" for item in pack.get("allowed_inputs", []) or [])
     lines.append("")
     lines.append("Required outputs:")

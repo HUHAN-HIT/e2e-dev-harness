@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -284,6 +285,89 @@ BLUEPRINT_STEPS = (
 )
 
 
+def required_todo_list_for_lifecycle(lifecycle: str, state: dict | None = None) -> list[str]:
+    state = state or {}
+    state_path = "docs/agent-runs/<run>/run-state.json"
+    lists = {
+        "CREATED": [
+            "Run kg_refresh or inspect GitNexus status before repository exploration.",
+            "Use GitNexus query/context/impact for bounded impact evidence; use rg/Read only for seed discovery.",
+            "Fill docs/design/<feature>.md with clarified requirements and bounded impact facts.",
+            f"Run e2e_dev_harness.py clarify --design-doc <design> --run-state {state_path}.",
+            "Revise the design doc until the clarification gate passes.",
+        ],
+        "CLARIFIED": [
+            "Use GitNexus evidence to confirm affected services, routes, topics, and dependency impact.",
+            "Run e2e_dev_harness.py plan --design-doc <design> --create-archive.",
+            "Dispatch or complete the independent R1 design review.",
+            "Run e2e_dev_harness.py next before TDD or implementation work.",
+        ],
+        "SERVICE_DESIGN_REQUIRED": [
+            "Use GitNexus context/impact for each service runtime path and dependency boundary.",
+            "Fill every service-designs/<service>.md slice with mapped ACs and runtime path.",
+            f"Run e2e_dev_harness.py service-design --run-state {state_path}.",
+            "Revise service design slices until the service-design gate passes.",
+        ],
+        "PLANNED": [
+            "Write the first failing service-local test only.",
+            "Capture red-test evidence and required command output.",
+            "Dispatch or complete the independent R2 test review.",
+        ],
+        "RED_READY": [
+            f"Run e2e_dev_harness.py gate --phase implementation --run-state {state_path}.",
+            "Do not edit production files until the implementation gate opens.",
+        ],
+        "IMPLEMENTED": [
+            "Continue TDD red/green/refactor for all assigned ACs in declared scope.",
+            "Run e2e_dev_harness.py ac-progress for the active service or global design.",
+            "Dispatch or complete R3 only after all assigned ACs pass ac-progress.",
+        ],
+        "REVIEWED": [
+            "Run the completion gate and strict guard.",
+            "Write run summary and requirements archive evidence.",
+            "Resolve any rework before reporting completion.",
+        ],
+        "VERIFIED": [
+            "Refresh artifact registry and requirements archive.",
+            "Report final evidence paths and residual risks.",
+        ],
+        "REWORK_REQUIRED": [
+            "Read the rework item return_phase.",
+            "Return to the earliest required phase before editing files.",
+            "Close rework with evidence before continuing.",
+        ],
+    }
+    return lists.get(
+        lifecycle,
+        [
+            "Inspect run-state.json and repair the lifecycle.",
+            f"Run e2e_dev_harness.py next --state {state_path} after repair.",
+        ],
+    )
+
+
+def exploration_policy_for_lifecycle(lifecycle: str) -> dict:
+    return {
+        "schema": "e2e-dev-harness.exploration-policy.v1",
+        "preferred": "gitnexus",
+        "direct_tools_allowed_for": ["seed discovery", "small quoted evidence after GitNexus points to a file"],
+        "required_for": ["impact analysis", "call path tracing", "cross-service dependencies", "route/topic/contract ownership"],
+        "fallback": "If GitNexus is unavailable, write degradation evidence before treating rg/Read findings as workflow evidence.",
+        "lifecycle": lifecycle or "<missing>",
+    }
+
+
+def todo_policy_for_lifecycle(lifecycle: str, state: dict | None = None) -> dict:
+    return {
+        "schema": "e2e-dev-harness.todo-policy.v1",
+        "mode": "phase-scoped",
+        "lifecycle": lifecycle or "<missing>",
+        "rule": "TodoList must describe only the current lifecycle phase; do not include future implementation/code tasks before the implementation gate.",
+        "required_todo_list": required_todo_list_for_lifecycle(lifecycle, state),
+        "exploration_policy": exploration_policy_for_lifecycle(lifecycle),
+    }
+
+
 def next_action_for_lifecycle(lifecycle: str, state: dict | None = None) -> dict:
     state = state or {}
     actions = {
@@ -361,6 +445,10 @@ def next_action_for_lifecycle(lifecycle: str, state: dict | None = None) -> dict
             "production code until implementation gate passes",
             "multi-service code writes without a claimed service code-developer task",
         ]
+    action = dict(action)
+    action["required_todo_list"] = required_todo_list_for_lifecycle(lifecycle, state)
+    action["todo_policy"] = todo_policy_for_lifecycle(lifecycle, state)
+    action["exploration_policy"] = exploration_policy_for_lifecycle(lifecycle)
     return action
 
 
@@ -1199,12 +1287,15 @@ def create_handoff_files(repo: Path, artifacts: dict, agent_schedule: dict | Non
         if not path.exists():
             path.write_text(text, encoding="utf-8")
             created.append(str(path))
+    global_design_ref = str(artifacts.get("design_doc", "<global-design-doc>"))
+    global_design_path = resolve_repo_path(repo, Path(global_design_ref)) if global_design_ref != "<global-design-doc>" else None
+    global_design_text = optional_text(global_design_path)
     for service, paths in artifacts.get("service_plans", {}).items():
         service_design = require_repo_path(repo, Path(paths["service_design"]), f"{service} service design")
         service_design.parent.mkdir(parents=True, exist_ok=True)
         if not service_design.exists():
             service_design.write_text(
-                service_design_template(service, artifacts.get("design_doc", "<global-design-doc>")),
+                service_design_template(service, global_design_ref, global_design_text),
                 encoding="utf-8",
             )
             created.append(str(service_design))
@@ -1258,56 +1349,136 @@ def create_handoff_files(repo: Path, artifacts: dict, agent_schedule: dict | Non
     return created
 
 
-def service_design_template(service: str, global_design: str) -> str:
+def service_tokens(service: str) -> list[str]:
+    values = {service.lower(), orchestration_plan.service_slug(service).lower(), Path(service).name.lower()}
+    for value in list(values):
+        values.update(part for part in value.replace("_", "-").replace("/", "-").split("-") if len(part) > 2)
+    return sorted(values, key=len, reverse=True)
+
+
+def acceptance_items_from_text(markdown: str) -> list[dict[str, str]]:
+    body = clarification_gate.section_text(markdown, clarification_gate.REQUIRED["acceptance"]) if markdown else None
+    if not body:
+        return []
+    results: list[dict[str, str]] = []
+    used: set[str] = set()
+    next_index = 1
+    for line in body.splitlines():
+        stripped = line.strip()
+        content = clarification_gate.ACCEPTANCE_LINE_RE.match(line)
+        item_text = content.group(1).strip() if content else stripped
+        if not item_text or set(item_text) <= {"|", "-", " "}:
+            continue
+        id_match = clarification_gate.ACCEPTANCE_ID_RE.match(item_text)
+        if id_match:
+            ac_id = clarification_gate.normalize_acceptance_id(item_text)
+            description = item_text[id_match.end():].strip(" :-\t") or item_text
+        else:
+            while f"AC-{next_index}" in used:
+                next_index += 1
+            ac_id = f"AC-{next_index}"
+            next_index += 1
+            description = item_text
+        if ac_id not in used:
+            results.append({"id": ac_id, "text": description})
+            used.add(ac_id)
+    return results
+
+
+def one_line_section(markdown: str, key: str) -> str:
+    patterns = clarification_gate.REQUIRED.get(key, [])
+    body = clarification_gate.section_text(markdown, patterns) if markdown and patterns else None
+    for line in (body or "").splitlines():
+        normalized = line.strip().strip("-* ")
+        if normalized:
+            return normalized
+    return ""
+
+
+def service_test_class_name(service: str) -> str:
+    slug = orchestration_plan.service_slug(service)
+    parts = [part for part in re.split(r"[^A-Za-z0-9]+", slug) if part]
+    base = "".join(part[:1].upper() + part[1:] for part in parts) or "Service"
+    return f"{base}Test"
+
+
+def service_acceptance_rows(service: str, global_design_text: str) -> str:
+    items = acceptance_items_from_text(global_design_text)
+    if not items:
+        return f"| AC-1 | Derived from global design after clarification | {service} service responsibility to be confirmed during service-design gate | {service_test_class_name(service)} |\n"
+    tokens = service_tokens(service)
+    matched = [
+        item
+        for item in items
+        if any(token in item["text"].lower() for token in tokens)
+    ]
+    selected = matched or items
+    test_class = service_test_class_name(service)
+    return "".join(
+        f"| {item['id']} | {item['text']} | {service} owns the service-local behavior, integration points, or non-applicability decision for this AC | {test_class} |\n"
+        for item in selected
+    )
+
+
+def service_scope_excerpt(service: str, global_design_text: str) -> str:
+    scope = one_line_section(global_design_text, "scope")
+    return scope or f"{service} service/module slice from the global design."
+
+
+def service_design_template(service: str, global_design: str, global_design_text: str = "") -> str:
+    ac_rows = service_acceptance_rows(service, global_design_text)
+    test_class = service_test_class_name(service)
+    intent = one_line_section(global_design_text, "restated_intent") or one_line_section(global_design_text, "goal")
+    service_scope = service_scope_excerpt(service, global_design_text)
     return f"""# Service Design Slice: {service}
 
 Global design: {global_design}
 
-This service design is the primary input for the service code agent. Keep global context bounded; copy only the ACs, constraints, and dependency facts this service needs.
+Primary development contract: this service design is the primary input for the service code agent. Keep global context bounded; copy only the ACs, constraints, and dependency facts this service needs.
 
 ## Service Scope
 - Service/module: {service}
 - Allowed edit scope:
   - {service}/
-- Explicitly out of scope:
+- Explicitly out of scope: other services unless listed in Dependency Boundary
 
 ## Global Intent Summary
-- Restated user intent:
-- This service's responsibility:
+- Restated user intent: {intent or 'See global design and requirements handoff.'}
+- This service's responsibility: {service_scope}
 
 ## Mapped Acceptance Criteria
 | AC | global requirement | service responsibility | local tests |
 | --- | --- | --- | --- |
-| AC-1 |  |  |  |
+{ac_rows.rstrip()}
 
 ## Runtime Path
-- Entry point:
-- Service/domain path:
-- Repository/client/sender path:
-- Output or side effect:
+- Entry point: GitNexus-confirmed entry point -> {service_test_class_name(service).removesuffix('Test')}#method
+- Service/domain path: {service_test_class_name(service).removesuffix('Test')}#method -> domain/service collaborator
+- Repository/client/sender path: repository/client/sender decided by service-design gate
+- Output or side effect: service-local state, API response, or event named in mapped ACs
 
 ## Service-local TDD Plan
-- First red test:
-- Expected failure:
-- Minimal green implementation:
-- Refactor checks:
-- Required Maven command:
+- First red test: {test_class} should fail before implementation
+- Expected failure: missing mapped service-local behavior
+- Minimal green implementation: implement only the mapped AC rows above
+- Refactor checks: keep edits inside allowed scope and declared dependency boundary
+- Required Maven command: mvn -pl {service} -am test
 
 ## Dependency Boundary
-- Independent service change: pending
-- HTTP/API dependencies:
-- MQ/DMQ/Kafka dependencies:
-- Shared DB/schema/config/security dependencies:
-- Required contracts or explicit non-applicability:
+- Independent service change: generated starter requires service owner confirmation before code dispatch
+- HTTP/API dependencies: use dependency report and GitNexus impact evidence, or state None
+- MQ/DMQ/Kafka dependencies: use dependency report and GitNexus impact evidence, or state None
+- Shared DB/schema/config/security dependencies: list shared edit scope or state None
+- Required contracts or explicit non-applicability: record before implementation
 
 ## Test Impact
-- Service-local test impact plan:
-- Broadened verification:
+- Service-local test impact plan: mvn -pl {service} -am test
+- Broadened verification: run impacted upstream/downstream modules from test-impact plan
 
 ## Reviewer Focus
-- Service-local R2 review:
-- Service-local R3 review:
-- Known risks:
+- Service-local R2 review: mapped ACs, red test, dependency boundary
+- Service-local R3 review: concrete code path, tests, and side effects for mapped ACs
+- Known risks: generated starter must be verified against GitNexus evidence and project instructions
 """
 
 
@@ -2093,7 +2264,11 @@ def service_design(args) -> tuple[int, dict]:
             slug = orchestration_plan.service_slug(str(service))
             target = target_dir / f"{slug}.md"
             if not target.exists():
-                target.write_text(service_design_template(str(service), global_design_text), encoding="utf-8")
+                global_design_path = resolve_repo_path(repo, getattr(args, "global_design", None))
+                target.write_text(
+                    service_design_template(str(service), global_design_text, optional_text(global_design_path)),
+                    encoding="utf-8",
+                )
             templates_written.append(posix(target.relative_to(repo)))
         args.service_design_dir = target_dir
     result = service_design_gate.validate(repo, args.global_design, args.service_design_dir, args.service_design)
@@ -2268,6 +2443,9 @@ def next_step(args) -> tuple[int, dict]:
         "hook_status": hooks,
         "lifecycle": lifecycle,
         "next": action,
+        "todo_policy": action["todo_policy"],
+        "required_todo_list": action["required_todo_list"],
+        "exploration_policy": action["exploration_policy"],
         "workflow_overview": workflow_overview_for(lifecycle, state),
         "gates": state.get("gates", {}),
         "blocked_reasons": blocked,

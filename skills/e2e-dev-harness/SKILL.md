@@ -31,6 +31,8 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py next . \
   --state docs/agent-runs/<run>/run-state.json
 ```
 
+Use `next.required_todo_list`; GitNexus-first, no code items before implementation gate.
+
 Fill the design doc, run `clarify`, then plan with `--service-scope affected` plus explicit `--service` or `--path` when ambiguous.
 
 Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`. Read `references/implementation-gates.md`.
