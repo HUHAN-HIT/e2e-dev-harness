@@ -484,6 +484,7 @@ def service_artifacts(base: str, services: list[str] | None) -> dict:
             "implementation_review": f"{service_base}/reviews/R3-implementation-review.md",
             "implementation_manifest": f"{service_base}/implementation-manifest.md",
             "test_impact_plan": f"{service_base}/test-impact-plan.json",
+            "red_test_evidence": f"{service_base}/red-test-evidence.txt",
             "test_evidence": f"{service_base}/unit-test-evidence.txt",
             "coverage_matrix": f"{service_base}/coverage-matrix.md",
             "business_review": f"{service_base}/business-review.md",
@@ -664,6 +665,28 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
         for service, paths in service_plans.items():
             agents.append(
                 {
+                    "name": f"test-case-developer-{service_slug(service)}",
+                    "owns": [f"service-local first red test for {service}", "service-local TDD evidence"],
+                    "inputs": [
+                        artifact_paths["requirements"],
+                        artifact_paths["impact_summary"],
+                        artifact_paths["use_cases"],
+                        artifact_paths["test_plan"],
+                        artifact_paths["test_impact_plan"],
+                        paths["service_design"],
+                        paths["service_plan"],
+                        paths["test_impact_plan"],
+                        artifact_paths["dependency_report"],
+                    ],
+                    "outputs": [
+                        paths["red_test_evidence"],
+                        paths["test_impact_plan"],
+                    ],
+                    "gate": "Write only the service-local red test and evidence; production code stays locked until implementation gate.",
+                }
+            )
+            agents.append(
+                {
                     "name": f"code-developer-{service_slug(service)}",
                     "owns": [f"implementation for {service}", "service-local tests", "service-local verification evidence"],
                     "inputs": [
@@ -676,6 +699,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
                         paths["service_plan"],
                         paths["test_impact_plan"],
                         artifact_paths["dependency_report"],
+                        paths["red_test_evidence"],
                         "failing tests for this service",
                     ],
                     "outputs": [
@@ -827,7 +851,7 @@ def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) 
                 "role_template": agent.get("role_template", ""),
                 "role_template_key": agent.get("role_template_key", ""),
                 "service": service,
-                "parallel_group": f"service:{service}" if service and phase in {"implement", "r3-review"} else phase,
+                "parallel_group": f"service:{service}" if service and phase in {"tdd-red", "implement", "r3-review"} else phase,
                 "depends_on_phases": depends_on_for_phase(phase),
                 "inputs": agent.get("inputs", []),
                 "outputs": agent.get("outputs", []),

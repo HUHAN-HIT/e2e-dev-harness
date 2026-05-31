@@ -1201,6 +1201,73 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("claimed", schedule_data["tasks"][1]["status"])
         self.assertEqual("T11", updated_state["dispatch"]["current_task_id"])
 
+    def test_dispatch_beat_spawns_parallel_service_tdd_red_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/test-case-developer.md")
+            write_role_template(repo, role_template)
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state(
+                    "docs/agent-runs/run",
+                    "multi",
+                    ["services/order-service", "services/payment-service"],
+                    "docs/agent-runs/run/artifact-registry.json",
+                    "PLANNED",
+                ),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {"id": "T01", "agent": "use-case-designer", "phase": "design", "status": "completed"},
+                            {"id": "T02", "agent": "design-reviewer", "phase": "r1-review", "status": "completed"},
+                            {
+                                "id": "T20",
+                                "agent": "test-case-developer-order-service",
+                                "phase": "tdd-red",
+                                "role_group": "test",
+                                "service": "services/order-service",
+                                "parallel_group": "service:services/order-service",
+                                "depends_on_phases": ["design", "r1-review"],
+                                "inputs": ["docs/agent-runs/run/service-designs/order-service.md"],
+                                "outputs": ["docs/agent-runs/run/service-plans/order-service/red-test-evidence.txt"],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            },
+                            {
+                                "id": "T21",
+                                "agent": "test-case-developer-payment-service",
+                                "phase": "tdd-red",
+                                "role_group": "test",
+                                "service": "services/payment-service",
+                                "parallel_group": "service:services/payment-service",
+                                "depends_on_phases": ["design", "r1-review"],
+                                "inputs": ["docs/agent-runs/run/service-designs/payment-service.md"],
+                                "outputs": ["docs/agent-runs/run/service-plans/payment-service/red-test-evidence.txt"],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            },
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_beat(repo, schedule, state_path, runtime="codex", max_workers=4)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(["T20", "T21"], [task["id"] for task in result["claimed_tasks"]])
+        self.assertEqual(2, len(result["runtime_spawn_requests"]))
+
     def test_dispatch_beat_does_not_parallelize_same_group(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -5461,14 +5528,36 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertIn("code-developer-order-service", names)
         self.assertIn("code-developer-payment-service", names)
+        self.assertIn("test-case-developer-order-service", names)
+        self.assertIn("test-case-developer-payment-service", names)
         self.assertIn("implementation-reviewer-order-service", names)
         self.assertIn("implementation-reviewer-payment-service", names)
         self.assertIn("coverage-reviewer", names)
+        order_tdd = next(agent for agent in agents if agent["name"] == "test-case-developer-order-service")
+        self.assertIn(artifacts["service_plans"]["services/order-service"]["service_design"], order_tdd["inputs"])
+        self.assertIn(artifacts["service_plans"]["services/order-service"]["red_test_evidence"], order_tdd["outputs"])
         order_developer = next(agent for agent in agents if agent["name"] == "code-developer-order-service")
+        self.assertIn(artifacts["service_plans"]["services/order-service"]["red_test_evidence"], order_developer["inputs"])
         self.assertNotIn(
             artifacts["service_plans"]["services/order-service"]["implementation_review"],
             order_developer["outputs"],
         )
+
+    def test_multi_agent_schedule_parallelizes_service_tdd_red_tasks(self) -> None:
+        artifacts = orchestration_plan.artifacts(
+            "checkout",
+            run_date="2026-05-23",
+            services=["services/order-service", "services/payment-service"],
+        )
+
+        agents = orchestration_plan.agent_plan("multi", artifacts, ["services/order-service", "services/payment-service"])
+        schedule = orchestration_plan.agent_schedule("multi", ["services/order-service", "services/payment-service"], agents)
+        tdd_tasks = [task for task in schedule["tasks"] if task["phase"] == "tdd-red" and task["service"]]
+        groups = {task["parallel_group"] for task in tdd_tasks}
+
+        self.assertEqual({"services/order-service", "services/payment-service"}, {task["service"] for task in tdd_tasks})
+        self.assertEqual({"service:services/order-service", "service:services/payment-service"}, groups)
+        self.assertTrue(all(task["depends_on_phases"] == ["design", "r1-review"] for task in tdd_tasks))
 
     def test_auto_mode_ignores_low_signal_api_message_words(self) -> None:
         body = "\n".join(
