@@ -285,11 +285,35 @@ BLUEPRINT_STEPS = (
 )
 
 
+def clarification_interaction_contract() -> dict:
+    return {
+        "schema": "e2e-dev-harness.clarification-interaction.v1",
+        "interaction_required": True,
+        "must_wait_for_user_answer": True,
+        "questions_to_ask_user": [
+            "Confirm the agent's Restated Intent with the user.",
+            "Ask any behavior, API, data, ownership, test, or impact questions that cannot be answered from evidence.",
+            "Update the design doc Open Questions section to None only after answers are recorded or explicitly deferred out of scope.",
+        ],
+        "allowed_before_user_answer": [
+            "bounded GitNexus or scanner discovery for evidence",
+            "drafting design sections clearly marked pending confirmation",
+        ],
+        "blocked_until_resolved": [
+            "planning",
+            "TDD",
+            "production-code edits",
+            "review dispatch that depends on clarified behavior",
+        ],
+    }
+
+
 def required_todo_list_for_lifecycle(lifecycle: str, state: dict | None = None) -> list[str]:
     state = state or {}
     state_path = "docs/agent-runs/<run>/run-state.json"
     lists = {
         "CREATED": [
+            "Ask the user to confirm Restated Intent and answer unresolved clarification questions.",
             "Run kg_refresh or inspect GitNexus status before repository exploration.",
             "Use GitNexus query/context/impact for bounded impact evidence; use rg/Read only for seed discovery.",
             "Fill docs/design/<feature>.md with clarified requirements and bounded impact facts.",
@@ -309,15 +333,17 @@ def required_todo_list_for_lifecycle(lifecycle: str, state: dict | None = None) 
             "Revise service design slices until the service-design gate passes.",
         ],
         "PLANNED": [
-            "Write the first failing service-local test only.",
-            "Capture red-test evidence and required command output.",
+            "Dispatch or complete service-local TDD red tasks.",
+            "Capture red-test evidence and required command output for each affected service.",
             "Dispatch or complete the independent R2 test review.",
+            "Run e2e_dev_harness.py next again after TDD red and R2 complete; run-state should advance to RED_READY.",
         ],
         "RED_READY": [
             f"Run e2e_dev_harness.py gate --phase implementation --run-state {state_path}.",
             "Do not edit production files until the implementation gate opens.",
         ],
         "IMPLEMENTED": [
+            "Dispatch or claim each code-developer task for its assigned service/module.",
             "Continue TDD red/green/refactor for all assigned ACs in declared scope.",
             "Run e2e_dev_harness.py ac-progress for the active service or global design.",
             "Dispatch or complete R3 only after all assigned ACs pass ac-progress.",
@@ -438,17 +464,19 @@ def next_action_for_lifecycle(lifecycle: str, state: dict | None = None) -> dict
     if lifecycle == "PLANNED" and state.get("selected_mode") == "multi":
         action = dict(action)
         action["command"] = (
-            "Run R1/R2 reviews, write service-local red tests, claim each code-developer task with "
-            "e2e_dev_harness.py agent-task --action claim, then gate --phase implementation."
+            "Dispatch/complete service-local TDD red workers and R2 review. After run-state reaches RED_READY, "
+            "run gate --phase implementation; dispatch code-developer workers only after IMPLEMENTED."
         )
         action["blocked_writes"] = [
             "production code until implementation gate passes",
-            "multi-service code writes without a claimed service code-developer task",
+            "code-developer claim/dispatch before RED_READY and implementation gate",
         ]
     action = dict(action)
     action["required_todo_list"] = required_todo_list_for_lifecycle(lifecycle, state)
     action["todo_policy"] = todo_policy_for_lifecycle(lifecycle, state)
     action["exploration_policy"] = exploration_policy_for_lifecycle(lifecycle)
+    if lifecycle == "CREATED":
+        action["clarification_interaction"] = clarification_interaction_contract()
     return action
 
 

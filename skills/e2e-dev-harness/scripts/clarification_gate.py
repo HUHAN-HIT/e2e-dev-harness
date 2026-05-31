@@ -62,6 +62,16 @@ NONE_MARKERS = {
     "没有",
     "已清零",
 }
+
+SECTION_LABELS = {
+    "restated_intent": "Restated Intent / user confirmation",
+    "goal": "Goal",
+    "scope": "Scope / affected services / non-goals",
+    "use_cases": "Use Cases",
+    "acceptance": "Acceptance Criteria",
+    "test_design": "Test Design",
+    "open_questions": "Open Questions",
+}
 PLACEHOLDER_MARKERS = {
     "",
     "-",
@@ -260,6 +270,49 @@ def open_questions_clear(text: str | None) -> tuple[bool, list[str]]:
     return False, lines
 
 
+def clarification_questions(result: dict) -> list[str]:
+    questions: list[str] = []
+    if result.get("intent_required") and "restated_intent" in result.get("missing_sections", []):
+        questions.append("Ask the user to confirm the agent's restated intent before planning.")
+    for key in result.get("missing_sections", []):
+        if key == "restated_intent":
+            continue
+        label = SECTION_LABELS.get(key, key.replace("_", " ").title())
+        questions.append(f"Ask the user what belongs in {label}, or record the evidence-backed answer in the design doc.")
+    for key in result.get("empty_sections", []):
+        label = SECTION_LABELS.get(key, key.replace("_", " ").title())
+        questions.append(f"Ask the user to clarify {label}, or record the evidence-backed answer in the design doc.")
+    for question in result.get("unresolved_open_questions", []):
+        questions.append(f"Resolve with the user: {question}")
+    for gap in result.get("integration_gaps", []):
+        questions.append(f"Clarify integration behavior before implementation: {gap}")
+    for gap in result.get("impact_gaps", []):
+        questions.append(f"Clarify impact evidence before implementation: {gap}")
+    for gap in result.get("change_logic_gaps", []):
+        questions.append(f"Clarify change logic before implementation: {gap}")
+    return questions
+
+
+def interaction_contract(result: dict) -> dict:
+    questions = clarification_questions(result)
+    return {
+        "schema": "e2e-dev-harness.clarification-interaction.v1",
+        "interaction_required": bool(questions),
+        "must_wait_for_user_answer": bool(questions),
+        "questions_to_ask_user": questions,
+        "allowed_before_user_answer": [
+            "bounded GitNexus or scanner discovery for evidence",
+            "drafting design sections clearly marked pending confirmation",
+        ],
+        "blocked_until_resolved": [
+            "planning",
+            "TDD",
+            "production-code edits",
+            "review dispatch that depends on clarified behavior",
+        ],
+    }
+
+
 def extract_acceptance_items(path: Path) -> list[dict[str, str]]:
     markdown = path.read_text(encoding="utf-8", errors="replace")
     text = section_text(markdown, REQUIRED["acceptance"])
@@ -409,7 +462,7 @@ def validate(path: Path, require_intent: bool = False) -> dict:
     impact_gaps = impact_summary_gaps(markdown)
     logic_gaps = change_logic_gaps(markdown)
     ready = not missing and not empty_sections and oq_clear and not gaps and not impact_gaps and not logic_gaps
-    return {
+    result = {
         "path": str(path),
         "ready_for_implementation": ready,
         "missing_sections": missing,
@@ -421,6 +474,10 @@ def validate(path: Path, require_intent: bool = False) -> dict:
         "change_logic_gaps": logic_gaps,
         "intent_required": require_intent,
     }
+    result["interaction_contract"] = interaction_contract(result)
+    result["interaction_required"] = result["interaction_contract"]["interaction_required"]
+    result["questions_to_ask_user"] = result["interaction_contract"]["questions_to_ask_user"]
+    return result
 
 
 def main() -> int:

@@ -312,10 +312,78 @@ class OrchestrationArtifactTests(unittest.TestCase):
                 "TodoWrite",
                 [],
                 run_dir=Path("docs/agent-runs/run"),
-                task_text="填充设计文档 运行 clarify 门禁 根据门禁结果修正文档",
+                task_text="Ask user to confirm Restated Intent, fill design doc, run clarify gate, revise the design doc.",
             )
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_phase_guard_blocks_clarification_todo_without_user_interaction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "TodoWrite",
+                [],
+                run_dir=Path("docs/agent-runs/run"),
+                task_text="Fill design doc and run clarify gate.",
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("user interaction" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(result["clarification_interaction"]["interaction_required"])
+
+    def test_next_created_exposes_clarification_interaction_contract(self) -> None:
+        result = e2e_dev_harness.next_action_for_lifecycle("CREATED", {})
+
+        self.assertTrue(result["clarification_interaction"]["interaction_required"])
+        self.assertTrue(result["clarification_interaction"]["must_wait_for_user_answer"])
+        self.assertTrue(any("Restated Intent" in item for item in result["required_todo_list"]))
+
+    def test_clarify_blocked_returns_questions_to_ask_user(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True, exist_ok=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Goal
+                    - Add payment risk control.
+
+                    ## Scope
+                    - Affected services/modules: payment-service
+                    - Non-goals: reporting
+
+                    ## Use Cases
+                    - UC-1: reject risky payment.
+
+                    ## Acceptance Criteria
+                    - AC-1: risky payments are rejected.
+
+                    ## Test Design
+                    - First red test: PaymentRiskTest.rejectsRiskyPayment
+                    - Verification command: mvn -pl payment-service test
+
+                    ## Open Questions
+                    - Which risk score threshold should block payment?
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            code, result = e2e_dev_harness.clarify(
+                SimpleNamespace(repo=repo, design_doc=Path("docs/design/feature.md"), run_state=None, require_intent=False, status_file=None)
+            )
+
+        self.assertEqual(2, code)
+        self.assertTrue(result["interaction_required"])
+        self.assertTrue(any("risk score threshold" in item for item in result["questions_to_ask_user"]))
 
     def test_phase_guard_blocks_exploration_todo_without_gitnexus_first(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2439,7 +2507,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("service-design gate transitions" in reason for reason in result["blocked_reasons"]))
 
-    def test_multi_implementation_gate_requires_claimed_service_tasks(self) -> None:
+    def test_multi_implementation_gate_waits_for_tdd_and_r2_not_code_claims(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             services = ["services/order-service", "services/payment-service"]
@@ -2528,7 +2596,8 @@ class OrchestrationArtifactTests(unittest.TestCase):
             )
 
         self.assertFalse(result["ready"])
-        self.assertTrue(any("must be claimed" in reason for reason in result["blocked_reasons"]))
+        self.assertFalse(any("must be claimed" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any("tdd-red" in reason and "r2-review" in reason for reason in result["blocked_reasons"]))
 
     def test_service_plan_archive_contains_microservice_scoped_sections(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3037,6 +3106,94 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("r2-review" in reason for reason in result["blocked_reasons"]))
+
+    def test_agent_task_complete_r2_transitions_planned_to_red_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule_path = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            evidence = repo / "docs" / "agent-runs" / "run" / "reviews" / "R2-test-review.md"
+            evidence.parent.mkdir(parents=True)
+            evidence.write_text("# R2\n\nStatus: approved\n", encoding="utf-8")
+            state = run_state.build_state("run", "multi", ["services/order-service"], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            state["gates"]["service_design"] = "passed"
+            run_state.write_state(repo, state_path, state)
+            schedule_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {"id": "T01", "phase": "tdd-red", "status": "completed"},
+                            {
+                                "id": "T02",
+                                "phase": "r2-review",
+                                "agent": "test-reviewer",
+                                "status": "claimed",
+                                "owner": "test-reviewer",
+                                "outputs": ["docs/agent-runs/run/reviews/R2-test-review.md"],
+                            },
+                            {
+                                "id": "T03",
+                                "phase": "implement",
+                                "service": "services/order-service",
+                                "status": "planned",
+                                "depends_on_phases": ["tdd-red", "r2-review"],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = agent_scheduler.complete(
+                repo,
+                schedule_path,
+                "T02",
+                "test-reviewer",
+                state_path,
+                evidence=["docs/agent-runs/run/reviews/R2-test-review.md"],
+            )
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("RED_READY", updated["lifecycle"])
+        self.assertEqual("RED_READY", result["run_state_transition"]["lifecycle"])
+
+    def test_agent_task_claim_allows_service_implementation_plan_input_without_ready_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule_path = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            service_plan = repo / "docs" / "agent-runs" / "run" / "service-plans" / "order-service" / "implementation-plan.md"
+            service_plan.parent.mkdir(parents=True)
+            service_plan.write_text("# Service Implementation Plan\n\n## Scope\n- services/order-service/\n", encoding="utf-8")
+            state = run_state.build_state("run", "multi", ["services/order-service"], "docs/agent-runs/run/artifact-registry.json", "IMPLEMENTED")
+            run_state.write_state(repo, state_path, state)
+            schedule_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {"id": "T01", "phase": "tdd-red", "status": "completed"},
+                            {"id": "T02", "phase": "r2-review", "status": "completed"},
+                            {
+                                "id": "T03",
+                                "agent": "code-developer-order-service",
+                                "phase": "implement",
+                                "service": "services/order-service",
+                                "status": "planned",
+                                "depends_on_phases": ["tdd-red", "r2-review"],
+                                "inputs": ["docs/agent-runs/run/service-plans/order-service/implementation-plan.md"],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = agent_scheduler.claim(repo, schedule_path, "T03", "code-developer-order-service", state_path)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
 
     def test_agent_task_claim_blocks_same_agent_across_design_test_code_roles(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

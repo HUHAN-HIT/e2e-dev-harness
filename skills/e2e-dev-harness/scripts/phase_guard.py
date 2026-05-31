@@ -134,6 +134,16 @@ GITNEXUS_TODO_RE = re.compile(
     r"\b(?:gitnexus|knowledge\s*graph|kg_refresh|kg\s+status|context/impact|query/context/impact)\b",
     re.IGNORECASE,
 )
+CLARIFICATION_TODO_RE = re.compile(
+    r"\b(?:clarify|clarification|design\s+doc|requirements?|restated\s+intent|open\s+questions?|acceptance\s+criteria)\b|"
+    r"(?:\u6f84\u6e05|\u8bbe\u8ba1\u6587\u6863|\u9700\u6c42|\u610f\u56fe\u56de\u663e|\u5f00\u653e\u95ee\u9898|\u9a8c\u6536)",
+    re.IGNORECASE,
+)
+USER_INTERACTION_TODO_RE = re.compile(
+    r"\b(?:ask|confirm|confirmation|clarifying\s+questions?|obtain\s+user\s+approval|wait\s+for\s+user|user\s+answer)\b|"
+    r"(?:\u7528\u6237|\u786e\u8ba4|\u63d0\u95ee|\u7b49\u5f85\u56de\u7b54|\u56de\u7b54|\u6279\u51c6)",
+    re.IGNORECASE,
+)
 
 import run_state  # noqa: E402
 import session_checkpoint  # noqa: E402
@@ -219,6 +229,7 @@ def required_todo_list_for_lifecycle(lifecycle: str) -> list[str]:
     state_path = "docs/agent-runs/<run>/run-state.json"
     lists = {
         "CREATED": [
+            "Ask the user to confirm Restated Intent and answer unresolved clarification questions.",
             "Run kg_refresh or inspect GitNexus status before repository exploration.",
             "Use GitNexus query/context/impact for bounded impact evidence; use rg/Read only for seed discovery.",
             "Fill docs/design/<feature>.md with clarified requirements and bounded impact facts.",
@@ -286,6 +297,25 @@ def exploration_policy_for_lifecycle(lifecycle: str) -> dict:
     }
 
 
+def clarification_interaction_for_lifecycle(lifecycle: str) -> dict:
+    return {
+        "schema": "e2e-dev-harness.clarification-interaction.v1",
+        "interaction_required": lifecycle == "CREATED",
+        "must_wait_for_user_answer": lifecycle == "CREATED",
+        "questions_to_ask_user": [
+            "Confirm the agent's Restated Intent with the user.",
+            "Ask any behavior, API, data, ownership, test, or impact questions that cannot be answered from evidence.",
+            "Update the design doc Open Questions section to None only after answers are recorded or explicitly deferred out of scope.",
+        ] if lifecycle == "CREATED" else [],
+        "blocked_until_resolved": [
+            "planning",
+            "TDD",
+            "production-code edits",
+            "review dispatch that depends on clarified behavior",
+        ] if lifecycle == "CREATED" else [],
+    }
+
+
 def state_path_display(repo: Path, lock: Path | None) -> str:
     if not lock:
         return "docs/agent-runs/<run>/run-state.json"
@@ -306,6 +336,7 @@ def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -
         },
         "required_todo_list": todo_list,
         "exploration_policy": exploration_policy_for_lifecycle(lifecycle),
+        "clarification_interaction": clarification_interaction_for_lifecycle(lifecycle),
         "allowed_direct_exploration_tools": ["Read", "Grep", "Glob", "List", "Search"],
         "direct_exploration_guidance": (
             "Start the harness run first, then use GitNexus first for impact analysis, call paths, cross-service dependencies, and route/topic/contract ownership. "
@@ -623,6 +654,10 @@ def todo_list_blockers(repo: Path, lock: Path | None, task_text: str) -> tuple[l
                 "Todo list blocked: current lifecycle "
                 + (lifecycle or "<missing>")
                 + " requires a phase-scoped TodoList. Do not list implementation/code/module-development tasks until the implementation gate opens."
+            ], lifecycle
+        if lifecycle == "CREATED" and CLARIFICATION_TODO_RE.search(text) and not USER_INTERACTION_TODO_RE.search(text):
+            return [
+                "Todo list blocked: clarification requires an explicit user interaction step. Add a TodoList item to ask/confirm the user's Restated Intent and resolve open questions before plan, TDD, or code work."
             ], lifecycle
         if EXPLORATION_TODO_RE.search(text) and not GITNEXUS_TODO_RE.search(text):
             return [

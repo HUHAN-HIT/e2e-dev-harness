@@ -6896,7 +6896,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("service-design gate transitions" in reason for reason in result["blocked_reasons"]))
 
-    def test_multi_implementation_gate_requires_claimed_service_tasks(self) -> None:
+    def test_multi_implementation_gate_waits_for_tdd_and_r2_not_code_claims(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             services = ["services/order-service", "services/payment-service"]
@@ -6985,7 +6985,8 @@ class OrchestrationArtifactTests(unittest.TestCase):
             )
 
         self.assertFalse(result["ready"])
-        self.assertTrue(any("must be claimed" in reason for reason in result["blocked_reasons"]))
+        self.assertFalse(any("must be claimed" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any("tdd-red" in reason and "r2-review" in reason for reason in result["blocked_reasons"]))
 
     def test_service_plan_archive_contains_microservice_scoped_sections(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

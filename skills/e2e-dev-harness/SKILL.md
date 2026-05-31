@@ -40,11 +40,11 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
 ## Hard Rules
 
 - Load project instructions before requirement clarification. Use discovery scope first; load affected service `AGENT.md` / `AGENTS.md` only after scope is known. Read `references/agent-instructions.md`.
-- Use Superpowers when available. `superpowers:brainstorming` owns clarification; `superpowers:test-driven-development` owns TDD. Read `references/superpowers-integration.md`.
-- Clarification is a hard gate. The design must state goals, non-goals, affected services/modules, use cases,
-  change logic, bounded impact summary, contracts, acceptance criteria, test design, and resolved open questions.
+- Use Superpowers when available: `brainstorming` for clarification, `test-driven-development` for TDD. Read `references/superpowers-integration.md`.
+- Clarification gate requires goals, non-goals, affected services, use cases, change logic, impact summary, contracts, ACs, test design, and closed questions.
   Read `references/clarification-gate.md`.
-  For high-risk or interactive runs, require `Restated Intent` with `--require-intent` so the agent's understanding is confirmed before planning.
+  In `CREATED`, TodoList must include user confirmation of Restated Intent and open questions before plan/TDD/code.
+  For high-risk or interactive runs, require `Restated Intent` with `--require-intent`.
   MQ/DMQ/Kafka requirements must name the cross-layer call chain and sender/producer injection point before implementation.
 - Prefer GitNexus for code-level cross-service evidence and explicit impact artifacts.
   Do not duplicate low-level `grep`/`rg` instructions just because GitNexus augments searches.
@@ -103,7 +103,7 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
 ## Workflow
 
 1. Prepare: load root instructions, scan memory, probe Superpowers, refresh GitNexus-first dependency evidence.
-2. Clarify: use Superpowers brainstorming and the Markdown clarification gate; stop on unresolved behavior/API/data/test or impact-summary questions.
+2. Clarify: use Superpowers brainstorming and the Markdown gate; confirm Restated Intent, resolve questions, then record answers.
 3. R1 design review: independent semantic reviewer checks AC completeness, affected modules, security paths, and reference patterns.
 4. Plan: choose `single`, explicit `single-review`, or `multi`; write an ExecPlan for complex work. Read `references/exec-plan.md`.
 5. Service design split for multi-service: fill and validate every `service-designs/<service>.md`; do not proceed while run-state is `SERVICE_DESIGN_REQUIRED`.

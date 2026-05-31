@@ -31,6 +31,8 @@ For high-risk, audited, or interactive runs, add:
 
 Run `clarify --require-intent` or `gate --require-intent` to make this a hard blocker. Without this mode, the section is advisory so CI and non-interactive replay can still run.
 
+During the `CREATED` lifecycle, `next` and `phase_guard` expose a `clarification_interaction` contract. The active TodoList must include a user-facing step to confirm Restated Intent and resolve open questions before planning, TDD, reviewer dispatch that depends on clarified behavior, or production-code edits. If `clarify` finds unresolved items, its JSON includes `interaction_required`, `questions_to_ask_user`, and `interaction_contract` so the agent can ask the user directly instead of guessing from blocked reasons.
+
 When an acceptance criterion or use case declares MQ/DMQ/Kafka/JMS notification behavior, the design must also state the cross-layer call chain and sender/producer injection point. Example:
 
 ```markdown

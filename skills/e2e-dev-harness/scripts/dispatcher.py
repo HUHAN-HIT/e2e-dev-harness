@@ -916,8 +916,29 @@ def dispatch_complete(
             "context_pack": "",
         }
         update = update_dispatch_state(repo, state_path, dispatch or legacy_dispatch, lifecycle=previous_lifecycle or None)
+        transition = None
+        if previous_lifecycle == "PLANNED":
+            ready_for_implementation, _missing = agent_scheduler.phases_completed(completed_schedule, ["tdd-red", "r2-review"])
+            if ready_for_implementation:
+                _restored_path, restored_state = load_state(repo, state_path)
+                if restored_state and str(restored_state.get("lifecycle", "")) == "PLANNED":
+                    transition = run_state.transition_state(
+                        repo,
+                        state_path,
+                        "RED_READY",
+                        gate="tdd_red",
+                        gate_status="passed",
+                        evidence=event_path,
+                    )
         complete["dispatch_event"] = rel(repo, event_path)
         complete["run_state_update"] = update
+        if transition:
+            complete["run_state_transition"] = transition
+            if not transition["ready"]:
+                complete["ready"] = False
+                complete.setdefault("blocked_reasons", []).extend(
+                    "Run state transition: " + reason for reason in transition["blocked_reasons"]
+                )
     return complete
 
 

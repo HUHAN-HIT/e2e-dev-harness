@@ -196,7 +196,7 @@ def task_input_handoff_blockers(repo: Path, task: dict) -> list[str]:
         text = posix_path(str(item))
         if not text.endswith(".md"):
             continue
-        if "/handoffs/" not in text and not text.endswith("/code-agent.md") and not text.endswith("/implementation-plan.md"):
+        if "/handoffs/" not in text and not text.endswith("/code-agent.md"):
             continue
         path = Path(text)
         full = path if path.is_absolute() else repo / path
@@ -210,6 +210,29 @@ def task_input_handoff_blockers(repo: Path, task: dict) -> list[str]:
                 for reason in result["blocked_reasons"]
             )
     return blocked
+
+
+def maybe_transition_red_ready(repo: Path, state_path: Path | None, schedule: dict, evidence: list[str]) -> dict | None:
+    if not state_path:
+        return None
+    state_file = resolve(repo, state_path)
+    if not state_file or not state_file.exists():
+        return None
+    state = load_json(state_file)
+    if str(state.get("lifecycle", "")) != "PLANNED":
+        return None
+    ready, _missing = phases_completed(schedule, ["tdd-red", "r2-review"])
+    if not ready:
+        return None
+    evidence_path = Path(evidence[0]) if evidence else None
+    return run_state.transition_state(
+        repo,
+        state_file,
+        "RED_READY",
+        gate="tdd_red",
+        gate_status="passed",
+        evidence=evidence_path,
+    )
 
 
 def role_template_blockers(repo: Path, schedule: dict, task: dict) -> list[str]:
@@ -589,7 +612,10 @@ def complete(
     task["evidence"] = resolved_evidence
     atomic_write_json(path, schedule)
     state_result = update_state_owner(repo, state_path, task, agent, "completed", resolved_evidence)
+    transition = maybe_transition_red_ready(repo, state_path, schedule, resolved_evidence)
     blocked = [] if state_result["ready"] else state_result["blocked_reasons"]
+    if transition and not transition["ready"]:
+        blocked.extend("Run state transition: " + reason for reason in transition["blocked_reasons"])
     return {
         "ready": not blocked,
         "blocked_reasons": blocked,
@@ -597,6 +623,7 @@ def complete(
         "schedule": str(path),
         "task": task,
         "run_state_update": state_result,
+        "run_state_transition": transition,
     }
 
 
