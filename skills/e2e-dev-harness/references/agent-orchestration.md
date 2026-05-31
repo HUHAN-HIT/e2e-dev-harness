@@ -29,7 +29,43 @@ For each task:
 
 This L0 mode is intentionally serial. It still gives the harness the main multi-agent benefits: context isolation, role separation, explicit handoffs, leases, and machine-checkable ownership. Runtime adapters may parallelize independent `parallel_group` tasks later, but only after service designs, red-test evidence, contracts, and R2 review are stable.
 
+The Claude Code/Superpowers adapter is exposed through the unified CLI:
+
+```bash
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py runtime-capabilities . --runtime claude-code
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-next . \
+  --schedule docs/agent-runs/<run>/agent-schedule.json \
+  --state docs/agent-runs/<run>/run-state.json \
+  --runtime claude-code
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-complete . \
+  --schedule docs/agent-runs/<run>/agent-schedule.json \
+  --state docs/agent-runs/<run>/run-state.json \
+  --task-id <task-id> \
+  --agent <agent> \
+  --evidence <scheduled-output>
+```
+
+`dispatch-next` scans for the first ready task and reports skipped tasks with
+their blockers. It validates handoff readiness, dependencies, role template, and
+context-pack budget before claiming; a blocked context pack must not leave a task
+claim behind. It then writes `context-packs/<task-id>.json`, claims the scheduled
+task, writes an invocation record, and returns the prompt to pass to a fresh
+Claude Code `Task` subagent. Implementation Task hooks require that
+generated Task ID and context pack after the implementation gate, so a coordinator
+cannot bypass the scheduler with a free-form "implement this service" Task.
+
+When a runtime cannot spawn an independent worker, dispatch enters
+`WAITING_DISPATCH` and records `dispatch.status=waiting_dispatch`. This is a
+pause state, not a completion state: Stop hooks may allow the coordinator to end
+so a fresh session can be started, but completion/guard commands still require
+closed scheduled tasks, independent semantic reviews, ready handoffs, and evidence.
+
 Do not let an implementation agent review its own work. If the runtime cannot spawn subagents, use a separate reviewer session with only the review request and allowed artifact inputs. Same-chat/self-review is not an acceptable fallback for R1/R2/R3.
+
+When a review worker reports evidence, complete it through `dispatch-complete`, not
+raw `agent-task complete`; the dispatcher reruns the reviewer gate and keeps the
+task open when independence, request hash, required fields, or no-code-change
+checks fail.
 
 Do not use `single-review` to collapse design, test, code, or the three reviews into one after-the-fact report. It only keeps implementation service scope compact; role timing, handoffs, reviewer independence, request hashes, invocation JSON, and Coverage Reviewer remain unchanged.
 
@@ -50,7 +86,12 @@ When `--service-scope auto` and no explicit service/path is supplied, the helper
 
 Every generated `service-plans/<service>/implementation-plan.md` must include agent assignment, allowed change scope, modification points, service-local change logic, TDD plan, contracts, data/transaction effects, risks, and completion evidence. The code agent owns that plan; reviewer agents validate it independently.
 
-`plan --create-archive` also writes `agent-schedule.json`. Treat it as the compact task board for agent dispatch: each task has an agent id, phase, service scope, dependency phases, input artifacts, output artifacts, and parallel group. Agents update task status with `e2e_dev_harness.py agent-task` instead of exchanging long free-form chat transcripts.
+`start` writes a bootstrap `agent-schedule.json` with a `requirements-clarifier`
+task so clarification can run in a subagent before the full archive exists.
+`plan --create-archive` replaces that with the full compact task board for agent
+dispatch: each task has an agent id, phase, service scope, dependency phases,
+input artifacts, output artifacts, and parallel group. Agents update task status
+through dispatcher commands instead of exchanging long free-form chat transcripts.
 It also writes short role templates under `agent-roles/`; generated schedules set `require_role_templates: true`, so claim is blocked if the referenced template is missing or malformed.
 
 For multi-service work, `plan --create-archive` leaves run-state at `SERVICE_DESIGN_REQUIRED`. Fill and validate every service design slice with `service-design --run-state` before service code dispatch. Service-scoped code-developer tasks in different `service:<name>` parallel groups may run concurrently only after shared contracts, service designs, service-local TDD plans, and R2 review are stable.
@@ -327,12 +368,13 @@ Parallel work is useful only after requirements are stable:
 ## Recommended Invocation Pattern
 
 1. Run `superpowers_probe.py --mode auto` during repository discovery; switch to `--mode strict` only when the project has committed to making Superpowers a hard gate.
-2. Run `kg_refresh.py . --mode auto`.
-3. Run `memory_capture.py scan .`.
-4. Run `orchestration_plan.py . --mode auto --service-scope discovery --design-doc <doc>` to get service candidates and next steps only.
-5. After affected services are clear, run `orchestration_plan.py . --mode auto --design-doc <doc>`; if the design names affected modules, auto mode selects them. Use `--service-scope affected --service services/<service>` only when you need to override or disambiguate.
-6. Create an archive with `e2e_dev_harness.py plan . --design-doc <doc> --create-archive`; verify the archive contains one `service-plans/<service>/code-agent.md` per affected service/module.
-7. In `multi` mode, update the handoff artifacts under `docs/agent-runs/<date-feature>/handoffs/` and the service plans under `docs/agent-runs/<date-feature>/service-plans/<service>/`.
-8. Run R1/R2/R3 semantic reviews at the phase boundaries and convert findings into rework items.
-9. Gate each phase with review before passing work forward.
-10. Run `e2e_dev_harness.py gate . --phase completion ... --review-dir docs/agent-runs/<run>/reviews --handoff-dir docs/agent-runs/<run>/handoffs --require-handoffs --contract-dir docs/agent-runs/<run>/contracts` before reporting done for multi-service/split-agent work; explicit review dirs are merged with inferred service-local reviews from the same agent run. Include additional service-local `--review-dir` values, `--implementation-manifest`, and `--rework-dir` when the run uses non-standard locations.
+2. Run `e2e_dev_harness.py start`; dispatch the bootstrap `requirements-clarifier` when the runtime supports isolated Task sessions.
+3. Run `kg_refresh.py . --mode auto`.
+4. Run `memory_capture.py scan .`.
+5. Run `orchestration_plan.py . --mode auto --service-scope discovery --design-doc <doc>` to get service candidates and next steps only.
+6. After affected services are clear, run `orchestration_plan.py . --mode auto --design-doc <doc>`; if the design names affected modules, auto mode selects them. Use `--service-scope affected --service services/<service>` only when you need to override or disambiguate.
+7. Let the coordinator create the archive with `e2e_dev_harness.py plan . --design-doc <doc> --create-archive`; then dispatch scheduled use-case, test, review, service-code, and coverage workers from that archive. Verify it contains one `service-plans/<service>/code-agent.md` per affected service/module.
+8. In `multi` mode, update the handoff artifacts under `docs/agent-runs/<date-feature>/handoffs/` and the service plans under `docs/agent-runs/<date-feature>/service-plans/<service>/`.
+9. Run R1/R2/R3 semantic reviews at the phase boundaries and convert findings into rework items.
+10. Gate each phase with review before passing work forward.
+11. Run `e2e_dev_harness.py gate . --phase completion ... --review-dir docs/agent-runs/<run>/reviews --handoff-dir docs/agent-runs/<run>/handoffs --require-handoffs --contract-dir docs/agent-runs/<run>/contracts` before reporting done for multi-service/split-agent work; explicit review dirs are merged with inferred service-local reviews from the same agent run. Include additional service-local `--review-dir` values, `--implementation-manifest`, and `--rework-dir` when the run uses non-standard locations.

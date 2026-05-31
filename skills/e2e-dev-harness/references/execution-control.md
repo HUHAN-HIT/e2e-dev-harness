@@ -33,6 +33,11 @@ python skills/e2e-dev-harness/scripts/harness_stop_guard.py . \
 ```
 
 `harness_stop_guard.py` discovers the latest `docs/agent-runs/<run>/run-state.json` unless `--run-state` or `--run-dir` is supplied. Runtime hooks must pass `--strict` so every non-terminal lifecycle blocks finalization; this prevents a resumed or impatient agent from stopping after clarify, planning, compile, or partial implementation.
+The exception is `WAITING_DISPATCH` / `dispatch.status=waiting_dispatch`: this
+state means the current coordinator cannot proceed without an independent
+subagent/session. The Stop hook may allow the coordinator turn to end so the
+worker can be started, but the run is not complete and completion gates still
+require finished scheduled tasks, independent reviews, and evidence.
 
 ## Guard Command
 

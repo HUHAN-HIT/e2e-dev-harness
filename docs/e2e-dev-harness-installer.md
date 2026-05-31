@@ -1,6 +1,16 @@
 # E2E Dev Harness Installer
 
-This guide explains how to use the Node bootstrap installer:
+This guide explains the two supported installer entrypoints:
+
+1. The short Python CLI after one editable install:
+
+```powershell
+python -m pip install -e .[dev,ast]
+cd C:\path\to\business-repo
+e2eh install --full --yes
+```
+
+2. The Node bootstrap installer when Python CLI is not installed yet:
 
 ```powershell
 node tools\install-e2e-dev-harness.mjs
@@ -8,7 +18,8 @@ node tools\install-e2e-dev-harness.mjs
 
 The installer copies the `e2e-dev-harness` skill into agent runtime skill
 directories, optionally installs the editable Python CLI, optionally installs
-GitNexus/Graphify, and can invoke the bundled runtime hook installer.
+GitNexus/Graphify, can invoke the bundled runtime hook installer for a business
+project, and can run a final `doctor` check.
 
 ## What It Installs
 
@@ -95,6 +106,48 @@ node tools\install-e2e-dev-harness.mjs `
 
 Use `--skip-python-cli` when you only want to install the skill files and do
 not want the installer to run `pip`.
+
+## One-Command Project Setup
+
+After `python -m pip install -e .[dev,ast]`, use the short command from the
+business repository root:
+
+```powershell
+cd C:\path\to\business-repo
+e2eh install --full --yes
+```
+
+Preview first by omitting `--yes`:
+
+```powershell
+e2eh install --full
+```
+
+For the Node bootstrap path, use `--project` with `--full`. The installer discovers
+the harness source repository from the script path, installs the latest skill
+copy into all supported runtime skill directories, installs missing
+GitNexus/Graphify when requested by the preset, writes Claude hooks into the
+target project, and runs doctor:
+
+```powershell
+node C:\path\to\harness-repo\tools\install-e2e-dev-harness.mjs `
+  --project C:\path\to\business-repo `
+  --full `
+  --yes
+```
+
+Preview first by omitting `--yes` and adding `--json`:
+
+```powershell
+node C:\path\to\harness-repo\tools\install-e2e-dev-harness.mjs `
+  --project C:\path\to\business-repo `
+  --full `
+  --json
+```
+
+`--full` expands to `--target all --install-external --with-hooks --runtime
+claude --doctor`. Use the longer flags only when you need a narrower install.
+Without `--project`/`--project-root`, hooks and doctor default to `--repo`.
 
 ## Full Local Developer Install
 
@@ -210,6 +263,7 @@ For Claude Code hook installation, run:
 ```powershell
 node tools\install-e2e-dev-harness.mjs `
   --target claude `
+  --project-root C:\path\to\business-repo `
   --with-hooks `
   --runtime claude `
   --yes
@@ -218,7 +272,7 @@ node tools\install-e2e-dev-harness.mjs `
 This invokes:
 
 ```powershell
-python skills/e2e-dev-harness/scripts/install_hooks.py . --runtime claude --json
+python C:\path\to\harness-repo\skills\e2e-dev-harness\scripts\install_hooks.py C:\path\to\business-repo --runtime claude --json
 ```
 
 The hook installer writes or validates runtime hook configuration using the
@@ -252,6 +306,8 @@ real install.
 After a real install, verify the Python CLI and environment:
 
 ```powershell
+e2eh --version
+e2eh doctor . --json
 e2e-dev-harness --version
 e2e-dev-harness doctor . --json
 ```
@@ -296,9 +352,8 @@ Preview all actions as JSON:
 
 ```powershell
 node tools\install-e2e-dev-harness.mjs `
-  --target all `
-  --install-external `
-  --with-hooks `
+  --project C:\path\to\business-repo `
+  --full `
   --json
 ```
 
@@ -335,7 +390,9 @@ Graphify extraction may still require project-specific LLM/API configuration.
 | --- | --- |
 | `--target codex\|claude\|agents\|all` | Select install destination. Default: `codex`. |
 | `--install-root <path>` | Root containing `.codex`, `.claude`, or `.agents`. Default: user home. |
-| `--repo <path>` | Repository root used for Python CLI and hook commands. Default: current directory. |
+| `--full` | Preset for `--target all --install-external --with-hooks --runtime claude --doctor`. |
+| `--repo <path>` | Harness source repository root used for skill copy and Python CLI install. Default: installer repository. |
+| `--project-root <path>` / `--project <path>` | Business project root used for runtime hook installation and doctor. Defaults to `--repo`. |
 | `--source-skill-dir <path>` | Source skill directory. Default: `<repo>\skills\e2e-dev-harness`. |
 | `--yes` | Execute planned writes and commands. Without it, the installer is dry-run only. |
 | `--json` | Print JSON plan/result. |
@@ -346,6 +403,7 @@ Graphify extraction may still require project-specific LLM/API configuration.
 | `--skip-external` | Check external tools but never plan external install actions. |
 | `--with-hooks` | Invoke the bundled hook installer. |
 | `--runtime claude` | Runtime passed to `install_hooks.py`. Currently used with `--with-hooks`. |
+| `--doctor` | Run `e2e_dev_harness.py doctor <project-root> --json` after install actions. |
 | `--strict-superpowers` | Block when required Superpowers skills are missing. |
 | `--superpowers-dir <path>` | Check a specific Superpowers skills directory. |
 | `--check-only` | Run checks only; do not plan copy or install actions. |

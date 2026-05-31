@@ -1,323 +1,395 @@
-# E2E Dev Harness 企业级就绪度评估报告（2026-05-31 更新）
+# E2E Dev Harness 企业级就绪度评估报告
 
-> 评估日期：2026-05-31
+> 评估日期：2026-05-31（完整重测）
 > 版本：0.2.0
-> 评估方法：全量测试执行 + 源码审读 + 安装验证 + CLI 体验测试
-> 对照基准：2026-05-30 评估报告（6.66/10，45 个测试失败）
+> 评估方法：全量测试执行 + 源码审读 + 安装验证 + CLI 体验测试 + 安全审计 + 用户体验评估
+> 对照基准：2026-05-30 首次评估（6.66/10，45 个测试失败）
 
 ---
 
-## 一、基线变化（相比上次评估）
+## 一、原始数据
 
-| 指标 | 上次（05-30） | 本次（05-31） | 变化 |
+### 1.1 测试执行
+
+```
+690 passed, 46 subtests passed, 0 failed
+执行时间：10.17s
+Python：3.13.12
+平台：Windows 11
+```
+
+### 1.2 代码规模
+
+| 层 | 文件数 | 行数 | 说明 |
+|----|--------|------|------|
+| Python 脚本 | 41 | 16,314 | 核心逻辑 |
+| 测试代码 | 25 | 22,342 | 692 个测试方法 |
+| SKILL.md | 1 | 226 | Agent 入口指令 |
+| 参考文档 | 15 | 2,123 | references/ |
+| README.md | 1 | 606 | 使用说明 |
+| 审查配置 | 3 | 327 | review-profiles/ |
+| Hook 模板 | 4 | 85 | 4 种 runtime |
+| CI 模板 | 1 | — | GitHub Actions |
+| 安装指南 | 1 | 352 | installer 文档 |
+| **合计** | **~92** | **~42,375** | — |
+
+测试/生产代码比 = **1.37:1**（22,342 / 16,314）
+
+### 1.3 Git 演进
+
+```
+36 次提交，跨度约 8 天（2026-05-23 ~ 05-31）
+16 个未提交文件（+829/-47 行变更）
+```
+
+---
+
+## 二、基线变化（相比 05-30 首评）
+
+| 指标 | 首次（05-30） | 本次（05-31） | 变化 |
 |------|-------------|-------------|------|
-| 测试总数 | 619 | 651 | +32 新测试 |
-| 测试通过率 | 92.7%（574/619） | **100%（651/651）** | **全绿** |
-| 失败测试 | 45 | **0** | 彻底修复 |
+| 测试总数 | 619 | **690** | +71 |
+| 测试通过率 | 92.7%（45 失败） | **100%** | 全绿 |
 | `pyproject.toml` | 无 | **有** | 可 pip install |
 | `--version` | 无 | **0.2.0** | 版本可追溯 |
 | `CHANGELOG.md` | 无 | **有** | 变更可追溯 |
 | `doctor` 命令 | 无 | **有** | 环境自检 |
-| `harness_stop_guard` | 无 | **有** | 停止守卫 |
-| pip install -e . | 不可能 | **成功** | 企业安装可行 |
-| CLI entry point | 仅 python 调用 | **e2e-dev-harness 全局命令** | 体验提升 |
-
-**结论：Phase 1（修复基线）已基本完成。这是从"原型可用"到"内部工具可用"的关键一步。**
-
----
-
-## 二、当前状态评分（8维度）
-
-| 维度 | 上次 | 本次 | 变化 | 核心依据 |
-|------|------|------|------|----------|
-| 架构设计 | 9.0 | 9.0 | — | 未变，仍然是最强项 |
-| 代码质量 | 6.5 | 7.0 | +0.5 | 接口收敛、doctor/stop_guard 新增 |
-| 测试健康度 | 6.0 | **8.5** | +2.5 | 全绿、新增 32 测试、doctor 覆盖 |
-| 可维护性 | 5.5 | **7.0** | +1.5 | pyproject.toml、version、changelog |
-| 可扩展性 | 5.0 | 5.0 | — | 未变，仍是最短板 |
-| 用户体验 | 5.5 | 6.5 | +1.0 | doctor 命令、全局 CLI、但输出仍全 JSON |
-| 安全性 | 5.5 | 5.5 | — | 未变 |
-| 参考文档 | 7.5 | 7.5 | — | 未变 |
-| **综合** | **6.66** | **7.19** | **+0.53** | |
+| `stop guard` | 无 | **有** | 停止守卫 |
+| OpenCode hook | 无 | **有** | 第 4 种 runtime |
+| 全局 CLI | 不可能 | **e2e-dev-harness** | 体验提升 |
+| 脚本数量 | 37 | **41** | +4 新模块 |
 
 ---
 
-## 三、当前已完成的能力清单
+## 三、八维度评分
 
-### 3.1 企业一键可用的基础 ✅
+### 3.1 架构设计 — 9.0 / 10
 
-| 能力 | 状态 | 证据 |
+| 评估项 | 评分 | 依据 |
+|--------|------|------|
+| 控制模型 | 9.5 | 状态机 + 文件锁 + 证据链，物理约束不靠 prompt |
+| Agent 中立 | 9.0 | Claude Code / Codex / Gemini CLI / OpenCode / CI，4 种 hook |
+| 生命周期 | 9.0 | 9 阶段 + 返工路由 + 检查点 |
+| 工作流分层 | 9.0 | basic / standard / critical / audited 四级自适应 |
+| Agent 编排 | 8.5 | single / single-review / multi 三模式 |
+| 可回放 | 9.0 | artifact-registry + SHA-256 + execution-trace |
+
+**核心优势不变**：
+- Phase Lock 在 hook 层物理拦截代码写入——AI Agent 生态中罕见
+- 状态机是文件级的（磁盘 `run-state.json`），多 Agent 可共享
+- R1/R2/R3 审查独立性有结构性保证
+
+**不足**：
+- 9 个生命周期阶段硬编码在 `next_action_for_lifecycle()`，不可注册自定义阶段
+- 多 Agent 错误传播机制未设计
+- Agent 编排策略不可自定义
+
+### 3.2 代码质量 — 7.0 / 10（+0.5）
+
+| 评估项 | 评分 | 依据 |
+|--------|------|------|
+| 模块分工 | 8.0 | 41 脚本职责单一，命名清晰 |
+| 错误处理 | 6.5 | 98 个具体 except vs 8 个 bare Exception，参差但改善 |
+| 代码组织 | 5.0 | 主入口 2,219 行（12% 代码库）+ 15 个硬编码模板函数 |
+| import 清洁度 | 7.5 | stdlib 占 63%，无重外部依赖 |
+
+**量化数据**：
+
+| 指标 | 数值 | 评价 |
 |------|------|------|
-| `pip install -e .` | ✅ | 成功安装 |
-| `e2e-dev-harness --version` | ✅ | 输出 0.2.0 |
-| `e2e-dev-harness doctor .` | ✅ | 检查 Python/pytest/Maven/GitNexus/hooks |
-| 全局 CLI entry point | ✅ | 安装后直接使用 `e2e-dev-harness` |
-| 651 测试全绿 | ✅ | 0 失败 |
-| Python >=3.10 声明 | ✅ | pyproject.toml |
-| 可选依赖管理 | ✅ | tree-sitter、pytest 分组 |
-| 变更日志 | ✅ | CHANGELOG.md |
+| try 块总数 | 106 | 适中 |
+| 具体异常捕获 | 98 | 92.5% 具体化 |
+| 裸 Exception | 8 | 7.5% 需治理 |
+| print() 调用 | 181 | 全部输出靠 print |
+| logging 使用 | 0 | **零结构化日志** |
+| subprocess 调用 | 15 | 受控 |
+| json.loads 调用 | 38 | 无 schema 校验 |
+| `__init__.py` | 0 | 不是正式包 |
 
-### 3.2 核心机制 ✅
+**主要问题**：
 
-| 能力 | 状态 | 说明 |
+1. **主入口单体**（2,219 行）：包含 14 个子命令路由 + 15 个模板函数（~1,200 行字符串）+ CLI 参数定义。模板内容占 54%。
+2. **零结构化日志**：181 个 `print()` 调用，无法分级、过滤、对接 ELK。
+3. **无包结构**：scripts/ 目录无 `__init__.py`，不是正式 Python 包。
+
+### 3.3 测试健康度 — 8.5 / 10（+2.5）
+
+| 评估项 | 评分 | 依据 |
+|--------|------|------|
+| 测试通过率 | 10.0 | **690/690 全绿，46 subtests 通过** |
+| 测试覆盖面 | 8.5 | 所有门禁、编排、扫描、记忆、doctor 有覆盖 |
+| 测试比 | 8.0 | 1.37:1（22,342 / 16,314），投入充分 |
+| 测试组织 | 5.5 | 单文件 10,326 行（46% 测试代码）|
+
+**测试分布**：
+
+| 文件 | 行数 | 方法数 | 占比 |
+|------|------|--------|------|
+| `test_e2e_dev_harness_scripts.py` | 10,326 | 322 | **46.3%** |
+| `test_orchestration.py` | 3,487 | 130 | 15.6% |
+| `test_gates_implementation.py` | 1,953 | 28 | 8.7% |
+| 其余 22 个文件 | 6,576 | 212 | 29.4% |
+
+**问题**：
+- `test_e2e_dev_harness_scripts.py` 10,326 行是最大技术债——应按脚本拆分
+- 缺少集成/E2E 测试（无真实 Maven 项目 + 真实 GitNexus 端到端流程）
+- 无性能基准测试
+
+### 3.4 可维护性 — 7.0 / 10（+1.5）
+
+| 评估项 | 评分 | 依据 |
+|--------|------|------|
+| 包管理 | 8.0 | pyproject.toml + entry_points + 可选依赖 |
+| 版本管理 | 7.0 | --version + CHANGELOG，但 run-state 无 schema version |
+| 代码-测试同步 | 8.0 | 690 全绿，新增 71 测试 |
+| 路径处理 | 8.5 | pathlib.Path + resolve_repo_path 安全检查 |
+| 模块化 | 5.0 | 主入口 2,219 行未拆分，模板未外置 |
+
+**正面**：
+- `pip install -e .` 成功
+- `e2e-dev-harness` 全局命令可用
+- Python >=3.10 声明
+- tree-sitter / pytest 作为可选依赖
+
+**负面**：
+- 主入口未模块化
+- 模板 1,200 行 Python f-string，用户无法定制
+- 无 `__init__.py`，不是正式包
+
+### 3.5 可扩展性 — 5.0 / 10（未变）
+
+| 扩展点 | 可定制性 | 机制 |
+|--------|----------|------|
+| Review profiles | **好** | JSON + extends + common_issues |
+| Workflow tiers | **好** | 4 级自适应 |
+| Lifecycle 阶段 | **无** | 硬编码 9 阶段 |
+| Gate 逻辑 | **无** | 硬编码 |
+| 模板格式 | **无** | Python f-string |
+| Rework routing | **无** | 硬编码映射 |
+| Scanner | **部分** | tree-sitter/regex 可切，不可注册自定义 |
+| Agent 编排 | **部分** | 3 模式，不可自定义策略 |
+
+**企业级缺失**：自定义 gate（对接 SonarQube）、自定义阶段（SECURITY_REVIEW）、自定义模板（多语言团队）、自定义 evidence 消费者（对接内部 CI）。
+
+### 3.6 用户体验 — 6.5 / 10（+1.0）
+
+| 评估项 | 评分 | 依据 |
+|--------|------|------|
+| CLI 设计 | 7.5 | 14 子命令，统一入口，`--json` |
+| `next` 命令 | 8.5 | 告诉用户当前该做什么 |
+| `doctor` 命令 | 8.0 | 一键环境自检 |
+| 输出格式 | 4.0 | **全 JSON，无人类友好输出** |
+| 错误提示 | 4.5 | JSON blocked_reasons，无上下文引导 |
+| 快速开始 | 4.0 | 无 quickstart 教程 |
+| Scaffold | 4.5 | 仅有 4 个 Java 文件 |
+| 安装体验 | 7.5 | pip install + doctor 验证 |
+
+**"一键可用"状态**：
+
+| 场景 | 状态 | 说明 |
 |------|------|------|
-| 状态机生命周期 | ✅ | 9 阶段，文件级 run-state.json |
-| Phase Lock 物理阻止 | ✅ | hook 层拦截未授权代码写入 |
-| 证据链 | ✅ | SHA-256 + exit_code + output hash |
-| TDD 红绿循环 | ✅ | basic/strict/auto 三模式 |
-| 三轮独立审查 | ✅ | R1/R2/R3 独立 agent/session |
-| 返工路由 | ✅ | 6 种回退映射 |
-| 多服务编排 | ✅ | single/single-review/multi |
-| Agent 交接 | ✅ | ready markers + hash 校验 |
-| Agent 任务调度 | ✅ | claim/lease/reclaim/complete |
-| Review profiles | ✅ | JSON + extends 继承 |
-| 跨平台 hook | ✅ | Claude Code/Codex/Gemini CLI |
-| 知识图谱集成 | ✅ | GitNexus(主) + Graphify(辅) |
-| 跨服务依赖扫描 | ✅ | regex + tree-sitter AST |
-| 上下文打包 | ✅ | 文件/字节预算 |
-| 记忆选择与捕获 | ✅ | 分层、验证、防重复 |
-| 执行追踪 | ✅ | 阶段计时 + token 计数 |
-| 运行摘要 | ✅ | JSON/MD 双格式 |
-| CI 集成 | ✅ | GitHub Actions 模板 |
-| Spring 静态检查 | ✅ | MQ routing、注入检查 |
+| 安装一键 | ✅ | `pip install -e .` |
+| 验证一键 | ✅ | `e2e-dev-harness doctor .` |
+| 启动一键 | ✅ | `e2e-dev-harness start .` |
+| 定制不改源码 | ❌ | 模板硬编码（Phase 2） |
+| 非 Java 可用 | ❌ | 只有 Java scanner（Phase 3） |
+| 团队配置共享 | ❌ | 无团队配置机制（Phase 3） |
+| CI 集成开箱 | ⚠️ | 仅 GitHub Actions |
 
----
-
-## 四、当前仍然存在的关键问题
-
-### P0：架构债务（阻碍规模化）
-
-#### 4.1 主入口单体 — `e2e_dev_harness.py`（2,111 行）
-
-**问题**：单一文件承担了 14 个子命令路由 + 13 个模板函数（~381 行 f-string）+ CLI 参数定义 + 所有业务逻辑。
-
-**影响**：
-- 企业用户无法定制模板而不改源码
-- 新增子命令需要理解 2,111 行代码
-- 代码审查困难
-
-**13 个硬编码模板函数**：
-```
-design_template, service_design_template, coverage_matrix_template,
-impact_summary_template, impact_evidence_template, test_impact_plan_template,
-implementation_manifest_template, unit_test_evidence_template,
-requirements_archive_template, review_checklist_template,
-review_request_template, semantic_review_template, service_plan_template
-```
-
-**建议**：拆分为 `commands/` 子目录（每命令一模块）+ `templates/` 目录（Markdown/JSON 文件）。
-
-#### 4.2 测试文件巨型单体 — `test_e2e_dev_harness_scripts.py`（10,061 行）
-
-**问题**：占全部测试代码的 47%，包含 29 个测试类。
-
-**影响**：
-- 定位失败测试困难
-- 与其他专项测试文件有重复
-- CI 并行化困难
-
-**建议**：按脚本名拆分为 `test_<script_name>.py`，每个文件 200-500 行。
-
-### P1：可扩展性（阻碍企业定制）
-
-#### 4.3 无插件/扩展机制
-
-当前无法在不改源码的情况下：
-- 注册自定义 lifecycle 阶段（如 `SECURITY_REVIEW`）
-- 注册自定义 gate（如对接 SonarQube）
-- 替换模板格式（如多语言团队）
-- 自定义 rework routing
-- 注册自定义 scanner（如 Go/TypeScript 项目）
-
-**建议**：设计 `harness-plugins.json` 配置 + Python entry_points 机制。
-
-#### 4.4 技术栈锁定 Java/Spring/Maven
-
-Scanner、Spring static check、Maven test-impact 全部 Java 专用。企业如果有 Go/Python/TypeScript 微服务，无法使用。
-
-**建议**：抽象 scanner 接口，提供 Go/TypeScript scanner 插件示例。
-
-### P2：用户体验（阻碍日常使用）
-
-#### 4.5 CLI 输出全 JSON
-
-所有输出都是 JSON，即使是 `doctor` 和 `next` 这种人读命令。企业用户需要：
-- 彩色终端输出（红/黄/绿状态）
-- `--verbose` / `--quiet` 分级
-- 人类友好的表格/列表
-- 进度指示
-
-**建议**：添加 `--format json|text|table` 参数，默认 text。
-
-#### 4.6 无 Quickstart 教程
-
-README 直接进入命令参考，缺少"5 分钟上手"引导。
-
-**建议**：添加 `docs/quickstart.md`，包含一个完整的单服务 basic 层级端到端示例。
-
-#### 4.7 Scaffold 示例简陋
-
-只有 4 个 Java 文件 + 1 个测试，缺少 JPA/MQ/Security/Testcontainers 示例。
-
-**建议**：提供 `scaffold/` 目录，包含 basic/standard/critical 三种示例项目。
-
-### P3：生产加固
-
-#### 4.8 安全风险
+### 3.7 安全性 — 5.5 / 10（未变）
 
 | 风险 | 严重性 | 位置 |
 |------|--------|------|
-| `command_evidence.py` 执行用户命令无白名单 | 高 | subprocess.run(--command) |
-| `install_hooks.py` 修改 settings.json 无原子写入 | 中 | 无备份机制 |
-| `phase_guard.py` stdin 无大小限制 | 中 | hook 输入未校验 |
+| `command_evidence.py` 命令注入 | **高** | subprocess.run(--command) 无白名单 |
+| `install_hooks.py` 非原子写入 | **中** | 无备份/原子操作 |
+| JSON 解析无 schema 校验 | **中** | 38 个 json.loads 调用 |
+| phase_guard stdin 无大小限制 | **中** | hook 输入未校验 |
+| 路径 traversal | **低** | 大部分有 relative_to 检查 |
 
-#### 4.9 多 Agent 并发安全
+**正面**：subprocess 用 `shell=False`、路径有安全检查、phase_guard 不执行代码。
 
-当前依赖文件系统锁，无 fcntl/msvcrt 锁，高并发下可能竞态。
+### 3.8 参考文档 — 7.5 / 10（未变）
 
-#### 4.10 缺少结构化日志
+| 文档 | 行数 | 完整性 | 清晰度 |
+|------|------|--------|--------|
+| implementation-gates.md | 382 | 5/5 | 4/5 |
+| agent-orchestration.md | 338 | 5/5 | 4/5 |
+| common-review-issues.md | 233 | 4/5 | 5/5 |
+| agent-handoff-schema.md | 169 | 4/5 | 4/5 |
+| memory-integration.md | 146 | 4/5 | 4/5 |
+| kg-tool-selection.md | 145 | 4/5 | 4/5 |
+| 其余 9 个 | 710 | 3/5 | 4/5 |
 
-所有输出都是 print/JSON，无 logging 模块。企业需要 ELK/Grafana 集成。
-
-#### 4.11 run-state 无 schema version
-
-升级时无法自动迁移旧格式。
+**缺失**：quickstart 教程、架构图、故障排查指南、API 参考。
 
 ---
 
-## 五、改进路线图（更新版）
+## 四、综合评分
 
-### Phase 1：修复基线 ✅ 已完成
+| 维度 | 得分 | 权重 | 加权 | 关键变化 |
+|------|------|------|------|----------|
+| 架构设计 | 9.0 | 25% | 2.25 | — |
+| 代码质量 | 7.0 | 15% | 1.05 | +0.5，接口收敛 |
+| 测试健康度 | 8.5 | 15% | 1.28 | **+2.5，全绿** |
+| 可维护性 | 7.0 | 15% | 1.05 | +1.5，pip install |
+| 可扩展性 | 5.0 | 10% | 0.50 | — |
+| 用户体验 | 6.5 | 10% | 0.65 | +1.0，doctor |
+| 安全性 | 5.5 | 5% | 0.28 | — |
+| 参考文档 | 7.5 | 5% | 0.38 | — |
+| **综合** | | | **7.44** | **+0.78** |
 
-| # | 改进项 | 状态 |
-|---|--------|------|
-| 1 | 修复全部失败测试 | ✅ 651/651 通过 |
-| 2 | 添加 pyproject.toml | ✅ 可 pip install |
-| 3 | 添加 --version + CHANGELOG | ✅ 0.2.0 |
-| 4 | 添加 doctor 命令 | ✅ 环境自检 |
-| 5 | 添加 stop guard | ✅ 停止守卫 |
+**变化轨迹**：6.66（05-30）→ 7.44（05-31）
+
+---
+
+## 五、成熟度雷达
+
+```
+                          架构 9.0
+                     ╱¯¯¯¯¯¯¯¯¯¯¯¯╲
+              文档 7.5              质量 7.0
+           ╱                           ╲
+      安全 5.5                           测试 8.5
+           ╲                           ╱
+              体验 6.5              维护 7.0
+                     ╲__________╱
+                          扩展 5.0
+```
+
+**强项**：架构设计（9.0）、测试健康度（8.5）
+**弱项**：可扩展性（5.0）、安全性（5.5）
+
+---
+
+## 六、企业一键可用差距清单
+
+### 6.1 已经做到 ✅
+
+```bash
+pip install -e .                        # 安装
+e2e-dev-harness --version               # 版本
+e2e-dev-harness doctor .                # 环境检查
+e2e-dev-harness start . --feature "X"   # 启动
+e2e-dev-harness next . --state <json>   # 下一步
+# 690 测试全绿，核心机制可靠
+```
+
+### 6.2 还差什么 ❌
+
+| # | 缺失能力 | 阻断级别 | 影响 | 所需 Phase |
+|---|----------|----------|------|-----------|
+| 1 | **主入口拆分 + 模板外置** | P0 硬阻断 | 定制需改源码 | Phase 2 |
+| 2 | **测试巨型单体拆分** | P0 硬阻断 | 10,326 行不可维护 | Phase 2 |
+| 3 | **插件扩展机制** | P1 软阻断 | 无法注册 gate/lifecycle | Phase 3 |
+| 4 | **CLI 人类友好输出** | P2 体验阻断 | 全 JSON 无法日常使用 | Phase 3 |
+| 5 | **Quickstart 教程** | P2 体验阻断 | 新人上手 >1 周 | Phase 3 |
+| 6 | **非 Java scanner** | P2 用户阻断 | Go/TS 项目不可用 | Phase 3 |
+| 7 | **团队配置共享** | P2 协作阻断 | 每人独立配置 | Phase 3 |
+| 8 | **命令注入防护** | P3 安全 | subprocess 无白名单 | Phase 4 |
+| 9 | **结构化日志** | P3 可观测 | 0 个 logging 调用 | Phase 4 |
+| 10 | **跨平台 CI** | P3 兼容 | 仅 Windows 测试 | Phase 4 |
+| 11 | **run-state schema version** | P3 兼容 | 升级无法迁移 | Phase 2 |
+| 12 | **Resume/恢复** | P3 运维 | 失败运行无法恢复 | Phase 4 |
+
+---
+
+## 七、改进路线图
+
+### Phase 1：修复基线 ✅ 完成
+
+| 交付物 | 状态 |
+|--------|------|
+| 690 测试全绿 | ✅ |
+| `pip install -e .` | ✅ |
+| `--version` 0.2.0 | ✅ |
+| `CHANGELOG.md` | ✅ |
+| `doctor` 环境自检 | ✅ |
+| `stop guard` 停止守卫 | ✅ |
+| OpenCode hook（第 4 runtime） | ✅ |
+| installer 文档 | ✅ |
 
 ### Phase 2：架构解耦（5-7 天）← 当前阶段
 
-| # | 改进项 | 工作量 | 优先级 | 交付物 |
-|---|--------|--------|--------|--------|
-| 6 | 拆分 e2e_dev_harness.py | 3-4 天 | P0 | commands/ 子目录 + 共享 core 层 + CLI 薄壳 |
-| 7 | 模板外置 | 1-2 天 | P0 | templates/ 目录（13 个 .md/.json 文件） |
-| 8 | 拆分 test_e2e_dev_harness_scripts.py | 1 天 | P0 | 按脚本一一对应拆分 |
-| 9 | run-state schema version | 0.5 天 | P1 | version 字段 + 迁移工具 |
+| # | 改进项 | 工作量 | 交付物 |
+|---|--------|--------|--------|
+| 1 | 拆分 `e2e_dev_harness.py` | 3-4 天 | `commands/` 目录 + CLI 薄壳 |
+| 2 | 模板外置 | 1-2 天 | `templates/` 目录（15 个 .md/.json） |
+| 3 | 拆分测试巨型单体 | 1 天 | 按脚本名一一对应 |
+| 4 | 添加 `__init__.py` | 0.5 天 | 正式 Python 包 |
+| 5 | run-state schema version | 0.5 天 | version 字段 + 迁移 |
 
-**Phase 2 完成标志**：无超过 500 行的 Python 文件、模板可外部替换、测试文件与源码一一对应。
+**完成标志**：无超过 500 行的 .py 文件、模板可外部替换、可 `import e2e_dev_harness`。
 
 ### Phase 3：可扩展性 + 体验（5-7 天）
 
-| # | 改进项 | 工作量 | 优先级 | 交付物 |
-|---|--------|--------|--------|--------|
-| 10 | 插件/扩展点机制 | 3-4 天 | P1 | 可注册 gate/lifecycle/scanner/template |
-| 11 | CLI 人性化输出 | 1-2 天 | P2 | 彩色、表格、--format json\|text |
-| 12 | Quickstart 教程 | 1 天 | P2 | docs/quickstart.md |
-| 13 | 丰富 scaffold 项目 | 2-3 天 | P2 | Spring/JPA/MQ/Testcontainers 示例 |
-| 14 | 非 Java scanner 示例 | 2 天 | P2 | Go 或 TypeScript scanner 插件 |
+| # | 改进项 | 工作量 | 交付物 |
+|---|--------|--------|--------|
+| 6 | 插件/扩展点 | 3-4 天 | 可注册 gate/lifecycle/scanner |
+| 7 | CLI `--format text\|json` | 1-2 天 | 彩色人类友好输出 |
+| 8 | Quickstart 教程 | 1 天 | docs/quickstart.md |
+| 9 | 非 Java scanner 示例 | 2 天 | Go 或 TypeScript |
+| 10 | 团队配置 `.e2e/config.json` | 1-2 天 | 配置共享 + 继承 |
 
-**Phase 3 完成标志**：企业可注册自定义 gate、CLI 有人类友好输出、新用户 30 分钟可上手。
+**完成标志**：企业可注册自定义 gate、CLI 有人类输出、30 分钟上手。
 
 ### Phase 4：生产加固（持续）
 
-| # | 改进项 | 工作量 | 优先级 |
-|---|--------|--------|--------|
-| 15 | command_evidence 命令白名单 | 1 天 | P3 |
-| 16 | 多 Agent 并发安全（文件锁增强） | 2-3 天 | P3 |
-| 17 | 结构化日志（logging 模块） | 1-2 天 | P3 |
-| 18 | 大 monorepo 性能基准 | 2-3 天 | P3 |
-| 19 | 多 CI 平台模板 | 1 天 | P3 |
-| 20 | 测试覆盖率报告（pytest-cov） | 0.5 天 | P3 |
+| # | 改进项 | 工作量 |
+|---|--------|--------|
+| 11 | command_evidence 白名单 | 1 天 |
+| 12 | 结构化 logging | 1-2 天 |
+| 13 | 多 Agent 文件锁增强 | 2-3 天 |
+| 14 | 跨平台 CI（ubuntu/macos/windows） | 2 天 |
+| 15 | 多 CI 模板（GitLab/Jenkins） | 1 天 |
+| 16 | Resume/恢复命令 | 3-4 天 |
+| 17 | 性能基准 | 2-3 天 |
 
 ---
 
-## 六、企业"一键可用"差距分析
+## 八、成熟度判定
 
-### 6.1 什么已经"一键可用"
-
-```bash
-# 安装
-pip install -e .
-
-# 验证环境
-e2e-dev-harness doctor .
-
-# 启动开发
-e2e-dev-harness start . --feature "add refund" --request "实现退款功能"
-
-# 查看下一步
-e2e-dev-harness next . --state docs/agent-runs/<run>/run-state.json
+```
+概念验证（POC）      ████████████████████████░░░░░░░░  ← 05-23 起点
+原型可用             ████████████████████████████░░░░  ← 05-30 首评
+内部工具可用         ██████████████████████████████░░  ← 当前 ★
+企业级可用           ████████████████████████████████  Phase 2-3
+生产级成熟           ████████████████████████████████  Phase 4+
 ```
 
-这三步已经可以工作了。✅
+**当前位置：内部工具可用**
 
-### 6.2 什么还不够"一键可用"
-
-| 场景 | 当前体验 | 理想体验 | 差距 |
-|------|----------|----------|------|
-| 自定义模板 | 改源码 | 编辑 templates/*.md | Phase 2 |
-| 非 Java 项目 | 不支持 | 自动检测 + 对应 scanner | Phase 3 |
-| 对接内部 CI | 手写脚本 | doctor --ci=gitlab 生成配置 | Phase 3-4 |
-| 日志集成 | 无 | 自动输出到 ELK | Phase 4 |
-| 团队共享配置 | 无 | .e2e/harness-config.json 继承 | Phase 3 |
-| 多语言设计文档 | 不支持 | 模板可替换 | Phase 2 |
-
-### 6.3 "企业一键可用"的关键定义
-
-对企业而言，"一键可用"意味着：
-
-1. **安装一键** ✅ `pip install e2e-dev-harness`（已完成）
-2. **验证一键** ✅ `e2e-dev-harness doctor .`（已完成）
-3. **启动一键** ✅ `e2e-dev-harness start .`（已完成）
-4. **定制不需要改源码** ❌ 当前改模板要改 Python（Phase 2）
-5. **非 Java 项目可用** ❌ 当前只有 Java scanner（Phase 3）
-6. **团队配置可共享** ❌ 当前无团队配置机制（Phase 3）
-7. **CI 集成开箱即用** ⚠️ 有 GitHub Actions 模板，但无 GitLab/Jenkins（Phase 4）
+核心判断：
+- 安装 → 验证 → 启动三步走通 ✅
+- 690 测试全绿，核心机制（状态机、文件锁、证据链、门禁判定）可靠 ✅
+- 4 种 Agent runtime + CI 支持 ✅
+- 定制需改源码 ❌
+- 非 Java 项目不可用 ❌
+- 无人类友好输出 ❌
 
 ---
 
-## 七、成熟度判定
+## 九、核心结论
 
-```
-                        上次    本次
-                          ↓      ↓
-概念验证（POC）     ████████████████████████████░░░░  ← 上次
-原型可用            ██████████████████████████████░░  ← 上次边界
-内部工具可用        ████████████████████████████████  ← 当前位置
-企业级可用          ████████████████████████████░░░░  Phase 2-3
-生产级成熟          ████████████████████████░░░░░░░░  Phase 4
-```
+### 做对了（继续保持）
 
-**当前位置：内部工具可用（Phase 1 完成）**
+1. **控制模型正确** — 文件锁 + 状态机 + 证据链，不靠 prompt 劝说
+2. **Phase 1 执行力** — 45 个失败测试 1 天内修复，新增 doctor/stop_guard/OpenCode hook
+3. **测试投入** — 1.37:1 测试比，690 方法全绿，远超行业平均
+4. **Agent 中立** — 4 种 runtime hook 模板 + CI，不绑定 Claude Code
+5. **Review profiles** — JSON + extends 继承，唯一设计良好的扩展点
+6. **doctor 命令** — 一键检查 Python/pytest/Maven/GitNexus/hooks
 
-- 安装、验证、启动三步走通
-- 651 测试全绿，核心机制可靠
-- CLI 全局可用，doctor 自检
-- 但定制需改源码，非 Java 项目不支持
+### 必须改进（按优先级）
 
----
-
-## 八、核心结论
-
-### 做对了什么（继续坚持）
-
-1. **Phase 1 执行力强** — 45 个测试失败在 1 天内全部修复，新增 doctor/stop_guard
-2. **包管理到位** — pyproject.toml、entry_points、可选依赖、Python 版本约束
-3. **doctor 命令** — 一键检查 Python/pytest/Maven/GitNexus/hooks，降低上手门槛
-4. **核心机制零回归** — 状态机、文件锁、证据链、门禁判定全部稳定
-
-### 下一步必须做什么
-
-| 优先级 | 任务 | 一句话 |
-|--------|------|--------|
-| **P0** | 拆分主入口 + 模板外置 | 2,111 行单文件是企业采用的硬阻断 |
-| **P0** | 拆分测试巨型单体 | 10,061 行测试文件是维护的硬阻断 |
-| P1 | 插件扩展机制 | 无法定制 gate/lifecycle 是企业采用的软阻断 |
-| P2 | CLI 人性化 + Quickstart | 全 JSON 输出是日常使用的体验阻断 |
-| P2 | 非 Java scanner | 只支持 Java 是用户群的硬边界 |
+| 优先级 | 任务 | 一句话 | 影响 |
+|--------|------|--------|------|
+| **P0** | 拆主入口 + 模板外置 | 2,219 行单文件 + 1,200 行硬编码模板 | 可维护性硬阻断 |
+| **P0** | 拆测试巨型单体 | 10,326 行测试占 46% | 测试可维护性硬阻断 |
+| **P1** | 插件扩展机制 | 无法注册 gate/lifecycle/scanner | 企业定制软阻断 |
+| **P2** | CLI 人类友好输出 | 全 JSON 无法日常使用 | 体验阻断 |
+| **P2** | Quickstart + 架构图 | 新人上手 >1 周 | 采用门槛阻断 |
+| **P3** | 安全加固 | 命令注入 + 无日志 | 安全阻断 |
 
 ### 一句话总结
 
-**Phase 1 已完成（651 测试全绿、可安装、有 doctor），从"原型可用"升级到"内部工具可用"。Phase 2（架构解耦：拆主入口、外置模板、拆测试）是通往"企业级可用"的下一个硬门槛，预计 5-7 天。**
+**评分 7.44/10，Phase 1 已完成（690 测试全绿、pip install、doctor、4 runtime），处于"内部工具可用"阶段。Phase 2（拆主入口 + 模板外置 + 拆测试）是通往"企业级可用"的下一个硬门槛，预计 5-7 天。核心架构（9.0 分）不需要推翻，工程化是唯一瓶颈。**

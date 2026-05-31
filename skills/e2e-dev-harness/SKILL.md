@@ -95,7 +95,7 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
   Use `agent-task --action claim` before any multi-service code agent writes code; phase guard blocks unclaimed service writes and cross-service edits by a single claimed task.
   Claims carry leases; renew long tasks, and reclaim stale ones before completion.
   Use `checkpoint_gate.py` or `gate --checkpoint-mode required` after clarify, R1, and TDD Red on critical or interactive work.
-  Agent start/stop is runtime-specific; this harness enforces portable state, hooks, gates, and rework routing instead of claiming non-portable process control.
+  Agent start/stop is runtime-specific; use `dispatch-next`/`dispatch-complete` for Claude/Superpowers Task handoffs. If no isolated worker exists, `dispatch-next` records `WAITING_DISPATCH`; do not collapse into the coordinator session.
 
 ## Workflow
 

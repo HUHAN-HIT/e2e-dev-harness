@@ -48,9 +48,30 @@ tests/
 
 ## Quick Start
 
-Use the Node bootstrap installer when setting up the skill for an agent runtime.
-It is a dry run by default and only writes files or runs install commands when
-`--yes` is supplied:
+Install the local harness CLI once:
+
+```powershell
+python -m pip install -e .[dev,ast]
+e2eh --version
+```
+
+Then enter a business repository root and configure the latest skill copies,
+Claude hook, external dependencies, and doctor check with the short CLI:
+
+```powershell
+cd C:\path\to\business-repo
+e2eh install --full --yes
+```
+
+Preview first by omitting `--yes`:
+
+```powershell
+e2eh install --full
+```
+
+The Node bootstrap installer remains available when you do not want to install
+the Python CLI first. It is a dry run by default and only writes files or runs
+install commands when `--yes` is supplied:
 
 ```powershell
 node tools\install-e2e-dev-harness.mjs `
@@ -77,7 +98,7 @@ installer when required Superpowers skills are missing.
 Full installer usage is documented in
 [`docs/e2e-dev-harness-installer.md`](docs/e2e-dev-harness-installer.md).
 
-Install the local harness entry point when working from this repository:
+The long command is still available:
 
 ```powershell
 python -m pip install -e .[dev]
@@ -178,6 +199,21 @@ For `critical` or `audited` completion, GitNexus evidence is a gate input, not a
 
 For `critical` or `audited` implementation, dependency discovery evidence is required before production code opens. This prevents compile-driven discovery after the implementation has already been written.
 
+Knowledge graph refresh status is run-scoped. Prefer:
+
+```powershell
+python skills\e2e-dev-harness\scripts\kg_refresh.py . `
+  --mode auto `
+  --status-file docs\agent-runs\<run>\evidence\knowledge-graph-refresh.json
+```
+
+Implementation gates first read the current run's evidence file, then the latest
+run evidence, and only then fall back to root-level legacy files such as
+`knowledge-graph\knowledge-graph-refresh.json`. A stale root file with
+`status: skipped` or `reason: no knowledge graph configured` is blocked when the
+repository already has `.gitnexus\meta.json`; regenerate run-scoped evidence
+instead of editing the phase lock or downgrading the gate.
+
 ## Incremental Test Scope
 
 For large Maven repositories, do not default to full-suite testing on every turn. Generate a test impact plan from changed files and dependency evidence, then run every required command in that plan.
@@ -237,6 +273,50 @@ The pack lists allowed inputs, allowed outputs, dependency phase, and budget. A 
 
 For Claude Code project integrations, start with L0 serial isolated dispatch instead of trying true parallelism first: read `agent-schedule.json`, claim the next ready task, spawn a fresh subagent/session with only its role template and context pack, complete the task with a scheduled evidence file, then dispatch the next dependent task. This keeps role isolation and handoff gates active without making the core skill depend on a specific runtime scheduler.
 
+The bundled dispatcher provides the first Claude Code/Superpowers execution loop:
+
+```powershell
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py runtime-capabilities . --runtime claude-code
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py dispatch-next . `
+  --schedule docs\agent-runs\<run>\agent-schedule.json `
+  --state docs\agent-runs\<run>\run-state.json `
+  --runtime claude-code
+```
+
+`dispatch-next` scans the schedule for the first truly ready task and reports
+earlier skipped tasks with their blockers. It validates dependency phases, ready
+handoff markers, role templates, and context-pack budgets before claiming a task.
+It then writes `context-packs/<task-id>.json`, claims the task, writes a dispatcher
+invocation JSON, and returns a self-contained Claude Code `Task` prompt. The
+subagent must use only that context pack and scheduled outputs. After the subagent returns evidence,
+close the task:
+
+```powershell
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py dispatch-complete . `
+  --schedule docs\agent-runs\<run>\agent-schedule.json `
+  --state docs\agent-runs\<run>\run-state.json `
+  --task-id T10 `
+  --agent code-developer-payment `
+  --evidence docs\agent-runs\<run>\service-plans\payment\code-agent.md
+```
+
+If the active runtime cannot spawn an independent subagent/session, `dispatch-next`
+records `WAITING_DISPATCH` with `dispatch.status=waiting_dispatch` and emits a
+manual dispatch packet. Claude Code Stop hooks allow that paused handoff state so
+the coordinator can start a fresh session, but completion gates still fail until
+scheduled tasks, reviews, handoffs, and evidence are complete.
+
+`start` now writes a bootstrap schedule with a `requirements-clarifier` task, so
+clarification can be delegated before the full plan archive exists. The
+coordinator still runs deterministic control-plane commands such as
+`plan --create-archive`, but requirements, use cases, tests, semantic reviews,
+service code, and coverage work should move through scheduled subagents whenever
+the runtime can provide isolated Task sessions.
+
+For R1/R2/R3 tasks, `dispatch-complete` immediately runs the reviewer gate against
+the reported review evidence. A reviewer task is not marked complete when the
+report fails independence, request-hash, required-field, or no-code-change checks.
+
 Before a multi-service code agent writes code, claim the scheduled service task. Phase guard blocks unclaimed service writes and blocks one claimed task from editing multiple services:
 
 ```powershell
@@ -277,6 +357,10 @@ If this blocks on `AC-2`, continue TDD red/green for `AC-2`; do not ask whether 
 ## Hook Configuration
 
 The hook examples are templates. To enforce them, run `install_hooks.py` from the installed skill directory so the generated hook command points to absolute guard script paths. Do not copy the example command verbatim into another repository; `python skills/e2e-dev-harness/scripts/phase_guard.py ...` only works when that repository contains the skill source tree. Codex and Gemini enforcement still depends on whether the host runner exposes a blocking pre-action/pre-tool hook.
+For one-command setup from the harness source repository, prefer the bootstrap
+installer with `--project <business-repo> --full`; this
+updates the skill runtime copy and writes the hook config into the business
+repository instead of the harness source repository.
 You can also install or check project-local hook configuration with:
 
 ```powershell
@@ -297,14 +381,14 @@ Code exploration/write guard:
 Stop/finalization guard:
 
 ```powershell
-"C:\absolute\path\to\python.exe" "C:\absolute\path\to\skills\e2e-dev-harness\scripts\harness_stop_guard.py" "C:\absolute\path\to\target-repo" --hook-input - --json
+"C:\absolute\path\to\python.exe" "C:\absolute\path\to\skills\e2e-dev-harness\scripts\harness_stop_guard.py" "C:\absolute\path\to\target-repo" --hook-input - --strict --json
 ```
 
 `phase_guard.py` reads `docs/agent-runs/<run>/.phase-lock`. With `--require-active-run-for-read`, code `Read`/`Grep`/`Glob` is blocked until `start` creates an active run. It allows red-test writes under `src/test`, `test`, or `tests` during `PLANNED`/`RED_READY`, but blocks runtime production code until lifecycle `IMPLEMENTED`. `IMPLEMENTED` must come from run-state transition history with ready implementation-gate evidence; editing `.phase-lock` and `run-state.json` by hand is blocked. In multi-service runs it also requires a claimed service code-developer task for runtime code writes in the touched service/module. It recognizes direct file tools including Claude `Update`, `apply_patch`, common shell write commands, and inline Python/Node/PowerShell mutation patterns; unknown tools touching code paths fail closed. Harness artifacts under `docs/agent-runs/` may be written before implementation except control files such as `.phase-lock`, `run-state.json`, `artifact-registry.json`, and `agent-schedule.json`.
 
 With `--require-session-checkpoint`, production/test code writes also require a fresh `session-checkpoint.json` produced by `e2e_dev_harness.py next`. If run-state changes or the checkpoint ages out, the hook blocks and forces the agent to reload the state machine before continuing.
 
-`harness_stop_guard.py` is wired to Claude Code `Stop`. It blocks Claude from ending a run while lifecycle is `IMPLEMENTED`, `REVIEWED`, or `REWORK_REQUIRED`, or while the post-code run still has open scheduled tasks. This is the guard that prevents "compiled successfully, summary emitted, R2/R3/completion skipped" behavior.
+`harness_stop_guard.py` is wired to Claude Code `Stop` with `--strict`. It blocks Claude from ending a run while lifecycle is non-terminal, or while the post-code run still has open scheduled tasks. This is the guard that prevents "compiled successfully, summary emitted, R2/R3/completion skipped" behavior.
 
 ### Claude Code
 
@@ -322,7 +406,7 @@ Minimal project config:
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|Grep|Glob|Write|Edit|Update|MultiEdit|NotebookEdit|Bash",
+        "matcher": "Read|Grep|Glob|Task|TaskCreate|Write|Edit|Update|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",
@@ -337,7 +421,7 @@ Minimal project config:
         "hooks": [
           {
             "type": "command",
-            "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\harness_stop_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --json"
+            "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\harness_stop_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --strict --json"
           }
         ]
       }

@@ -22,6 +22,7 @@ import artifact_registry  # noqa: E402
 import clarification_gate  # noqa: E402
 from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, configure_utf8_stdio  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
+import dispatcher  # noqa: E402
 import execution_trace  # noqa: E402
 import implementation_gate  # noqa: E402
 import install_hooks  # noqa: E402
@@ -679,17 +680,31 @@ def start(args) -> tuple[int, dict]:
         design_path.write_text(design_template(feature, args.request or ""), encoding="utf-8")
         design_created = True
         created.append(str(design_path))
-    schedule = orchestration_plan.agent_schedule("unplanned", [], [])
+    role_templates_created = create_role_template_files(repo, artifacts)
+    created.extend(role_templates_created)
+    bootstrap_agents = [
+        orchestration_plan.with_role_template(
+            {
+                "name": "requirements-clarifier",
+                "owns": ["goal", "non-goals", "constraints", "impact summary", "acceptance criteria", "open questions"],
+                "inputs": ["user request", artifacts["design_doc"], artifacts["dependency_report"]],
+                "outputs": [artifacts["requirements"], artifacts["impact_summary"], artifacts["impact_evidence"]],
+                "gate": "Behavior/API/data/test-impacting open questions and bounded impact summary gaps must be resolved.",
+            },
+            artifacts,
+        )
+    ]
+    schedule = orchestration_plan.agent_schedule("bootstrap", [], bootstrap_agents)
     schedule_path = require_repo_path(repo, Path(artifacts["agent_schedule"]), "agent schedule")
     schedule_path.write_text(json.dumps(schedule, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     created.append(str(schedule_path))
-    registry = artifact_registry.build_registry(repo, artifacts["agent_run_dir"], artifacts, "unplanned", [])
+    registry = artifact_registry.build_registry(repo, artifacts["agent_run_dir"], artifacts, "bootstrap", [])
     registry_path = require_repo_path(repo, Path(artifacts["artifact_registry"]), "artifact registry")
     artifact_registry.write_registry(repo, registry_path, registry)
     created.append(str(registry_path))
     state = run_state.build_state(
         artifacts["agent_run_dir"],
-        "unplanned",
+        "bootstrap",
         [],
         artifacts["artifact_registry"],
         lifecycle="CREATED",
@@ -2050,6 +2065,50 @@ def agent_task(args) -> tuple[int, dict]:
     return (0 if result["ready"] else 2), result
 
 
+def runtime_capabilities(args) -> tuple[int, dict]:
+    result = dispatcher.runtime_capabilities(args.runtime)
+    result.update({"ready": True, "blocked_reasons": [], "warnings": []})
+    write_status(args.status_file, result)
+    return 0, result
+
+
+def dispatch_next(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    result = dispatcher.dispatch_next(
+        repo,
+        args.schedule,
+        args.state,
+        runtime=args.runtime,
+        coordinator_agent=args.coordinator_agent,
+        developer_session=args.developer_session,
+        max_files=args.max_files,
+        max_chars=args.max_chars,
+    )
+    write_status(args.status_file, result)
+    return (0 if result["ready"] else 2), result
+
+
+def dispatch_complete(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    result = dispatcher.dispatch_complete(
+        repo,
+        args.schedule,
+        args.state,
+        args.task_id,
+        args.agent or "agent",
+        args.evidence or [],
+    )
+    write_status(args.status_file, result)
+    return (0 if result["ready"] else 2), result
+
+
+def dispatch_status(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    result = dispatcher.dispatch_status(repo, args.schedule, args.state)
+    write_status(args.status_file, result)
+    return (0 if result["ready"] else 2), result
+
+
 def ac_progress(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
     result = ac_progress_gate.validate(
@@ -2328,6 +2387,37 @@ def main() -> int:
     agent_task_parser.add_argument("--force", action="store_true", help="Reclaim an active (non-stale) claim.")
     agent_task_parser.add_argument("--status-file", type=Path)
 
+    capabilities_parser = subparsers.add_parser("runtime-capabilities", help="Report runtime multi-agent dispatch capabilities.")
+    capabilities_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    capabilities_parser.add_argument("--runtime", default="claude-code")
+    capabilities_parser.add_argument("--status-file", type=Path)
+
+    dispatch_next_parser = subparsers.add_parser("dispatch-next", help="Claim the next ready scheduled task and create a subagent dispatch packet.")
+    dispatch_next_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    dispatch_next_parser.add_argument("--schedule", required=True, type=Path)
+    dispatch_next_parser.add_argument("--state", required=True, type=Path)
+    dispatch_next_parser.add_argument("--runtime", default="claude-code")
+    dispatch_next_parser.add_argument("--coordinator-agent", default="coordinator-agent")
+    dispatch_next_parser.add_argument("--developer-session", default="coordinator-session")
+    dispatch_next_parser.add_argument("--max-files", type=int, default=12)
+    dispatch_next_parser.add_argument("--max-chars", type=int, default=120_000)
+    dispatch_next_parser.add_argument("--status-file", type=Path)
+
+    dispatch_complete_parser = subparsers.add_parser("dispatch-complete", help="Complete a dispatched task with scheduled evidence.")
+    dispatch_complete_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    dispatch_complete_parser.add_argument("--schedule", required=True, type=Path)
+    dispatch_complete_parser.add_argument("--state", type=Path)
+    dispatch_complete_parser.add_argument("--task-id", required=True)
+    dispatch_complete_parser.add_argument("--agent", default="")
+    dispatch_complete_parser.add_argument("--evidence", action="append")
+    dispatch_complete_parser.add_argument("--status-file", type=Path)
+
+    dispatch_status_parser = subparsers.add_parser("dispatch-status", help="Summarize dispatch state and open scheduled tasks.")
+    dispatch_status_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    dispatch_status_parser.add_argument("--schedule", required=True, type=Path)
+    dispatch_status_parser.add_argument("--state", type=Path)
+    dispatch_status_parser.add_argument("--status-file", type=Path)
+
     ac_progress_parser = subparsers.add_parser("ac-progress", help="Block R3 review until all assigned ACs have implementation and test evidence.")
     ac_progress_parser.add_argument("repo", nargs="?", default=".", type=Path)
     ac_progress_parser.add_argument("--design-doc", type=Path)
@@ -2368,6 +2458,14 @@ def main() -> int:
             exit_code, result = service_design(args)
         elif args.command == "agent-task":
             exit_code, result = agent_task(args)
+        elif args.command == "runtime-capabilities":
+            exit_code, result = runtime_capabilities(args)
+        elif args.command == "dispatch-next":
+            exit_code, result = dispatch_next(args)
+        elif args.command == "dispatch-complete":
+            exit_code, result = dispatch_complete(args)
+        elif args.command == "dispatch-status":
+            exit_code, result = dispatch_status(args)
         elif args.command == "ac-progress":
             exit_code, result = ac_progress(args)
         elif args.command == "next":

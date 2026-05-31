@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import os
 import subprocess
@@ -33,6 +34,7 @@ import agent_instructions  # noqa: E402
 import agent_scheduler  # noqa: E402
 import artifact_registry  # noqa: E402
 import context_pack  # noqa: E402
+import dispatcher  # noqa: E402
 import execution_trace  # noqa: E402
 import harness_policy  # noqa: E402
 import harness_verify  # noqa: E402
@@ -71,6 +73,93 @@ def write_implemented_state(repo: Path, state_path: Path, state: dict) -> None:
         raise AssertionError(result["blocked_reasons"])
 
 
+def write_role_template(repo: Path, path: Path) -> None:
+    full = repo / path
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(
+        textwrap.dedent(
+            """
+            # Role
+
+            ## Role Boundary
+            Own exactly one scheduled task.
+
+            ## Allowed Inputs
+            Use only the context pack inputs.
+
+            ## Forbidden
+            Do not inherit coordinator chat context.
+
+            ## Required Outputs
+            Write only scheduled outputs.
+
+            ## Done When
+            Return evidence paths for scheduled outputs.
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+
+
+def write_ready_handoff(repo: Path, path: Path, agent_id: str = "requirements-agent") -> None:
+    full = repo / path
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(
+        textwrap.dedent(
+            f"""
+            ---
+            agent: requirements-clarifier
+            agent_id: {agent_id}
+            status: ready
+            inputs:
+              - user request
+            outputs:
+              - {path.as_posix()}
+            input_hashes:
+              - user-request sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            output_hashes:
+              - {path.as_posix()} sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+            consumed_by:
+              - code-developer
+            open_questions: None
+            ---
+
+            ## Summary
+            Requirements are clarified for dispatch.
+
+            ## Facts Used
+            User request and service scope were reviewed.
+
+            ## Decisions Made
+            The downstream task may use the scheduled context pack.
+
+            ## Open Questions
+            None
+
+            ## Downstream Assumptions
+            The implementation agent will stay inside scheduled outputs.
+
+            ## Verification Evidence
+            Ready marker hash matches this handoff file.
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+    marker = full.with_suffix(".ready.json")
+    marker.write_text(
+        json.dumps(
+            {
+                "path": full.name,
+                "sha256": hashlib.sha256(full.read_bytes()).hexdigest(),
+                "producer_agent": agent_id,
+                "status": "ready",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
 class OrchestrationArtifactTests(unittest.TestCase):
     def test_start_creates_controlled_run_design_and_locked_phase(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -93,6 +182,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
             design_text = design.read_text(encoding="utf-8")
             state = json.loads(Path(result["run_state"]).read_text(encoding="utf-8"))
             lock = json.loads(Path(result["phase_lock"]).read_text(encoding="utf-8"))
+            schedule = json.loads(Path(result["agent_schedule"]).read_text(encoding="utf-8"))
             guard = phase_guard.validate_action(repo, "Write", [Path("services/refund/src/main/java/RefundService.java")])
 
         self.assertEqual(0, code)
@@ -100,6 +190,10 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertIn("## Restated Intent", design_text)
         self.assertEqual("CREATED", state["lifecycle"])
         self.assertEqual("code-write-locked", lock["state"])
+        self.assertEqual("bootstrap", schedule["selected_mode"])
+        self.assertEqual("requirements-clarifier", schedule["tasks"][0]["agent"])
+        self.assertEqual("clarify", schedule["tasks"][0]["phase"])
+        self.assertTrue(schedule["tasks"][0]["role_template"])
         self.assertFalse(guard["ready"])
 
     def test_next_reports_clarify_after_start(self) -> None:
@@ -733,6 +827,325 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("above max_chars" in reason for reason in result["blocked_reasons"]))
+
+    def test_runtime_capabilities_mark_claude_code_as_subagent_dispatcher(self) -> None:
+        result = dispatcher.runtime_capabilities("claude-code")
+
+        self.assertTrue(result["supports_subagent"])
+        self.assertTrue(result["supports_task_hook"])
+        self.assertTrue(result["supports_isolated_review"])
+        self.assertEqual("native-subagent", result["dispatch_mode"])
+
+    def test_dispatch_next_claims_task_and_writes_context_pack_invocation_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/code-developer.md")
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            output = Path("docs/agent-runs/run/service-plans/order-service/code-agent.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, handoff)
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "multi",
+                ["services/order-service"],
+                "docs/agent-runs/run/artifact-registry.json",
+                "IMPLEMENTED",
+            )
+            run_state.write_state(repo, state_path, state)
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T10",
+                                "agent": "code-developer-order-service",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/order-service",
+                                "inputs": [handoff.as_posix()],
+                                "outputs": [output.as_posix()],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_next(
+                repo,
+                schedule,
+                state_path,
+                runtime="claude-code",
+                coordinator_agent="coordinator-agent",
+                developer_session="coordinator-session",
+            )
+            schedule_data = json.loads(schedule.read_text(encoding="utf-8"))
+            updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+            context_pack_exists = (repo / result["context_pack"]).exists()
+            invocation_exists = (repo / result["invocation_path"]).exists()
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("T10", result["task"]["id"])
+        self.assertEqual("claimed", schedule_data["tasks"][0]["status"])
+        self.assertEqual("code-developer-order-service", schedule_data["tasks"][0]["owner"])
+        self.assertTrue(context_pack_exists)
+        self.assertTrue(invocation_exists)
+        self.assertEqual("worker_running", updated_state["dispatch"]["status"])
+        self.assertEqual("T10", updated_state["dispatch"]["current_task_id"])
+        self.assertIn("Task prompt", result["task_prompt"])
+        self.assertIn("e2e-dev-harness isolated worker task", result["task_prompt"])
+
+    def test_dispatch_next_budget_block_does_not_claim_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/use-case-designer.md")
+            large_input = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, large_input)
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state("docs/agent-runs/run", "single-review", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED"),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T02",
+                                "agent": "use-case-designer",
+                                "phase": "design",
+                                "role_group": "design",
+                                "inputs": [large_input.as_posix()],
+                                "outputs": ["docs/agent-runs/run/handoffs/02-use-case-designer.md"],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_next(repo, schedule, state_path, runtime="claude-code", max_chars=10)
+            schedule_data = json.loads(schedule.read_text(encoding="utf-8"))
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Context pack" in reason for reason in result["blocked_reasons"]))
+        self.assertEqual("planned", schedule_data["tasks"][0]["status"])
+        self.assertNotIn("owner", schedule_data["tasks"][0])
+
+    def test_dispatch_next_enters_waiting_dispatch_without_subagent_capability(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state("docs/agent-runs/run", "multi", ["services/order-service"], "docs/agent-runs/run/artifact-registry.json", "PLANNED"),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "inputs": [],
+                                "outputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_next(repo, schedule, state_path, runtime="manual")
+            updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertFalse(result["ready"])
+        self.assertEqual("waiting_dispatch", result["dispatch"]["status"])
+        self.assertEqual("WAITING_DISPATCH", updated_state["lifecycle"])
+        self.assertEqual("waiting_dispatch", updated_state["dispatch"]["status"])
+        self.assertIn("manual_dispatch_packet", result)
+
+    def test_dispatch_next_skips_blocked_task_and_claims_next_ready_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/code-developer.md")
+            ready_handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            missing_handoff = "docs/agent-runs/run/handoffs/missing.md"
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, ready_handoff)
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state("docs/agent-runs/run", "multi", ["services/order-service"], "docs/agent-runs/run/artifact-registry.json", "IMPLEMENTED"),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "code-developer-blocked",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/order-service",
+                                "inputs": [missing_handoff],
+                                "outputs": ["docs/agent-runs/run/service-plans/order-service/blocked.md"],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            },
+                            {
+                                "id": "T02",
+                                "agent": "code-developer-ready",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/order-service",
+                                "inputs": [ready_handoff.as_posix()],
+                                "outputs": ["docs/agent-runs/run/service-plans/order-service/code-agent.md"],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_next(repo, schedule, state_path, runtime="claude-code")
+            schedule_data = json.loads(schedule.read_text(encoding="utf-8"))
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("T02", result["task"]["id"])
+        self.assertEqual("planned", schedule_data["tasks"][0]["status"])
+        self.assertEqual("claimed", schedule_data["tasks"][1]["status"])
+        self.assertTrue(any(item["task_id"] == "T01" for item in result["skipped_tasks"]))
+
+    def test_dispatch_complete_runs_reviewer_gate_for_review_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            review = Path("docs/agent-runs/run/reviews/R1-design-review.md")
+            role_template = Path("docs/agent-runs/run/agent-roles/semantic-reviewer.md")
+            write_role_template(repo, role_template)
+            (repo / review).parent.mkdir(parents=True, exist_ok=True)
+            (repo / review).write_text("review evidence\n", encoding="utf-8")
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state("docs/agent-runs/run", "single-review", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED"),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T04",
+                                "agent": "design-reviewer",
+                                "phase": "r1-review",
+                                "role_group": "review",
+                                "inputs": ["docs/agent-runs/run/review-requests/R1-design-review-request.md"],
+                                "outputs": [review.as_posix()],
+                                "role_template": role_template.as_posix(),
+                                "status": "claimed",
+                                "owner": "design-reviewer",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(dispatcher.reviewer_gate, "validate", return_value={"ready": True, "blocked_reasons": [], "warnings": [], "covered_phases": ["design"]}) as validate:
+                result = dispatcher.dispatch_complete(repo, schedule, state_path, "T04", "design-reviewer", [review.as_posix()])
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertIn("reviewer_gate", result)
+        validate.assert_called_once()
+
+    def test_dispatch_complete_restores_previous_lifecycle_after_waiting_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            evidence = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            role_template = Path("docs/agent-runs/run/agent-roles/requirements-clarifier.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, evidence, "requirements-agent")
+            state = run_state.build_state("docs/agent-runs/run", "bootstrap", [], "docs/agent-runs/run/artifact-registry.json", "WAITING_DISPATCH")
+            state["dispatch"] = {
+                "status": "waiting_dispatch",
+                "runtime": "manual",
+                "previous_lifecycle": "CREATED",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+            }
+            run_state.write_state(repo, state_path, state)
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "role_group": "design",
+                                "inputs": [],
+                                "outputs": [evidence.as_posix()],
+                                "role_template": role_template.as_posix(),
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_complete(repo, schedule, state_path, "T01", "requirements-clarifier", [evidence.as_posix()])
+            updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("CREATED", updated_state["lifecycle"])
+        self.assertEqual("worker_completed", updated_state["dispatch"]["status"])
 
     def test_service_design_gate_requires_global_ac_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2394,6 +2807,71 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("Code-agent dispatch blocked" in reason for reason in result["blocked_reasons"]))
 
+    def test_phase_guard_blocks_code_agent_dispatch_without_dispatch_packet_after_implementation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "multi", ["services/payment"], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            write_implemented_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Task",
+                [],
+                run_dir=Path("docs/agent-runs/run"),
+                task_text="Implement the payment service and write production code.",
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("dispatcher context pack" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_phase_guard_allows_dispatcher_generated_code_agent_task_after_implementation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            schedule = run_dir / "agent-schedule.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/code-developer.md")
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, handoff)
+            state = run_state.build_state("run", "multi", ["services/payment"], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            write_implemented_state(repo, state_path, state)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T10",
+                                "agent": "code-developer-payment",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/payment",
+                                "inputs": [handoff.as_posix()],
+                                "outputs": ["docs/agent-runs/run/service-plans/payment/code-agent.md"],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            dispatch_result = dispatcher.dispatch_next(repo, schedule, state_path, runtime="claude-code")
+
+            result = phase_guard.validate_action(
+                repo,
+                "Task",
+                [],
+                run_dir=Path("docs/agent-runs/run"),
+                task_text=dispatch_result["task_prompt"],
+            )
+
+        self.assertTrue(dispatch_result["ready"], dispatch_result["blocked_reasons"])
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
     def test_phase_guard_allows_non_code_reviewer_task_before_implementation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -2621,6 +3099,33 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(any("not terminal" in reason for reason in result["blocked_reasons"]))
         self.assertIn("R1 design review", result["guidance"]["remaining_phases"])
         self.assertIn("Do not ask the user to choose", result["guidance"]["agent_instruction"])
+
+    def test_stop_guard_allows_waiting_dispatch_without_marking_completion_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "multi",
+                ["services/order-service"],
+                "docs/agent-runs/run/artifact-registry.json",
+                "WAITING_DISPATCH",
+            )
+            state["dispatch"] = {
+                "status": "waiting_dispatch",
+                "runtime": "manual",
+                "current_task_id": "T10",
+                "current_agent": "code-developer-order-service",
+            }
+            run_state.write_state(repo, state_path, state)
+
+            result = harness_stop_guard.evaluate(repo, run_state_path=state_path, strict=True)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("WAITING_DISPATCH", result["lifecycle"])
+        self.assertTrue(result["dispatch_waiting"])
+        self.assertFalse(result["completion_ready"])
+        self.assertIn("independent subagent", result["warnings"][0])
 
     def test_stop_guard_json_hook_writes_blocking_guidance_to_stderr(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

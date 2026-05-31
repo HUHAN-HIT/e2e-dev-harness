@@ -26,6 +26,7 @@ NEXT_ACTIONS = {
     "SERVICE_DESIGN_REQUIRED": "Complete and validate every service design slice before TDD red.",
     "PLANNED": "Write the red test evidence, run R2 review, then open implementation through the implementation gate.",
     "RED_READY": "Complete R2 test review if missing, then run gate --phase implementation with red evidence and run-state.",
+    "WAITING_DISPATCH": "Start the required independent subagent/session with dispatch-next or complete the manual dispatch packet.",
     "IMPLEMENTED": "Continue TDD red/green for all assigned ACs, run ac-progress, R3 review, completion gate, strict guard, and archive.",
     "REVIEWED": "Run completion gate, strict guard, run summary, and requirements archive validation.",
     "REWORK_REQUIRED": "Follow the rework return phase and verify the rework item before finalizing.",
@@ -95,6 +96,11 @@ REMAINING_PHASES = {
         "strict guard",
         "archive",
     ],
+    "WAITING_DISPATCH": [
+        "independent subagent/session dispatch",
+        "agent-task completion evidence",
+        "resume harness state machine",
+    ],
     "IMPLEMENTED": [
         "continue remaining AC red/green",
         "AC progress",
@@ -127,6 +133,9 @@ COMMAND_HINTS = {
     "RED_READY": [
         "create an independent R2 test review artifact if it is missing",
         "e2e_dev_harness.py gate . --phase implementation --run-state <run-state> --red-test-evidence <red-evidence> --review-dir <reviews>",
+    ],
+    "WAITING_DISPATCH": [
+        "e2e_dev_harness.py dispatch-next . --schedule <agent-schedule> --state <run-state> --runtime claude-code",
     ],
     "IMPLEMENTED": [
         "e2e_dev_harness.py ac-progress . --design-doc <design> --coverage-matrix <coverage> --implementation-manifest <manifest> --unit-test-evidence <green-evidence>",
@@ -239,6 +248,11 @@ def stop_guidance(lifecycle: str, state_path: Path | None, repo: Path) -> dict:
     }
 
 
+def is_waiting_dispatch(lifecycle: str, data: dict) -> bool:
+    dispatch = data.get("dispatch") if isinstance(data.get("dispatch"), dict) else {}
+    return lifecycle == "WAITING_DISPATCH" or str(dispatch.get("status", "")).lower() == "waiting_dispatch"
+
+
 def write_blocked_stderr(result: dict) -> None:
     if result.get("ready"):
         return
@@ -310,11 +324,16 @@ def evaluate(
         }
 
     lifecycle = str(data.get("lifecycle", ""))
+    dispatch_waiting = is_waiting_dispatch(lifecycle, data)
     blocked: list[str] = []
     warnings: list[str] = []
     block_set = block_lifecycle or DEFAULT_BLOCK_LIFECYCLES
     if lifecycle not in run_state.LIFECYCLE:
         blocked.append(f"Stop blocked: run-state lifecycle is invalid: {lifecycle}")
+    elif dispatch_waiting:
+        warnings.append(
+            "Run is waiting for an independent subagent/session dispatch; stop is allowed so a fresh worker can be started, but completion is not ready."
+        )
     elif strict and lifecycle not in TERMINAL_LIFECYCLES:
         blocked.append(f"Stop blocked: lifecycle {lifecycle} is not terminal. {NEXT_ACTIONS.get(lifecycle, '')}")
     elif lifecycle in block_set:
@@ -340,6 +359,9 @@ def evaluate(
         "repo": str(repo),
         "run_state": str(state_path),
         "lifecycle": lifecycle,
+        "dispatch": data.get("dispatch", {}),
+        "dispatch_waiting": dispatch_waiting,
+        "completion_ready": lifecycle in TERMINAL_LIFECYCLES and not blocked,
         "next_action": NEXT_ACTIONS.get(lifecycle, "Inspect run-state.json and repair lifecycle before finalizing."),
         "guidance": stop_guidance(lifecycle, state_path, repo),
         "schedule": str(schedule_path) if schedule_path else None,
