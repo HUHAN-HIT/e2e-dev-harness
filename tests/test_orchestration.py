@@ -1006,6 +1006,254 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(result["task_prompt"], spawn["arguments"]["message"])
         self.assertIn("dispatch-complete", spawn["completion_command"])
 
+    def test_dispatch_beat_spawns_parallel_ready_tasks_in_distinct_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/code-developer.md")
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, handoff)
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state(
+                    "docs/agent-runs/run",
+                    "multi",
+                    ["services/order-service", "services/payment-service"],
+                    "docs/agent-runs/run/artifact-registry.json",
+                    "IMPLEMENTED",
+                ),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T10",
+                                "agent": "code-developer-order-service",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/order-service",
+                                "parallel_group": "service:order-service",
+                                "inputs": [handoff.as_posix()],
+                                "outputs": ["docs/agent-runs/run/service-plans/order-service/code-agent.md"],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            },
+                            {
+                                "id": "T11",
+                                "agent": "code-developer-payment-service",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/payment-service",
+                                "parallel_group": "service:payment-service",
+                                "inputs": [handoff.as_posix()],
+                                "outputs": ["docs/agent-runs/run/service-plans/payment-service/code-agent.md"],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            },
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_beat(repo, schedule, state_path, runtime="codex", max_workers=4)
+            schedule_data = json.loads(schedule.read_text(encoding="utf-8"))
+            updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(["T10", "T11"], [task["id"] for task in result["claimed_tasks"]])
+        self.assertEqual(2, len(result["runtime_spawn_requests"]))
+        self.assertEqual({"T10", "T11"}, set(updated_state["dispatches"]))
+        self.assertEqual("awaiting_runtime_spawn", updated_state["dispatches"]["T10"]["status"])
+        self.assertEqual("awaiting_runtime_spawn", updated_state["dispatches"]["T11"]["status"])
+        self.assertEqual("claimed", schedule_data["tasks"][0]["status"])
+        self.assertEqual("claimed", schedule_data["tasks"][1]["status"])
+        self.assertEqual("T11", updated_state["dispatch"]["current_task_id"])
+
+    def test_dispatch_beat_does_not_parallelize_same_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/code-developer.md")
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, handoff)
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state("docs/agent-runs/run", "multi", ["services/order-service"], "docs/agent-runs/run/artifact-registry.json", "IMPLEMENTED"),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T10",
+                                "agent": "code-developer-order-a",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/order-service",
+                                "parallel_group": "service:order-service",
+                                "inputs": [handoff.as_posix()],
+                                "outputs": ["docs/agent-runs/run/service-plans/order-service/code-agent-a.md"],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            },
+                            {
+                                "id": "T11",
+                                "agent": "code-developer-order-b",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/order-service",
+                                "parallel_group": "service:order-service",
+                                "inputs": [handoff.as_posix()],
+                                "outputs": ["docs/agent-runs/run/service-plans/order-service/code-agent-b.md"],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_beat(repo, schedule, state_path, runtime="claude-code", max_workers=4)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(["T10"], [task["id"] for task in result["claimed_tasks"]])
+        self.assertEqual(1, len(result["runtime_spawn_requests"]))
+        self.assertTrue(any(item["task_id"] == "T11" and "parallel group" in item["blocked_reasons"][0] for item in result["blocked_tasks"]))
+
+    def test_dispatch_beat_does_not_redispatch_active_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/code-developer.md")
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, handoff)
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state("docs/agent-runs/run", "multi", ["services/order-service"], "docs/agent-runs/run/artifact-registry.json", "IMPLEMENTED"),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T10",
+                                "agent": "code-developer-order-service",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/order-service",
+                                "parallel_group": "service:order-service",
+                                "inputs": [handoff.as_posix()],
+                                "outputs": ["docs/agent-runs/run/service-plans/order-service/code-agent.md"],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            first = dispatcher.dispatch_beat(repo, schedule, state_path, runtime="codex", max_workers=1)
+
+            second = dispatcher.dispatch_beat(repo, schedule, state_path, runtime="codex", max_workers=1)
+
+        self.assertTrue(first["ready"], first["blocked_reasons"])
+        self.assertFalse(second["ready"])
+        self.assertTrue(any("active dispatch" in reason for item in second["blocked_tasks"] for reason in item["blocked_reasons"]))
+
+    def test_dispatch_beat_does_not_dispatch_new_task_in_active_parallel_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/code-developer.md")
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, handoff)
+            state = run_state.build_state("docs/agent-runs/run", "multi", ["services/order-service"], "docs/agent-runs/run/artifact-registry.json", "IMPLEMENTED")
+            state["dispatches"] = {
+                "T10": {
+                    "status": "worker_running",
+                    "current_task_id": "T10",
+                    "current_agent": "code-developer-order-a",
+                    "parallel_group": "service:order-service",
+                    "worker_handle": "worker-a",
+                }
+            }
+            run_state.write_state(repo, state_path, state)
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T11",
+                                "agent": "code-developer-order-b",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/order-service",
+                                "parallel_group": "service:order-service",
+                                "inputs": [handoff.as_posix()],
+                                "outputs": ["docs/agent-runs/run/service-plans/order-service/code-agent-b.md"],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_beat(repo, schedule, state_path, runtime="claude-code", max_workers=2)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("active dispatch" in reason for item in result["blocked_tasks"] for reason in item["blocked_reasons"]))
+
+    def test_dispatch_beat_reports_recent_completion_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            event = run_dir / "dispatch-events" / "T10-completed.json"
+            event.parent.mkdir(parents=True, exist_ok=True)
+            event.write_text(json.dumps({"task_id": "T10", "event": "worker_completed"}), encoding="utf-8")
+            run_state.write_state(repo, state_path, run_state.build_state("docs/agent-runs/run", "multi", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED"))
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(json.dumps({"schema": "e2e-dev-harness.agent-schedule.v1", "tasks": []}), encoding="utf-8")
+
+            result = dispatcher.dispatch_beat(repo, schedule, state_path, runtime="codex", max_workers=2)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(["T10"], [item["task_id"] for item in result["recent_events"]])
+
     def test_dispatch_ack_records_real_spawned_worker_handle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -1042,6 +1290,27 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("worker_running", updated_state["dispatch"]["status"])
         self.assertEqual("019-worker", updated_state["dispatch"]["worker_handle"])
         self.assertEqual("codex-thread-019-worker", updated_state["dispatch"]["worker_session"])
+
+    def test_dispatch_ack_updates_matching_dispatch_slot_not_latest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            state = run_state.build_state("docs/agent-runs/run", "multi", [], "docs/agent-runs/run/artifact-registry.json", "IMPLEMENTED")
+            state["dispatch"] = {"status": "awaiting_runtime_spawn", "current_task_id": "T11", "current_agent": "agent-b"}
+            state["dispatches"] = {
+                "T10": {"status": "awaiting_runtime_spawn", "runtime": "codex", "current_task_id": "T10", "current_agent": "agent-a"},
+                "T11": {"status": "awaiting_runtime_spawn", "runtime": "codex", "current_task_id": "T11", "current_agent": "agent-b"},
+            }
+            run_state.write_state(repo, state_path, state)
+
+            result = dispatcher.dispatch_ack(repo, state_path, "T10", "agent-a", "worker-a", "session-a")
+            updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("worker_running", updated_state["dispatches"]["T10"]["status"])
+        self.assertEqual("awaiting_runtime_spawn", updated_state["dispatches"]["T11"]["status"])
+        self.assertEqual("T10", updated_state["dispatch"]["current_task_id"])
 
     def test_dispatch_ack_syncs_worker_session_to_invocation_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1159,6 +1428,71 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("not been confirmed" in reason for reason in result["blocked_reasons"]))
+
+    def test_dispatch_complete_uses_matching_dispatch_slot_and_writes_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            evidence_a = Path("docs/agent-runs/run/handoffs/a.md")
+            evidence_b = Path("docs/agent-runs/run/handoffs/b.md")
+            role_template = Path("docs/agent-runs/run/agent-roles/requirements-clarifier.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, evidence_a, "agent-a")
+            write_ready_handoff(repo, evidence_b, "agent-b")
+            state = run_state.build_state("docs/agent-runs/run", "multi", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            state["dispatch"] = {"status": "worker_running", "current_task_id": "T11", "current_agent": "agent-b", "worker_handle": "worker-b"}
+            state["dispatches"] = {
+                "T10": {"status": "worker_running", "runtime": "codex", "current_task_id": "T10", "current_agent": "agent-a", "worker_handle": "worker-a"},
+                "T11": {"status": "worker_running", "runtime": "codex", "current_task_id": "T11", "current_agent": "agent-b", "worker_handle": "worker-b"},
+            }
+            run_state.write_state(repo, state_path, state)
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T10",
+                                "agent": "agent-a",
+                                "phase": "design",
+                                "role_group": "design",
+                                "inputs": [],
+                                "outputs": [evidence_a.as_posix()],
+                                "role_template": role_template.as_posix(),
+                                "status": "claimed",
+                                "owner": "agent-a",
+                            },
+                            {
+                                "id": "T11",
+                                "agent": "agent-b",
+                                "phase": "design",
+                                "role_group": "design",
+                                "inputs": [],
+                                "outputs": [evidence_b.as_posix()],
+                                "role_template": role_template.as_posix(),
+                                "status": "claimed",
+                                "owner": "agent-b",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_complete(repo, schedule, state_path, "T10", "agent-a", [evidence_a.as_posix()])
+            updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+            event = json.loads((run_dir / "dispatch-events" / "T10-completed.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("worker_completed", updated_state["dispatches"]["T10"]["status"])
+        self.assertEqual("worker_running", updated_state["dispatches"]["T11"]["status"])
+        self.assertEqual("T10", event["task_id"])
+        self.assertEqual([evidence_a.as_posix()], event["evidence"])
+        self.assertTrue(any(item["task_id"] == "T11" for item in event["unblocked_candidates"]))
 
     def test_dispatch_next_budget_block_does_not_claim_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3575,6 +3909,29 @@ class OrchestrationArtifactTests(unittest.TestCase):
             self.assertTrue(result["ready"], result["blocked_reasons"])
             self.assertTrue(result["dispatch_waiting"])
             self.assertFalse(result["completion_ready"])
+
+    def test_stop_guard_treats_multi_dispatch_running_as_dispatch_waiting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "multi",
+                ["services/order-service", "services/payment-service"],
+                "docs/agent-runs/run/artifact-registry.json",
+                "IMPLEMENTED",
+            )
+            state["dispatches"] = {
+                "T10": {"status": "worker_running", "current_task_id": "T10", "current_agent": "agent-a"},
+                "T11": {"status": "awaiting_runtime_spawn", "current_task_id": "T11", "current_agent": "agent-b"},
+            }
+            run_state.write_state(repo, state_path, state)
+
+            result = harness_stop_guard.evaluate(repo, run_state_path=state_path, strict=True)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertTrue(result["dispatch_waiting"])
+        self.assertEqual(2, len(result["dispatches"]))
 
     def test_stop_guard_json_hook_writes_blocking_guidance_to_stderr(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

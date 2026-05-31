@@ -92,7 +92,9 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
   Claims carry leases; renew long tasks, and reclaim stale ones before completion.
   Use `checkpoint_gate.py` or `gate --checkpoint-mode required` after clarify, R1, and TDD Red on critical or interactive work.
   Use `dispatch-next`/`dispatch-ack`/`dispatch-complete` for runtime handoffs.
-  `dispatch-next` emits a runtime spawn request for Claude Code `Task` or Codex `multi_agent_v1.spawn_agent`; call that tool,
+  `dispatch-next` is single-worker compatibility; `dispatch-beat --max-workers N` emits a ready spawn wave.
+  The coordinator flow is `dispatch-beat` -> spawn returned workers -> hook/`dispatch-ack` -> `dispatch-complete` -> `dispatch-beat` again.
+  Spawn requests target Claude Code `Task` or Codex `multi_agent_v1.spawn_agent`; call that tool,
   let the Task hook confirm or record the worker id with `dispatch-ack`, then accept `dispatch-complete`.
   The coordinator must not do dispatched work locally or paste full worker context into chat; keep only task id, context-pack path, invocation path, worker handle, and final evidence paths.
 
@@ -139,6 +141,7 @@ Important boundaries:
 - Before dispatching, create `context-packs/<task>.json` from `agent-schedule.json`; never pass inherited developer chat as worker context.
 - `dispatch-next --runtime claude-code` emits a Claude Code `Task` request; invoke it with the returned prompt. The Task hook or `dispatch-ack` must confirm the worker before `dispatch-complete`.
 - `dispatch-next --runtime codex` emits a `multi_agent_v1.spawn_agent` request; call it with `fork_context=false`, then `dispatch-ack` the returned worker id before `dispatch-complete`.
+- `dispatch-beat --max-workers N` dispatches a ready wave across distinct `parallel_group` values by default; rerun after worker completion events.
 - Before a service code agent writes code, claim its task with `e2e_dev_harness.py agent-task --action claim --schedule docs/agent-runs/<run>/agent-schedule.json --task-id <id> --agent <agent> --state docs/agent-runs/<run>/run-state.json`.
 - Completion requires each service implement task to be completed with `agent-task --action complete` and an existing evidence file that matches one of the task outputs; the completion gate replays `agent-schedule.json`.
 - The orchestration result records `multi_agent_decision` with criteria, evidence, and required artifacts.

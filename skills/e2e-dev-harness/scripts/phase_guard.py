@@ -436,7 +436,10 @@ def validate_dispatch_context(repo: Path, state_data: dict, task_text: str) -> l
     expected_agent = str(pack_task.get("agent", "")).strip()
     if expected_agent and owner and owner != expected_agent:
         blocked.append("Code-agent dispatch blocked: claimed task owner does not match dispatcher context pack agent.")
-    dispatch = state_data.get("dispatch") if isinstance(state_data.get("dispatch"), dict) else {}
+    dispatches = state_data.get("dispatches") if isinstance(state_data.get("dispatches"), dict) else {}
+    dispatch = dispatches.get(task_id) if isinstance(dispatches.get(task_id), dict) else {}
+    if not dispatch:
+        dispatch = state_data.get("dispatch") if isinstance(state_data.get("dispatch"), dict) else {}
     if dispatch and str(dispatch.get("current_task_id", "")) not in {"", task_id}:
         blocked.append("Code-agent dispatch blocked: run-state dispatch current_task_id does not match Task prompt.")
     return blocked
@@ -448,7 +451,10 @@ def auto_confirm_dispatcher_task(repo: Path, lock: Path, state_data: dict, task_
         return ""
     state_path = run_state_path_for_lock(repo, lock)
     current_state = load_json(state_path) or state_data
-    dispatch = current_state.get("dispatch") if isinstance(current_state.get("dispatch"), dict) else {}
+    dispatches = current_state.get("dispatches") if isinstance(current_state.get("dispatches"), dict) else {}
+    dispatch = dispatches.get(task_id) if isinstance(dispatches.get(task_id), dict) else {}
+    if not dispatch:
+        dispatch = current_state.get("dispatch") if isinstance(current_state.get("dispatch"), dict) else {}
     status = str(dispatch.get("status", ""))
     if status not in {"awaiting_runtime_spawn", "worker_dispatched", "dispatched"}:
         return ""
@@ -465,6 +471,7 @@ def auto_confirm_dispatcher_task(repo: Path, lock: Path, state_data: dict, task_
         }
     )
     current_state["dispatch"] = confirmed
+    current_state.setdefault("dispatches", {})[task_id] = confirmed
     current_state["updated_at"] = run_state.now_iso()
     run_state.write_state(repo, state_path, current_state)
     return f"Dispatcher task {task_id} auto-confirmed by phase_guard."

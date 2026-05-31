@@ -2175,6 +2175,23 @@ def dispatch_next(args) -> tuple[int, dict]:
     return (0 if result["ready"] else 2), result
 
 
+def dispatch_beat(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    result = dispatcher.dispatch_beat(
+        repo,
+        args.schedule,
+        args.state,
+        runtime=args.runtime,
+        coordinator_agent=args.coordinator_agent,
+        developer_session=args.developer_session,
+        max_workers=args.max_workers,
+        max_files=args.max_files,
+        max_chars=args.max_chars,
+    )
+    write_status(args.status_file, result)
+    return (0 if result["ready"] else 2), result
+
+
 def dispatch_complete(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
     result = dispatcher.dispatch_complete(
@@ -2506,6 +2523,18 @@ def main() -> int:
     dispatch_next_parser.add_argument("--max-chars", type=int, default=120_000)
     dispatch_next_parser.add_argument("--status-file", type=Path)
 
+    dispatch_beat_parser = subparsers.add_parser("dispatch-beat", help="Dispatch a beat wave of ready scheduled tasks.")
+    dispatch_beat_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    dispatch_beat_parser.add_argument("--schedule", required=True, type=Path)
+    dispatch_beat_parser.add_argument("--state", required=True, type=Path)
+    dispatch_beat_parser.add_argument("--runtime", default="claude-code")
+    dispatch_beat_parser.add_argument("--coordinator-agent", default="coordinator-agent")
+    dispatch_beat_parser.add_argument("--developer-session", default="coordinator-session")
+    dispatch_beat_parser.add_argument("--max-workers", type=int, default=1)
+    dispatch_beat_parser.add_argument("--max-files", type=int, default=12)
+    dispatch_beat_parser.add_argument("--max-chars", type=int, default=120_000)
+    dispatch_beat_parser.add_argument("--status-file", type=Path)
+
     dispatch_complete_parser = subparsers.add_parser("dispatch-complete", help="Complete a dispatched task with scheduled evidence.")
     dispatch_complete_parser.add_argument("repo", nargs="?", default=".", type=Path)
     dispatch_complete_parser.add_argument("--schedule", required=True, type=Path)
@@ -2574,6 +2603,8 @@ def main() -> int:
             exit_code, result = runtime_capabilities(args)
         elif args.command == "dispatch-next":
             exit_code, result = dispatch_next(args)
+        elif args.command == "dispatch-beat":
+            exit_code, result = dispatch_beat(args)
         elif args.command == "dispatch-complete":
             exit_code, result = dispatch_complete(args)
         elif args.command == "dispatch-ack":

@@ -29,6 +29,34 @@ For each task:
 
 This L0 mode is intentionally serial. It still gives the harness the main multi-agent benefits: context isolation, role separation, explicit handoffs, leases, and machine-checkable ownership. Runtime adapters may parallelize independent `parallel_group` tasks later, but only after service designs, red-test evidence, contracts, and R2 review are stable.
 
+## L1 Beat Cadence Dispatch
+
+Use `dispatch-beat` when the runtime can spawn multiple independent workers. A
+beat is one coordinator scheduling cycle: consume prior completion events, find
+ready scheduled tasks, claim a safe wave, emit runtime spawn requests, then stop
+until workers ack/complete. `dispatch-next` stays as the compatibility wrapper
+for `dispatch-beat --max-workers 1`.
+
+```bash
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-beat . \
+  --schedule docs/agent-runs/<run>/agent-schedule.json \
+  --state docs/agent-runs/<run>/run-state.json \
+  --runtime codex \
+  --max-workers 4
+```
+
+The beat output includes `runtime_spawn_requests`, `claimed_tasks`,
+`blocked_tasks`, `dispatches`, and `next_beat_hint`. The coordinator invokes the
+returned runtime tools, records worker handles through the Task hook or
+`dispatch-ack`, and each worker finishes with `dispatch-complete`. Completion
+writes `dispatch-events/<task-id>-completed.json`; the next beat can use those
+events plus the updated schedule to unlock successors.
+
+By default, one beat dispatches only distinct `parallel_group` values. This keeps
+same-service or same-scope code work serialized while still allowing unrelated
+services, role handoffs, or review tasks to run concurrently when their gates and
+handoffs are ready.
+
 The Claude Code/Superpowers adapter is exposed through the unified CLI:
 
 ```bash

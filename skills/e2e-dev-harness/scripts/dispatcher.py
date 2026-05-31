@@ -139,6 +139,31 @@ def update_dispatch_state(
     if lifecycle:
         state["lifecycle"] = lifecycle
     state["dispatch"] = dispatch
+    task_id = str(dispatch.get("current_task_id", "")).strip()
+    if task_id:
+        state.setdefault("dispatches", {})[task_id] = dispatch
+    state["updated_at"] = run_state.now_iso()
+    run_state.write_state(repo, path, state)
+    return {"ready": True, "blocked_reasons": [], "warnings": [], "run_state": str(path)}
+
+
+def update_dispatches_state(
+    repo: Path,
+    state_path: Path | None,
+    latest_dispatch: dict,
+    dispatches: dict[str, dict],
+    lifecycle: str | None = None,
+) -> dict:
+    path, state = load_state(repo, state_path)
+    if not path or not state:
+        return {"ready": True, "blocked_reasons": [], "warnings": ["No run-state supplied; dispatch state not recorded."]}
+    if lifecycle:
+        state["lifecycle"] = lifecycle
+    state["dispatch"] = latest_dispatch
+    existing = state.get("dispatches") if isinstance(state.get("dispatches"), dict) else {}
+    merged = dict(existing)
+    merged.update(dispatches)
+    state["dispatches"] = merged
     state["updated_at"] = run_state.now_iso()
     run_state.write_state(repo, path, state)
     return {"ready": True, "blocked_reasons": [], "warnings": [], "run_state": str(path)}
@@ -191,6 +216,85 @@ def next_ready_task(repo: Path, schedule: dict) -> tuple[dict | None, list[dict]
             }
         )
     return None, skipped
+
+
+def task_parallel_group(task: dict) -> str:
+    group = str(task.get("parallel_group", "")).strip()
+    if group:
+        return group
+    service = str(task.get("service", "")).strip()
+    phase = str(task.get("phase", "")).strip()
+    return f"service:{service}" if service and phase == "implement" else phase or str(task.get("id", ""))
+
+
+ACTIVE_DISPATCH_STATUSES = {"awaiting_runtime_spawn", "waiting_dispatch", "worker_running", "worker_dispatched", "dispatched"}
+
+
+def active_dispatches(state: dict) -> dict[str, dict]:
+    dispatches = state.get("dispatches") if isinstance(state.get("dispatches"), dict) else {}
+    active: dict[str, dict] = {}
+    for task_id, dispatch in dispatches.items():
+        if isinstance(dispatch, dict) and str(dispatch.get("status", "")).lower() in ACTIVE_DISPATCH_STATUSES:
+            active[str(task_id)] = dispatch
+    current = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
+    current_id = str(current.get("current_task_id", "")).strip()
+    if current_id and str(current.get("status", "")).lower() in ACTIVE_DISPATCH_STATUSES:
+        active.setdefault(current_id, current)
+    return active
+
+
+def active_parallel_groups(state: dict) -> set[str]:
+    groups: set[str] = set()
+    for dispatch in active_dispatches(state).values():
+        group = str(dispatch.get("parallel_group", "")).strip()
+        if group:
+            groups.add(group)
+    return groups
+
+
+def ready_tasks(
+    repo: Path,
+    schedule: dict,
+    max_workers: int = 1,
+    parallel_policy: str = "distinct_parallel_group",
+    state: dict | None = None,
+) -> tuple[list[dict], list[dict]]:
+    selected: list[dict] = []
+    blocked: list[dict] = []
+    used_groups: set[str] = set()
+    state_data = state or {}
+    active_by_task = active_dispatches(state_data)
+    active_groups = active_parallel_groups(state_data)
+    limit = max(1, int(max_workers or 1))
+    for task in schedule.get("tasks", []) or []:
+        if not isinstance(task, dict) or task_done(task):
+            continue
+        agent = str(task.get("agent", "")) or "agent"
+        blockers = task_ready_blockers(repo, schedule, task, agent)
+        group = task_parallel_group(task)
+        task_id = str(task.get("id", ""))
+        if task_id in active_by_task:
+            blockers.append(f"Task {task_id} already has an active dispatch.")
+        if group and group in active_groups:
+            blockers.append(f"Task parallel group {group} already has an active dispatch.")
+        if not blockers and parallel_policy == "distinct_parallel_group" and group in used_groups:
+            blockers = [f"Task shares parallel group {group} with another task in this beat."]
+        if blockers:
+            blocked.append(
+                {
+                    "task_id": task.get("id", ""),
+                    "agent": task.get("agent", ""),
+                    "phase": task.get("phase", ""),
+                    "parallel_group": group,
+                    "blocked_reasons": blockers,
+                }
+            )
+            continue
+        selected.append(task)
+        used_groups.add(group)
+        if len(selected) >= limit:
+            break
+    return selected, blocked
 
 
 def invocation_dir_for_task(run_dir: Path, task: dict) -> Path:
@@ -392,7 +496,11 @@ def mark_invocation_completed(repo: Path, dispatch: dict, evidence: list[str] | 
 
 def dispatch_completion_blockers(repo: Path, state_path: Path | None, task_id: str, agent: str) -> tuple[list[str], dict]:
     _state_path, state = load_state(repo, state_path)
-    dispatch = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
+    dispatches = state.get("dispatches") if isinstance(state.get("dispatches"), dict) else {}
+    dispatch = dispatches.get(task_id) if isinstance(dispatches.get(task_id), dict) else {}
+    if not dispatch:
+        current = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
+        dispatch = current if str(current.get("current_task_id", "")).strip() == task_id else {}
     if not dispatch or str(dispatch.get("current_task_id", "")).strip() != task_id:
         return [], dispatch
     blocked: list[str] = []
@@ -413,6 +521,86 @@ def dispatch_completion_blockers(repo: Path, state_path: Path | None, task_id: s
     ):
         blocked.append("Dispatch has no worker confirmation proof; record dispatch-ack or runtime hook confirmation before dispatch-complete.")
     return blocked, dispatch
+
+
+def dispatch_for_task(state: dict, task_id: str) -> dict:
+    dispatches = state.get("dispatches") if isinstance(state.get("dispatches"), dict) else {}
+    dispatch = dispatches.get(task_id)
+    if isinstance(dispatch, dict):
+        return dispatch
+    current = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
+    return current if str(current.get("current_task_id", "")).strip() == task_id else {}
+
+
+def completion_event_path(repo: Path, state_path: Path | None, schedule_path: Path) -> Path:
+    state_file = resolve(repo, state_path)
+    run_dir = state_file.parent if state_file else (resolve(repo, schedule_path) or schedule_path).parent
+    return run_dir / "dispatch-events"
+
+
+def unblocked_candidates(repo: Path, schedule: dict) -> list[dict]:
+    candidates: list[dict] = []
+    for task in schedule.get("tasks", []) or []:
+        if not isinstance(task, dict) or task_done(task):
+            continue
+        agent = str(task.get("agent", "")) or "agent"
+        if not task_ready_blockers(repo, schedule, task, agent):
+            candidates.append(
+                {
+                    "task_id": task.get("id", ""),
+                    "agent": task.get("agent", ""),
+                    "phase": task.get("phase", ""),
+                    "service": task.get("service", ""),
+                    "parallel_group": task_parallel_group(task),
+                }
+            )
+    return candidates
+
+
+def write_completion_event(
+    repo: Path,
+    schedule_path: Path,
+    state_path: Path | None,
+    task: dict,
+    agent: str,
+    evidence: list[str],
+    schedule_after: dict,
+    dispatch: dict,
+) -> Path:
+    event_dir = completion_event_path(repo, state_path, schedule_path)
+    task_id = str(task.get("id", ""))
+    path = event_dir / f"{task_id}-completed.json"
+    data = {
+        "schema": "e2e-dev-harness.dispatch-event.v1",
+        "event": "worker_completed",
+        "task_id": task_id,
+        "agent": agent,
+        "phase": task.get("phase", ""),
+        "service": task.get("service", ""),
+        "evidence": evidence,
+        "worker_summary": evidence[0] if evidence else "",
+        "worker_handle": dispatch.get("worker_handle", ""),
+        "worker_session": dispatch.get("worker_session", ""),
+        "unblocked_candidates": unblocked_candidates(repo, schedule_after),
+        "created_at": run_state.now_iso(),
+    }
+    atomic_write_json(path, data)
+    return path
+
+
+def recent_completion_events(repo: Path, state_path: Path | None, schedule_path: Path, limit: int = 20) -> list[dict]:
+    event_dir = completion_event_path(repo, state_path, schedule_path)
+    if not event_dir.exists():
+        return []
+    events: list[dict] = []
+    for path in sorted(event_dir.glob("*-completed.json"), key=lambda item: item.stat().st_mtime, reverse=True)[:limit]:
+        data = read_json(path)
+        if not data:
+            continue
+        data.setdefault("task_id", path.name.removesuffix("-completed.json"))
+        data["path"] = rel(repo, path)
+        events.append(data)
+    return events
 
 
 def waiting_dispatch_result(
@@ -456,6 +644,163 @@ def waiting_dispatch_result(
     }
 
 
+def dispatch_beat(
+    repo: Path,
+    schedule_path: Path,
+    state_path: Path | None,
+    runtime: str = "claude-code",
+    coordinator_agent: str = "coordinator-agent",
+    developer_session: str = "coordinator-session",
+    max_workers: int = 1,
+    max_files: int = 12,
+    max_chars: int = 120_000,
+    parallel_policy: str = "distinct_parallel_group",
+) -> dict:
+    repo = repo.resolve()
+    schedule_file = resolve(repo, schedule_path)
+    schedule = read_json(schedule_file)
+    if not schedule:
+        return {"ready": False, "blocked_reasons": [f"Agent schedule not found or unreadable: {schedule_file}"], "warnings": []}
+    _state_path, state_data = load_state(repo, state_path)
+    recent_events = recent_completion_events(repo, state_path, schedule_path)
+    tasks, blocked_tasks = ready_tasks(repo, schedule, max_workers=max_workers, parallel_policy=parallel_policy, state=state_data)
+    if not tasks:
+        open_task = next_open_task(schedule)
+        if open_task:
+            return {
+                "ready": False,
+                "blocked_reasons": ["No scheduled task is ready to dispatch."],
+                "warnings": [],
+                "blocked_tasks": blocked_tasks,
+                "skipped_tasks": blocked_tasks,
+                "recent_events": recent_events,
+            }
+        return {
+            "ready": True,
+            "blocked_reasons": [],
+            "warnings": [],
+            "message": "No open scheduled tasks.",
+            "claimed_tasks": [],
+            "runtime_spawn_requests": [],
+            "blocked_tasks": blocked_tasks,
+            "skipped_tasks": blocked_tasks,
+            "dispatches": {},
+            "recent_events": recent_events,
+            "next_beat_hint": "No open scheduled tasks.",
+        }
+    capabilities = runtime_capabilities(runtime)
+    if not capabilities["supports_subagent"]:
+        return waiting_dispatch_result(repo, schedule_path, state_path, tasks[0], capabilities)
+
+    run_dir = (resolve(repo, state_path).parent if state_path else schedule_file.parent)  # type: ignore[union-attr]
+    warnings: list[str] = []
+    dispatches: dict[str, dict] = {}
+    packets: list[dict] = []
+    claimed_tasks: list[dict] = []
+    claims: list[dict] = []
+    latest_dispatch: dict = {}
+    for task in tasks:
+        task_id = str(task.get("id", ""))
+        agent = str(task.get("agent", "")) or "agent"
+        context_path = run_dir / "context-packs" / f"{task_id}.json"
+        pack = context_pack.build_pack(repo, schedule_path, task_id=task_id, max_files=max_files, max_chars=max_chars)
+        pack["path"] = rel(repo, context_path)
+        pack["context_pack_path"] = rel(repo, context_path)
+        atomic_write_json(context_path, pack)
+        if not pack["ready"]:
+            blocked_tasks.append(
+                {
+                    "task_id": task_id,
+                    "agent": agent,
+                    "phase": task.get("phase", ""),
+                    "parallel_group": task_parallel_group(task),
+                    "blocked_reasons": ["Context pack: " + reason for reason in pack["blocked_reasons"]],
+                }
+            )
+            warnings.extend(pack["warnings"])
+            continue
+
+        claim = agent_scheduler.claim(repo, schedule_path, task_id, agent, state_path)
+        if not claim["ready"]:
+            blocked_tasks.append(
+                {
+                    "task_id": task_id,
+                    "agent": agent,
+                    "phase": task.get("phase", ""),
+                    "parallel_group": task_parallel_group(task),
+                    "blocked_reasons": claim["blocked_reasons"],
+                }
+            )
+            warnings.extend(claim["warnings"] + pack["warnings"])
+            continue
+
+        claimed_schedule = read_json(schedule_file)
+        claimed_task = agent_scheduler.find_task(claimed_schedule, task_id) or task
+        invocation = write_invocation(repo, run_dir, claimed_task, capabilities["runtime"], context_path, coordinator_agent, developer_session)
+        dispatch_status = "awaiting_runtime_spawn" if capabilities.get("spawn_requires_tool_call") else "worker_running"
+        dispatch = {
+            "status": dispatch_status,
+            "runtime": capabilities["runtime"],
+            "current_task_id": task_id,
+            "current_agent": agent,
+            "invocation_path": rel(repo, invocation),
+            "context_pack": rel(repo, context_path),
+            "parallel_group": task_parallel_group(claimed_task),
+            "started_at": run_state.now_iso(),
+        }
+        prompt = task_prompt(claimed_task, pack, invocation, repo)
+        spawn_request = spawn_request_for_runtime(capabilities, claimed_task, prompt, schedule_path, state_path, repo)
+        packet = {
+            "task": {"id": task_id, "agent": agent, "phase": claimed_task.get("phase", ""), "service": claimed_task.get("service", "")},
+            "claim": claim,
+            "context_pack": rel(repo, context_path),
+            "invocation_path": rel(repo, invocation),
+            "task_prompt": prompt,
+            "dispatch": dispatch,
+            **({"runtime_spawn_request": spawn_request} if spawn_request else {}),
+        }
+        packets.append(packet)
+        claimed_tasks.append(packet["task"])
+        claims.append(claim)
+        dispatches[task_id] = dispatch
+        latest_dispatch = dispatch
+        warnings.extend(claim["warnings"] + pack["warnings"])
+
+    if dispatches:
+        state_update = update_dispatches_state(repo, state_path, latest_dispatch, dispatches)
+    else:
+        flattened = [
+            reason
+            for item in blocked_tasks
+            for reason in (item.get("blocked_reasons", []) if isinstance(item.get("blocked_reasons", []), list) else [])
+        ]
+        state_update = {
+            "ready": False,
+            "blocked_reasons": flattened or ["No tasks could be dispatched in this beat."],
+            "warnings": [],
+        }
+    spawn_requests = [packet["runtime_spawn_request"] for packet in packets if packet.get("runtime_spawn_request")]
+    return {
+        "ready": state_update["ready"],
+        "blocked_reasons": state_update["blocked_reasons"],
+        "warnings": warnings + state_update["warnings"],
+        "capabilities": capabilities,
+        "requires_fresh_worker": True,
+        "coordinator_action": "spawn_fresh_worker",
+        "worker_context_policy": "Use only the context pack and allowed inputs; do not continue in coordinator context.",
+        "dispatch": latest_dispatch,
+        "dispatches": dispatches,
+        "claimed_tasks": claimed_tasks,
+        "claims": claims,
+        "blocked_tasks": blocked_tasks,
+        "skipped_tasks": blocked_tasks,
+        "dispatch_packets": packets,
+        "runtime_spawn_requests": spawn_requests,
+        "recent_events": recent_events,
+        "next_beat_hint": "Spawn the returned workers, wait for ack/complete events, then run dispatch-beat again.",
+    }
+
+
 def dispatch_next(
     repo: Path,
     schedule_path: Path,
@@ -466,88 +811,32 @@ def dispatch_next(
     max_files: int = 12,
     max_chars: int = 120_000,
 ) -> dict:
-    repo = repo.resolve()
-    schedule_file = resolve(repo, schedule_path)
-    schedule = read_json(schedule_file)
-    if not schedule:
-        return {"ready": False, "blocked_reasons": [f"Agent schedule not found or unreadable: {schedule_file}"], "warnings": []}
-    task, skipped = next_ready_task(repo, schedule)
-    if not task:
-        open_task = next_open_task(schedule)
-        if open_task:
-            return {
-                "ready": False,
-                "blocked_reasons": ["No scheduled task is ready to dispatch."],
-                "warnings": [],
-                "skipped_tasks": skipped,
+    result = dispatch_beat(
+        repo,
+        schedule_path,
+        state_path,
+        runtime=runtime,
+        coordinator_agent=coordinator_agent,
+        developer_session=developer_session,
+        max_workers=1,
+        max_files=max_files,
+        max_chars=max_chars,
+    )
+    packets = result.get("dispatch_packets") if isinstance(result.get("dispatch_packets"), list) else []
+    if result.get("ready") and packets:
+        first = packets[0]
+        result.update(
+            {
+                "task": first.get("task", {}),
+                "claim": first.get("claim", {}),
+                "context_pack": first.get("context_pack", ""),
+                "invocation_path": first.get("invocation_path", ""),
+                "task_prompt": first.get("task_prompt", ""),
             }
-        return {"ready": True, "blocked_reasons": [], "warnings": [], "message": "No open scheduled tasks.", "skipped_tasks": skipped}
-    capabilities = runtime_capabilities(runtime)
-    if not capabilities["supports_subagent"]:
-        return waiting_dispatch_result(repo, schedule_path, state_path, task, capabilities)
-
-    task_id = str(task.get("id", ""))
-    agent = str(task.get("agent", "")) or "agent"
-    run_dir = (resolve(repo, state_path).parent if state_path else schedule_file.parent)  # type: ignore[union-attr]
-    context_path = run_dir / "context-packs" / f"{task_id}.json"
-    pack = context_pack.build_pack(repo, schedule_path, task_id=task_id, max_files=max_files, max_chars=max_chars)
-    pack["path"] = rel(repo, context_path)
-    pack["context_pack_path"] = rel(repo, context_path)
-    atomic_write_json(context_path, pack)
-    if not pack["ready"]:
-        return {
-            "ready": False,
-            "blocked_reasons": ["Context pack: " + reason for reason in pack["blocked_reasons"]],
-            "warnings": pack["warnings"],
-            "capabilities": capabilities,
-            "task": {"id": task_id, "agent": agent},
-            "context_pack": rel(repo, context_path),
-        }
-
-    claim = agent_scheduler.claim(repo, schedule_path, task_id, agent, state_path)
-    if not claim["ready"]:
-        return {
-            "ready": False,
-            "blocked_reasons": claim["blocked_reasons"],
-            "warnings": claim["warnings"],
-            "capabilities": capabilities,
-            "task": {"id": task_id, "agent": agent},
-            "context_pack": rel(repo, context_path),
-            "skipped_tasks": skipped,
-        }
-
-    claimed_schedule = read_json(schedule_file)
-    claimed_task = agent_scheduler.find_task(claimed_schedule, task_id) or task
-    invocation = write_invocation(repo, run_dir, claimed_task, capabilities["runtime"], context_path, coordinator_agent, developer_session)
-    dispatch_status = "awaiting_runtime_spawn" if capabilities.get("spawn_requires_tool_call") else "worker_running"
-    dispatch = {
-        "status": dispatch_status,
-        "runtime": capabilities["runtime"],
-        "current_task_id": task_id,
-        "current_agent": agent,
-        "invocation_path": rel(repo, invocation),
-        "context_pack": rel(repo, context_path),
-    }
-    state_update = update_dispatch_state(repo, state_path, dispatch)
-    prompt = task_prompt(claimed_task, pack, invocation, repo)
-    spawn_request = spawn_request_for_runtime(capabilities, claimed_task, prompt, schedule_path, state_path, repo)
-    return {
-        "ready": state_update["ready"],
-        "blocked_reasons": state_update["blocked_reasons"],
-        "warnings": claim["warnings"] + pack["warnings"] + state_update["warnings"],
-        "capabilities": capabilities,
-        "requires_fresh_worker": True,
-        "coordinator_action": "spawn_fresh_worker",
-        "worker_context_policy": "Use only the context pack and allowed inputs; do not continue in coordinator context.",
-        "dispatch": dispatch,
-        "task": {"id": task_id, "agent": agent, "phase": claimed_task.get("phase", ""), "service": claimed_task.get("service", "")},
-        "claim": claim,
-        "skipped_tasks": skipped,
-        "context_pack": rel(repo, context_path),
-        "invocation_path": rel(repo, invocation),
-        "task_prompt": prompt,
-        **({"runtime_spawn_request": spawn_request} if spawn_request else {}),
-    }
+        )
+        if first.get("runtime_spawn_request"):
+            result["runtime_spawn_request"] = first["runtime_spawn_request"]
+    return result
 
 
 def dispatch_complete(
@@ -582,12 +871,33 @@ def dispatch_complete(
     if reviewer_result is not None:
         complete["reviewer_gate"] = reviewer_result
     if complete["ready"]:
+        completed_schedule = read_json(schedule_file)
+        event_path = write_completion_event(
+            repo,
+            schedule_path,
+            state_path,
+            complete.get("task", task),
+            agent,
+            complete.get("task", {}).get("evidence", evidence or []),
+            completed_schedule,
+            active_dispatch,
+        )
         _state_path, state = load_state(repo, state_path)
         previous_lifecycle = ""
         prior_dispatch = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
         if str(state.get("lifecycle", "")) == "WAITING_DISPATCH":
             previous_lifecycle = str(prior_dispatch.get("previous_lifecycle", ""))
-        dispatch = {
+        dispatch = dict(active_dispatch)
+        dispatch.update(
+            {
+                "status": "worker_completed",
+                "completed_at": run_state.now_iso(),
+                "evidence": complete.get("task", {}).get("evidence", evidence or []),
+            }
+        )
+        if previous_lifecycle:
+            dispatch["previous_lifecycle"] = previous_lifecycle
+        legacy_dispatch = {
             "status": "worker_completed",
             "runtime": "",
             "previous_lifecycle": previous_lifecycle,
@@ -596,7 +906,8 @@ def dispatch_complete(
             "invocation_path": "",
             "context_pack": "",
         }
-        update = update_dispatch_state(repo, state_path, dispatch, lifecycle=previous_lifecycle or None)
+        update = update_dispatch_state(repo, state_path, dispatch or legacy_dispatch, lifecycle=previous_lifecycle or None)
+        complete["dispatch_event"] = rel(repo, event_path)
         complete["run_state_update"] = update
     return complete
 
@@ -613,7 +924,7 @@ def dispatch_ack(
     state_file, state = load_state(repo, state_path)
     if not state_file or not state:
         return {"ready": False, "blocked_reasons": ["Run state is required to acknowledge a spawned worker."], "warnings": []}
-    dispatch = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
+    dispatch = dispatch_for_task(state, task_id)
     blocked: list[str] = []
     if str(dispatch.get("status", "")) not in {"awaiting_runtime_spawn", "waiting_dispatch"}:
         blocked.append("Dispatch is not awaiting runtime spawn acknowledgement.")
@@ -660,6 +971,7 @@ def dispatch_status(repo: Path, schedule_path: Path, state_path: Path | None = N
         "schedule": str(schedule_file),
         "run_state": str(state_file) if state_file else None,
         "dispatch": state.get("dispatch", {}),
+        "dispatches": state.get("dispatches", {}),
         "open_tasks": [
             {
                 "id": task.get("id", ""),
@@ -684,10 +996,11 @@ def main() -> int:
     parser.add_argument("--runtime", default="claude-code")
     parser.add_argument("--coordinator-agent", default="coordinator-agent")
     parser.add_argument("--developer-session", default="coordinator-session")
+    parser.add_argument("--max-workers", type=int, default=1)
     parser.add_argument("--task-id")
     parser.add_argument("--agent")
     parser.add_argument("--evidence", action="append")
-    parser.add_argument("--action", choices=["capabilities", "next", "complete", "status"], default="status")
+    parser.add_argument("--action", choices=["capabilities", "next", "beat", "complete", "status"], default="status")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -699,6 +1012,10 @@ def main() -> int:
         if not args.schedule:
             parser.error("--schedule is required for --action next")
         result = dispatch_next(repo, args.schedule, args.state, args.runtime, args.coordinator_agent, args.developer_session)
+    elif args.action == "beat":
+        if not args.schedule:
+            parser.error("--schedule is required for --action beat")
+        result = dispatch_beat(repo, args.schedule, args.state, args.runtime, args.coordinator_agent, args.developer_session, max_workers=args.max_workers)
     elif args.action == "complete":
         if not args.schedule or not args.task_id:
             parser.error("--schedule and --task-id are required for --action complete")

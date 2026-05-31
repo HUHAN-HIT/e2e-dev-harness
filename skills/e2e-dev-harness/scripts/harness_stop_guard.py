@@ -250,10 +250,16 @@ def stop_guidance(lifecycle: str, state_path: Path | None, repo: Path) -> dict:
 
 def is_waiting_dispatch(lifecycle: str, data: dict) -> bool:
     dispatch = data.get("dispatch") if isinstance(data.get("dispatch"), dict) else {}
-    return lifecycle == "WAITING_DISPATCH" or str(dispatch.get("status", "")).lower() in {
+    dispatches = data.get("dispatches") if isinstance(data.get("dispatches"), dict) else {}
+    waiting_statuses = {
         "waiting_dispatch",
         "awaiting_runtime_spawn",
         "worker_running",
+    }
+    if any(str(item.get("status", "")).lower() in waiting_statuses for item in dispatches.values() if isinstance(item, dict)):
+        return True
+    return lifecycle == "WAITING_DISPATCH" or str(dispatch.get("status", "")).lower() in {
+        *waiting_statuses,
     }
 
 
@@ -364,6 +370,7 @@ def evaluate(
         "run_state": str(state_path),
         "lifecycle": lifecycle,
         "dispatch": data.get("dispatch", {}),
+        "dispatches": data.get("dispatches", {}),
         "dispatch_waiting": dispatch_waiting,
         "completion_ready": lifecycle in TERMINAL_LIFECYCLES and not blocked,
         "next_action": NEXT_ACTIONS.get(lifecycle, "Inspect run-state.json and repair lifecycle before finalizing."),
