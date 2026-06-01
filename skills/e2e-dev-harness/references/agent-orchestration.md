@@ -74,6 +74,14 @@ count as a tool-call proxy. If `coordinator_context_budget.handoff_recommended`
 is true, do not keep reading more evidence in the same chat; checkpoint and
 resume from the compact run-state plus paths.
 
+Coordinator write actions are budgeted too. Runtime hooks extract inline
+Write/Edit/MultiEdit/patch payloads for coordinator-owned design, plan, and
+handoff artifacts. Medium bodies produce a `Coordinator write budget warning`;
+oversized inline bodies are blocked with `coordinator_write_budget` guidance.
+Long detail belongs in a dispatched worker's scheduled evidence file, or in a
+checked-in generator/harness command that writes the artifact without echoing
+the full body through coordinator chat.
+
 By default, one beat dispatches only distinct `parallel_group` values. This keeps
 same-service or same-scope code work serialized while still allowing unrelated
 services, role handoffs, or review tasks to run concurrently when their gates and

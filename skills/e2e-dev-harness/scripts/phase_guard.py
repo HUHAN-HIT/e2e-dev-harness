@@ -73,6 +73,20 @@ REVIEW_DISPATCH_PHASES = {"r1-review", "r2-review", "r3-review"}
 REVIEW_REPORT_NAME_RE = re.compile(r"^R[123](?:[-_].*)?\.md$", re.IGNORECASE)
 DEFAULT_ALLOWED_RUNTIME_LIFECYCLES = {"IMPLEMENTED"}
 DEFAULT_ALLOWED_TEST_LIFECYCLES = {"PLANNED", "RED_READY", "IMPLEMENTED"}
+COORDINATOR_INLINE_WRITE_WARN_CHARS = 8_000
+COORDINATOR_INLINE_WRITE_BLOCK_CHARS = 24_000
+COORDINATOR_INLINE_WRITE_PREFIXES = (
+    "docs/design/",
+    "docs/requirements/",
+    "docs/superpowers/plans/",
+)
+COORDINATOR_INLINE_WRITE_EXCLUDED_RUN_PARTS = (
+    "/reviews/",
+    "/evidence/",
+    "/context-packs/",
+    "/dispatch/",
+    "/cli-responses/",
+)
 PATCH_FILE_RE = re.compile(
     r"^\s*(?:\*\*\* (?:Add|Update|Delete) File:|\*\*\* Move to:|---|\+\+\+)\s+(?P<path>.+?)\s*$",
     re.MULTILINE,
@@ -116,6 +130,7 @@ HOOK_PATH_KEYS = {
     "pattern",
 }
 TASK_TEXT_KEYS = {"description", "prompt", "task", "subagent_type", "title", "todos", "content"}
+WRITE_PAYLOAD_KEYS = {"content", "input", "new_string", "old_string", "patch", "replacement", "text"}
 CODE_TASK_RE = re.compile(
     r"(?:\b(?:implement|code|coding|write\s+code|edit\s+code|modify\s+code|create\s+(?:class|entity|service|controller|mapper))\b|"
     r"开发|实现|编码|写代码|修改代码|创建(?:实体|服务|控制器|类))",
@@ -225,6 +240,17 @@ def is_harness_control_path(repo: Path, path: Path) -> bool:
 def is_hook_config_path(repo: Path, path: Path) -> bool:
     relative = posix_relative(repo, resolve_for_repo(repo, path))
     return relative in HOOK_CONFIG_PATHS
+
+
+def is_coordinator_inline_write_path(repo: Path, path: Path) -> bool:
+    relative = posix_relative(repo, resolve_for_repo(repo, path)).replace("\\", "/")
+    if relative.startswith(COORDINATOR_INLINE_WRITE_PREFIXES):
+        return True
+    if not relative.startswith("docs/agent-runs/"):
+        return False
+    if is_harness_control_path(repo, path):
+        return False
+    return not any(part in f"/{relative}" for part in COORDINATOR_INLINE_WRITE_EXCLUDED_RUN_PARTS)
 
 
 def required_todo_list_for_lifecycle(lifecycle: str) -> list[str]:
@@ -891,6 +917,34 @@ def extract_hook_command_text(text: str) -> str:
     return command_text
 
 
+def extract_hook_write_payload_text(text: str) -> str:
+    if not text.strip():
+        return ""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return ""
+    tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else data
+    return "\n".join(collect_write_payload_text(tool_input))
+
+
+def collect_write_payload_text(value, include: bool = False) -> list[str]:
+    if isinstance(value, str):
+        return [value] if include else []
+    if isinstance(value, list):
+        text: list[str] = []
+        for item in value:
+            text.extend(collect_write_payload_text(item, include))
+        return text
+    if isinstance(value, dict):
+        text: list[str] = []
+        for key, item in value.items():
+            key_matches = str(key) in WRITE_PAYLOAD_KEYS
+            text.extend(collect_write_payload_text(item, include or key_matches))
+        return text
+    return []
+
+
 def extract_task_text(text: str) -> str:
     if not text.strip():
         return ""
@@ -954,6 +1008,54 @@ def shell_mentions_harness_control(command: str) -> bool:
     return bool(CONTROL_FILENAME_RE.search(command or ""))
 
 
+def coordinator_write_budget(
+    repo: Path,
+    normalized_tool: str,
+    paths: list[Path],
+    shell_mutation: bool,
+    command_text: str,
+    write_payload_text: str,
+) -> tuple[dict, list[str], list[str]]:
+    if normalized_tool not in WRITE_TOOLS:
+        return {}, [], []
+    if normalized_tool in SHELL_TOOLS and not shell_mutation:
+        return {}, [], []
+    payload_chars = len(write_payload_text or "")
+    if normalized_tool in SHELL_TOOLS:
+        payload_chars = max(payload_chars, len(command_text or ""))
+    budget_paths = [path for path in paths if is_coordinator_inline_write_path(repo, path)]
+    if not payload_chars or not budget_paths:
+        return {}, [], []
+    details = {
+        "schema": "e2e-dev-harness.coordinator-write-budget.v1",
+        "inline_payload_chars": payload_chars,
+        "warn_at_chars": COORDINATOR_INLINE_WRITE_WARN_CHARS,
+        "block_at_chars": COORDINATOR_INLINE_WRITE_BLOCK_CHARS,
+        "paths": result_paths(repo, budget_paths),
+        "recommended_action": (
+            "For long coordinator artifacts, dispatch a worker and require an evidence path, "
+            "or use a checked-in generator/harness CLI command that writes the file without echoing the body into chat."
+        ),
+    }
+    warnings: list[str] = []
+    blockers: list[str] = []
+    if payload_chars >= COORDINATOR_INLINE_WRITE_BLOCK_CHARS:
+        blockers.append(
+            "Coordinator write budget blocked: inline artifact body is "
+            + str(payload_chars)
+            + " chars, which exceeds "
+            + str(COORDINATOR_INLINE_WRITE_BLOCK_CHARS)
+            + ". Write long details through a worker evidence file or generator script, then keep only the path in coordinator chat."
+        )
+    elif payload_chars >= COORDINATOR_INLINE_WRITE_WARN_CHARS:
+        warnings.append(
+            "Coordinator write budget warning: inline artifact body is "
+            + str(payload_chars)
+            + " chars. Prefer worker evidence paths or generator scripts before the coordinator context grows."
+        )
+    return details, warnings, blockers
+
+
 def validate_action(
     repo: Path,
     tool: str,
@@ -963,6 +1065,7 @@ def validate_action(
     require_active_run_for_read: bool = False,
     command_text: str = "",
     task_text: str = "",
+    write_payload_text: str = "",
     require_session_checkpoint: bool = False,
     checkpoint_max_age_minutes: int = 30,
 ) -> dict:
@@ -1018,6 +1121,23 @@ def validate_action(
             ],
             "warnings": warnings,
             "protected_paths": result_paths(repo, hook_config_paths),
+            **guidance_from_lock(repo, lock),
+        }
+    write_budget, write_budget_warnings, write_budget_blockers = coordinator_write_budget(
+        repo,
+        normalized,
+        paths,
+        shell_mutation,
+        command_text,
+        write_payload_text,
+    )
+    warnings.extend(write_budget_warnings)
+    if write_budget_blockers:
+        return {
+            "ready": False,
+            "blocked_reasons": write_budget_blockers,
+            "warnings": warnings,
+            "coordinator_write_budget": write_budget,
             **guidance_from_lock(repo, lock),
         }
     review_report_paths = [path for path in paths if is_review_report_path(repo, path)]
@@ -1120,7 +1240,10 @@ def validate_action(
             "runtime_code_paths": result_paths(repo, runtime_code_paths),
         }
     if normalized not in WRITE_TOOLS or not code_paths:
-        return {"ready": True, "blocked_reasons": [], "warnings": warnings, "code_paths": result_paths(repo, code_paths)}
+        result = {"ready": True, "blocked_reasons": [], "warnings": warnings, "code_paths": result_paths(repo, code_paths)}
+        if write_budget:
+            result["coordinator_write_budget"] = write_budget
+        return result
     if not lock or not lock.exists():
         return {
             "ready": False,
@@ -1310,9 +1433,11 @@ def main() -> int:
         tool = tool or hook_tool
         paths.extend(Path(path) for path in hook_paths)
         command_text = extract_hook_command_text(hook_text)
+        write_payload_text = extract_hook_write_payload_text(hook_text)
         task_text = extract_task_text(hook_text)
     else:
         command_text = ""
+        write_payload_text = ""
         task_text = ""
     result = validate_action(
         args.repo,
@@ -1322,6 +1447,7 @@ def main() -> int:
         args.run_dir,
         args.require_active_run_for_read,
         command_text=command_text,
+        write_payload_text=write_payload_text,
         task_text=task_text,
         require_session_checkpoint=args.require_session_checkpoint,
         checkpoint_max_age_minutes=args.checkpoint_max_age_minutes,

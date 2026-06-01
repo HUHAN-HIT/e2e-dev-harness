@@ -31,7 +31,8 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py next . \
 ```
 
 Use `next.required_todo_list`; GitNexus-first, no code items before implementation gate.
-Coordinator minimal reading set: instructions, `next` summary, active design/slice, handoff/context-pack paths, blockers; keep full CLI JSON in evidence files.
+Coordinator minimal reading set: instructions, `next`, active design/slice, paths, blockers; keep full CLI JSON in evidence files.
+Coordinator write budget: long design/plan/handoff bodies must be worker evidence or generator outputs; keep only paths in chat.
 
 Fill the design doc, run `clarify`, then plan with `--service-scope affected` plus explicit `--service` or `--path` when ambiguous.
 
@@ -39,20 +40,20 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
 
 ## Hard Rules
 
-- Load project instructions before requirement clarification. Use discovery scope first; load affected service `AGENT.md` / `AGENTS.md` only after scope is known. Read `references/agent-instructions.md`.
+- Load project instructions before clarification. Use discovery scope first; load affected service `AGENT.md` / `AGENTS.md` after scope is known. Read `references/agent-instructions.md`.
 - Use Superpowers when available: `brainstorming` for clarification, `test-driven-development` for TDD. Read `references/superpowers-integration.md`.
 - Clarification gate requires goals, non-goals, affected services, use cases, change logic, impact summary, contracts, ACs, test design, and closed questions.
   Read `references/clarification-gate.md`.
   In `CREATED`, TodoList must include user confirmation of Restated Intent and open questions before plan/TDD/code.
-  For high-risk or interactive runs, require `Restated Intent` with `--require-intent`.
+  Interactive `clarify` requires `Restated Intent` and user confirmation provenance; do not self-answer open questions.
   MQ/DMQ/Kafka requirements must name the cross-layer call chain and sender/producer injection point before implementation.
 - Prefer GitNexus for code-level cross-service evidence and explicit impact artifacts.
   Do not duplicate low-level `grep`/`rg` instructions just because GitNexus augments searches.
-  Use explicit GitNexus commands when a gate needs auditable evidence; failed required evidence blocks unless the user approves documented degradation.
+  Use explicit GitNexus commands for auditable gate evidence; failures block unless the user approves documented degradation.
   Put raw impact output in evidence files; keep only a bounded affected-interface summary in agent context.
   Use Graphify for docs, ADRs, diagrams, and semantic context. Scanner facts seed both. Read `references/kg-tool-selection.md`.
 - Memory is optional context, not authority. Capture only verified or user-approved facts; Obsidian tags and links help selection but never replace explicit text. Read `references/memory-integration.md`.
-- TDD is mandatory for production changes, but enforcement depth is scenario-based.
+- TDD is mandatory for production changes; enforcement depth is scenario-based.
   Use the default `--tdd-mode auto`; it resolves to strict red/green command evidence for critical/audited work.
   Write a red test, observe the expected failure, implement minimally, then broaden Maven verification. Read `references/tdd-java-spring.md`.
 - Large repositories use planned incremental verification, not ad hoc test selection.
@@ -68,7 +69,7 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
   Use common issue guidance for reviewer focus. Read `references/review-profiles.md` and `references/common-review-issues.md`.
 - R1/R2/R3 are independent-agent reviews, not same-chat roleplay.
   Reviewer Invocation JSON must prove runtime/session isolation; same agent or same session blocks.
-- Archive the final requirement summary after completion so future analysis can read outcomes without replaying every run artifact. Read `references/requirements-archive.md`.
+- Archive the final requirement summary so future analysis avoids replaying every run artifact. Read `references/requirements-archive.md`.
 - Completion requires task-completion proof, not chat claims: every AC has concrete code refs and concrete test refs.
   Semantic reviews, implementation manifest, coverage matrix, unit-test JSON, business review, dependency report when cross-service,
   task-alignment evidence, closed rework, and passing guard are completion evidence.
@@ -89,8 +90,8 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
   Read `references/execution-control.md`.
   After red-test evidence exists, run `e2e_dev_harness.py gate --phase implementation --run-state docs/agent-runs/<run>/run-state.json`;
   a passing gate opens the `IMPLEMENTED` phase automatically.
-- Replay a run with `harness_verify.py` or `verify --harness`; emit run summaries for CI, reviewers, evaluation, and later analysis.
-- Use `execution_trace.py`, `command_evidence.py`, and `context_pack.py` for timing/decision traces, command proof, and bounded request-scoped agent inputs.
+- Replay with `harness_verify.py` or `verify --harness`; emit summaries for CI, reviewers, evaluation, and later analysis.
+- Use `execution_trace.py`, `command_evidence.py`, and `context_pack.py` for decision traces, command proof, and bounded worker inputs.
   Use `agent-task --action claim` before any multi-service code agent writes code; phase guard blocks unclaimed service writes and cross-service edits by a single claimed task.
   Claims carry leases; renew long tasks, and reclaim stale ones before completion.
   Use `checkpoint_gate.py` or `gate --checkpoint-mode required` after clarify, R1, and TDD Red on critical or interactive work.

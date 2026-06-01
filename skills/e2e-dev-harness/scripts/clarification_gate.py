@@ -51,6 +51,13 @@ RESOLVED_MARKERS = (
     "已覆盖",
 )
 
+USER_CONFIRMATION_RE = re.compile(
+    r"\b(?:confirmed|answered|approved|decided)-by\s*:\s*user\b|"
+    r"\buser\s+(?:confirmed|answered|approved|decided)\b|"
+    r"\buser\s+confirmation\s*:\s*(?:confirmed|answered|approved|decided)",
+    re.IGNORECASE,
+)
+
 NONE_MARKERS = {
     "none",
     "n/a",
@@ -270,6 +277,21 @@ def open_questions_clear(text: str | None) -> tuple[bool, list[str]]:
     return False, lines
 
 
+def has_user_confirmation(text: str | None) -> bool:
+    return bool(text and USER_CONFIRMATION_RE.search(text))
+
+
+def user_confirmation_gaps(markdown: str, require_intent: bool, open_questions_ready: bool) -> list[str]:
+    gaps: list[str] = []
+    intent = section_text(markdown, REQUIRED["restated_intent"])
+    open_questions = section_text(markdown, REQUIRED["open_questions"])
+    if require_intent and intent is not None and not has_user_confirmation(intent):
+        gaps.append("Restated Intent must include user confirmation provenance, e.g. 'User confirmation: confirmed-by: user @<date/session>'.")
+    if open_questions_ready and open_questions is not None and not has_user_confirmation(open_questions):
+        gaps.append("Open Questions must include user confirmation provenance, e.g. 'None. confirmed-by: user @<date/session>'.")
+    return gaps
+
+
 def clarification_questions(result: dict) -> list[str]:
     questions: list[str] = []
     if result.get("intent_required") and "restated_intent" in result.get("missing_sections", []):
@@ -290,6 +312,8 @@ def clarification_questions(result: dict) -> list[str]:
         questions.append(f"Clarify impact evidence before implementation: {gap}")
     for gap in result.get("change_logic_gaps", []):
         questions.append(f"Clarify change logic before implementation: {gap}")
+    for gap in result.get("user_confirmation_gaps", []):
+        questions.append(f"Ask the user for confirmation provenance before implementation: {gap}")
     return questions
 
 
@@ -442,7 +466,7 @@ def change_logic_gaps(markdown: str) -> list[str]:
     return gaps
 
 
-def validate(path: Path, require_intent: bool = False) -> dict:
+def validate(path: Path, require_intent: bool = False, require_user_confirmation: bool = False) -> dict:
     markdown = path.read_text(encoding="utf-8")
     titles = [title for title, _start, _end in headings(markdown)]
     required_items = REQUIRED if require_intent else {key: value for key, value in REQUIRED.items() if key != "restated_intent"}
@@ -461,7 +485,8 @@ def validate(path: Path, require_intent: bool = False) -> dict:
     gaps = integration_gaps(markdown)
     impact_gaps = impact_summary_gaps(markdown)
     logic_gaps = change_logic_gaps(markdown)
-    ready = not missing and not empty_sections and oq_clear and not gaps and not impact_gaps and not logic_gaps
+    confirmation_gaps = user_confirmation_gaps(markdown, require_intent, oq_clear) if require_user_confirmation else []
+    ready = not missing and not empty_sections and oq_clear and not gaps and not impact_gaps and not logic_gaps and not confirmation_gaps
     result = {
         "path": str(path),
         "ready_for_implementation": ready,
@@ -473,6 +498,8 @@ def validate(path: Path, require_intent: bool = False) -> dict:
         "impact_gaps": impact_gaps,
         "change_logic_gaps": logic_gaps,
         "intent_required": require_intent,
+        "user_confirmation_required": require_user_confirmation,
+        "user_confirmation_gaps": confirmation_gaps,
     }
     result["interaction_contract"] = interaction_contract(result)
     result["interaction_required"] = result["interaction_contract"]["interaction_required"]
@@ -485,6 +512,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("design_doc", type=Path)
     parser.add_argument("--require-intent", action="store_true", help="Require a Restated Intent/User Intent section.")
+    parser.add_argument("--require-user-confirmation", action="store_true", help="Require user confirmation provenance for intent and open questions.")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON only.")
     args = parser.parse_args()
 
@@ -492,7 +520,11 @@ def main() -> int:
         print(f"Design doc not found: {args.design_doc}", file=sys.stderr)
         return 2
 
-    result = validate(args.design_doc, require_intent=args.require_intent)
+    result = validate(
+        args.design_doc,
+        require_intent=args.require_intent,
+        require_user_confirmation=args.require_user_confirmation,
+    )
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:

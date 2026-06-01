@@ -4032,6 +4032,10 @@ class OrchestrationArtifactTests(unittest.TestCase):
                     """
                     # Feature
 
+                    ## Restated Intent
+                    - The user wants a quote returned.
+                    - User confirmation: confirmed-by: user @2026-06-02
+
                     ## Goal
                     - Return a quote.
 
@@ -4048,7 +4052,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
                     - Unit test first.
 
                     ## Open Questions
-                    None
+                    None. confirmed-by: user @2026-06-02
                     """
                 ).strip(),
                 encoding="utf-8",
@@ -4297,6 +4301,58 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("Harness control file write blocked" in reason for reason in result["blocked_reasons"]))
+
+    def test_phase_guard_blocks_large_inline_coordinator_write_payload(self) -> None:
+        hook_text = json.dumps(
+            {
+                "tool_name": "Write",
+                "tool_input": {
+                    "file_path": "docs/agent-runs/run/handoffs/worker-handoff.md",
+                    "content": "x" * 25000,
+                },
+            }
+        )
+        tool, paths = phase_guard.parse_hook_input(hook_text)
+        payload_text = phase_guard.extract_hook_write_payload_text(hook_text)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            result = phase_guard.validate_action(
+                repo,
+                tool,
+                [Path(path) for path in paths],
+                write_payload_text=payload_text,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Coordinator write budget blocked" in reason for reason in result["blocked_reasons"]))
+        self.assertIn("coordinator_write_budget", result)
+        self.assertEqual(25000, result["coordinator_write_budget"]["inline_payload_chars"])
+
+    def test_phase_guard_warns_on_medium_inline_coordinator_write_payload(self) -> None:
+        hook_text = json.dumps(
+            {
+                "tool_name": "Edit",
+                "tool_input": {
+                    "file_path": "docs/agent-runs/run/handoffs/worker-handoff.md",
+                    "old_string": "before",
+                    "new_string": "x" * 9000,
+                },
+            }
+        )
+        tool, paths = phase_guard.parse_hook_input(hook_text)
+        payload_text = phase_guard.extract_hook_write_payload_text(hook_text)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            result = phase_guard.validate_action(
+                repo,
+                tool,
+                [Path(path) for path in paths],
+                write_payload_text=payload_text,
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertTrue(any("Coordinator write budget warning" in warning for warning in result["warnings"]))
+        self.assertIn("coordinator_write_budget", result)
 
     def test_phase_guard_allows_harness_cli_referencing_run_state(self) -> None:
         hook_text = json.dumps(

@@ -1188,7 +1188,11 @@ def clarify(args) -> tuple[int, dict]:
     design_path = resolve_repo_path(repo, args.design_doc)
     if not design_path or not design_path.exists():
         return 2, {"ready_for_implementation": False, "error": f"Design doc not found: {design_path}"}
-    result = clarification_gate.validate(design_path, require_intent=getattr(args, "require_intent", False))
+    result = clarification_gate.validate(
+        design_path,
+        require_intent=getattr(args, "require_intent", True),
+        require_user_confirmation=getattr(args, "require_user_confirmation", True),
+    )
     run_state_path = getattr(args, "run_state", None)
     if run_state_path and result.get("ready_for_implementation"):
         result["run_state_transition"] = run_state.transition_state(
@@ -2858,7 +2862,11 @@ def main() -> int:
     clarify_parser = subparsers.add_parser("clarify", help="Run the clarification gate.")
     clarify_parser.add_argument("repo", nargs="?", default=".", type=Path)
     clarify_parser.add_argument("--design-doc", required=True, type=Path)
-    clarify_parser.add_argument("--require-intent", action="store_true")
+    clarify_parser.set_defaults(require_intent=True, require_user_confirmation=True)
+    clarify_parser.add_argument("--require-intent", dest="require_intent", action="store_true")
+    clarify_parser.add_argument("--no-require-intent", dest="require_intent", action="store_false")
+    clarify_parser.add_argument("--require-user-confirmation", dest="require_user_confirmation", action="store_true")
+    clarify_parser.add_argument("--no-require-user-confirmation", dest="require_user_confirmation", action="store_false")
     clarify_parser.add_argument("--run-state", type=Path)
     clarify_parser.add_argument("--status-file", type=Path)
 

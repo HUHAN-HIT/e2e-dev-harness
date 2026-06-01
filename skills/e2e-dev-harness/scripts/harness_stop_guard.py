@@ -232,6 +232,21 @@ def stop_guidance(lifecycle: str, state_path: Path | None, repo: Path) -> dict:
     if state_path:
         state_value = rel(repo, state_path) or str(state_path)
         hints = [hint.replace("<run-state>", state_value) for hint in hints]
+    if lifecycle == "CREATED":
+        return {
+            "must_continue": False,
+            "next_action": "Ask the user to confirm Restated Intent and answer or defer Open Questions before running clarify.",
+            "remaining_phases": REMAINING_PHASES.get(lifecycle, []),
+            "recommended_commands": hints,
+            "agent_instruction": (
+                "Ask the user for product decisions and record confirmation provenance such as "
+                "'confirmed-by: user @<date/session>'; do not self-answer open questions to advance the harness."
+            ),
+            "forbidden_response": (
+                "Do not summarize as finished, do not mark clarification complete from self-authored answers, "
+                "and do not plan/TDD/code before user-confirmed clarification evidence exists."
+            ),
+        }
     return {
         "must_continue": lifecycle not in TERMINAL_LIFECYCLES,
         "next_action": NEXT_ACTIONS.get(lifecycle, "Inspect run-state.json and repair lifecycle before finalizing."),
