@@ -146,7 +146,7 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py agent-task . \
   --state docs/agent-runs/<run>/run-state.json
 ```
 
-Completion requires service implementation tasks to be completed in `agent-schedule.json`; `agent-task --action complete` must point at existing evidence that is one of the scheduled task outputs. Generated schedules require each task to reference a valid `agent-roles/*.md` template. Role handoff outputs must be ready handoffs with matching `.ready.json` markers, and downstream `agent-task --action claim` rejects incomplete handoff inputs. The scheduler blocks a single agent from owning incompatible role groups such as design, test, code, semantic review, and coverage.
+Completion requires service implementation tasks to be completed in `agent-schedule.json`; generated schedules use `completion_mode: dispatcher-confirmed`, so normal task completion must go through `dispatch-complete` after runtime acknowledgement. Raw `agent-task --action complete --allow-local-completion` is only for explicit legacy/manual recovery and still must point at existing evidence that is one of the scheduled task outputs. Generated schedules require each task to reference a valid `agent-roles/*.md` template. Role handoff outputs must be ready handoffs with matching `.ready.json` markers, and downstream `agent-task --action claim` rejects incomplete handoff inputs. The scheduler blocks a single agent from owning incompatible role groups such as design, test, code, semantic review, and coverage.
 
 ## Workflow Tiers
 

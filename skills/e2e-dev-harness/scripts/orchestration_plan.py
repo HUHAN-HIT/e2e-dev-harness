@@ -313,6 +313,7 @@ def review_isolation_reasons(reasons: list[str]) -> list[str]:
 
 def choose_mode(requested: str, facts: dict, design_text: str, design_is_template: bool) -> tuple[str, list[str]]:
     reasons = mode_reasons(facts, design_text, design_is_template)
+    low_risk_single_approved = bool(facts.get("low_risk_single_service_approved"))
     if requested in {"single", "single-review"}:
         multi_reasons = multi_forcing_reasons(reasons)
         if multi_reasons:
@@ -321,6 +322,9 @@ def choose_mode(requested: str, facts: dict, design_text: str, design_is_templat
             review_reasons = review_isolation_reasons(reasons)
             if review_reasons:
                 return "single-review", ["single escalated to single-review: " + "; ".join(review_reasons[:3])] + reasons
+            if not low_risk_single_approved:
+                return "single-review", ["single requires machine-verified low-risk approval; using single-review floor"] + reasons
+            return "single", ["mode explicitly set to single with machine-verified low-risk single-service approval"] + reasons
         return requested, [f"mode explicitly set to {requested}"]
     if requested in EXPLICIT_AGENT_MODES:
         return requested, [f"mode explicitly set to {requested}"]
@@ -331,7 +335,9 @@ def choose_mode(requested: str, facts: dict, design_text: str, design_is_templat
     review_reasons = review_isolation_reasons(reasons)
     if review_reasons:
         return "single-review", reasons
-    return "single", ["single service and low-risk design context detected"]
+    if low_risk_single_approved:
+        return "single", ["machine-verified low-risk single-service approval"] + reasons
+    return "single-review", ["single-review floor for non-trivial harness run"] + reasons
 
 
 def service_slug(service: str) -> str:
@@ -502,6 +508,8 @@ ROLE_TEMPLATE_FILES = {
     "semantic-reviewer": "semantic-reviewer.md",
     "coverage-reviewer": "coverage-reviewer.md",
 }
+DEFAULT_COMPLETION_MODE = "dispatcher-confirmed"
+DEFAULT_EXECUTION_MODEL = "coordinator-only-dispatch"
 
 
 def role_templates(base: str) -> dict[str, str]:
@@ -871,6 +879,8 @@ def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) 
     return {
         "schema": "e2e-dev-harness.agent-schedule.v1",
         "selected_mode": selected_mode,
+        "completion_mode": DEFAULT_COMPLETION_MODE,
+        "execution_model": DEFAULT_EXECUTION_MODEL,
         "require_role_templates": True,
         "services": services,
         "coordination": "machine-readable task board; agents update task status and artifact hashes instead of exchanging long free-form chat.",

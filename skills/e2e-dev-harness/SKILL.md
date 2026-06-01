@@ -27,14 +27,15 @@ Call `next` and do only the returned phase:
 
 ```bash
 python skills/e2e-dev-harness/scripts/e2e_dev_harness.py next . \
-  --state docs/agent-runs/<run>/run-state.json
+  --state docs/agent-runs/<run>/run-state.json \
+  --runtime <codex|claude-code|opencode|manual>
 ```
 
-Use `next.required_todo_list`; GitNexus-first, no code items before implementation gate.
+Default CLI stdout is compact. Read `full_result_path` or
+`coordinator_summary_path`; use `--json-full` only for debugging or legacy automation.
 
-Fill the design doc, run `clarify`, then plan with `--service-scope affected` plus explicit `--service` or `--path` when ambiguous.
-
-Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`. Read `references/implementation-gates.md`.
+Use `next.required_todo_list`; GitNexus-first; no code items before implementation gate.
+Fill the design doc, run `clarify`, then plan with affected `--service` or `--path`.
 
 ## Hard Rules
 
@@ -145,7 +146,10 @@ Important boundaries:
 - `dispatch-next --runtime codex` emits a `multi_agent_v1.spawn_agent` request; call it with `fork_context=false`, then `dispatch-ack` the returned worker id before `dispatch-complete`.
 - `dispatch-beat --max-workers N` dispatches a ready wave across distinct `parallel_group` values by default; rerun after worker completion events.
 - Before a service code agent writes code, claim its task with `e2e_dev_harness.py agent-task --action claim --schedule docs/agent-runs/<run>/agent-schedule.json --task-id <id> --agent <agent> --state docs/agent-runs/<run>/run-state.json`.
-- Completion requires each service implement task to be completed with `agent-task --action complete` and an existing evidence file that matches one of the task outputs; the completion gate replays `agent-schedule.json`.
+- Generated schedules use `completion_mode: dispatcher-confirmed`.
+  Complete scheduled role tasks through `dispatch-complete` after `dispatch-ack`.
+  Use `agent-task --action complete --allow-local-completion` only for explicit
+  legacy/manual recovery with an audit warning.
 - The orchestration result records `multi_agent_decision` with criteria, evidence, and required artifacts.
 - R1/R2/R3 reviews must be independent agents or separate reviewer sessions; one consolidated after-the-fact review is invalid.
 - Coverage Reviewer always runs before completion.

@@ -11,9 +11,25 @@ Use this reference when a Java/Spring 6/Maven change benefits from smaller, isol
 | `multi` | User asks for split agents, cross-service work, or multiple affected services/modules | Separate agents own requirements, use cases, tests, service-scoped code, semantic reviews, and coverage review. |
 | `auto` | Default recommendation mode | The helper chooses `single`, `single-review`, or `multi`; risk keywords and large single-service designs become `single-review`, while multiple services/modules become `multi`. |
 
+`single-review` is the default floor for non-trivial harness runs. `single` is
+kept only for machine-verified low-risk single-service work; it still uses the
+coordinator-only dispatch schedule and must not collapse design, test, code, or
+review work into the coordinator chat.
+
 The orchestration result includes `multi_agent_decision`. Treat it as the audit record for why multi-agent development was or was not used. The decision checks affected service count, HTTP/DMQ/shared contracts, data/schema/config/security/payment/refund risk, design size, and explicit user requests.
 
 Agent start/stop and scheduler APIs are runtime-specific. The portable harness control plane is phase locks, blocking hooks, handoff ready markers, state transitions, rework routing, and execution traces. Do not claim that the harness can launch or terminate agents unless the active runtime provides that integration; instead, record which runtime/session owns each role and block unsafe next actions through gates.
+
+Use `next --runtime <runtime>` when asking the harness for the next coordinator action so the suggested `dispatch_command` matches the active runtime instead of assuming a runtime-specific spawn protocol.
+Unified harness commands write full JSON results to an artifact path and keep
+stdout compact by default. Treat `full_result_path` as the machine-readable
+source of truth; the coordinator should keep only the compact stdout,
+`coordinator-summary.json`, task ids, context-pack paths, worker handles, and
+evidence paths in chat context. Use `--json-full` only for legacy automation or
+debugging.
+If no enforceable runtime hook/config is detected, `dispatch-next` and
+`dispatch-beat` force `WAITING_DISPATCH`; an isolated worker must be
+acknowledged before completion evidence is accepted.
 
 ## L0 Serial Isolated Dispatch
 
@@ -25,7 +41,7 @@ For each task:
 2. Run `e2e_dev_harness.py agent-task --action claim` with the scheduled `task_id`, `agent`, `agent-schedule.json`, and `run-state.json`.
 3. Dispatch the worker in a fresh runtime context and include the claim result in its prompt.
 4. Require the worker to write only scheduled outputs and to return structured evidence paths.
-5. Run `e2e_dev_harness.py agent-task --action complete --evidence <scheduled-output>` before the next dependent task starts.
+5. Run `e2e_dev_harness.py dispatch-complete --evidence <scheduled-output>` after the worker is acknowledged. Use raw `agent-task --action complete --allow-local-completion` only for explicit legacy/manual recovery.
 
 This L0 mode is intentionally serial. It still gives the harness the main multi-agent benefits: context isolation, role separation, explicit handoffs, leases, and machine-checkable ownership. Runtime adapters may parallelize independent `parallel_group` tasks later, but only after service designs, red-test evidence, contracts, and R2 review are stable.
 
@@ -143,7 +159,7 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py agent-task . \
   --state docs/agent-runs/<run>/run-state.json
 ```
 
-The claim writes service ownership into run-state and `.phase-lock`, allowing `phase_guard.py` to block unclaimed service writes and one-task multi-service edits. Completion requires each service implementation task to be marked `completed` with evidence.
+The claim writes service ownership into run-state and `.phase-lock`, allowing `phase_guard.py` to block unclaimed service writes and one-task multi-service edits. Generated schedules use `completion_mode: dispatcher-confirmed`, so normal completion requires `dispatch-complete` with evidence. Raw `agent-task complete` is a legacy/manual recovery path only when `--allow-local-completion` is explicit.
 
 ### Claim leases and recovery
 

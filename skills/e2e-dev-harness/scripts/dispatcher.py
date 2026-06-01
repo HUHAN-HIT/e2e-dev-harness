@@ -920,7 +920,15 @@ def dispatch_complete(
                 "warnings": ["Reviewer gate: " + warning for warning in reviewer_result["warnings"]],
                 "reviewer_gate": reviewer_result,
             }
-    complete = agent_scheduler.complete(repo, schedule_path, task_id, agent, state_path, evidence or [])
+    complete = agent_scheduler.complete(
+        repo,
+        schedule_path,
+        task_id,
+        agent,
+        state_path,
+        evidence or [],
+        dispatcher_confirmed=True,
+    )
     if reviewer_result is not None:
         complete["reviewer_gate"] = reviewer_result
     if complete["ready"]:

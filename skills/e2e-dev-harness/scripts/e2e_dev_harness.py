@@ -23,6 +23,7 @@ import artifact_registry  # noqa: E402
 import clarification_gate  # noqa: E402
 from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, configure_utf8_stdio, posix  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
+import coordinator_flow  # noqa: E402
 import dispatcher  # noqa: E402
 import execution_trace  # noqa: E402
 import implementation_gate  # noqa: E402
@@ -33,6 +34,7 @@ import handoff_gate  # noqa: E402
 import harness_verify  # noqa: E402
 import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
+import output_contract  # noqa: E402
 import phase_guard  # noqa: E402
 import run_state  # noqa: E402
 import session_checkpoint  # noqa: E402
@@ -73,6 +75,13 @@ DEFAULT_REVIEWER_AGENTS = {
     "test": "test-reviewer",
     "implementation": "implementation-reviewer",
 }
+BLUEPRINT_STEPS = coordinator_flow.BLUEPRINT_STEPS
+runtime_hook_status = coordinator_flow.runtime_hook_status
+next_action_for_lifecycle = coordinator_flow.next_action_for_lifecycle
+workflow_overview_for = coordinator_flow.workflow_overview_for
+required_todo_list_for_lifecycle = coordinator_flow.required_todo_list_for_lifecycle
+todo_policy_for_lifecycle = coordinator_flow.todo_policy_for_lifecycle
+exploration_policy_for_lifecycle = coordinator_flow.exploration_policy_for_lifecycle
 
 
 def as_repo(path: Path) -> Path:
@@ -218,308 +227,6 @@ sequenceDiagram
 """
 
 
-def load_run_state(repo: Path, state_path: Path) -> dict:
-    path = state_path if state_path.is_absolute() else repo / state_path
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def runtime_hook_status(repo: Path) -> dict:
-    checked: list[dict] = []
-    project_claude_dir = repo / ".claude"
-    project_opencode_dir = repo / ".opencode"
-    claude_targets = [
-        ("project", project_claude_dir / "settings.json"),
-        ("user", Path.home() / ".claude" / "settings.json"),
-    ]
-    if project_claude_dir.exists():
-        for scope, target in claude_targets:
-            if not target.parent.exists():
-                continue
-            result = install_hooks.validate_config(target, repo)
-            result["runtime"] = "claude"
-            result["scope"] = scope
-            checked.append(result)
-            if result["ready"]:
-                if scope == "user" and checked and checked[0].get("scope") == "project" and not checked[0]["ready"]:
-                    result["warnings"] = result.get("warnings", []) + [
-                        "Project Claude hook config is not ready; user-level Claude hook config is enforcing phase_guard.py."
-                    ]
-                    result["project_hook_status"] = checked[0]
-                return result
-    if project_opencode_dir.exists():
-        opencode_target = project_opencode_dir / "plugins" / "e2e-dev-harness.js"
-        result = install_hooks.validate_config(opencode_target, repo)
-        result["runtime"] = "opencode"
-        result["scope"] = "project"
-        checked.append(result)
-        if result["ready"]:
-            return result
-    if checked:
-        return {
-            "ready": False,
-            "blocked_reasons": [
-                f"{item['scope']} {item.get('runtime', 'runtime')} hook: {reason}"
-                for item in checked
-                for reason in item.get("blocked_reasons", [])
-            ],
-            "warnings": [],
-            "runtime": ",".join(sorted({str(item.get("runtime", "runtime")) for item in checked})),
-            "target": ", ".join(str(item.get("target", "")) for item in checked),
-            "checked": checked,
-        }
-    if not project_claude_dir.exists() and not project_opencode_dir.exists():
-        return {
-            "ready": True,
-            "blocked_reasons": [],
-            "warnings": [
-                "No runtime hook directory detected; use e2e_dev_harness.py pre-code before code edits when hooks are unavailable."
-            ],
-            "runtime": "generic",
-            "target": "",
-        }
-    return {
-        "ready": False,
-        "blocked_reasons": [
-            "Runtime hook config not found or unreadable."
-        ],
-        "warnings": [],
-        "runtime": "runtime",
-        "target": "",
-    }
-
-
-BLUEPRINT_STEPS = (
-    ("CREATED", "clarify", "Fill the design doc; clarification gate needs goals, use cases, acceptance criteria, test design, and resolved open questions."),
-    ("CLARIFIED", "plan", "Run plan --create-archive and complete the independent R1 design review."),
-    ("SERVICE_DESIGN_REQUIRED", "service-design", "Fill and validate each service-designs/<service>.md (service-design gate); use --emit-template to start."),
-    ("PLANNED", "tdd-red", "Write the first red test, capture red evidence, and complete the independent R2 test review."),
-    ("RED_READY", "implementation-gate", "Run gate --phase implementation to open production-code writes."),
-    ("IMPLEMENTED", "implement-or-complete", "TDD red/green for every assigned AC until ac-progress is ready, then the independent R3 implementation review."),
-    ("REVIEWED", "completion", "Run the completion gate, strict guard, run summary, and requirements archive."),
-    ("VERIFIED", "archive", "Refresh the registry, archive requirements, and report evidence."),
-)
-
-
-def clarification_interaction_contract() -> dict:
-    return {
-        "schema": "e2e-dev-harness.clarification-interaction.v1",
-        "interaction_required": True,
-        "must_wait_for_user_answer": True,
-        "questions_to_ask_user": [
-            "Confirm the agent's Restated Intent with the user.",
-            "Ask any behavior, API, data, ownership, test, or impact questions that cannot be answered from evidence.",
-            "Update the design doc Open Questions section to None only after answers are recorded or explicitly deferred out of scope.",
-        ],
-        "allowed_before_user_answer": [
-            "bounded GitNexus or scanner discovery for evidence",
-            "drafting design sections clearly marked pending confirmation",
-        ],
-        "blocked_until_resolved": [
-            "planning",
-            "TDD",
-            "production-code edits",
-            "review dispatch that depends on clarified behavior",
-        ],
-    }
-
-
-def required_todo_list_for_lifecycle(lifecycle: str, state: dict | None = None) -> list[str]:
-    state = state or {}
-    state_path = "docs/agent-runs/<run>/run-state.json"
-    lists = {
-        "CREATED": [
-            "Ask the user to confirm Restated Intent and answer unresolved clarification questions.",
-            "Run kg_refresh or inspect GitNexus status before repository exploration.",
-            "Use GitNexus query/context/impact for bounded impact evidence; use rg/Read only for seed discovery.",
-            "Fill docs/design/<feature>.md with clarified requirements and bounded impact facts.",
-            f"Run e2e_dev_harness.py clarify --design-doc <design> --run-state {state_path}.",
-            "Revise the design doc until the clarification gate passes.",
-        ],
-        "CLARIFIED": [
-            "Use GitNexus evidence to confirm affected services, routes, topics, and dependency impact.",
-            "Run e2e_dev_harness.py plan --design-doc <design> --create-archive.",
-            "Dispatch or complete the independent R1 design review.",
-            "Run e2e_dev_harness.py next before TDD or implementation work.",
-        ],
-        "SERVICE_DESIGN_REQUIRED": [
-            "Use GitNexus context/impact for each service runtime path and dependency boundary.",
-            "Fill every service-designs/<service>.md slice with mapped ACs and runtime path.",
-            f"Run e2e_dev_harness.py service-design --run-state {state_path}.",
-            "Revise service design slices until the service-design gate passes.",
-        ],
-        "PLANNED": [
-            "Run e2e_dev_harness.py dispatch-beat --max-workers <N> to spawn service-local TDD red workers.",
-            "Capture red-test evidence and required command output for each affected service.",
-            "Dispatch or complete the independent R2 test review.",
-            "Run e2e_dev_harness.py next again after TDD red and R2 complete; run-state should advance to RED_READY.",
-        ],
-        "RED_READY": [
-            f"Run e2e_dev_harness.py gate --phase implementation --run-state {state_path}.",
-            "Do not edit production files until the implementation gate opens.",
-        ],
-        "IMPLEMENTED": [
-            "Dispatch or claim each code-developer task for its assigned service/module.",
-            "Continue TDD red/green/refactor for all assigned ACs in declared scope.",
-            "Run e2e_dev_harness.py ac-progress for the active service or global design.",
-            "Dispatch or complete R3 only after all assigned ACs pass ac-progress.",
-        ],
-        "REVIEWED": [
-            "Run the completion gate and strict guard.",
-            "Write run summary and requirements archive evidence.",
-            "Resolve any rework before reporting completion.",
-        ],
-        "VERIFIED": [
-            "Refresh artifact registry and requirements archive.",
-            "Report final evidence paths and residual risks.",
-        ],
-        "REWORK_REQUIRED": [
-            "Read the rework item return_phase.",
-            "Return to the earliest required phase before editing files.",
-            "Close rework with evidence before continuing.",
-        ],
-    }
-    return lists.get(
-        lifecycle,
-        [
-            "Inspect run-state.json and repair the lifecycle.",
-            f"Run e2e_dev_harness.py next --state {state_path} after repair.",
-        ],
-    )
-
-
-def exploration_policy_for_lifecycle(lifecycle: str) -> dict:
-    return {
-        "schema": "e2e-dev-harness.exploration-policy.v1",
-        "preferred": "gitnexus",
-        "direct_tools_allowed_for": ["seed discovery", "small quoted evidence after GitNexus points to a file"],
-        "required_for": ["impact analysis", "call path tracing", "cross-service dependencies", "route/topic/contract ownership"],
-        "fallback": "If GitNexus is unavailable, write degradation evidence before treating rg/Read findings as workflow evidence.",
-        "lifecycle": lifecycle or "<missing>",
-    }
-
-
-def todo_policy_for_lifecycle(lifecycle: str, state: dict | None = None) -> dict:
-    return {
-        "schema": "e2e-dev-harness.todo-policy.v1",
-        "mode": "phase-scoped",
-        "lifecycle": lifecycle or "<missing>",
-        "rule": "TodoList must describe only the current lifecycle phase; do not include future implementation/code tasks before the implementation gate.",
-        "required_todo_list": required_todo_list_for_lifecycle(lifecycle, state),
-        "exploration_policy": exploration_policy_for_lifecycle(lifecycle),
-    }
-
-
-def next_action_for_lifecycle(lifecycle: str, state: dict | None = None) -> dict:
-    state = state or {}
-    actions = {
-        "CREATED": {
-            "phase": "clarify",
-            "command": "Fill docs/design/<feature>.md, then run e2e_dev_harness.py clarify --design-doc <design> --run-state <state>.",
-            "allowed_writes": ["docs/design/", "docs/agent-runs/"],
-            "blocked_writes": ["production code", "tests outside harness evidence"],
-        },
-        "CLARIFIED": {
-            "phase": "plan",
-            "command": "Run e2e_dev_harness.py plan --design-doc <design> --create-archive, then complete R1 review.",
-            "allowed_writes": ["docs/agent-runs/", "docs/design/"],
-            "blocked_writes": ["production code"],
-        },
-        "SERVICE_DESIGN_REQUIRED": {
-            "phase": "service-design",
-            "command": "Fill service-designs/<service>.md for every affected service, validate with e2e_dev_harness.py service-design --run-state <state>, then continue to R1/TDD planning.",
-            "allowed_writes": ["docs/agent-runs/", "docs/design/"],
-            "blocked_writes": ["production code", "service code-agent dispatch before service-design gate passes"],
-        },
-        "PLANNED": {
-            "phase": "tdd-red",
-            "command": "Write the first red test, capture red evidence, run R2 review, then gate --phase implementation.",
-            "allowed_writes": ["test files for red evidence", "docs/agent-runs/"],
-            "blocked_writes": ["production code until implementation gate passes"],
-        },
-        "RED_READY": {
-            "phase": "implementation-gate",
-            "command": "Run gate --phase implementation with red evidence and run-state to open implementation.",
-            "allowed_writes": ["docs/agent-runs/"],
-            "blocked_writes": ["production code until implementation gate passes"],
-        },
-        "IMPLEMENTED": {
-            "phase": "implement-or-complete",
-            "command": "Production code writes are open. Continue TDD red/green until ac-progress is ready for all assigned ACs, then run R3 review and completion gate.",
-            "allowed_writes": ["declared production/test scope", "docs/agent-runs/"],
-            "blocked_writes": ["undeclared scope drift", "R3 review before all assigned ACs pass ac-progress"],
-        },
-        "REVIEWED": {
-            "phase": "completion",
-            "command": "Run completion gate, strict guard, summary, and requirements archive validation.",
-            "allowed_writes": ["docs/agent-runs/"],
-            "blocked_writes": ["new production changes without rework item"],
-        },
-        "REWORK_REQUIRED": {
-            "phase": "rework",
-            "command": "Follow rework item return_phase; do not patch directly outside the routed phase.",
-            "allowed_writes": ["rework-routed scope only"],
-            "blocked_writes": ["unrouted production changes"],
-        },
-        "VERIFIED": {
-            "phase": "archive",
-            "command": "Refresh registry, archive requirements, and report evidence.",
-            "allowed_writes": ["docs/agent-runs/", "memory updates with approval"],
-            "blocked_writes": ["new implementation changes"],
-        },
-    }
-    action = actions.get(
-        lifecycle,
-        {
-            "phase": "unknown",
-            "command": "Inspect run-state.json and repair lifecycle before continuing.",
-            "allowed_writes": ["docs/agent-runs/"],
-            "blocked_writes": ["production code"],
-        },
-    )
-    if lifecycle == "PLANNED" and state.get("selected_mode") == "multi":
-        action = dict(action)
-        action["command"] = (
-            "Run dispatch-beat --max-workers <N> to spawn service-local TDD red workers, then dispatch/complete R2 review. After run-state reaches RED_READY, "
-            "run gate --phase implementation; dispatch code-developer workers only after IMPLEMENTED."
-        )
-        action["blocked_writes"] = [
-            "production code until implementation gate passes",
-            "code-developer claim/dispatch before RED_READY and implementation gate",
-        ]
-    action = dict(action)
-    action["required_todo_list"] = required_todo_list_for_lifecycle(lifecycle, state)
-    action["todo_policy"] = todo_policy_for_lifecycle(lifecycle, state)
-    action["exploration_policy"] = exploration_policy_for_lifecycle(lifecycle)
-    if lifecycle == "CREATED":
-        action["clarification_interaction"] = clarification_interaction_contract()
-    return action
-
-
-def workflow_overview_for(lifecycle: str, state: dict | None = None) -> dict:
-    state = state or {}
-    order = [item[0] for item in BLUEPRINT_STEPS]
-    current_index = order.index(lifecycle) if lifecycle in order else -1
-    steps: list[dict] = []
-    for index, (step_lifecycle, phase, summary) in enumerate(BLUEPRINT_STEPS):
-        steps.append(
-            {
-                "lifecycle": step_lifecycle,
-                "phase": phase,
-                "gate_summary": summary,
-                "current": step_lifecycle == lifecycle,
-                "completed": current_index >= 0 and index < current_index,
-                "pending": current_index == -1 or index > current_index,
-                "gate_status": (state.get("gates", {}) or {}).get(phase, ""),
-            }
-        )
-    return {
-        "schema": "e2e-dev-harness.workflow-overview.v1",
-        "current_lifecycle": lifecycle,
-        "selected_mode": state.get("selected_mode", ""),
-        "steps": steps,
-    }
-
-
 def load_phase_profile(repo: Path, path: Path | None) -> tuple[dict, list[str]]:
     if not path:
         return {}, []
@@ -592,20 +299,6 @@ def workflow_plan_for_start(
             "changing core lifecycle order from a phase profile",
         ],
     }
-
-
-def load_workflow_plan(repo: Path, state: dict) -> dict | None:
-    value = str(state.get("workflow_plan", "")).strip()
-    if not value:
-        return None
-    path = resolve_repo_path(repo, Path(value))
-    if not path or not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-        return None
-    return data if isinstance(data, dict) else None
 
 
 def without_status_file(args):
@@ -2483,6 +2176,7 @@ def agent_task(args) -> tuple[int, dict]:
             args.agent or "agent",
             args.state,
             args.evidence or [],
+            allow_local_completion=getattr(args, "allow_local_completion", False),
         )
     else:
         schedule_path = args.schedule if args.schedule.is_absolute() else repo / args.schedule
@@ -2506,36 +2200,11 @@ def runtime_capabilities(args) -> tuple[int, dict]:
 
 
 def dispatch_next(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    result = dispatcher.dispatch_next(
-        repo,
-        args.schedule,
-        args.state,
-        runtime=args.runtime,
-        coordinator_agent=args.coordinator_agent,
-        developer_session=args.developer_session,
-        max_files=args.max_files,
-        max_chars=args.max_chars,
-    )
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return coordinator_flow.dispatch_next(args)
 
 
 def dispatch_beat(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    result = dispatcher.dispatch_beat(
-        repo,
-        args.schedule,
-        args.state,
-        runtime=args.runtime,
-        coordinator_agent=args.coordinator_agent,
-        developer_session=args.developer_session,
-        max_workers=args.max_workers,
-        max_files=args.max_files,
-        max_chars=args.max_chars,
-    )
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return coordinator_flow.dispatch_beat(args)
 
 
 def dispatch_complete(args) -> tuple[int, dict]:
@@ -2588,51 +2257,7 @@ def ac_progress(args) -> tuple[int, dict]:
 
 
 def next_step(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    state_path = require_repo_path(repo, args.state, "run state")
-    if not state_path.exists():
-        result = {
-            "repo": str(repo),
-            "ready": False,
-            "blocked_reasons": [f"Run state not found: {state_path}. Run e2e_dev_harness.py start first."],
-            "warnings": [],
-        }
-        write_status(args.status_file, result)
-        return 2, result
-    state = load_run_state(repo, state_path)
-    lifecycle = str(state.get("lifecycle", ""))
-    action = next_action_for_lifecycle(lifecycle, state)
-    workflow_plan = load_workflow_plan(repo, state)
-    hooks = runtime_hook_status(repo)
-    blocked = [] if hooks["ready"] else [
-        "Runtime hook is not ready; install hooks or use e2e_dev_harness.py pre-code before any code edit."
-    ]
-    result = {
-        "repo": str(repo),
-        "ready": not blocked,
-        "run_state": str(state_path),
-        "phase_lock": str(state_path.parent / run_state.PHASE_LOCK),
-        "hook_status": hooks,
-        "lifecycle": lifecycle,
-        "next": action,
-        "todo_policy": action["todo_policy"],
-        "required_todo_list": action["required_todo_list"],
-        "exploration_policy": action["exploration_policy"],
-        "workflow_overview": workflow_overview_for(lifecycle, state),
-        "workflow_plan": workflow_plan,
-        "phase_mode": state.get("phase_mode", ""),
-        "workflow_profile": state.get("workflow_profile", ""),
-        "gates": state.get("gates", {}),
-        "blocked_reasons": blocked,
-        "warnings": hooks.get("warnings", []) if hooks["ready"] else [],
-    }
-    checkpoint = session_checkpoint.create(repo, state_path, action)
-    result["session_checkpoint"] = checkpoint
-    if not checkpoint["ready"]:
-        result["ready"] = False
-        result["blocked_reasons"].extend("Session checkpoint: " + reason for reason in checkpoint["blocked_reasons"])
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return coordinator_flow.next_step(args)
 
 
 def add_prepare_args(parser: argparse.ArgumentParser) -> None:
@@ -2658,6 +2283,11 @@ def add_prepare_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-write-dependency-report", dest="write_dependency_report", action="store_false")
     parser.set_defaults(write_dependency_report=True)
     parser.add_argument("--status-file", type=Path)
+
+
+def add_output_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--json-full", action="store_true", help="Print the complete JSON result to stdout.")
+    parser.add_argument("--compact-output", action="store_true", help="Print compact coordinator-safe stdout; this is the default.")
 
 
 def main() -> int:
@@ -2859,6 +2489,7 @@ def main() -> int:
     agent_task_parser.add_argument("--require-claims", action="store_true")
     agent_task_parser.add_argument("--require-completed", action="store_true")
     agent_task_parser.add_argument("--evidence", action="append")
+    agent_task_parser.add_argument("--allow-local-completion", action="store_true")
     agent_task_parser.add_argument("--lease-seconds", type=int, default=agent_scheduler.DEFAULT_LEASE_SECONDS)
     agent_task_parser.add_argument("--force", action="store_true", help="Reclaim an active (non-stale) claim.")
     agent_task_parser.add_argument("--status-file", type=Path)
@@ -2927,7 +2558,33 @@ def main() -> int:
     next_parser = subparsers.add_parser("next", help="Show the next allowed harness action from run-state.")
     next_parser.add_argument("repo", nargs="?", default=".", type=Path)
     next_parser.add_argument("--state", required=True, type=Path)
+    next_parser.add_argument("--runtime", default="claude-code", help="Runtime used in suggested dispatch commands.")
     next_parser.add_argument("--status-file", type=Path)
+
+    for output_parser in (
+        start_parser,
+        prepare_parser,
+        clarify_parser,
+        plan_parser,
+        gate_parser,
+        verify_parser,
+        guard_parser,
+        doctor_parser,
+        install_parser,
+        pre_code_parser,
+        test_impact_parser,
+        service_design_parser,
+        agent_task_parser,
+        capabilities_parser,
+        dispatch_next_parser,
+        dispatch_beat_parser,
+        dispatch_complete_parser,
+        dispatch_ack_parser,
+        dispatch_status_parser,
+        ac_progress_parser,
+        next_parser,
+    ):
+        add_output_args(output_parser)
 
     args = parser.parse_args()
     try:
@@ -2977,7 +2634,29 @@ def main() -> int:
         print(f"e2e-dev-harness error: {error}", file=sys.stderr)
         return 2
 
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    if getattr(args, "json_full", False):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return exit_code
+    repo = as_repo(getattr(args, "repo", Path(".")))
+    full_result_path = output_contract.write_full_result(repo, args.command or "verify", result, args)
+    coordinator_summary_path = ""
+    if args.command == "next":
+        summary = session_checkpoint.create_coordinator_summary(
+            repo,
+            getattr(args, "state"),
+            result,
+            str(full_result_path),
+        )
+        coordinator_summary_path = summary.get("coordinator_summary", "")
+        result["coordinator_summary_path"] = coordinator_summary_path
+    compact = output_contract.compact_payload(
+        repo,
+        args.command or "verify",
+        result,
+        full_result_path,
+        coordinator_summary_path,
+    )
+    print(output_contract.render_json(compact))
     return exit_code
 
 

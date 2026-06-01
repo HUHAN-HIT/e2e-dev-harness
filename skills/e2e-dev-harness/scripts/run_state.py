@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import artifact_registry  # noqa: E402
+import coordinator_summary  # noqa: E402
 from common import posix  # noqa: E402
 
 
@@ -127,8 +128,17 @@ def atomic_write_text(target: Path, text: str) -> None:
 
 def write_state(repo: Path, path: Path, state: dict) -> None:
     target = path if path.is_absolute() else repo / path
+    previous_lifecycle = ""
+    if target.exists():
+        try:
+            previous = json.loads(target.read_text(encoding="utf-8"))
+            previous_lifecycle = str(previous.get("lifecycle", ""))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            previous_lifecycle = ""
     atomic_write_text(target, json.dumps(state, indent=2, ensure_ascii=False) + "\n")
     write_phase_lock(repo, target, state)
+    if previous_lifecycle and previous_lifecycle != str(state.get("lifecycle", "")):
+        coordinator_summary.write(repo, target, state)
 
 
 def phase_lock_payload(state: dict) -> dict:

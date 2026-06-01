@@ -22,6 +22,7 @@ CLAIMED_STATUSES = {"claimed", "in-progress", "in_progress", "completed"}
 # Statuses that hold a task without finishing it; a stale hold can be reclaimed.
 HELD_STATUSES = {"claimed", "in-progress", "in_progress"}
 DEFAULT_LEASE_SECONDS = 1800
+DISPATCHER_CONFIRMED_COMPLETION = "dispatcher-confirmed"
 EXCLUSIVE_ROLE_GROUPS = {"design", "test", "code", "review", "coverage"}
 ROLE_TEMPLATE_MARKERS = ("## Role Boundary", "## Allowed Inputs", "## Forbidden", "## Required Outputs", "## Done When")
 PHASE_ROLE_GROUPS = {
@@ -591,6 +592,8 @@ def complete(
     agent: str,
     state_path: Path | None = None,
     evidence: list[str] | None = None,
+    dispatcher_confirmed: bool = False,
+    allow_local_completion: bool = False,
 ) -> dict:
     path = resolve(repo, schedule_path)
     if not path or not path.exists():
@@ -599,6 +602,29 @@ def complete(
     task = find_task(schedule, task_id)
     if not task:
         return {"ready": False, "blocked_reasons": [f"Task not found in agent schedule: {task_id}"], "warnings": []}
+    completion_mode = str(schedule.get("completion_mode", "")).strip().lower()
+    warnings: list[str] = []
+    if completion_mode == DISPATCHER_CONFIRMED_COMPLETION and not dispatcher_confirmed:
+        if not allow_local_completion:
+            return {
+                "ready": False,
+                "blocked_reasons": [
+                    f"Task {task_id} is in dispatcher-confirmed completion mode; use dispatch-complete after dispatch-ack, or rerun with --allow-local-completion for an explicit legacy/manual recovery."
+                ],
+                "warnings": [],
+            }
+        warnings.append(
+            f"Local completion override used for dispatcher-confirmed task {task_id}; prefer dispatch-complete for normal coordinator-only runs."
+        )
+        schedule.setdefault("manual_recovery_events", []).append(
+            {
+                "task_id": task_id,
+                "agent": agent,
+                "event": "allow-local-completion",
+                "warning": warnings[-1],
+                "recorded_at": now_iso(),
+            }
+        )
     owner = str(task.get("owner", ""))
     if owner and owner != agent:
         return {"ready": False, "blocked_reasons": [f"Task {task_id} is owned by {owner}, not {agent}."], "warnings": []}
@@ -635,7 +661,7 @@ def complete(
     return {
         "ready": not blocked,
         "blocked_reasons": blocked,
-        "warnings": state_result["warnings"],
+        "warnings": warnings + state_result["warnings"],
         "schedule": str(path),
         "task": task,
         "run_state_update": state_result,
@@ -655,6 +681,7 @@ def main() -> int:
     parser.add_argument("--require-claims", action="store_true")
     parser.add_argument("--require-completed", action="store_true")
     parser.add_argument("--evidence", action="append", default=[])
+    parser.add_argument("--allow-local-completion", action="store_true")
     parser.add_argument("--lease-seconds", type=int, default=DEFAULT_LEASE_SECONDS)
     parser.add_argument("--force", action="store_true", help="Reclaim an active (non-stale) claim.")
     parser.add_argument("--json", action="store_true")
@@ -668,7 +695,15 @@ def main() -> int:
     elif args.action == "reclaim":
         result = reclaim(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state, args.force, args.lease_seconds)
     elif args.action == "complete":
-        result = complete(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state, args.evidence)
+        result = complete(
+            repo,
+            args.schedule,
+            args.task_id or "",
+            args.agent or "agent",
+            args.state,
+            args.evidence,
+            allow_local_completion=args.allow_local_completion,
+        )
     else:
         path = resolve(repo, args.schedule)
         schedule = load_json(path) if path and path.exists() else {}

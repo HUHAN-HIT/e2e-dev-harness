@@ -15,6 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import run_state  # noqa: E402
+import coordinator_summary  # noqa: E402
 from common import atomic_write_json, now_iso  # noqa: E402
 
 SCHEMA = "e2e-dev-harness.session-checkpoint.v1"
@@ -94,6 +95,18 @@ def create(
         "lifecycle": data["lifecycle"],
         "next": data["next"],
     }
+
+
+def create_coordinator_summary(
+    repo: Path,
+    state_path: Path,
+    result: dict,
+    full_result_path: str = "",
+) -> dict:
+    repo = repo.resolve()
+    resolved_state = resolve(repo, state_path)
+    state = load_json(resolved_state)
+    return coordinator_summary.write(repo, resolved_state, state, result, full_result_path)
 
 
 def parse_time(value: str) -> datetime | None:

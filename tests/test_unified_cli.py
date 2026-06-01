@@ -199,6 +199,7 @@ class UnifiedCliTests(unittest.TestCase):
                     str(repo),
                     "--design-doc",
                     "docs/design/feature.md",
+                    "--json-full",
                 ],
                 cwd=str(repo),
                 env=env,
@@ -209,6 +210,125 @@ class UnifiedCliTests(unittest.TestCase):
 
         self.assertEqual(2, completed.returncode)
         self.assertIn("是否需要支持 Aliyun RocketMQ 供应商", payload["unresolved_open_questions"][0])
+
+    def test_main_defaults_to_compact_stdout_and_writes_full_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            state = e2e_dev_harness.run_state.build_state(
+                "docs/agent-runs/run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            e2e_dev_harness.run_state.write_state(repo, state_path, state)
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "e2e_dev_harness.py"),
+                    "next",
+                    str(repo),
+                    "--state",
+                    str(state_path),
+                    "--runtime",
+                    "claude-code",
+                ],
+                cwd=str(repo),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(completed.stdout)
+            full_path = Path(payload["full_result_path"])
+            if not full_path.is_absolute():
+                full_path = repo / full_path
+            full = json.loads(full_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, completed.returncode)
+        self.assertEqual("compact", payload["stdout_mode"])
+        self.assertIn("full_result_path", payload)
+        self.assertIn("coordinator_summary_path", payload)
+        self.assertNotIn("workflow_plan", payload)
+        self.assertNotIn("gates", payload)
+        self.assertIn("workflow_plan", full)
+
+    def test_main_json_full_preserves_complete_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            state = e2e_dev_harness.run_state.build_state(
+                "docs/agent-runs/run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            e2e_dev_harness.run_state.write_state(repo, state_path, state)
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "e2e_dev_harness.py"),
+                    "next",
+                    str(repo),
+                    "--state",
+                    str(state_path),
+                    "--runtime",
+                    "claude-code",
+                    "--json-full",
+                ],
+                cwd=str(repo),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(completed.stdout)
+
+        self.assertEqual(0, completed.returncode)
+        self.assertIn("workflow_plan", payload)
+        self.assertNotIn("stdout_mode", payload)
+
+    def test_main_status_file_is_reported_as_full_result_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            status_file = run_dir / "custom-status.json"
+            state = e2e_dev_harness.run_state.build_state(
+                "docs/agent-runs/run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            e2e_dev_harness.run_state.write_state(repo, state_path, state)
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "e2e_dev_harness.py"),
+                    "next",
+                    str(repo),
+                    "--state",
+                    str(state_path),
+                    "--status-file",
+                    str(status_file),
+                ],
+                cwd=str(repo),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(completed.stdout)
+            status_exists = status_file.exists()
+
+        self.assertEqual(0, completed.returncode)
+        self.assertEqual(str(status_file), payload["full_result_path"])
+        self.assertTrue(status_exists)
 
     def test_install_command_full_defaults_to_current_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

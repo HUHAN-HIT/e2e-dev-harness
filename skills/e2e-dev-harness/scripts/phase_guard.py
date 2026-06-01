@@ -141,6 +141,16 @@ CLARIFICATION_TODO_RE = re.compile(
     r"(?:\u6f84\u6e05|\u8bbe\u8ba1\u6587\u6863|\u9700\u6c42|\u610f\u56fe\u56de\u663e|\u5f00\u653e\u95ee\u9898|\u9a8c\u6536)",
     re.IGNORECASE,
 )
+PHASE_TASK_RE = re.compile(
+    r"\b(?:clarify|clarification|requirements?|use[-\s]?case|design|test(?:ing)?|tdd|red\s+test|review|coverage)\b|"
+    r"(?:\u6f84\u6e05|\u9700\u6c42|\u7528\u4f8b|\u8bbe\u8ba1|\u6d4b\u8bd5|\u8bc4\u5ba1|\u8986\u76d6)",
+    re.IGNORECASE,
+)
+READ_ONLY_EXPLORATION_TASK_RE = re.compile(
+    r"\b(?:read[-\s]?only|explor(?:e|ation)|inspect|map|trace|summari[sz]e)\b|"
+    r"(?:\u53ea\u8bfb|\u63a2\u7d22|\u68c0\u67e5|\u8ffd\u8e2a|\u603b\u7ed3)",
+    re.IGNORECASE,
+)
 USER_INTERACTION_TODO_RE = re.compile(
     r"\b(?:ask|confirm|confirmation|clarifying\s+questions?|obtain\s+user\s+approval|wait\s+for\s+user|user\s+answer)\b|"
     r"(?:\u7528\u6237|\u786e\u8ba4|\u63d0\u95ee|\u7b49\u5f85\u56de\u7b54|\u56de\u7b54|\u6279\u51c6)",
@@ -251,9 +261,9 @@ def required_todo_list_for_lifecycle(lifecycle: str) -> list[str]:
             "Revise service design slices until the service-design gate passes.",
         ],
         "PLANNED": [
-            "Write the first failing service-local test only.",
-            "Capture red-test evidence and required command output.",
-            "Dispatch or complete the independent R2 test review.",
+            "Run dispatch-beat/dispatch-next to spawn TDD red and R2 review workers.",
+            "Use only dispatcher-generated worker prompts with Task ID and Context Pack.",
+            "Wait for dispatch-complete to record red-test and R2 evidence.",
         ],
         "RED_READY": [
             f"Run e2e_dev_harness.py gate --phase implementation --run-state {state_path}.",
@@ -345,7 +355,7 @@ def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -
             "Use direct Read/Grep/Glob/List/Search only to discover missing seeds or quote small evidence after GitNexus points to a file."
         ),
         "agent_dispatch_guidance": (
-            "Do not spawn Task/subagent workers during clarification or ad hoc exploration; dispatcher-generated workers require "
+            "Only spawn dispatcher-generated Task/subagent workers; they require "
             "dispatch-next, a context pack, and a scheduled task."
         ),
         "forbidden_actions": [
@@ -387,9 +397,9 @@ def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -
         },
         "PLANNED": {
             "allowed_actions": [
-                "write red tests only",
-                "capture red-test evidence",
-                "create R2 test review artifacts",
+                "run dispatch-beat/dispatch-next for TDD red and R2 workers",
+                "record dispatch-ack for spawned workers",
+                "run dispatch-complete with scheduled red-test and R2 evidence",
                 "run e2e_dev_harness.py gate . --phase implementation --run-state " + state_path,
             ],
             "phase_guidance": "Current lifecycle is PLANNED. Production code is still locked; complete TDD red and R2 before implementation gate.",
@@ -1046,6 +1056,7 @@ def validate_action(
         text = task_text.strip()
         code_task = bool(CODE_TASK_RE.search(text))
         dispatcher_task = bool(dispatcher_task_id(text) and dispatcher_context_pack(text))
+        read_only_exploration_task = bool(READ_ONLY_EXPLORATION_TASK_RE.search(text)) and not code_task
         if dispatcher_task and not code_task:
             blocked = _evaluate_dispatch_task(
                 repo,
@@ -1068,6 +1079,15 @@ def validate_action(
             )
             if blocked is not None:
                 return blocked
+        if not dispatcher_task and PHASE_TASK_RE.search(text) and not read_only_exploration_task:
+            return {
+                "ready": False,
+                "blocked_reasons": [
+                    "Phase worker dispatch blocked: use dispatcher-generated Task prompts from dispatch-beat/dispatch-next with a Task ID and Context Pack."
+                ],
+                "warnings": warnings,
+                **guidance_from_lock(repo, lock),
+            }
         return {"ready": True, "blocked_reasons": [], "warnings": warnings}
     if require_active_run_for_read and normalized in READ_TOOLS:
         read_targets = list(paths)

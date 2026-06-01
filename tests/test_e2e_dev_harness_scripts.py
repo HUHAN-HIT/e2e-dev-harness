@@ -6402,7 +6402,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
         scoped = orchestration_plan.mode_facts_for_service_scope(facts, [], "discovery")
         selected, reasons = orchestration_plan.choose_mode("auto", scoped, "", False)
 
-        self.assertEqual("single", selected)
+        self.assertEqual("single-review", selected)
         self.assertEqual([], scoped["service_candidates"])
         self.assertFalse(scoped["multi_service"])
 
@@ -8945,7 +8945,8 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         mode, reasons = orchestration_plan.choose_mode("auto", facts, design_text, False)
 
-        self.assertEqual("single", mode, reasons)
+        self.assertEqual("single-review", mode, reasons)
+        self.assertTrue(any("single-review floor" in reason for reason in reasons))
 
     def test_auto_mode_uses_single_review_for_single_service_risk_terms(self) -> None:
         design_text = textwrap.dedent(
