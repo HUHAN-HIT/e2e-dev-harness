@@ -38,6 +38,9 @@ state means the current coordinator cannot proceed without an independent
 subagent/session. The Stop hook may allow the coordinator turn to end so the
 worker can be started, but the run is not complete and completion gates still
 require finished scheduled tasks, independent reviews, and evidence.
+This is also a coordinator context handoff point: preserve `run-state.json`,
+`session-checkpoint.json`, dispatch event files, and evidence paths, then resume
+from those files instead of carrying the prior coordinator chat forward.
 
 ## Guard Command
 

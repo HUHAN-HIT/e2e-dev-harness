@@ -4,7 +4,7 @@ The gate prevents coding before the problem is testable.
 
 ## Required Fields
 
-- Restated Intent when `--require-intent` is enabled
+- Restated Intent with user confirmation provenance for normal interactive `clarify` runs
 - Goal
 - Non-goals or out-of-scope items
 - Affected services/modules
@@ -21,15 +21,27 @@ Acceptance criteria may be written as explicit IDs (`AC-1`, `AC2`) or as plain b
 
 ## Restated Intent
 
-For high-risk, audited, or interactive runs, add:
+For interactive runs, add:
 
 ```markdown
 ## Restated Intent
 - The agent understands the user wants ...
-- The user confirmed this understanding on <date/session/artifact>.
+- User confirmation: confirmed-by: user @<date/session/artifact>.
+
+## Open Questions
+- None. confirmed-by: user @<date/session/artifact>
 ```
 
-Run `clarify --require-intent` or `gate --require-intent` to make this a hard blocker. Without this mode, the section is advisory so CI and non-interactive replay can still run.
+`clarify` requires Restated Intent and user confirmation provenance by default. Use
+`--no-require-intent` or `--no-require-user-confirmation` only for non-interactive
+replay or explicitly documented degradation. `gate --require-intent` still makes
+Restated Intent a hard blocker in implementation-gate replay.
+
+Do not mark Open Questions as `None`, `resolved`, or `confirmed` from agent-only
+reasoning. When the answer came from the user, record provenance such as
+`confirmed-by: user @2026-06-02-session`. When the answer is evidence-backed
+rather than user-provided, keep the question open or explicitly defer it out of
+scope with evidence before rerunning clarify.
 
 During the `CREATED` lifecycle, `next` and `phase_guard` expose a `clarification_interaction` contract. The active TodoList must include a user-facing step to confirm Restated Intent and resolve open questions before planning, TDD, reviewer dispatch that depends on clarified behavior, or production-code edits. If `clarify` finds unresolved items, its JSON includes `interaction_required`, `questions_to_ask_user`, and `interaction_contract` so the agent can ask the user directly instead of guessing from blocked reasons.
 
@@ -109,5 +121,5 @@ Acceptance tests:
 - ...
 
 Open questions:
-- None
+- None. confirmed-by: user @<date/session>
 ```

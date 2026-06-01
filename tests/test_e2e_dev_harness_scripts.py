@@ -3302,6 +3302,10 @@ class ReviewerGateTests(unittest.TestCase):
                     """
                     # Feature
 
+                    ## Restated Intent
+                    - The user wants a quote returned.
+                    - User confirmation: confirmed-by: user @2026-06-02
+
                     ## Goal
                     - Return a quote.
 
@@ -3319,7 +3323,7 @@ class ReviewerGateTests(unittest.TestCase):
                     - Unit test first.
 
                     ## Open Questions
-                    None
+                    None. confirmed-by: user @2026-06-02
                     """
                 ).strip(),
                 encoding="utf-8",
@@ -3347,6 +3351,10 @@ class ReviewerGateTests(unittest.TestCase):
                     """
                     # Feature
 
+                    ## Restated Intent
+                    - The user wants a quote returned.
+                    - User confirmation: confirmed-by: user @2026-06-02
+
                     ## Goal
                     - Return a quote.
 
@@ -3364,7 +3372,7 @@ class ReviewerGateTests(unittest.TestCase):
                     - Unit test first.
 
                     ## Open Questions
-                    None
+                    None. confirmed-by: user @2026-06-02
                     """
                 ).strip(),
                 encoding="utf-8",
@@ -3399,6 +3407,10 @@ class ReviewerGateTests(unittest.TestCase):
                     """
                     # Feature
 
+                    ## Restated Intent
+                    - The user wants a quote returned.
+                    - User confirmation: confirmed-by: user @2026-06-02
+
                     ## Goal
                     - Publish refund callback.
 
@@ -3415,7 +3427,7 @@ class ReviewerGateTests(unittest.TestCase):
                     - Unit test first.
 
                     ## Open Questions
-                    None
+                    None. confirmed-by: user @2026-06-02
                     """
                 ).strip(),
                 encoding="utf-8",
@@ -7533,6 +7545,10 @@ class OrchestrationArtifactTests(unittest.TestCase):
                     """
                     # Feature
 
+                    ## Restated Intent
+                    - The user wants a quote returned.
+                    - User confirmation: confirmed-by: user @2026-06-02
+
                     ## Goal
                     - Return a quote.
 
@@ -7549,7 +7565,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
                     - Unit test first.
 
                     ## Open Questions
-                    None
+                    None. confirmed-by: user @2026-06-02
                     """
                 ).strip(),
                 encoding="utf-8",

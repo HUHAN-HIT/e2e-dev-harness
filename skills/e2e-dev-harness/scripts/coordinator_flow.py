@@ -576,6 +576,10 @@ def next_step(args) -> tuple[int, dict]:
     }
     checkpoint = session_checkpoint.create(repo, state_path, action)
     result["session_checkpoint"] = checkpoint
+    result["coordinator_context_budget"] = checkpoint.get("context_budget", {})
+    for warning in checkpoint.get("warnings", []):
+        if warning not in result["warnings"]:
+            result["warnings"].append(warning)
     if not checkpoint["ready"]:
         result["ready"] = False
         result["blocked_reasons"].extend("Session checkpoint: " + reason for reason in checkpoint["blocked_reasons"])

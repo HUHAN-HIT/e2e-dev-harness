@@ -21,7 +21,7 @@ import ac_progress_gate  # noqa: E402
 import agent_scheduler  # noqa: E402
 import artifact_registry  # noqa: E402
 import clarification_gate  # noqa: E402
-from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, configure_utf8_stdio, posix  # noqa: E402
+from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, atomic_write_json, configure_utf8_stdio, posix  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import coordinator_flow  # noqa: E402
 import dispatcher  # noqa: E402
@@ -82,6 +82,14 @@ workflow_overview_for = coordinator_flow.workflow_overview_for
 required_todo_list_for_lifecycle = coordinator_flow.required_todo_list_for_lifecycle
 todo_policy_for_lifecycle = coordinator_flow.todo_policy_for_lifecycle
 exploration_policy_for_lifecycle = coordinator_flow.exploration_policy_for_lifecycle
+NOISY_STDOUT_COMMANDS = {
+    "next",
+    "gate",
+    "dispatch-next",
+    "dispatch-beat",
+    "dispatch-ack",
+    "dispatch-complete",
+}
 
 
 def as_repo(path: Path) -> Path:
@@ -115,6 +123,156 @@ def write_status(path: Path | None, result: dict) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def normalize_cli_path(repo: Path, value: str | Path | None) -> str:
+    if not value:
+        return ""
+    path = value if isinstance(value, Path) else Path(str(value))
+    try:
+        full = path if path.is_absolute() else repo / path
+        return posix(full.resolve().relative_to(repo.resolve()))
+    except (OSError, ValueError):
+        return posix(str(value))
+
+
+def run_state_path_from_args(repo: Path, args: argparse.Namespace, result: dict) -> Path | None:
+    for name in ("state", "run_state"):
+        value = getattr(args, name, None)
+        if value:
+            path = value if value.is_absolute() else repo / value
+            return path
+    value = result.get("run_state")
+    if isinstance(value, str) and value.strip():
+        path = Path(value)
+        return path if path.is_absolute() else repo / path
+    return None
+
+
+def lifecycle_from_state(repo: Path, args: argparse.Namespace, result: dict) -> str:
+    lifecycle = str(result.get("lifecycle", "")).strip()
+    if lifecycle:
+        return lifecycle
+    state_path = run_state_path_from_args(repo, args, result)
+    data = load_run_state(repo, state_path) if state_path and state_path.exists() else {}
+    return str(data.get("lifecycle", "")).strip()
+
+
+def write_cli_response_artifact(repo: Path, command: str, args: argparse.Namespace, result: dict) -> str:
+    state_path = run_state_path_from_args(repo, args, result)
+    if not state_path:
+        return ""
+    run_dir = state_path.parent
+    timestamp = f"{time.strftime('%Y%m%dT%H%M%S')}-{time.time_ns() % 1_000_000_000:09d}"
+    path = run_dir / "evidence" / "cli-responses" / f"{command}-{timestamp}.json"
+    atomic_write_json(path, result)
+    return normalize_cli_path(repo, path)
+
+
+def append_unique(items: list[str], value: str) -> None:
+    if value and value not in items:
+        items.append(value)
+
+
+def merge_warnings(*groups: list | None) -> list[str]:
+    warnings: list[str] = []
+    for group in groups:
+        for value in group or []:
+            append_unique(warnings, str(value).strip())
+    return warnings
+
+
+def dispatch_summary_fields(repo: Path, result: dict) -> dict:
+    dispatch = result.get("dispatch") if isinstance(result.get("dispatch"), dict) else {}
+    dispatches = result.get("dispatches") if isinstance(result.get("dispatches"), dict) else {}
+    packets = result.get("dispatch_packets") if isinstance(result.get("dispatch_packets"), list) else []
+    claimed = result.get("claimed_tasks") if isinstance(result.get("claimed_tasks"), list) else []
+    recent = result.get("recent_events") if isinstance(result.get("recent_events"), list) else []
+    task_ids: list[str] = []
+    worker_handles: list[str] = []
+    spawn_request_paths: list[str] = []
+    task_prompt_paths: list[str] = []
+    evidence_paths: list[str] = []
+    for task in claimed:
+        if isinstance(task, dict):
+            append_unique(task_ids, str(task.get("id", "")).strip())
+    for task_id in dispatches:
+        append_unique(task_ids, str(task_id).strip())
+    append_unique(task_ids, str(dispatch.get("current_task_id", "")).strip())
+    for item in [dispatch, *[value for value in dispatches.values() if isinstance(value, dict)]]:
+        append_unique(worker_handles, str(item.get("worker_handle", "")).strip())
+        for evidence in item.get("evidence", []) if isinstance(item.get("evidence"), list) else []:
+            append_unique(evidence_paths, normalize_cli_path(repo, evidence))
+    for packet in packets:
+        if not isinstance(packet, dict):
+            continue
+        append_unique(spawn_request_paths, normalize_cli_path(repo, packet.get("spawn_request_path", "")))
+        append_unique(task_prompt_paths, normalize_cli_path(repo, packet.get("task_prompt_path", "")))
+    task = result.get("task") if isinstance(result.get("task"), dict) else {}
+    for evidence in task.get("evidence", []) if isinstance(task.get("evidence"), list) else []:
+        append_unique(evidence_paths, normalize_cli_path(repo, evidence))
+    return {
+        "task_ids": task_ids,
+        "worker_handles": worker_handles,
+        "spawn_request_paths": spawn_request_paths,
+        "task_prompt_paths": task_prompt_paths,
+        "evidence_paths": evidence_paths,
+        "claimed_tasks": claimed,
+        "blocked_tasks": result.get("blocked_tasks", result.get("skipped_tasks", [])),
+        "recent_events": [
+            {
+                "task_id": item.get("task_id", ""),
+                "event": item.get("event", ""),
+                "path": normalize_cli_path(repo, item.get("path", "")),
+                "evidence": [normalize_cli_path(repo, value) for value in item.get("evidence", [])]
+                if isinstance(item.get("evidence"), list)
+                else [],
+            }
+            for item in recent
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def summarize_stdout_result(command: str, args: argparse.Namespace, result: dict) -> dict:
+    if command not in NOISY_STDOUT_COMMANDS or getattr(args, "full_json", False):
+        return result
+    repo = as_repo(getattr(args, "repo", Path(".")))
+    full_result_path = write_cli_response_artifact(repo, command, args, result)
+    next_action = result.get("next") if isinstance(result.get("next"), dict) else {}
+    session = result.get("session_checkpoint") if isinstance(result.get("session_checkpoint"), dict) else {}
+    coordinator_budget = result.get("coordinator_context_budget")
+    if not isinstance(coordinator_budget, dict):
+        coordinator_budget = session.get("context_budget") if isinstance(session.get("context_budget"), dict) else {}
+    summary = {
+        "schema": "e2e-dev-harness.cli-summary.v1",
+        "command": command,
+        "ready": result.get("ready", False),
+        "lifecycle": lifecycle_from_state(repo, args, result),
+        "blocked_reasons": result.get("blocked_reasons", []),
+        "warnings": result.get("warnings", []),
+        "full_result_path": full_result_path,
+        "checkpoint": normalize_cli_path(repo, session.get("checkpoint", "")),
+        "coordinator_context_budget": coordinator_budget,
+        "resume_instruction": (
+            coordinator_budget.get("resume_instruction")
+            or "Resume from the checkpoint and run only the next phase allowed by run-state."
+            if session.get("checkpoint")
+            else ""
+        ),
+        "next_action": {
+            "phase": next_action.get("phase", ""),
+            "command": next_action.get("command", ""),
+        },
+        "next_command": result.get("next_beat_hint") or next_action.get("command", "") or result.get("coordinator_action", ""),
+    }
+    if command.startswith("dispatch-"):
+        summary.update(dispatch_summary_fields(repo, result))
+        if not summary["resume_instruction"]:
+            summary["resume_instruction"] = (
+                "After each dispatch or completion wave, run next to refresh the session checkpoint before continuing."
+            )
+    return summary
 
 
 def install_targets(target: str) -> list[str]:
@@ -723,7 +881,11 @@ def clarify(args) -> tuple[int, dict]:
     design_path = resolve_repo_path(repo, args.design_doc)
     if not design_path or not design_path.exists():
         return 2, {"ready_for_implementation": False, "error": f"Design doc not found: {design_path}"}
-    result = clarification_gate.validate(design_path, require_intent=getattr(args, "require_intent", False))
+    result = clarification_gate.validate(
+        design_path,
+        require_intent=getattr(args, "require_intent", True),
+        require_user_confirmation=getattr(args, "require_user_confirmation", True),
+    )
     run_state_path = getattr(args, "run_state", None)
     if run_state_path and result.get("ready_for_implementation"):
         result["run_state_transition"] = run_state.transition_state(
@@ -998,6 +1160,13 @@ ROLE_TEMPLATE_DETAILS = {
         "forbidden": "Changing accepted scope, production/test code edits, and approving own design.",
         "outputs": "Ready use-case handoff, service/use-case mapping, contract candidates, downstream assumptions.",
         "done": "Every AC maps to at least one use case or a documented deferral with owner and approval need.",
+    },
+    "implementation-planner": {
+        "boundary": "Refine the implementation plan and dispatch sequence after R1 approval. Do not write tests or production code.",
+        "inputs": "Ready requirements/use-case handoffs, R1 design review, impact summary, dependency report, project patterns.",
+        "forbidden": "Approving own design, writing R1/R2/R3 reports, changing accepted scope, test edits, and production code edits.",
+        "outputs": "Dispatch-ready exec plan evidence, open rework routing, service/code handoff assumptions.",
+        "done": "TDD and implementation tasks have bounded inputs, ordered dependencies, and unresolved R1 findings are routed to rework.",
     },
     "test-case-developer": {
         "boundary": "Create test strategy, first red tests, contract tests, and test-impact commands. Do not modify production code.",
@@ -2286,8 +2455,18 @@ def add_prepare_args(parser: argparse.ArgumentParser) -> None:
 
 
 def add_output_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--json-full", action="store_true", help="Print the complete JSON result to stdout.")
+    parser.add_argument(
+        "--json-full",
+        "--full-json",
+        dest="json_full",
+        action="store_true",
+        help="Print the complete JSON result to stdout.",
+    )
     parser.add_argument("--compact-output", action="store_true", help="Print compact coordinator-safe stdout; this is the default.")
+
+
+def add_full_json_arg(parser: argparse.ArgumentParser) -> None:
+    return None
 
 
 def main() -> int:
@@ -2317,7 +2496,11 @@ def main() -> int:
     clarify_parser = subparsers.add_parser("clarify", help="Run the clarification gate.")
     clarify_parser.add_argument("repo", nargs="?", default=".", type=Path)
     clarify_parser.add_argument("--design-doc", required=True, type=Path)
-    clarify_parser.add_argument("--require-intent", action="store_true")
+    clarify_parser.set_defaults(require_intent=True, require_user_confirmation=True)
+    clarify_parser.add_argument("--require-intent", dest="require_intent", action="store_true")
+    clarify_parser.add_argument("--no-require-intent", dest="require_intent", action="store_false")
+    clarify_parser.add_argument("--require-user-confirmation", dest="require_user_confirmation", action="store_true")
+    clarify_parser.add_argument("--no-require-user-confirmation", dest="require_user_confirmation", action="store_false")
     clarify_parser.add_argument("--run-state", type=Path)
     clarify_parser.add_argument("--status-file", type=Path)
 
@@ -2373,6 +2556,7 @@ def main() -> int:
     gate_parser.add_argument("--require-gitnexus-evidence", choices=["auto", "strict", "off"], default="auto")
     gate_parser.add_argument("--gitnexus-degradation", type=Path)
     gate_parser.add_argument("--status-file", type=Path)
+    add_full_json_arg(gate_parser)
 
     verify_parser = subparsers.add_parser("verify", help="Run prepare, clarification, optional gate, and optional Maven.")
     add_prepare_args(verify_parser)
@@ -2509,6 +2693,7 @@ def main() -> int:
     dispatch_next_parser.add_argument("--max-files", type=int, default=12)
     dispatch_next_parser.add_argument("--max-chars", type=int, default=120_000)
     dispatch_next_parser.add_argument("--status-file", type=Path)
+    add_full_json_arg(dispatch_next_parser)
 
     dispatch_beat_parser = subparsers.add_parser("dispatch-beat", help="Dispatch a beat wave of ready scheduled tasks.")
     dispatch_beat_parser.add_argument("repo", nargs="?", default=".", type=Path)
@@ -2521,6 +2706,7 @@ def main() -> int:
     dispatch_beat_parser.add_argument("--max-files", type=int, default=12)
     dispatch_beat_parser.add_argument("--max-chars", type=int, default=120_000)
     dispatch_beat_parser.add_argument("--status-file", type=Path)
+    add_full_json_arg(dispatch_beat_parser)
 
     dispatch_complete_parser = subparsers.add_parser("dispatch-complete", help="Complete a dispatched task with scheduled evidence.")
     dispatch_complete_parser.add_argument("repo", nargs="?", default=".", type=Path)
@@ -2530,6 +2716,7 @@ def main() -> int:
     dispatch_complete_parser.add_argument("--agent", default="")
     dispatch_complete_parser.add_argument("--evidence", action="append")
     dispatch_complete_parser.add_argument("--status-file", type=Path)
+    add_full_json_arg(dispatch_complete_parser)
 
     dispatch_ack_parser = subparsers.add_parser("dispatch-ack", help="Record the runtime worker handle after a spawn request succeeds.")
     dispatch_ack_parser.add_argument("repo", nargs="?", default=".", type=Path)
@@ -2539,6 +2726,7 @@ def main() -> int:
     dispatch_ack_parser.add_argument("--worker-handle", required=True)
     dispatch_ack_parser.add_argument("--worker-session", default="")
     dispatch_ack_parser.add_argument("--status-file", type=Path)
+    add_full_json_arg(dispatch_ack_parser)
 
     dispatch_status_parser = subparsers.add_parser("dispatch-status", help="Summarize dispatch state and open scheduled tasks.")
     dispatch_status_parser.add_argument("repo", nargs="?", default=".", type=Path)
@@ -2560,6 +2748,7 @@ def main() -> int:
     next_parser.add_argument("--state", required=True, type=Path)
     next_parser.add_argument("--runtime", default="claude-code", help="Runtime used in suggested dispatch commands.")
     next_parser.add_argument("--status-file", type=Path)
+    add_full_json_arg(next_parser)
 
     for output_parser in (
         start_parser,

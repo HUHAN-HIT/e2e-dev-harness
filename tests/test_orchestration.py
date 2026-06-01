@@ -281,6 +281,73 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(any("implement" in item.lower() or "code" in item.lower() for item in result["required_todo_list"]))
         self.assertTrue(checkpoint_exists)
 
+    def test_session_checkpoint_reports_coordinator_context_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            evidence_dir = state_path.parent / "evidence"
+            cli_dir = evidence_dir / "cli-responses"
+            events_dir = state_path.parent / "dispatch-events"
+            evidence_dir.mkdir(parents=True)
+            cli_dir.mkdir(parents=True)
+            events_dir.mkdir(parents=True)
+            (evidence_dir / "large.md").write_text("x" * 80, encoding="utf-8")
+            (cli_dir / "next-1.json").write_text("{}", encoding="utf-8")
+            (events_dir / "T01-completed.json").write_text("{}", encoding="utf-8")
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            state["history"] = [{"to": "CLARIFIED"}, {"to": "PLANNED"}]
+            run_state.write_state(repo, state_path, state)
+
+            result = session_checkpoint.create(
+                repo,
+                state_path,
+                {"phase": "tdd-red"},
+                max_evidence_bytes=40,
+                max_phase_events=2,
+                max_tool_calls=0,
+            )
+            checkpoint_data = json.loads(Path(result["checkpoint"]).read_text(encoding="utf-8"))
+
+        budget = result["context_budget"]
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertTrue(budget["handoff_recommended"])
+        self.assertIn("evidence_bytes", budget["exceeded_limits"])
+        self.assertIn("phase_events", budget["exceeded_limits"])
+        self.assertIn("tool_calls", budget["exceeded_limits"])
+        self.assertEqual(budget, checkpoint_data["context_budget"])
+        self.assertTrue(any("Coordinator context budget exceeded" in warning for warning in result["warnings"]))
+
+    def test_next_surfaces_coordinator_context_budget_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            evidence_dir = state_path.parent / "evidence"
+            evidence_dir.mkdir(parents=True)
+            (evidence_dir / "large.md").write_text(
+                "x" * (session_checkpoint.DEFAULT_MAX_EVIDENCE_BYTES + 1),
+                encoding="utf-8",
+            )
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            run_state.write_state(repo, state_path, state)
+
+            _code, result = e2e_dev_harness.next_step(SimpleNamespace(repo=repo, state=state_path, status_file=None))
+
+        self.assertTrue(result["coordinator_context_budget"]["handoff_recommended"])
+        self.assertIn("evidence_bytes", result["coordinator_context_budget"]["exceeded_limits"])
+        self.assertTrue(any("Coordinator context budget exceeded" in warning for warning in result["warnings"]))
+
     def test_next_includes_global_workflow_overview(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -536,6 +603,64 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(result["interaction_required"])
         self.assertTrue(any("risk score threshold" in item for item in result["questions_to_ask_user"]))
 
+    def test_clarify_defaults_to_user_confirmation_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True, exist_ok=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Restated Intent
+                    - The user wants payment risk control.
+
+                    ## Goal
+                    - Add payment risk control.
+
+                    ## Scope
+                    - Affected services/modules: payment-service
+                    - Non-goals: reporting
+
+                    ## Use Cases
+                    - UC-1: reject risky payment.
+
+                    ## Acceptance Criteria
+                    - AC-1: risky payments are rejected.
+
+                    ## Test Design
+                    - First red test: PaymentRiskTest.rejectsRiskyPayment
+
+                    ## Open Questions
+                    - None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            code, result = e2e_dev_harness.clarify(
+                SimpleNamespace(repo=repo, design_doc=Path("docs/design/feature.md"), run_state=None, status_file=None)
+            )
+
+        self.assertEqual(2, code)
+        self.assertTrue(result["user_confirmation_required"])
+        self.assertTrue(any("confirmed-by: user" in item for item in result["questions_to_ask_user"]))
+
+    def test_stop_guidance_created_waits_for_user_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+
+            result = harness_stop_guard.evaluate(repo, state_path)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertFalse(result["guidance"]["must_continue"])
+        self.assertIn("Ask the user", result["guidance"]["agent_instruction"])
+        self.assertNotIn("Do not ask the user", result["guidance"]["agent_instruction"])
+
     def test_phase_guard_blocks_exploration_todo_without_gitnexus_first(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -640,17 +765,20 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         agents = orchestration_plan.agent_plan("single", artifacts, [])
         names = [agent["name"] for agent in agents]
+        planner = next(agent for agent in agents if agent["name"] == "implementation-planner")
         code = next(agent for agent in agents if agent["name"] == "code-developer")
 
         self.assertNotIn("single-agent", names)
         self.assertIn("requirements-clarifier", names)
         self.assertIn("use-case-designer", names)
+        self.assertIn("implementation-planner", names)
         self.assertIn("test-case-developer", names)
         self.assertIn("code-developer", names)
         self.assertIn("design-reviewer", names)
         self.assertIn("test-reviewer", names)
         self.assertIn("implementation-reviewer", names)
-        self.assertIn(artifacts["implementation_plan"], code["outputs"])
+        self.assertIn(artifacts["exec_plan"], planner["outputs"])
+        self.assertIn(artifacts["implementation_plan"], code["inputs"])
         self.assertNotIn(artifacts["design_review"], code["outputs"])
         self.assertNotIn(artifacts["implementation_review"], code["outputs"])
         schedule = orchestration_plan.agent_schedule("single", [], agents)
@@ -659,6 +787,27 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("coordinator-only-dispatch", schedule["execution_model"])
         for task in schedule["tasks"]:
             self.assertIn("agent-roles/", task["role_template"])
+        by_agent = {task["agent"]: task for task in schedule["tasks"]}
+        self.assertEqual("plan", by_agent["implementation-planner"]["phase"])
+        self.assertEqual("planning", by_agent["implementation-planner"]["role_group"])
+        self.assertEqual(["r1-review"], by_agent["implementation-planner"]["depends_on_phases"])
+        self.assertEqual(
+            ["design", "r1-review", "plan"],
+            by_agent["test-case-developer"]["depends_on_phases"],
+        )
+
+    def test_schedule_marks_planner_and_reviewers_for_fresh_runtime_dispatch(self) -> None:
+        artifacts = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
+
+        agents = orchestration_plan.agent_plan("single-review", artifacts, [])
+        schedule = orchestration_plan.agent_schedule("single-review", [], agents)
+        by_phase = {task["phase"]: task for task in schedule["tasks"] if task["phase"] in {"plan", "r1-review", "r2-review", "r3-review"}}
+
+        self.assertEqual({"plan", "r1-review", "r2-review", "r3-review"}, set(by_phase))
+        for task in by_phase.values():
+            self.assertTrue(task["requires_runtime_dispatch"])
+            self.assertEqual("fresh-subagent", task["dispatch_contract"])
+            self.assertEqual("general-purpose", task["runtime_subagent_type"])
 
     def test_select_services_discovery_does_not_use_all_candidates(self) -> None:
         facts = {"service_candidates": ["services/order-service", "services/payment-service", "services/catalog-service"]}
@@ -1417,6 +1566,69 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertNotIn("runtime_spawn_request", result)
         self.assertTrue(any("hook" in warning.lower() for warning in result["warnings"]))
 
+    def test_dispatch_beat_writes_spawn_request_and_prompt_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/code-developer.md")
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            output = Path("docs/agent-runs/run/service-plans/order-service/code-agent.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, handoff)
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state(
+                    "docs/agent-runs/run",
+                    "multi",
+                    ["services/order-service"],
+                    "docs/agent-runs/run/artifact-registry.json",
+                    "IMPLEMENTED",
+                ),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T10",
+                                "agent": "code-developer-order-service",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/order-service",
+                                "inputs": [handoff.as_posix()],
+                                "outputs": [output.as_posix()],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_beat(repo, schedule, state_path, runtime="claude-code", max_workers=1)
+            packet = result["dispatch_packets"][0]
+            spawn_path = repo / packet["spawn_request_path"]
+            prompt_path = repo / packet["task_prompt_path"]
+            spawn_path_exists = spawn_path.exists()
+            prompt_path_exists = prompt_path.exists()
+            spawn_payload = json.loads(spawn_path.read_text(encoding="utf-8"))
+            prompt_text = prompt_path.read_text(encoding="utf-8")
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertTrue(spawn_path_exists)
+        self.assertTrue(prompt_path_exists)
+        self.assertEqual("Task", spawn_payload["tool"])
+        self.assertIn("dispatch-ack", spawn_payload["ack_command"])
+        self.assertIn("Task prompt: e2e-dev-harness isolated worker task", prompt_text)
+        self.assertEqual(packet["runtime_spawn_request"], result["runtime_spawn_requests"][0])
+
     def test_dispatch_beat_spawns_parallel_ready_tasks_in_distinct_groups(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -1557,6 +1769,88 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(["T20", "T21"], [task["id"] for task in result["claimed_tasks"]])
         self.assertEqual(2, len(result["runtime_spawn_requests"]))
 
+    def test_dispatch_beat_planned_lifecycle_dispatches_unfinished_r1_before_tdd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            review_template = Path("docs/agent-runs/run/agent-roles/semantic-reviewer.md")
+            test_template = Path("docs/agent-runs/run/agent-roles/test-case-developer.md")
+            request = run_dir / "review-requests" / "R1-design-review-request.md"
+            review = run_dir / "reviews" / "R1-design-review.md"
+            test_plan = run_dir / "handoffs" / "03-test-case-developer.md"
+            write_role_template(repo, review_template)
+            write_role_template(repo, test_template)
+            request.parent.mkdir(parents=True, exist_ok=True)
+            request.write_text("Review request\nreviewer_invocation: docs/agent-runs/run/review-invocations/r1.json\n", encoding="utf-8")
+            test_plan.parent.mkdir(parents=True, exist_ok=True)
+            test_plan.write_text("# Test plan\n", encoding="utf-8")
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state(
+                    "docs/agent-runs/run",
+                    "single-review",
+                    [],
+                    "docs/agent-runs/run/artifact-registry.json",
+                    "PLANNED",
+                ),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "selected_mode": "single-review",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "status": "completed",
+                            },
+                            {
+                                "id": "T02",
+                                "agent": "use-case-designer",
+                                "phase": "design",
+                                "status": "completed",
+                            },
+                            {
+                                "id": "T03",
+                                "agent": "single-reviewer-r1-design",
+                                "phase": "r1-review",
+                                "role_group": "review",
+                                "depends_on_phases": ["design"],
+                                "inputs": [request.relative_to(repo).as_posix()],
+                                "outputs": [review.relative_to(repo).as_posix()],
+                                "role_template": review_template.as_posix(),
+                                "status": "planned",
+                            },
+                            {
+                                "id": "T04",
+                                "agent": "test-case-developer",
+                                "phase": "tdd-red",
+                                "role_group": "test",
+                                "depends_on_phases": ["design", "r1-review", "plan"],
+                                "inputs": [test_plan.relative_to(repo).as_posix()],
+                                "outputs": ["docs/agent-runs/run/evidence/red-test.txt"],
+                                "role_template": test_template.as_posix(),
+                                "status": "planned",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_beat(repo, schedule, state_path, runtime="claude-code", max_workers=1)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(["T03"], [task["id"] for task in result["claimed_tasks"]])
+        self.assertEqual("single-reviewer-r1-design", result["runtime_spawn_requests"][0]["agent"])
+
     def test_dispatch_beat_in_planned_skips_stale_early_tasks_and_spawns_service_tdd(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -1621,7 +1915,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
                                 "parallel_group": "r1-review",
                                 "depends_on_phases": ["design"],
                                 "role_template": review_template.as_posix(),
-                                "status": "planned",
+                                "status": "completed",
                             },
                             {
                                 "id": "T20",
@@ -4066,6 +4360,10 @@ class OrchestrationArtifactTests(unittest.TestCase):
                     """
                     # Feature
 
+                    ## Restated Intent
+                    - The user wants a quote returned.
+                    - User confirmation: confirmed-by: user @2026-06-02
+
                     ## Goal
                     - Return a quote.
 
@@ -4082,7 +4380,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
                     - Unit test first.
 
                     ## Open Questions
-                    None
+                    None. confirmed-by: user @2026-06-02
                     """
                 ).strip(),
                 encoding="utf-8",
@@ -4331,6 +4629,58 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("Harness control file write blocked" in reason for reason in result["blocked_reasons"]))
+
+    def test_phase_guard_blocks_large_inline_coordinator_write_payload(self) -> None:
+        hook_text = json.dumps(
+            {
+                "tool_name": "Write",
+                "tool_input": {
+                    "file_path": "docs/agent-runs/run/handoffs/worker-handoff.md",
+                    "content": "x" * 25000,
+                },
+            }
+        )
+        tool, paths = phase_guard.parse_hook_input(hook_text)
+        payload_text = phase_guard.extract_hook_write_payload_text(hook_text)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            result = phase_guard.validate_action(
+                repo,
+                tool,
+                [Path(path) for path in paths],
+                write_payload_text=payload_text,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Coordinator write budget blocked" in reason for reason in result["blocked_reasons"]))
+        self.assertIn("coordinator_write_budget", result)
+        self.assertEqual(25000, result["coordinator_write_budget"]["inline_payload_chars"])
+
+    def test_phase_guard_warns_on_medium_inline_coordinator_write_payload(self) -> None:
+        hook_text = json.dumps(
+            {
+                "tool_name": "Edit",
+                "tool_input": {
+                    "file_path": "docs/agent-runs/run/handoffs/worker-handoff.md",
+                    "old_string": "before",
+                    "new_string": "x" * 9000,
+                },
+            }
+        )
+        tool, paths = phase_guard.parse_hook_input(hook_text)
+        payload_text = phase_guard.extract_hook_write_payload_text(hook_text)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            result = phase_guard.validate_action(
+                repo,
+                tool,
+                [Path(path) for path in paths],
+                write_payload_text=payload_text,
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertTrue(any("Coordinator write budget warning" in warning for warning in result["warnings"]))
+        self.assertIn("coordinator_write_budget", result)
 
     def test_phase_guard_allows_harness_cli_referencing_run_state(self) -> None:
         hook_text = json.dumps(
@@ -6472,7 +6822,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertEqual({"services/order-service", "services/payment-service"}, {task["service"] for task in tdd_tasks})
         self.assertEqual({"service:services/order-service", "service:services/payment-service"}, groups)
-        self.assertTrue(all(task["depends_on_phases"] == ["design", "r1-review"] for task in tdd_tasks))
+        self.assertTrue(all(task["depends_on_phases"] == ["design", "r1-review", "plan"] for task in tdd_tasks))
 
     def test_auto_mode_ignores_low_signal_api_message_words(self) -> None:
         body = "\n".join(

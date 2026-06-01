@@ -20,6 +20,9 @@ from common import atomic_write_json, now_iso  # noqa: E402
 
 SCHEMA = "e2e-dev-harness.session-checkpoint.v1"
 FILENAME = "session-checkpoint.json"
+DEFAULT_MAX_EVIDENCE_BYTES = 240_000
+DEFAULT_MAX_PHASE_EVENTS = 8
+DEFAULT_MAX_TOOL_CALLS = 40
 
 
 def now_dt() -> datetime:
@@ -56,12 +59,84 @@ def checkpoint_path(state_path: Path) -> Path:
     return state_path.parent / FILENAME
 
 
+def file_count_and_bytes(root: Path) -> tuple[int, int]:
+    if not root.exists():
+        return 0, 0
+    count = 0
+    total = 0
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        count += 1
+        try:
+            total += path.stat().st_size
+        except OSError:
+            continue
+    return count, total
+
+
+def context_budget(
+    state_path: Path,
+    state: dict,
+    max_evidence_bytes: int = DEFAULT_MAX_EVIDENCE_BYTES,
+    max_phase_events: int = DEFAULT_MAX_PHASE_EVENTS,
+    max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
+) -> dict:
+    run_dir = state_path.parent
+    evidence_count, evidence_bytes = file_count_and_bytes(run_dir / "evidence")
+    cli_response_count, _cli_response_bytes = file_count_and_bytes(run_dir / "evidence" / "cli-responses")
+    dispatch_event_count, _dispatch_event_bytes = file_count_and_bytes(run_dir / "dispatch-events")
+    history = state.get("history") if isinstance(state.get("history"), list) else []
+    phase_events = len(history) + dispatch_event_count
+    metrics = {
+        "evidence_files": evidence_count,
+        "evidence_bytes": evidence_bytes,
+        "phase_events": phase_events,
+        "tool_calls": cli_response_count,
+        "dispatch_events": dispatch_event_count,
+    }
+    limits = {
+        "max_evidence_bytes": max_evidence_bytes,
+        "max_phase_events": max_phase_events,
+        "max_tool_calls": max_tool_calls,
+    }
+    exceeded: list[str] = []
+    if max_evidence_bytes >= 0 and evidence_bytes > max_evidence_bytes:
+        exceeded.append("evidence_bytes")
+    if max_phase_events >= 0 and phase_events > max_phase_events:
+        exceeded.append("phase_events")
+    if max_tool_calls >= 0 and cli_response_count > max_tool_calls:
+        exceeded.append("tool_calls")
+    return {
+        "schema": "e2e-dev-harness.coordinator-context-budget.v1",
+        "metrics": metrics,
+        "limits": limits,
+        "exceeded_limits": exceeded,
+        "handoff_recommended": bool(exceeded),
+        "resume_instruction": (
+            "Start a fresh coordinator session from run-state.json and session-checkpoint.json; keep only task ids, paths, worker handles, and evidence paths in chat."
+            if exceeded
+            else ""
+        ),
+    }
+
+
+def budget_warnings(budget: dict) -> list[str]:
+    if not budget.get("handoff_recommended"):
+        return []
+    exceeded = ", ".join(budget.get("exceeded_limits", []))
+    return [f"Coordinator context budget exceeded ({exceeded}); checkpoint/resume is recommended before continuing the run."]
+
+
 def create(
     repo: Path,
     state_path: Path,
     next_action: dict | None = None,
     agent: str = "",
     role: str = "",
+    max_evidence_bytes: int = DEFAULT_MAX_EVIDENCE_BYTES,
+    max_phase_events: int = DEFAULT_MAX_PHASE_EVENTS,
+    max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
 ) -> dict:
     repo = repo.resolve()
     resolved_state = resolve(repo, state_path)
@@ -73,6 +148,7 @@ def create(
             "warnings": [],
             "checkpoint": str(checkpoint_path(resolved_state)),
         }
+    budget = context_budget(resolved_state, state, max_evidence_bytes, max_phase_events, max_tool_calls)
     data = {
         "schema": SCHEMA,
         "run_id": state.get("run_id", ""),
@@ -82,6 +158,7 @@ def create(
         "next": next_action or {},
         "agent": agent,
         "role": role,
+        "context_budget": budget,
         "created_at": now_iso(),
         "instruction": "Resume from this checkpoint and perform only the next phase allowed by run-state.",
     }
@@ -90,10 +167,11 @@ def create(
     return {
         "ready": True,
         "blocked_reasons": [],
-        "warnings": [],
+        "warnings": budget_warnings(budget),
         "checkpoint": str(target),
         "lifecycle": data["lifecycle"],
         "next": data["next"],
+        "context_budget": budget,
     }
 
 
@@ -147,12 +225,17 @@ def validate(repo: Path, state_path: Path, max_age_minutes: int = 30) -> dict:
             blocked.append(
                 f"Session checkpoint is older than {max_age_minutes} minutes; rerun e2e_dev_harness.py next or resume."
             )
+        budget = data.get("context_budget") if isinstance(data.get("context_budget"), dict) else {}
+        warnings.extend(budget_warnings(budget))
+    else:
+        budget = {}
     return {
         "ready": not blocked,
         "blocked_reasons": blocked,
         "warnings": warnings,
         "run_state": str(resolved_state),
         "checkpoint": str(target),
+        "context_budget": budget,
     }
 
 
@@ -164,10 +247,21 @@ def main() -> int:
     parser.add_argument("--agent", default="")
     parser.add_argument("--role", default="")
     parser.add_argument("--max-age-minutes", type=int, default=30)
+    parser.add_argument("--max-evidence-bytes", type=int, default=DEFAULT_MAX_EVIDENCE_BYTES)
+    parser.add_argument("--max-phase-events", type=int, default=DEFAULT_MAX_PHASE_EVENTS)
+    parser.add_argument("--max-tool-calls", type=int, default=DEFAULT_MAX_TOOL_CALLS)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    result = create(args.repo, args.state, agent=args.agent, role=args.role) if args.create else validate(
+    result = create(
+        args.repo,
+        args.state,
+        agent=args.agent,
+        role=args.role,
+        max_evidence_bytes=args.max_evidence_bytes,
+        max_phase_events=args.max_phase_events,
+        max_tool_calls=args.max_tool_calls,
+    ) if args.create else validate(
         args.repo,
         args.state,
         args.max_age_minutes,

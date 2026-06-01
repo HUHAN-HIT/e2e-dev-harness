@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+import io
 import hashlib
 import json
 import os
@@ -21,6 +22,8 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import e2e_dev_harness  # noqa: E402
+import run_state  # noqa: E402
+import install_hooks  # noqa: E402
 
 from conftest import REVIEW_CHECKLIST, write_command_evidence  # noqa: E402
 import agent_instructions  # noqa: E402
@@ -28,6 +31,92 @@ import agent_instructions  # noqa: E402
 
 class UnifiedCliTests(unittest.TestCase):
     REVIEW_CHECKLIST = REVIEW_CHECKLIST
+
+    def write_role_template(self, repo: Path, path: Path) -> None:
+        full = repo / path
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(
+            textwrap.dedent(
+                """
+                # Role
+
+                ## Role Boundary
+                Own exactly one scheduled task.
+
+                ## Allowed Inputs
+                Use only context pack inputs.
+
+                ## Forbidden
+                Do not inherit coordinator chat context.
+
+                ## Required Outputs
+                Write only scheduled outputs.
+
+                ## Done When
+                Return evidence paths.
+                """
+            ).strip(),
+            encoding="utf-8",
+        )
+
+    def write_ready_handoff(self, repo: Path, path: Path, agent_id: str = "requirements-agent") -> None:
+        full = repo / path
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(
+            textwrap.dedent(
+                f"""
+                ---
+                agent: requirements-clarifier
+                agent_id: {agent_id}
+                status: ready
+                inputs:
+                  - user request
+                outputs:
+                  - {path.as_posix()}
+                input_hashes:
+                  - user-request sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                output_hashes:
+                  - {path.as_posix()} sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                consumed_by:
+                  - code-developer
+                open_questions: None
+                ready_at: 2026-05-23T00:00:00Z
+                ---
+
+                ## Summary
+                Requirements are clarified for dispatch.
+
+                ## Facts Used
+                User request and service scope were reviewed.
+
+                ## Decisions Made
+                The downstream task may use the scheduled context pack.
+
+                ## Open Questions
+                None
+
+                ## Downstream Assumptions
+                The implementation agent will stay inside scheduled outputs.
+
+                ## Verification Evidence
+                Ready marker hash matches this handoff file.
+                """
+            ).strip(),
+            encoding="utf-8",
+        )
+        marker = full.with_suffix(".ready.json")
+        marker.write_text(
+            json.dumps(
+                {
+                    "path": full.name,
+                    "sha256": hashlib.sha256(full.read_bytes()).hexdigest(),
+                    "producer_agent": agent_id,
+                    "status": "ready",
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     def default_review_checklist(self, phase: str) -> str:
         return "\n".join(f"- [x] {item}: checked." for item in self.REVIEW_CHECKLIST.get(phase, []))
@@ -356,6 +445,208 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertFalse(result["executed"])
         self.assertEqual(["codex", "claude", "agents"], result["targets"])
         self.assertIn("copy-skill", [action["id"] for action in result["actions"]])
+
+    def test_next_cli_quiet_default_writes_full_result_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _code, start_result = e2e_dev_harness.start(
+                SimpleNamespace(
+                    repo=repo,
+                    feature="Quote",
+                    request="Return a quote.",
+                    design_doc=None,
+                    agent_run_dir=None,
+                    run_id="run",
+                    run_date=None,
+                    force=False,
+                    status_file=None,
+                )
+            )
+
+            stdout = io.StringIO()
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "e2e_dev_harness.py",
+                    "next",
+                    str(repo),
+                    "--state",
+                    str(start_result["run_state"]),
+                ],
+            ), patch("sys.stdout", stdout):
+                exit_code = e2e_dev_harness.main()
+            payload = json.loads(stdout.getvalue())
+            full_path = repo / payload["full_result_path"]
+            full_path_exists = full_path.exists()
+            full_payload = json.loads(full_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, exit_code)
+        self.assertIn("full_result_path", payload)
+        self.assertIn("checkpoint", payload)
+        self.assertIn("resume_instruction", payload)
+        self.assertNotIn("workflow_plan", payload)
+        self.assertNotIn("todo_policy", payload)
+        self.assertTrue(full_path_exists)
+        self.assertIn("workflow_plan", full_payload)
+        self.assertIn("todo_policy", full_payload)
+
+    def test_next_cli_quiet_surfaces_coordinator_context_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _code, start_result = e2e_dev_harness.start(
+                SimpleNamespace(
+                    repo=repo,
+                    feature="Quote",
+                    request="Return a quote.",
+                    design_doc=None,
+                    agent_run_dir=None,
+                    run_id="run",
+                    run_date=None,
+                    force=False,
+                    status_file=None,
+                )
+            )
+            state_path = repo / start_result["run_state"]
+            evidence_dir = state_path.parent / "evidence"
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            (evidence_dir / "large.md").write_text(
+                "x" * (e2e_dev_harness.session_checkpoint.DEFAULT_MAX_EVIDENCE_BYTES + 1),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "e2e_dev_harness.py",
+                    "next",
+                    str(repo),
+                    "--state",
+                    str(start_result["run_state"]),
+                ],
+            ), patch("sys.stdout", stdout):
+                exit_code = e2e_dev_harness.main()
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["coordinator_context_budget"]["handoff_recommended"])
+        self.assertIn("evidence_bytes", payload["coordinator_context_budget"]["exceeded_limits"])
+        self.assertTrue(any("Coordinator context budget exceeded" in warning for warning in payload["warnings"]))
+
+    def test_next_cli_full_json_preserves_legacy_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _code, start_result = e2e_dev_harness.start(
+                SimpleNamespace(
+                    repo=repo,
+                    feature="Quote",
+                    request="Return a quote.",
+                    design_doc=None,
+                    agent_run_dir=None,
+                    run_id="run",
+                    run_date=None,
+                    force=False,
+                    status_file=None,
+                )
+            )
+
+            stdout = io.StringIO()
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "e2e_dev_harness.py",
+                    "next",
+                    str(repo),
+                    "--state",
+                    str(start_result["run_state"]),
+                    "--full-json",
+                ],
+            ), patch("sys.stdout", stdout):
+                exit_code = e2e_dev_harness.main()
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(0, exit_code)
+        self.assertIn("workflow_plan", payload)
+        self.assertIn("todo_policy", payload)
+        self.assertNotIn("full_result_path", payload)
+
+    def test_dispatch_beat_cli_quiet_default_omits_prompt_and_keeps_full_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/code-developer.md")
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            output = Path("docs/agent-runs/run/service-plans/order-service/code-agent.md")
+            install_hooks.install(repo, "claude")
+            self.write_role_template(repo, role_template)
+            self.write_ready_handoff(repo, handoff)
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state(
+                    "docs/agent-runs/run",
+                    "multi",
+                    ["services/order-service"],
+                    "docs/agent-runs/run/artifact-registry.json",
+                    "IMPLEMENTED",
+                ),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T10",
+                                "agent": "code-developer-order-service",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/order-service",
+                                "inputs": [handoff.as_posix()],
+                                "outputs": [output.as_posix()],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "e2e_dev_harness.py",
+                    "dispatch-beat",
+                    str(repo),
+                    "--schedule",
+                    str(schedule),
+                    "--state",
+                    str(state_path),
+                    "--runtime",
+                    "claude-code",
+                ],
+            ), patch("sys.stdout", stdout):
+                exit_code = e2e_dev_harness.main()
+            payload = json.loads(stdout.getvalue())
+            full_payload = json.loads((repo / payload["full_result_path"]).read_text(encoding="utf-8"))
+
+        self.assertEqual(0, exit_code)
+        self.assertIn("spawn_request_paths", payload)
+        self.assertIn("task_prompt_paths", payload)
+        self.assertNotIn("task_prompt", payload)
+        self.assertNotIn("dispatch_packets", payload)
+        self.assertIn("dispatch_packets", full_payload)
+        self.assertIn("task_prompt", full_payload["dispatch_packets"][0])
 
     def test_prepare_reuses_single_knowledge_graph_detection(self) -> None:
         facts = {

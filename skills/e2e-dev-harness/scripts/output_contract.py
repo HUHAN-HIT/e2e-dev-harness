@@ -122,6 +122,11 @@ def compact_payload(
     full_result_path: Path,
     coordinator_summary_path: str = "",
 ) -> dict:
+    session = result.get("session_checkpoint") if isinstance(result.get("session_checkpoint"), dict) else {}
+    coordinator_budget = result.get("coordinator_context_budget")
+    if not isinstance(coordinator_budget, dict):
+        coordinator_budget = session.get("context_budget") if isinstance(session.get("context_budget"), dict) else {}
+    dispatch_packets = result.get("dispatch_packets") if isinstance(result.get("dispatch_packets"), list) else []
     payload = {
         "ready": bool(result.get("ready", False)),
         "blocked_reasons": _limited_list(result.get("blocked_reasons", [])),
@@ -136,6 +141,31 @@ def compact_payload(
         },
         "artifact_paths": _artifact_paths(result, full_result_path, coordinator_summary_path),
         "next_action": _compact_next(result.get("next")),
+        "checkpoint": session.get("checkpoint", ""),
+        "coordinator_context_budget": coordinator_budget,
+        "resume_instruction": (
+            coordinator_budget.get("resume_instruction")
+            or "Resume from the checkpoint and run only the next phase allowed by run-state."
+            if session.get("checkpoint")
+            else ""
+        ),
+        "spawn_request_paths": _limited_list(
+            [
+                packet.get("spawn_request_path", "")
+                for packet in dispatch_packets
+                if isinstance(packet, dict) and packet.get("spawn_request_path")
+            ]
+        ),
+        "task_prompt_paths": _limited_list(
+            [
+                packet.get("task_prompt_path", "")
+                for packet in dispatch_packets
+                if isinstance(packet, dict) and packet.get("task_prompt_path")
+            ]
+        ),
+        "claimed_tasks": _limited_list(result.get("claimed_tasks", []), 5),
+        "blocked_tasks": _limited_list(result.get("blocked_tasks", result.get("skipped_tasks", [])), 5),
+        "recent_events": _limited_list(result.get("recent_events", []), 5),
         "full_result_path": str(full_result_path),
         "coordinator_summary_path": coordinator_summary_path,
         "stdout_mode": "compact",

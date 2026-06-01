@@ -503,6 +503,7 @@ def service_artifacts(base: str, services: list[str] | None) -> dict:
 ROLE_TEMPLATE_FILES = {
     "requirements-clarifier": "requirements-clarifier.md",
     "use-case-designer": "use-case-designer.md",
+    "implementation-planner": "implementation-planner.md",
     "test-case-developer": "test-case-developer.md",
     "code-developer": "code-developer.md",
     "semantic-reviewer": "semantic-reviewer.md",
@@ -581,6 +582,8 @@ def role_template_key(agent_name: str) -> str:
         return "requirements-clarifier"
     if "use-case" in agent_name or "designer" in agent_name:
         return "use-case-designer"
+    if "planner" in agent_name:
+        return "implementation-planner"
     if "test" in agent_name and "review" not in agent_name:
         return "test-case-developer"
     if "code-developer" in agent_name:
@@ -686,6 +689,19 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
             "outputs": [artifact_paths["test_review"]],
             "gate": "Production code waits until test review is approved or rework is routed.",
         },
+        {
+            "name": "implementation-planner",
+            "owns": ["implementation plan refinement", "dispatch sequencing", "review-driven rework routing"],
+            "inputs": [
+                artifact_paths["requirements"],
+                artifact_paths["impact_summary"],
+                artifact_paths["use_cases"],
+                artifact_paths["design_review"],
+                artifact_paths["dependency_report"],
+            ],
+            "outputs": [artifact_paths["exec_plan"]],
+            "gate": "Must run after independent R1 review; TDD waits until the planner records dispatch-ready plan evidence.",
+        },
     ])
     if has_service_slices:
         for service, paths in service_plans.items():
@@ -758,7 +774,13 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
         agents.append({
             "name": "code-developer",
             "owns": ["minimal implementation", "red-green-refactor", "verification"],
-            "inputs": [artifact_paths["requirements"], artifact_paths["use_cases"], artifact_paths["test_plan"], "failing tests"],
+            "inputs": [
+                artifact_paths["requirements"],
+                artifact_paths["use_cases"],
+                artifact_paths["implementation_plan"],
+                artifact_paths["test_plan"],
+                "failing tests",
+            ],
             "outputs": [artifact_paths["implementation_plan"], "code changes", "test results"],
             "gate": "Must be a different agent from design and test roles; all narrow and broadened verification commands pass.",
         })
@@ -807,6 +829,8 @@ def phase_for_agent(name: str) -> str:
         return "clarify"
     if "use-case" in name or "designer" in name:
         return "design"
+    if "planner" in name:
+        return "plan"
     if "code-developer" in name:
         return "implement"
     if "coverage" in name:
@@ -827,7 +851,8 @@ def depends_on_for_phase(phase: str) -> list[str]:
         "clarify": [],
         "design": ["clarify"],
         "r1-review": ["design"],
-        "tdd-red": ["design", "r1-review"],
+        "plan": ["r1-review"],
+        "tdd-red": ["design", "r1-review", "plan"],
         "r2-review": ["tdd-red"],
         "implement": ["tdd-red", "r2-review"],
         "r3-review": ["implement"],
@@ -840,6 +865,7 @@ def role_group_for_phase(phase: str) -> str:
     groups = {
         "clarify": "design",
         "design": "design",
+        "plan": "planning",
         "tdd-red": "test",
         "implement": "code",
         "r1-review": "review",
@@ -874,6 +900,9 @@ def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) 
                 "inputs": agent.get("inputs", []),
                 "outputs": agent.get("outputs", []),
                 "status": "planned",
+                "requires_runtime_dispatch": True,
+                "dispatch_contract": "fresh-subagent",
+                "runtime_subagent_type": "general-purpose",
             }
         )
     return {
