@@ -31,6 +31,7 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py next . \
 ```
 
 Use `next.required_todo_list`; GitNexus-first, no code items before implementation gate.
+Coordinator minimal reading set: instructions, `next` summary, active design/slice, handoff/context-pack paths, blockers; keep full CLI JSON in evidence files.
 
 Fill the design doc, run `clarify`, then plan with `--service-scope affected` plus explicit `--service` or `--path` when ambiguous.
 
@@ -105,7 +106,7 @@ Use focused subcommands as needed: `clarify`, `plan`, `gate`, `verify`, `guard`.
 1. Prepare: load root instructions, scan memory, probe Superpowers, refresh GitNexus-first dependency evidence.
 2. Clarify: use Superpowers brainstorming and the Markdown gate; confirm Restated Intent, resolve questions, then record answers.
 3. R1 design review: independent semantic reviewer checks AC completeness, affected modules, security paths, and reference patterns.
-4. Plan: choose `single`, explicit `single-review`, or `multi`; write an ExecPlan for complex work. Read `references/exec-plan.md`.
+4. Plan: choose `single`, `single-review`, or `multi`; dispatch `implementation-planner` for ExecPlan evidence.
 5. Service design split for multi-service: fill and validate every `service-designs/<service>.md`; do not proceed while run-state is `SERVICE_DESIGN_REQUIRED`.
 6. TDD red: write the first failing service-local test and capture failing evidence.
 7. R2 test review: independent reviewer checks happy/failure paths, security cases, and contract coverage before production code.
@@ -218,4 +219,4 @@ python skills/e2e-dev-harness/scripts/memory_capture.py select . \
 
 At completion, process proposed memory updates from the agent run. Promote accepted, approved, or verified entries only after validation.
 
-Final reports should name loaded AGENT files, Superpowers status, graph status, affected services, review artifacts, tests and Maven commands, coverage/rework state, memory decisions, and residual risks.
+Final reports name instructions, evidence, memory, and risks.

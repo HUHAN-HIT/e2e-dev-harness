@@ -162,7 +162,7 @@ LIFECYCLE_ALLOWED_PHASES = {
     "CREATED": {"clarify"},
     "CLARIFIED": {"design", "r1-review"},
     "SERVICE_DESIGN_REQUIRED": {"design", "r1-review"},
-    "PLANNED": {"tdd-red", "r2-review"},
+    "PLANNED": {"r1-review", "plan", "tdd-red", "r2-review"},
     "RED_READY": set(),
     "IMPLEMENTED": {"implement", "r3-review", "completion"},
     "REVIEWED": {"completion"},
@@ -171,12 +171,12 @@ LIFECYCLE_ALLOWED_PHASES = {
 
 LIFECYCLE_SATISFIED_PHASES = {
     "CLARIFIED": {"clarify"},
-    "SERVICE_DESIGN_REQUIRED": {"clarify", "design", "r1-review"},
-    "PLANNED": {"clarify", "design", "r1-review"},
-    "RED_READY": {"clarify", "design", "r1-review", "tdd-red", "r2-review"},
-    "IMPLEMENTED": {"clarify", "design", "r1-review", "tdd-red", "r2-review"},
-    "REVIEWED": {"clarify", "design", "r1-review", "tdd-red", "r2-review", "implement", "r3-review"},
-    "VERIFIED": {"clarify", "design", "r1-review", "tdd-red", "r2-review", "implement", "r3-review", "completion"},
+    "SERVICE_DESIGN_REQUIRED": {"clarify", "design"},
+    "PLANNED": {"clarify", "design"},
+    "RED_READY": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review"},
+    "IMPLEMENTED": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review"},
+    "REVIEWED": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review", "implement", "r3-review"},
+    "VERIFIED": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review", "implement", "r3-review", "completion"},
 }
 
 
@@ -429,7 +429,7 @@ def task_prompt(task: dict, pack: dict, invocation_path: Path, repo: Path) -> st
         "- Use only the allowed inputs from the context pack.",
         "- Do not inherit or rely on coordinator chat context.",
         "- Write only scheduled outputs.",
-        "- Return the evidence paths that should be passed to dispatch-complete.",
+        "- Return only the evidence paths that should be passed to dispatch-complete; put details in scheduled output files.",
         "- Do not perform R1/R2/R3 self-review from the same developer session.",
         "",
     ]
@@ -452,6 +452,17 @@ def task_prompt(task: dict, pack: dict, invocation_path: Path, repo: Path) -> st
 
 def worker_agent_type(task: dict) -> str:
     return "worker"
+
+
+def write_spawn_artifacts(repo: Path, run_dir: Path, task_id: str, spawn_request: dict | None, prompt: str) -> tuple[str, str]:
+    artifact_dir = run_dir / "dispatch-spawn-requests"
+    prompt_path = artifact_dir / f"{task_id}-prompt.md"
+    spawn_path = artifact_dir / f"{task_id}-spawn-request.json"
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text(prompt + "\n", encoding="utf-8")
+    if spawn_request:
+        atomic_write_json(spawn_path, spawn_request)
+    return rel(repo, spawn_path), rel(repo, prompt_path)
 
 
 def spawn_request_for_runtime(
@@ -803,11 +814,14 @@ def dispatch_beat(
         }
         prompt = task_prompt(claimed_task, pack, invocation, repo)
         spawn_request = spawn_request_for_runtime(capabilities, claimed_task, prompt, schedule_path, state_path, repo)
+        spawn_request_path, task_prompt_path = write_spawn_artifacts(repo, run_dir, task_id, spawn_request, prompt)
         packet = {
             "task": {"id": task_id, "agent": agent, "phase": claimed_task.get("phase", ""), "service": claimed_task.get("service", "")},
             "claim": claim,
             "context_pack": rel(repo, context_path),
             "invocation_path": rel(repo, invocation),
+            "spawn_request_path": spawn_request_path,
+            "task_prompt_path": task_prompt_path,
             "task_prompt": prompt,
             "dispatch": dispatch,
             **({"runtime_spawn_request": spawn_request} if spawn_request else {}),

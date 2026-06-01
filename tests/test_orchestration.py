@@ -541,23 +541,47 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         agents = orchestration_plan.agent_plan("single", artifacts, [])
         names = [agent["name"] for agent in agents]
+        planner = next(agent for agent in agents if agent["name"] == "implementation-planner")
         code = next(agent for agent in agents if agent["name"] == "code-developer")
 
         self.assertNotIn("single-agent", names)
         self.assertIn("requirements-clarifier", names)
         self.assertIn("use-case-designer", names)
+        self.assertIn("implementation-planner", names)
         self.assertIn("test-case-developer", names)
         self.assertIn("code-developer", names)
         self.assertIn("design-reviewer", names)
         self.assertIn("test-reviewer", names)
         self.assertIn("implementation-reviewer", names)
-        self.assertIn(artifacts["implementation_plan"], code["outputs"])
+        self.assertIn(artifacts["exec_plan"], planner["outputs"])
+        self.assertIn(artifacts["implementation_plan"], code["inputs"])
         self.assertNotIn(artifacts["design_review"], code["outputs"])
         self.assertNotIn(artifacts["implementation_review"], code["outputs"])
         schedule = orchestration_plan.agent_schedule("single", [], agents)
         self.assertTrue(schedule["require_role_templates"])
         for task in schedule["tasks"]:
             self.assertIn("agent-roles/", task["role_template"])
+        by_agent = {task["agent"]: task for task in schedule["tasks"]}
+        self.assertEqual("plan", by_agent["implementation-planner"]["phase"])
+        self.assertEqual("planning", by_agent["implementation-planner"]["role_group"])
+        self.assertEqual(["r1-review"], by_agent["implementation-planner"]["depends_on_phases"])
+        self.assertEqual(
+            ["design", "r1-review", "plan"],
+            by_agent["test-case-developer"]["depends_on_phases"],
+        )
+
+    def test_schedule_marks_planner_and_reviewers_for_fresh_runtime_dispatch(self) -> None:
+        artifacts = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
+
+        agents = orchestration_plan.agent_plan("single-review", artifacts, [])
+        schedule = orchestration_plan.agent_schedule("single-review", [], agents)
+        by_phase = {task["phase"]: task for task in schedule["tasks"] if task["phase"] in {"plan", "r1-review", "r2-review", "r3-review"}}
+
+        self.assertEqual({"plan", "r1-review", "r2-review", "r3-review"}, set(by_phase))
+        for task in by_phase.values():
+            self.assertTrue(task["requires_runtime_dispatch"])
+            self.assertEqual("fresh-subagent", task["dispatch_contract"])
+            self.assertEqual("general-purpose", task["runtime_subagent_type"])
 
     def test_select_services_discovery_does_not_use_all_candidates(self) -> None:
         facts = {"service_candidates": ["services/order-service", "services/payment-service", "services/catalog-service"]}
@@ -1248,6 +1272,69 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(result["task_prompt"], spawn["arguments"]["message"])
         self.assertIn("dispatch-complete", spawn["completion_command"])
 
+    def test_dispatch_beat_writes_spawn_request_and_prompt_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/code-developer.md")
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            output = Path("docs/agent-runs/run/service-plans/order-service/code-agent.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, handoff)
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state(
+                    "docs/agent-runs/run",
+                    "multi",
+                    ["services/order-service"],
+                    "docs/agent-runs/run/artifact-registry.json",
+                    "IMPLEMENTED",
+                ),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T10",
+                                "agent": "code-developer-order-service",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/order-service",
+                                "inputs": [handoff.as_posix()],
+                                "outputs": [output.as_posix()],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_beat(repo, schedule, state_path, runtime="claude-code", max_workers=1)
+            packet = result["dispatch_packets"][0]
+            spawn_path = repo / packet["spawn_request_path"]
+            prompt_path = repo / packet["task_prompt_path"]
+            spawn_path_exists = spawn_path.exists()
+            prompt_path_exists = prompt_path.exists()
+            spawn_payload = json.loads(spawn_path.read_text(encoding="utf-8"))
+            prompt_text = prompt_path.read_text(encoding="utf-8")
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertTrue(spawn_path_exists)
+        self.assertTrue(prompt_path_exists)
+        self.assertEqual("Task", spawn_payload["tool"])
+        self.assertIn("dispatch-ack", spawn_payload["ack_command"])
+        self.assertIn("Task prompt: e2e-dev-harness isolated worker task", prompt_text)
+        self.assertEqual(packet["runtime_spawn_request"], result["runtime_spawn_requests"][0])
+
     def test_dispatch_beat_spawns_parallel_ready_tasks_in_distinct_groups(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -1388,6 +1475,88 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(["T20", "T21"], [task["id"] for task in result["claimed_tasks"]])
         self.assertEqual(2, len(result["runtime_spawn_requests"]))
 
+    def test_dispatch_beat_planned_lifecycle_dispatches_unfinished_r1_before_tdd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            review_template = Path("docs/agent-runs/run/agent-roles/semantic-reviewer.md")
+            test_template = Path("docs/agent-runs/run/agent-roles/test-case-developer.md")
+            request = run_dir / "review-requests" / "R1-design-review-request.md"
+            review = run_dir / "reviews" / "R1-design-review.md"
+            test_plan = run_dir / "handoffs" / "03-test-case-developer.md"
+            write_role_template(repo, review_template)
+            write_role_template(repo, test_template)
+            request.parent.mkdir(parents=True, exist_ok=True)
+            request.write_text("Review request\nreviewer_invocation: docs/agent-runs/run/review-invocations/r1.json\n", encoding="utf-8")
+            test_plan.parent.mkdir(parents=True, exist_ok=True)
+            test_plan.write_text("# Test plan\n", encoding="utf-8")
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state(
+                    "docs/agent-runs/run",
+                    "single-review",
+                    [],
+                    "docs/agent-runs/run/artifact-registry.json",
+                    "PLANNED",
+                ),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "selected_mode": "single-review",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "status": "completed",
+                            },
+                            {
+                                "id": "T02",
+                                "agent": "use-case-designer",
+                                "phase": "design",
+                                "status": "completed",
+                            },
+                            {
+                                "id": "T03",
+                                "agent": "single-reviewer-r1-design",
+                                "phase": "r1-review",
+                                "role_group": "review",
+                                "depends_on_phases": ["design"],
+                                "inputs": [request.relative_to(repo).as_posix()],
+                                "outputs": [review.relative_to(repo).as_posix()],
+                                "role_template": review_template.as_posix(),
+                                "status": "planned",
+                            },
+                            {
+                                "id": "T04",
+                                "agent": "test-case-developer",
+                                "phase": "tdd-red",
+                                "role_group": "test",
+                                "depends_on_phases": ["design", "r1-review", "plan"],
+                                "inputs": [test_plan.relative_to(repo).as_posix()],
+                                "outputs": ["docs/agent-runs/run/evidence/red-test.txt"],
+                                "role_template": test_template.as_posix(),
+                                "status": "planned",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_beat(repo, schedule, state_path, runtime="claude-code", max_workers=1)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(["T03"], [task["id"] for task in result["claimed_tasks"]])
+        self.assertEqual("single-reviewer-r1-design", result["runtime_spawn_requests"][0]["agent"])
+
     def test_dispatch_beat_in_planned_skips_stale_early_tasks_and_spawns_service_tdd(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -1452,7 +1621,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
                                 "parallel_group": "r1-review",
                                 "depends_on_phases": ["design"],
                                 "role_template": review_template.as_posix(),
-                                "status": "planned",
+                                "status": "completed",
                             },
                             {
                                 "id": "T20",
@@ -6059,7 +6228,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertEqual({"services/order-service", "services/payment-service"}, {task["service"] for task in tdd_tasks})
         self.assertEqual({"service:services/order-service", "service:services/payment-service"}, groups)
-        self.assertTrue(all(task["depends_on_phases"] == ["design", "r1-review"] for task in tdd_tasks))
+        self.assertTrue(all(task["depends_on_phases"] == ["design", "r1-review", "plan"] for task in tdd_tasks))
 
     def test_auto_mode_ignores_low_signal_api_message_words(self) -> None:
         body = "\n".join(

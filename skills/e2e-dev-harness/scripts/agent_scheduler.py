@@ -22,11 +22,12 @@ CLAIMED_STATUSES = {"claimed", "in-progress", "in_progress", "completed"}
 # Statuses that hold a task without finishing it; a stale hold can be reclaimed.
 HELD_STATUSES = {"claimed", "in-progress", "in_progress"}
 DEFAULT_LEASE_SECONDS = 1800
-EXCLUSIVE_ROLE_GROUPS = {"design", "test", "code", "review", "coverage"}
+EXCLUSIVE_ROLE_GROUPS = {"design", "planning", "test", "code", "review", "coverage"}
 ROLE_TEMPLATE_MARKERS = ("## Role Boundary", "## Allowed Inputs", "## Forbidden", "## Required Outputs", "## Done When")
 PHASE_ROLE_GROUPS = {
     "clarify": "design",
     "design": "design",
+    "plan": "planning",
     "tdd-red": "test",
     "implement": "code",
     "r1-review": "review",
@@ -36,12 +37,12 @@ PHASE_ROLE_GROUPS = {
 }
 LIFECYCLE_SATISFIED_PHASES = {
     "CLARIFIED": {"clarify"},
-    "SERVICE_DESIGN_REQUIRED": {"clarify", "design", "r1-review"},
-    "PLANNED": {"clarify", "design", "r1-review"},
-    "RED_READY": {"clarify", "design", "r1-review", "tdd-red", "r2-review"},
-    "IMPLEMENTED": {"clarify", "design", "r1-review", "tdd-red", "r2-review"},
-    "REVIEWED": {"clarify", "design", "r1-review", "tdd-red", "r2-review", "implement", "r3-review"},
-    "VERIFIED": {"clarify", "design", "r1-review", "tdd-red", "r2-review", "implement", "r3-review", "completion"},
+    "SERVICE_DESIGN_REQUIRED": {"clarify", "design"},
+    "PLANNED": {"clarify", "design"},
+    "RED_READY": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review"},
+    "IMPLEMENTED": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review"},
+    "REVIEWED": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review", "implement", "r3-review"},
+    "VERIFIED": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review", "implement", "r3-review", "completion"},
 }
 
 

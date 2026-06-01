@@ -101,6 +101,19 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("claim", text)
         self.assertIn("complete", text)
 
+    def test_orchestration_docs_define_coordinator_context_budget_strategy(self) -> None:
+        skill_text = (ROOT / "skills" / "e2e-dev-harness" / "SKILL.md").read_text(encoding="utf-8")
+        orchestration = (ROOT / "skills" / "e2e-dev-harness" / "references" / "agent-orchestration.md").read_text(encoding="utf-8")
+        execution_control = (ROOT / "skills" / "e2e-dev-harness" / "references" / "execution-control.md").read_text(encoding="utf-8")
+
+        self.assertIn("Coordinator minimal reading set", skill_text)
+        self.assertIn("keep full CLI JSON in evidence files", skill_text)
+        self.assertIn("Coordinator Context Budget", orchestration)
+        self.assertIn("coordinator context handoff point", orchestration)
+        self.assertIn("session-checkpoint.json", orchestration)
+        self.assertIn("coordinator context handoff point", execution_control)
+        self.assertIn("WAITING_DISPATCH", execution_control)
+
     def test_github_actions_harness_is_windows_first(self) -> None:
         text = (ROOT / "skills" / "e2e-dev-harness" / "ci" / "github-actions-harness.yml").read_text(encoding="utf-8")
 

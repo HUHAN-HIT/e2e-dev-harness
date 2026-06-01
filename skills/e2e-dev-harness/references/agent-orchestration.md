@@ -52,6 +52,21 @@ returned runtime tools, records worker handles through the Task hook or
 writes `dispatch-events/<task-id>-completed.json`; the next beat can use those
 events plus the updated schedule to unlock successors.
 
+## Coordinator Context Budget
+
+Coordinator CLI output is intentionally bounded. `next`, `gate`, and
+`dispatch-*` default to a short summary and write full JSON under
+`evidence/cli-responses/`; use `--full-json` only when diagnosing a failed gate
+or dispatcher invariant. Spawn requests and worker prompts are persisted as
+files, so the coordinator should keep paths plus worker handles in chat rather
+than pasting prompts, context packs, or full dispatch packets.
+
+Treat `WAITING_DISPATCH`, a completed dispatch wave, and each worker completion
+wave as a coordinator context handoff point. Run `next` to refresh
+`session-checkpoint.json`, then a fresh coordinator session can resume from
+`run-state.json`, the checkpoint, dispatch event files, and scheduled evidence
+without replaying prior chat.
+
 By default, one beat dispatches only distinct `parallel_group` values. This keeps
 same-service or same-scope code work serialized while still allowing unrelated
 services, role handoffs, or review tasks to run concurrently when their gates and
@@ -128,9 +143,14 @@ task so clarification can run in a subagent before the full archive exists.
 dispatch: each task has an agent id, phase, service scope, dependency phases,
 input artifacts, output artifacts, and parallel group. Agents update task status
 through dispatcher commands instead of exchanging long free-form chat transcripts.
+Generated tasks also declare `requires_runtime_dispatch: true`,
+`dispatch_contract: fresh-subagent`, and `runtime_subagent_type:
+general-purpose`; the coordinator may write archive scaffolding, but it must not
+treat R1/R2/R3 review or implementation planning as completed until the
+corresponding dispatched task writes its scheduled evidence.
 It also writes short role templates under `agent-roles/`; generated schedules set `require_role_templates: true`, so claim is blocked if the referenced template is missing or malformed.
 
-For multi-service work, `plan --create-archive` leaves run-state at `SERVICE_DESIGN_REQUIRED`. Fill and validate every service design slice with `service-design --run-state` before service code dispatch. Service-scoped code-developer tasks in different `service:<name>` parallel groups may run concurrently only after shared contracts, service designs, service-local TDD plans, and R2 review are stable.
+For multi-service work, `plan --create-archive` leaves run-state at `SERVICE_DESIGN_REQUIRED`. Fill and validate every service design slice with `service-design --run-state` before service code dispatch. Service-scoped code-developer tasks in different `service:<name>` parallel groups may run concurrently only after shared contracts, service designs, the implementation-planner task, service-local TDD plans, and R2 review are stable.
 
 Before writing code, a service code agent must claim its task:
 
@@ -214,6 +234,25 @@ Gate:
 
 - Planning waits until this review is `approved` or findings have rework/clarification items. The reviewer does not patch the design silently.
 - The review report must reference the review request, name a different Developer Agent and Reviewer Agent, declare `Independence: independent-agent`, and state `No Code Changes: confirmed`.
+
+### Implementation Planner
+
+Inputs:
+
+- Approved requirements and use-case artifacts
+- R1 design review output
+- Impact summary and dependency report
+- Project reference patterns needed to bound implementation
+
+Outputs:
+
+- `docs/agent-runs/<date-feature>/exec-plan.md`
+- Dispatch-ready implementation assumptions, open rework routing, and task sequencing evidence
+
+Gate:
+
+- TDD red work depends on the `plan` phase as well as R1. `PLANNED` run-state means the archive exists and test writes are phase-lock eligible; it does not mean R1 review or planner evidence may be skipped.
+- The planner runs as a fresh dispatched worker, not as coordinator inline reasoning. The coordinator may create scaffolding files, but the scheduled planner task must own the final plan evidence used by downstream workers.
 
 ### Test Case Developer
 
