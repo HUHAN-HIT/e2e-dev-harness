@@ -111,6 +111,8 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("Coordinator Context Budget", orchestration)
         self.assertIn("coordinator context handoff point", orchestration)
         self.assertIn("session-checkpoint.json", orchestration)
+        self.assertIn("coordinator_context_budget.handoff_recommended", orchestration)
+        self.assertIn("bytes under `evidence/`", orchestration)
         self.assertIn("coordinator context handoff point", execution_control)
         self.assertIn("WAITING_DISPATCH", execution_control)
 

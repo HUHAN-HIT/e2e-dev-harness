@@ -165,6 +165,14 @@ def append_unique(items: list[str], value: str) -> None:
         items.append(value)
 
 
+def merge_warnings(*groups: list | None) -> list[str]:
+    warnings: list[str] = []
+    for group in groups:
+        for value in group or []:
+            append_unique(warnings, str(value).strip())
+    return warnings
+
+
 def dispatch_summary_fields(repo: Path, result: dict) -> dict:
     dispatch = result.get("dispatch") if isinstance(result.get("dispatch"), dict) else {}
     dispatches = result.get("dispatches") if isinstance(result.get("dispatches"), dict) else {}
@@ -224,6 +232,9 @@ def summarize_stdout_result(command: str, args: argparse.Namespace, result: dict
     full_result_path = write_cli_response_artifact(repo, command, args, result)
     next_action = result.get("next") if isinstance(result.get("next"), dict) else {}
     session = result.get("session_checkpoint") if isinstance(result.get("session_checkpoint"), dict) else {}
+    coordinator_budget = result.get("coordinator_context_budget")
+    if not isinstance(coordinator_budget, dict):
+        coordinator_budget = session.get("context_budget") if isinstance(session.get("context_budget"), dict) else {}
     summary = {
         "schema": "e2e-dev-harness.cli-summary.v1",
         "command": command,
@@ -233,8 +244,10 @@ def summarize_stdout_result(command: str, args: argparse.Namespace, result: dict
         "warnings": result.get("warnings", []),
         "full_result_path": full_result_path,
         "checkpoint": normalize_cli_path(repo, session.get("checkpoint", "")),
+        "coordinator_context_budget": coordinator_budget,
         "resume_instruction": (
-            "Resume from the checkpoint and run only the next phase allowed by run-state."
+            coordinator_budget.get("resume_instruction")
+            or "Resume from the checkpoint and run only the next phase allowed by run-state."
             if session.get("checkpoint")
             else ""
         ),
@@ -2780,6 +2793,8 @@ def next_step(args) -> tuple[int, dict]:
     }
     checkpoint = session_checkpoint.create(repo, state_path, action)
     result["session_checkpoint"] = checkpoint
+    result["coordinator_context_budget"] = checkpoint.get("context_budget", {})
+    result["warnings"] = merge_warnings(result.get("warnings", []), checkpoint.get("warnings", []))
     if not checkpoint["ready"]:
         result["ready"] = False
         result["blocked_reasons"].extend("Session checkpoint: " + reason for reason in checkpoint["blocked_reasons"])

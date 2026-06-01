@@ -279,6 +279,73 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(any("implement" in item.lower() or "code" in item.lower() for item in result["required_todo_list"]))
         self.assertTrue(checkpoint_exists)
 
+    def test_session_checkpoint_reports_coordinator_context_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            evidence_dir = state_path.parent / "evidence"
+            cli_dir = evidence_dir / "cli-responses"
+            events_dir = state_path.parent / "dispatch-events"
+            evidence_dir.mkdir(parents=True)
+            cli_dir.mkdir(parents=True)
+            events_dir.mkdir(parents=True)
+            (evidence_dir / "large.md").write_text("x" * 80, encoding="utf-8")
+            (cli_dir / "next-1.json").write_text("{}", encoding="utf-8")
+            (events_dir / "T01-completed.json").write_text("{}", encoding="utf-8")
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            state["history"] = [{"to": "CLARIFIED"}, {"to": "PLANNED"}]
+            run_state.write_state(repo, state_path, state)
+
+            result = session_checkpoint.create(
+                repo,
+                state_path,
+                {"phase": "tdd-red"},
+                max_evidence_bytes=40,
+                max_phase_events=2,
+                max_tool_calls=0,
+            )
+            checkpoint_data = json.loads(Path(result["checkpoint"]).read_text(encoding="utf-8"))
+
+        budget = result["context_budget"]
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertTrue(budget["handoff_recommended"])
+        self.assertIn("evidence_bytes", budget["exceeded_limits"])
+        self.assertIn("phase_events", budget["exceeded_limits"])
+        self.assertIn("tool_calls", budget["exceeded_limits"])
+        self.assertEqual(budget, checkpoint_data["context_budget"])
+        self.assertTrue(any("Coordinator context budget exceeded" in warning for warning in result["warnings"]))
+
+    def test_next_surfaces_coordinator_context_budget_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            evidence_dir = state_path.parent / "evidence"
+            evidence_dir.mkdir(parents=True)
+            (evidence_dir / "large.md").write_text(
+                "x" * (session_checkpoint.DEFAULT_MAX_EVIDENCE_BYTES + 1),
+                encoding="utf-8",
+            )
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            run_state.write_state(repo, state_path, state)
+
+            _code, result = e2e_dev_harness.next_step(SimpleNamespace(repo=repo, state=state_path, status_file=None))
+
+        self.assertTrue(result["coordinator_context_budget"]["handoff_recommended"])
+        self.assertIn("evidence_bytes", result["coordinator_context_budget"]["exceeded_limits"])
+        self.assertTrue(any("Coordinator context budget exceeded" in warning for warning in result["warnings"]))
+
     def test_next_includes_global_workflow_overview(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -436,6 +503,64 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(2, code)
         self.assertTrue(result["interaction_required"])
         self.assertTrue(any("risk score threshold" in item for item in result["questions_to_ask_user"]))
+
+    def test_clarify_defaults_to_user_confirmation_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True, exist_ok=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Restated Intent
+                    - The user wants payment risk control.
+
+                    ## Goal
+                    - Add payment risk control.
+
+                    ## Scope
+                    - Affected services/modules: payment-service
+                    - Non-goals: reporting
+
+                    ## Use Cases
+                    - UC-1: reject risky payment.
+
+                    ## Acceptance Criteria
+                    - AC-1: risky payments are rejected.
+
+                    ## Test Design
+                    - First red test: PaymentRiskTest.rejectsRiskyPayment
+
+                    ## Open Questions
+                    - None
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            code, result = e2e_dev_harness.clarify(
+                SimpleNamespace(repo=repo, design_doc=Path("docs/design/feature.md"), run_state=None, status_file=None)
+            )
+
+        self.assertEqual(2, code)
+        self.assertTrue(result["user_confirmation_required"])
+        self.assertTrue(any("confirmed-by: user" in item for item in result["questions_to_ask_user"]))
+
+    def test_stop_guidance_created_waits_for_user_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+
+            result = harness_stop_guard.evaluate(repo, state_path)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertFalse(result["guidance"]["must_continue"])
+        self.assertIn("Ask the user", result["guidance"]["agent_instruction"])
+        self.assertNotIn("Do not ask the user", result["guidance"]["agent_instruction"])
 
     def test_phase_guard_blocks_exploration_todo_without_gitnexus_first(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

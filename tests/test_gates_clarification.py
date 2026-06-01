@@ -174,6 +174,117 @@ class ClarificationGateTests(unittest.TestCase):
 
         self.assertTrue(result["ready_for_implementation"], result)
 
+    def test_user_confirmation_required_blocks_self_resolved_open_questions(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Restated Intent
+            - The user wants checkout quotes returned.
+            - User confirmation: confirmed-by: user @2026-06-02
+
+            ## Goal
+            - Return checkout quotes.
+
+            ## Scope
+            - services/checkout-service
+
+            ## Use Cases
+            - Customer requests a checkout quote.
+
+            ## Acceptance Criteria
+            - AC-1 Checkout quote is returned.
+
+            ## Test Design
+            - CheckoutServiceTest covers quote creation.
+
+            ## Open Questions
+            - None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path, require_intent=True, require_user_confirmation=True)
+
+        self.assertFalse(result["ready_for_implementation"])
+        self.assertTrue(any("Open Questions" in gap for gap in result["user_confirmation_gaps"]))
+        self.assertTrue(result["interaction_required"])
+
+    def test_user_confirmation_required_accepts_confirmed_intent_and_open_questions(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Restated Intent
+            - The user wants checkout quotes returned.
+            - User confirmation: confirmed-by: user @2026-06-02
+
+            ## Goal
+            - Return checkout quotes.
+
+            ## Scope
+            - services/checkout-service
+
+            ## Use Cases
+            - Customer requests a checkout quote.
+
+            ## Acceptance Criteria
+            - AC-1 Checkout quote is returned.
+
+            ## Test Design
+            - CheckoutServiceTest covers quote creation.
+
+            ## Open Questions
+            - None. confirmed-by: user @2026-06-02
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path, require_intent=True, require_user_confirmation=True)
+
+        self.assertTrue(result["ready_for_implementation"], result)
+        self.assertEqual([], result["user_confirmation_gaps"])
+
+    def test_user_confirmation_required_blocks_unconfirmed_restated_intent(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Restated Intent
+            - The user wants checkout quotes returned.
+
+            ## Goal
+            - Return checkout quotes.
+
+            ## Scope
+            - services/checkout-service
+
+            ## Use Cases
+            - Customer requests a checkout quote.
+
+            ## Acceptance Criteria
+            - AC-1 Checkout quote is returned.
+
+            ## Test Design
+            - CheckoutServiceTest covers quote creation.
+
+            ## Open Questions
+            - None. confirmed-by: user @2026-06-02
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path, require_intent=True, require_user_confirmation=True)
+
+        self.assertFalse(result["ready_for_implementation"])
+        self.assertTrue(any("Restated Intent" in gap for gap in result["user_confirmation_gaps"]))
+
     def test_mq_requirement_requires_cross_layer_sender_call_chain(self) -> None:
         markdown = textwrap.dedent(
             """

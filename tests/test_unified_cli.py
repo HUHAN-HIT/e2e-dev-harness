@@ -370,6 +370,50 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertIn("workflow_plan", full_payload)
         self.assertIn("todo_policy", full_payload)
 
+    def test_next_cli_quiet_surfaces_coordinator_context_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _code, start_result = e2e_dev_harness.start(
+                SimpleNamespace(
+                    repo=repo,
+                    feature="Quote",
+                    request="Return a quote.",
+                    design_doc=None,
+                    agent_run_dir=None,
+                    run_id="run",
+                    run_date=None,
+                    force=False,
+                    status_file=None,
+                )
+            )
+            state_path = repo / start_result["run_state"]
+            evidence_dir = state_path.parent / "evidence"
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            (evidence_dir / "large.md").write_text(
+                "x" * (e2e_dev_harness.session_checkpoint.DEFAULT_MAX_EVIDENCE_BYTES + 1),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "e2e_dev_harness.py",
+                    "next",
+                    str(repo),
+                    "--state",
+                    str(start_result["run_state"]),
+                ],
+            ), patch("sys.stdout", stdout):
+                exit_code = e2e_dev_harness.main()
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["coordinator_context_budget"]["handoff_recommended"])
+        self.assertIn("evidence_bytes", payload["coordinator_context_budget"]["exceeded_limits"])
+        self.assertTrue(any("Coordinator context budget exceeded" in warning for warning in payload["warnings"]))
+
     def test_next_cli_full_json_preserves_legacy_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

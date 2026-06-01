@@ -67,6 +67,13 @@ wave as a coordinator context handoff point. Run `next` to refresh
 `run-state.json`, the checkpoint, dispatch event files, and scheduled evidence
 without replaying prior chat.
 
+`session-checkpoint.json` also carries a soft coordinator budget. The harness
+cannot see the real LLM context window, so it records proxy metrics instead:
+bytes under `evidence/`, phase/dispatch event count, and CLI response artifact
+count as a tool-call proxy. If `coordinator_context_budget.handoff_recommended`
+is true, do not keep reading more evidence in the same chat; checkpoint and
+resume from the compact run-state plus paths.
+
 By default, one beat dispatches only distinct `parallel_group` values. This keeps
 same-service or same-scope code work serialized while still allowing unrelated
 services, role handoffs, or review tasks to run concurrently when their gates and
