@@ -1856,6 +1856,60 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("not been confirmed" in reason for reason in result["blocked_reasons"]))
 
+    def test_dispatch_complete_blocks_task_that_was_never_dispatched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            evidence = Path("docs/agent-runs/run/service-plans/order-service/code-agent.md")
+            role_template = Path("docs/agent-runs/run/agent-roles/code-developer.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, evidence, "code-developer-order-service")
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state(
+                    "docs/agent-runs/run",
+                    "multi",
+                    ["services/order-service"],
+                    "docs/agent-runs/run/artifact-registry.json",
+                    "IMPLEMENTED",
+                ),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T10",
+                                "agent": "code-developer-order-service",
+                                "phase": "implement",
+                                "role_group": "code",
+                                "service": "services/order-service",
+                                "inputs": [],
+                                "outputs": [evidence.as_posix()],
+                                "role_template": role_template.as_posix(),
+                                "status": "claimed",
+                                "owner": "code-developer-order-service",
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_complete(repo, schedule, state_path, "T10", "code-developer-order-service", [evidence.as_posix()])
+            schedule_data = json.loads(schedule.read_text(encoding="utf-8"))
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("never dispatched" in reason for reason in result["blocked_reasons"]))
+        self.assertEqual("claimed", schedule_data["tasks"][0]["status"])
+
     def test_dispatch_complete_uses_matching_dispatch_slot_and_writes_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -2081,11 +2135,18 @@ class OrchestrationArtifactTests(unittest.TestCase):
             write_role_template(repo, role_template)
             (repo / review).parent.mkdir(parents=True, exist_ok=True)
             (repo / review).write_text("review evidence\n", encoding="utf-8")
-            run_state.write_state(
-                repo,
-                state_path,
-                run_state.build_state("docs/agent-runs/run", "single-review", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED"),
-            )
+            state = run_state.build_state("docs/agent-runs/run", "single-review", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            state["dispatch"] = {
+                "status": "worker_running",
+                "runtime": "codex",
+                "current_task_id": "T04",
+                "current_agent": "design-reviewer",
+                "worker_handle": "review-worker",
+                "worker_session": "review-worker-session",
+                "spawn_acknowledged_at": "2026-05-31T00:00:00Z",
+            }
+            state["dispatches"] = {"T04": state["dispatch"]}
+            run_state.write_state(repo, state_path, state)
             schedule.parent.mkdir(parents=True, exist_ok=True)
             schedule.write_text(
                 json.dumps(
@@ -3019,6 +3080,18 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("regression" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_run_state_transition_blocks_skip_not_in_transition_table(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+
+            result = run_state.transition_state(repo, state_path, "VERIFIED")
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("transition table" in reason for reason in result["blocked_reasons"]))
 
     def test_run_state_blocks_manual_implemented_transition_without_gate_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3973,6 +4046,44 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("Shell write blocked" in reason for reason in result["blocked_reasons"]))
+
+    def test_phase_guard_blocks_tee_code_write_before_phase_lock(self) -> None:
+        hook_text = json.dumps(
+            {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "printf 'class Pay {}' | tee services/payment/src/main/java/Pay.java"
+                },
+            }
+        )
+        tool, paths = phase_guard.parse_hook_input(hook_text)
+        command_text = phase_guard.extract_hook_command_text(hook_text)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            result = phase_guard.validate_action(repo, tool, [Path(path) for path in paths], command_text=command_text)
+
+        self.assertIn("services/payment/src/main/java/Pay.java", paths)
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Code write blocked" in reason for reason in result["blocked_reasons"]))
+
+    def test_phase_guard_blocks_heredoc_code_write_before_phase_lock(self) -> None:
+        hook_text = json.dumps(
+            {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "cat <<'EOF' > services/payment/src/main/java/Pay.java\nclass Pay {}\nEOF"
+                },
+            }
+        )
+        tool, paths = phase_guard.parse_hook_input(hook_text)
+        command_text = phase_guard.extract_hook_command_text(hook_text)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            result = phase_guard.validate_action(repo, tool, [Path(path) for path in paths], command_text=command_text)
+
+        self.assertIn("services/payment/src/main/java/Pay.java", paths)
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Code write blocked" in reason for reason in result["blocked_reasons"]))
 
     def test_phase_guard_allows_readonly_bash_without_active_run(self) -> None:
         hook_text = json.dumps({"tool_name": "Bash", "tool_input": {"command": "python --version"}})

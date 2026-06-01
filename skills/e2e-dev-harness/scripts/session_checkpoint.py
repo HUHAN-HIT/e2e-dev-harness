@@ -6,9 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,6 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import run_state  # noqa: E402
+from common import atomic_write_json, now_iso  # noqa: E402
 
 SCHEMA = "e2e-dev-harness.session-checkpoint.v1"
 FILENAME = "session-checkpoint.json"
@@ -24,27 +23,6 @@ FILENAME = "session-checkpoint.json"
 
 def now_dt() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def now_iso() -> str:
-    return now_dt().replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def atomic_write_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-            json.dump(data, handle, indent=2, ensure_ascii=False)
-            handle.write("\n")
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        Path(tmp_name).unlink(missing_ok=True)
-        raise
 
 
 def load_json(path: Path) -> dict:

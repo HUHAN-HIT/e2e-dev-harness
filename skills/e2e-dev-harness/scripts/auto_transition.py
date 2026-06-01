@@ -15,12 +15,6 @@ if str(SCRIPT_DIR) not in sys.path:
 import run_state  # noqa: E402
 
 
-PHASE_TRANSITIONS = {
-    "implementation": "IMPLEMENTED",
-    "completion": "VERIFIED",
-}
-
-
 def load_json(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -103,7 +97,7 @@ def transition_from_status(repo: Path, status_path: Path, state_path: Path | Non
             "status_file": str(status_file),
         }
     phase = str(status.get("phase") or "")
-    target = PHASE_TRANSITIONS.get(phase)
+    target = run_state.GATE_TRANSITIONS.get(phase)
     if not target:
         return {
             "ready": True,

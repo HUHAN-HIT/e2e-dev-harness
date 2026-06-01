@@ -16,7 +16,7 @@ if str(SCRIPTS) not in sys.path:
 
 import command_evidence  # noqa: E402
 import tdd_evidence  # noqa: E402
-from common import split_command  # noqa: E402
+from common import atomic_write_json, now_iso, read_json_object, split_command  # noqa: E402
 from conftest import write_command_evidence  # noqa: E402
 
 
@@ -27,6 +27,33 @@ class CommandSplitTests(unittest.TestCase):
     def test_shell_control_operators_are_rejected(self) -> None:
         with self.assertRaises(ValueError):
             split_command("graphify update . && echo unsafe")
+
+
+class CommonHelperTests(unittest.TestCase):
+    def test_read_json_object_returns_empty_for_missing_invalid_or_non_object_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            invalid = repo / "invalid.json"
+            array_json = repo / "array.json"
+            invalid.write_text("{not json", encoding="utf-8")
+            array_json.write_text("[]", encoding="utf-8")
+
+            self.assertEqual({}, read_json_object(None))
+            self.assertEqual({}, read_json_object(repo / "missing.json"))
+            self.assertEqual({}, read_json_object(invalid))
+            self.assertEqual({}, read_json_object(array_json))
+
+    def test_atomic_write_json_round_trips_utf8_object(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "nested" / "data.json"
+
+            atomic_write_json(target, {"message": "支付", "ok": True})
+
+            self.assertEqual({"message": "支付", "ok": True}, json.loads(target.read_text(encoding="utf-8")))
+            self.assertTrue(target.read_text(encoding="utf-8").endswith("\n"))
+
+    def test_now_iso_returns_utc_z_timestamp(self) -> None:
+        self.assertRegex(now_iso(), r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 

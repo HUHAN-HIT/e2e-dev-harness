@@ -45,6 +45,35 @@ ORDERED_LIFECYCLE = [
     "VERIFIED",
     "ARCHIVED",
 ]
+TRANSITIONS = {
+    "CREATED": {"CLARIFIED"},
+    "CLARIFIED": {"SERVICE_DESIGN_REQUIRED", "PLANNED"},
+    "SERVICE_DESIGN_REQUIRED": {"PLANNED"},
+    "PLANNED": {"RED_READY", "IMPLEMENTED", "WAITING_DISPATCH"},
+    "RED_READY": {"IMPLEMENTED", "WAITING_DISPATCH"},
+    "WAITING_DISPATCH": {
+        "CREATED",
+        "CLARIFIED",
+        "SERVICE_DESIGN_REQUIRED",
+        "PLANNED",
+        "RED_READY",
+        "IMPLEMENTED",
+        "REVIEWED",
+        "VERIFIED",
+    },
+    "IMPLEMENTED": {"REVIEWED", "VERIFIED", "WAITING_DISPATCH"},
+    "REVIEWED": {"VERIFIED", "WAITING_DISPATCH"},
+    "VERIFIED": {"ARCHIVED"},
+    "ARCHIVED": set(),
+}
+GATE_TRANSITIONS = {
+    "clarification": "CLARIFIED",
+    "service_design": "PLANNED",
+    "tdd_red": "RED_READY",
+    "implementation": "IMPLEMENTED",
+    "completion": "VERIFIED",
+    "archive": "ARCHIVED",
+}
 
 
 def now_iso() -> str:
@@ -333,11 +362,16 @@ def transition_allowed(current: str, target: str, allow_regression: bool) -> tup
         return True, ""
     if current == target:
         return True, ""
-    if current not in ORDERED_LIFECYCLE or target not in ORDERED_LIFECYCLE:
+    if current not in LIFECYCLE or target not in LIFECYCLE:
         return False, f"Run state transition uses invalid lifecycle: {current} -> {target}"
-    if ORDERED_LIFECYCLE.index(target) < ORDERED_LIFECYCLE.index(current) and not allow_regression:
-        return False, f"Run state transition regression is not allowed without --allow-regression: {current} -> {target}"
-    return True, ""
+    if current in ORDERED_LIFECYCLE and target in ORDERED_LIFECYCLE:
+        if ORDERED_LIFECYCLE.index(target) < ORDERED_LIFECYCLE.index(current):
+            if allow_regression:
+                return True, ""
+            return False, f"Run state transition regression is not allowed without --allow-regression: {current} -> {target}"
+    if target in TRANSITIONS.get(current, set()):
+        return True, ""
+    return False, f"Run state transition is not allowed by the lifecycle transition table: {current} -> {target}"
 
 
 def transition_state(

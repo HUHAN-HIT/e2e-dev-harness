@@ -79,7 +79,8 @@ PATCH_FILE_RE = re.compile(
 )
 SHELL_WRITE_RE = re.compile(
     r"(?:Set-Content|Add-Content|Out-File|New-Item)\b[^\r\n]*?(?:-Path|-LiteralPath|-FilePath|-Name)?\s*['\"]?(?P<cmdlet>[A-Za-z0-9_./\\:-]+\.[A-Za-z0-9]+)['\"]?"
-    r"|(?:^|\s)(?:>|>>)\s*['\"]?(?P<redir>[A-Za-z0-9_./\\:-]+\.[A-Za-z0-9]+)['\"]?",
+    r"|(?:^|\s)(?:>|>>)\s*['\"]?(?P<redir>[A-Za-z0-9_./\\:-]+\.[A-Za-z0-9]+)['\"]?"
+    r"|(?:^|\s)tee(?:\s+-a)?\s+['\"]?(?P<tee>[A-Za-z0-9_./\\:-]+\.[A-Za-z0-9]+)['\"]?",
     re.IGNORECASE | re.MULTILINE,
 )
 PYTHON_PATH_LITERAL_RE = re.compile(
@@ -94,7 +95,8 @@ SHELL_MUTATION_RE = re.compile(
     r"(?:\bpython(?:3)?(?:\.exe)?\s+(?:-[c]|-)\b|\bnode(?:\.exe)?\s+(?:-[e]|-)\b|\bpowershell(?:\.exe)?\b.*\b-Command\b|"
     r"\bwith\s+open\s*\(|\bopen\s*\(|\.write_text\s*\(|\.write_bytes\s*\(|\bjson\.dump\s*\(|\byaml\.dump\s*\(|"
     r"\bshutil\.(?:copy|copyfile|move)\s*\(|\bos\.(?:remove|unlink|rename|replace)\s*\(|"
-    r"\b(?:Set-Content|Add-Content|Out-File|New-Item|Remove-Item|Move-Item|Copy-Item)\b|(?:^|\s)(?:>|>>)\s*)",
+    r"\b(?:Set-Content|Add-Content|Out-File|New-Item|Remove-Item|Move-Item|Copy-Item)\b|"
+    r"(?:^|\s)tee(?:\s+-a)?\s+|<<\s*['\"]?[A-Za-z0-9_-]+['\"]?\s*(?:>|>>)?|(?:^|\s)(?:>|>>)\s*)",
     re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
 CONTROL_FILENAME_RE = re.compile(r"(?:\.phase-lock|run-state\.json|artifact-registry\.json|agent-schedule\.json)", re.IGNORECASE)
@@ -743,6 +745,74 @@ def auto_confirm_dispatcher_task(repo: Path, lock: Path, state_data: dict, task_
     return f"Dispatcher task {task_id} auto-confirmed by phase_guard."
 
 
+def _evaluate_dispatch_task(
+    repo: Path,
+    lock: Path | None,
+    text: str,
+    warnings: list[str],
+    *,
+    blocked_message: str,
+    require_lifecycle: bool,
+) -> dict | None:
+    """Validate a dispatcher-generated worker task (review or code) before launch.
+
+    Returns a blocked response dict when the task must not proceed, or ``None``
+    when it may proceed. On success any auto-confirmation note is appended to
+    ``warnings``. ``require_lifecycle`` enforces the allowed implementation-phase
+    check that only applies to code-agent dispatch.
+    """
+    if not lock or not lock.exists():
+        return {
+            "ready": False,
+            "blocked_reasons": [blocked_message],
+            "warnings": warnings,
+            "action": "run e2e_dev_harness.py start . --feature <feature> --request <request>",
+            **guidance_from_lock(repo, lock),
+        }
+    lock_data, state_data, state_blockers = lock_state_pair(repo, lock)
+    if state_blockers:
+        return {
+            "ready": False,
+            "blocked_reasons": state_blockers,
+            "warnings": warnings,
+            "phase_lock": str(lock),
+            "run_state": str(run_state_path_for_lock(repo, lock)),
+            **guidance_from_lock(repo, lock),
+        }
+    lifecycle = str(state_data.get("lifecycle", ""))
+    if require_lifecycle:
+        allowed_runtime = set(lock_data.get("allowed_code_write_lifecycles") or DEFAULT_ALLOWED_RUNTIME_LIFECYCLES)
+        if lifecycle not in allowed_runtime:
+            return {
+                "ready": False,
+                "blocked_reasons": [
+                    f"Code-agent dispatch blocked: lifecycle {lifecycle or '<missing>'} is not in allowed implementation phases: "
+                    + ", ".join(sorted(allowed_runtime))
+                    + ". Complete clarify, plan, TDD red, R2 review, and implementation gate before dispatching code developers."
+                ],
+                "warnings": warnings,
+                "phase_lock": str(lock),
+                "run_state": str(run_state_path_for_lock(repo, lock)),
+                "lifecycle": lifecycle,
+                **guidance_from_lock(repo, lock),
+            }
+    dispatch_blockers = validate_dispatch_context(repo, state_data, text)
+    if dispatch_blockers:
+        return {
+            "ready": False,
+            "blocked_reasons": dispatch_blockers,
+            "warnings": warnings,
+            "phase_lock": str(lock),
+            "run_state": str(run_state_path_for_lock(repo, lock)),
+            "lifecycle": lifecycle,
+            **guidance_from_lock(repo, lock),
+        }
+    confirmation = auto_confirm_dispatcher_task(repo, lock, state_data, text)
+    if confirmation:
+        warnings.append(confirmation)
+    return None
+
+
 def parse_hook_input(text: str) -> tuple[str, list[str]]:
     if not text.strip():
         return "", []
@@ -865,7 +935,7 @@ def paths_from_patch(text: str) -> list[str]:
 def paths_from_shell_command(command: str) -> list[str]:
     paths: list[str] = []
     for match in SHELL_WRITE_RE.finditer(command or ""):
-        value = match.group("cmdlet") or match.group("redir") or ""
+        value = match.group("cmdlet") or match.group("redir") or match.group("tee") or ""
         if value:
             paths.append(value)
     for pattern in (PYTHON_PATH_LITERAL_RE, CONTROL_PATH_LITERAL_RE):
@@ -977,91 +1047,27 @@ def validate_action(
         code_task = bool(CODE_TASK_RE.search(text))
         dispatcher_task = bool(dispatcher_task_id(text) and dispatcher_context_pack(text))
         if dispatcher_task and not code_task:
-            if not lock or not lock.exists():
-                return {
-                    "ready": False,
-                    "blocked_reasons": [
-                        "Dispatcher task blocked: start an e2e-dev-harness run before assigning dispatcher-generated worker tasks."
-                    ],
-                    "warnings": warnings,
-                    "action": "run e2e_dev_harness.py start . --feature <feature> --request <request>",
-                    **guidance_from_lock(repo, lock),
-                }
-            lock_data, state_data, state_blockers = lock_state_pair(repo, lock)
-            if state_blockers:
-                return {
-                    "ready": False,
-                    "blocked_reasons": state_blockers,
-                    "warnings": warnings,
-                    "phase_lock": str(lock),
-                    "run_state": str(run_state_path_for_lock(repo, lock)),
-                    **guidance_from_lock(repo, lock),
-                }
-            dispatch_blockers = validate_dispatch_context(repo, state_data, text)
-            if dispatch_blockers:
-                return {
-                    "ready": False,
-                    "blocked_reasons": dispatch_blockers,
-                    "warnings": warnings,
-                    "phase_lock": str(lock),
-                    "run_state": str(run_state_path_for_lock(repo, lock)),
-                    "lifecycle": str(state_data.get("lifecycle", "")),
-                    **guidance_from_lock(repo, lock),
-                }
-            confirmation = auto_confirm_dispatcher_task(repo, lock, state_data, text)
-            if confirmation:
-                warnings.append(confirmation)
+            blocked = _evaluate_dispatch_task(
+                repo,
+                lock,
+                text,
+                warnings,
+                blocked_message="Dispatcher task blocked: start an e2e-dev-harness run before assigning dispatcher-generated worker tasks.",
+                require_lifecycle=False,
+            )
+            if blocked is not None:
+                return blocked
         if code_task:
-            if not lock or not lock.exists():
-                return {
-                    "ready": False,
-                    "blocked_reasons": [
-                        "Code-agent dispatch blocked: start an e2e-dev-harness run and pass clarify/plan/TDD gates before assigning implementation work."
-                    ],
-                    "warnings": warnings,
-                    "action": "run e2e_dev_harness.py start . --feature <feature> --request <request>",
-                    **guidance_from_lock(repo, lock),
-                }
-            lock_data, state_data, state_blockers = lock_state_pair(repo, lock)
-            if state_blockers:
-                return {
-                    "ready": False,
-                    "blocked_reasons": state_blockers,
-                    "warnings": warnings,
-                    "phase_lock": str(lock),
-                    "run_state": str(run_state_path_for_lock(repo, lock)),
-                    **guidance_from_lock(repo, lock),
-                }
-            lifecycle = str(state_data.get("lifecycle", ""))
-            allowed_runtime = set(lock_data.get("allowed_code_write_lifecycles") or DEFAULT_ALLOWED_RUNTIME_LIFECYCLES)
-            if lifecycle not in allowed_runtime:
-                return {
-                    "ready": False,
-                    "blocked_reasons": [
-                        f"Code-agent dispatch blocked: lifecycle {lifecycle or '<missing>'} is not in allowed implementation phases: "
-                        + ", ".join(sorted(allowed_runtime))
-                        + ". Complete clarify, plan, TDD red, R2 review, and implementation gate before dispatching code developers."
-                    ],
-                    "warnings": warnings,
-                    "phase_lock": str(lock),
-                    "run_state": str(run_state_path_for_lock(repo, lock)),
-                    "lifecycle": lifecycle,
-                    **guidance_from_lock(repo, lock),
-                }
-            dispatch_blockers = validate_dispatch_context(repo, state_data, text)
-            if dispatch_blockers:
-                return {
-                    "ready": False,
-                    "blocked_reasons": dispatch_blockers,
-                    "warnings": warnings,
-                    "phase_lock": str(lock),
-                    "run_state": str(run_state_path_for_lock(repo, lock)),
-                    "lifecycle": lifecycle,
-                    **guidance_from_lock(repo, lock),
-                }
-            confirmation = auto_confirm_dispatcher_task(repo, lock, state_data, text)
-            if confirmation:
-                warnings.append(confirmation)
+            blocked = _evaluate_dispatch_task(
+                repo,
+                lock,
+                text,
+                warnings,
+                blocked_message="Code-agent dispatch blocked: start an e2e-dev-harness run and pass clarify/plan/TDD gates before assigning implementation work.",
+                require_lifecycle=True,
+            )
+            if blocked is not None:
+                return blocked
         return {"ready": True, "blocked_reasons": [], "warnings": warnings}
     if require_active_run_for_read and normalized in READ_TOOLS:
         read_targets = list(paths)

@@ -5,9 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,6 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import run_state  # noqa: E402
 import handoff_gate  # noqa: E402
+from common import atomic_write_json, now_iso  # noqa: E402
 
 
 CLAIMED_STATUSES = {"claimed", "in-progress", "in_progress", "completed"}
@@ -48,10 +47,6 @@ LIFECYCLE_SATISFIED_PHASES = {
 
 def now_dt(now: datetime | None = None) -> datetime:
     return (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-
-
-def now_iso(now: datetime | None = None) -> str:
-    return now_dt(now).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def parse_iso(value: str) -> datetime | None:
@@ -92,23 +87,6 @@ def is_stale(task: dict, now: datetime | None = None) -> bool:
         # Held with no timestamp at all: treat as stale so it can be recovered.
         return True
     return (now_dt(now) - pulse).total_seconds() > task_lease_seconds(task)
-
-
-def atomic_write_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-            json.dump(data, handle, indent=2, ensure_ascii=False)
-            handle.write("\n")
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        Path(tmp_name).unlink(missing_ok=True)
-        raise
 
 
 def resolve(repo: Path, path: Path | None) -> Path | None:

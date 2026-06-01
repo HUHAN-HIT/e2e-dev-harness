@@ -4,10 +4,7 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -18,7 +15,7 @@ import agent_scheduler  # noqa: E402
 import context_pack  # noqa: E402
 import reviewer_gate  # noqa: E402
 import run_state  # noqa: E402
-from common import configure_utf8_stdio, posix  # noqa: E402
+from common import atomic_write_json, configure_utf8_stdio, posix, read_json_object  # noqa: E402
 
 
 CLAUDE_CAPABILITIES = {
@@ -89,30 +86,7 @@ def resolve(repo: Path, path: Path | str | None) -> Path | None:
 
 
 def read_json(path: Path | None) -> dict:
-    if not path or not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def atomic_write_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-            json.dump(data, handle, indent=2, ensure_ascii=False)
-            handle.write("\n")
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        Path(tmp_name).unlink(missing_ok=True)
-        raise
+    return read_json_object(path)
 
 
 def rel(repo: Path, path: Path) -> str:
@@ -578,7 +552,10 @@ def dispatch_completion_blockers(repo: Path, state_path: Path | None, task_id: s
         current = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
         dispatch = current if str(current.get("current_task_id", "")).strip() == task_id else {}
     if not dispatch or str(dispatch.get("current_task_id", "")).strip() != task_id:
-        return [], dispatch
+        return [
+            f"Task {task_id} was never dispatched by dispatch-beat/dispatch-next; "
+            "run dispatch-beat or dispatch-next, spawn the requested worker, then dispatch-ack before dispatch-complete."
+        ], dispatch
     blocked: list[str] = []
     if str(dispatch.get("current_agent", "")).strip() != agent:
         blocked.append(f"Dispatch agent mismatch: expected {dispatch.get('current_agent', '')}, got {agent}.")

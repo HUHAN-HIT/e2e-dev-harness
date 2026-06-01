@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import sys
 import xml.etree.ElementTree as ET
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -30,6 +33,37 @@ def configure_utf8_stdio() -> None:
 
 def posix(pathlike) -> str:
     return str(pathlike).replace("\\", "/")
+
+
+def now_iso(now: datetime | None = None) -> str:
+    return (now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def read_json_object(path: Path | None) -> dict:
+    if not path or not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def atomic_write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            json.dump(data, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
 
 
 def parse_modules(pom: Path) -> list[str]:
