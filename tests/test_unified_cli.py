@@ -629,6 +629,33 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertIn("checkpoint", full_payload["session_checkpoint"])
         self.assertEqual("CREATED", full_payload["execution_packet"]["lifecycle"])
         self.assertIn("dispatch-next", full_payload["execution_packet"]["primary_command"])
+        self.assertTrue(
+            any(
+                "gate --phase clarification" in action
+                for action in full_payload["execution_packet"]["forbidden_actions"]
+            )
+        )
+
+    def test_gate_phase_clarification_error_routes_to_clarify_or_dispatch(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "e2e_dev_harness.py"),
+                "gate",
+                "--phase",
+                "clarification",
+                "--run-state",
+                "docs/agent-runs/run/run-state.json",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual(2, result.returncode)
+        self.assertIn("clarify", result.stderr)
+        self.assertIn("dispatch-next", result.stderr)
+        self.assertIn("gate --phase clarification", result.stderr)
 
     def test_next_cli_quiet_surfaces_coordinator_context_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -351,6 +351,48 @@ def exploration_policy_for_lifecycle(lifecycle: str) -> dict:
 
 
 def clarification_interaction_for_lifecycle(lifecycle: str) -> dict:
+    ask_user_requests = [
+        {
+            "id": "confirm_restated_intent",
+            "header": "Intent",
+            "question": "Confirm or revise the requirements-clarifier worker's Restated Intent.",
+            "options": [
+                {
+                    "label": "Confirm (Recommended)",
+                    "description": "Use when the worker's Restated Intent matches the user's goal.",
+                },
+                {
+                    "label": "Revise",
+                    "description": "Use when the user needs to correct scope, behavior, or wording.",
+                },
+                {
+                    "label": "Keep blocked",
+                    "description": "Use when the user cannot confirm intent yet.",
+                },
+            ],
+            "provenance_required": "Record confirmed-by: user @<date/session/artifact> in Restated Intent.",
+        },
+        {
+            "id": "resolve_open_questions",
+            "header": "Questions",
+            "question": "Answer, defer, or keep blocked on unresolved Open Questions returned by the worker.",
+            "options": [
+                {
+                    "label": "Answer now (Recommended)",
+                    "description": "Use when the user can close the returned Open Questions now.",
+                },
+                {
+                    "label": "Defer out of scope",
+                    "description": "Use when the user explicitly excludes the question from this implementation.",
+                },
+                {
+                    "label": "Keep blocked",
+                    "description": "Use when planning and implementation should wait.",
+                },
+            ],
+            "provenance_required": "Record confirmed-by: user @<date/session/artifact> in Open Questions.",
+        },
+    ]
     return {
         "schema": "e2e-dev-harness.clarification-interaction.v1",
         "interaction_required": lifecycle == "CREATED",
@@ -360,6 +402,8 @@ def clarification_interaction_for_lifecycle(lifecycle: str) -> dict:
             "Relay only unresolved behavior, API, data, ownership, test, or impact questions returned by the worker.",
             "Record the worker's returned evidence paths after answers are captured.",
         ] if lifecycle == "CREATED" else [],
+        "ask_user_schema": "codex.request_user_input.v1",
+        "ask_user_requests": ask_user_requests if lifecycle == "CREATED" else [],
         "blocked_until_resolved": [
             "planning",
             "TDD",

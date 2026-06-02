@@ -171,7 +171,7 @@ LIFECYCLE_ALLOWED_PHASES = {
 
 LIFECYCLE_SATISFIED_PHASES = {
     "CLARIFIED": {"clarify"},
-    "SERVICE_DESIGN_REQUIRED": {"clarify", "design"},
+    "SERVICE_DESIGN_REQUIRED": {"clarify", "design", "r1-review"},
     "PLANNED": {"clarify", "design"},
     "RED_READY": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review"},
     "IMPLEMENTED": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review"},
@@ -189,6 +189,18 @@ def phase_dispatch_blocker(task: dict, state: dict | None) -> str:
     if phase not in allowed:
         return f"Task phase {phase or '<missing>'} is not dispatchable while lifecycle is {lifecycle}."
     return ""
+
+
+def satisfied_phase_dispatch_blocker(task: dict, state: dict | None) -> str:
+    lifecycle = lifecycle_value(state)
+    phase = str(task.get("phase", "")).strip()
+    if phase not in LIFECYCLE_SATISFIED_PHASES.get(lifecycle, set()):
+        return ""
+    agent = str(task.get("agent", "")).strip()
+    service = str(task.get("service", "")).strip()
+    if lifecycle == "SERVICE_DESIGN_REQUIRED" and phase == "design" and service and agent.startswith("service-designer"):
+        return ""
+    return f"Task phase {phase} is already satisfied while lifecycle is {lifecycle}."
 
 
 def missing_dependency_phases(schedule: dict, task: dict, state: dict | None) -> list[str]:
@@ -214,6 +226,12 @@ def service_design_primary_task(task: dict) -> bool:
 
 def task_ready_blockers(repo: Path, schedule: dict, task: dict, agent: str, state: dict | None = None) -> list[str]:
     blocked: list[str] = []
+    phase_blocker = phase_dispatch_blocker(task, state)
+    if phase_blocker:
+        blocked.append(phase_blocker)
+    satisfied_blocker = satisfied_phase_dispatch_blocker(task, state)
+    if satisfied_blocker:
+        blocked.append(satisfied_blocker)
     blocked.extend(agent_scheduler.role_conflict_blockers(schedule, task, agent))
     blocked.extend(agent_scheduler.role_template_blockers(repo, schedule, task))
     missing_deps = missing_dependency_phases(schedule, task, state)
@@ -1185,6 +1203,7 @@ def dispatch_status(repo: Path, schedule_path: Path, state_path: Path | None = N
     state_file, state = load_state(repo, state_path)
     tasks = [task for task in schedule.get("tasks", []) or [] if isinstance(task, dict)]
     open_tasks = [task for task in tasks if not task_done(task)]
+    selected_tasks, blocked_tasks = ready_tasks(repo, schedule, max_workers=1, state=state)
     return {
         "ready": True,
         "blocked_reasons": [],
@@ -1204,7 +1223,20 @@ def dispatch_status(repo: Path, schedule_path: Path, state_path: Path | None = N
             }
             for task in open_tasks
         ],
-        "next_task": (open_tasks[0].get("id", "") if open_tasks else ""),
+        "ready_tasks": [
+            {
+                "id": task.get("id", ""),
+                "agent": task.get("agent", ""),
+                "phase": task.get("phase", ""),
+                "service": task.get("service", ""),
+                "status": task.get("status", "planned"),
+                "owner": task.get("owner", ""),
+            }
+            for task in selected_tasks
+        ],
+        "blocked_tasks": blocked_tasks,
+        "skipped_tasks": blocked_tasks,
+        "next_task": (selected_tasks[0].get("id", "") if selected_tasks else ""),
     }
 
 

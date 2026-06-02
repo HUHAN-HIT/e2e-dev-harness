@@ -1,6 +1,7 @@
 # Clarification Gate
 
 The gate prevents coding before the problem is testable.
+Run it with `e2e_dev_harness.py clarify`; `gate --phase clarification` is not a valid command.
 
 ## Required Fields
 
@@ -44,6 +45,8 @@ rather than user-provided, keep the question open or explicitly defer it out of
 scope with evidence before rerunning clarify.
 
 During the `CREATED` lifecycle, `next` and `phase_guard` expose a `clarification_interaction` contract. The active TodoList must include a user-facing step to confirm Restated Intent and resolve open questions before planning, TDD, reviewer dispatch that depends on clarified behavior, or production-code edits. If `clarify` finds unresolved items, its JSON includes `interaction_required`, `questions_to_ask_user`, and `interaction_contract` so the agent can ask the user directly instead of guessing from blocked reasons.
+
+The interaction contract keeps `questions_to_ask_user` for existing callers and also exposes `ask_user_schema: codex.request_user_input.v1` plus `ask_user_requests`. Each request has a stable `id`, short `header`, user-facing `question`, selectable `options`, and `provenance_required`. Runtimes with an AskUser/request-user-input UI should render those options directly; text-only runtimes should present the same options and record the selected answer as `confirmed-by: user @<date/session/artifact>` in the design doc.
 
 When an acceptance criterion or use case declares MQ/DMQ/Kafka/JMS notification behavior, the design must also state the cross-layer call chain and sender/producer injection point. Example:
 

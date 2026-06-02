@@ -2608,6 +2608,26 @@ def add_full_json_arg(parser: argparse.ArgumentParser) -> None:
     return None
 
 
+def gate_phase_clarification_recovery(argv: list[str]) -> str:
+    if not argv or argv[0] != "gate":
+        return ""
+    for index, token in enumerate(argv):
+        if token == "--phase" and index + 1 < len(argv) and argv[index + 1] == "clarification":
+            break
+        if token == "--phase=clarification":
+            break
+    else:
+        return ""
+    return (
+        "error: gate --phase clarification is not a valid CLI command. "
+        "Clarification uses the separate 'clarify' subcommand after the design doc is updated. "
+        "If run-state is CREATED, run 'e2e_dev_harness.py dispatch-next --schedule "
+        "docs/agent-runs/<run>/agent-schedule.json --state docs/agent-runs/<run>/run-state.json' "
+        "to dispatch requirements-clarifier first. "
+        "Valid gate --phase values are: planning, implementation, completion."
+    )
+
+
 def main() -> int:
     configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -2915,6 +2935,11 @@ def main() -> int:
         next_parser,
     ):
         add_output_args(output_parser)
+
+    recovery = gate_phase_clarification_recovery(sys.argv[1:])
+    if recovery:
+        print(recovery, file=sys.stderr)
+        return 2
 
     args = parser.parse_args()
     try:

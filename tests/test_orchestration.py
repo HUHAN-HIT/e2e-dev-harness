@@ -893,6 +893,9 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("dispatch-only" in reason for reason in result["blocked_reasons"]))
         self.assertTrue(result["clarification_interaction"]["interaction_required"])
+        requests = result["clarification_interaction"]["ask_user_requests"]
+        self.assertTrue(any(request["id"] == "confirm_restated_intent" for request in requests))
+        self.assertTrue(any(request["id"] == "resolve_open_questions" for request in requests))
 
     def test_next_created_exposes_clarification_interaction_contract(self) -> None:
         result = e2e_dev_harness.next_action_for_lifecycle("CREATED", {})
@@ -901,6 +904,11 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(result["clarification_interaction"]["must_wait_for_user_answer"])
         self.assertTrue(any("Restated Intent" in item for item in result["required_todo_list"]))
         self.assertTrue(any("requirements-clarifier" in item for item in result["required_todo_list"]))
+        requests = result["clarification_interaction"]["ask_user_requests"]
+        self.assertTrue(any(request["id"] == "confirm_restated_intent" for request in requests))
+        intent_request = next(request for request in requests if request["id"] == "confirm_restated_intent")
+        self.assertTrue(any("Confirm" in option["label"] for option in intent_request["options"]))
+        self.assertTrue(any("Revise" in option["label"] for option in intent_request["options"]))
 
     def test_clarify_blocked_returns_questions_to_ask_user(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -943,6 +951,12 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(2, code)
         self.assertTrue(result["interaction_required"])
         self.assertTrue(any("risk score threshold" in item for item in result["questions_to_ask_user"]))
+        self.assertEqual("codex.request_user_input.v1", result["interaction_contract"]["ask_user_schema"])
+        requests = result["interaction_contract"]["ask_user_requests"]
+        self.assertTrue(any("risk score threshold" in request["question"] for request in requests))
+        threshold_request = next(request for request in requests if "risk score threshold" in request["question"])
+        self.assertTrue(any("Answer now" in option["label"] for option in threshold_request["options"]))
+        self.assertTrue(any("Defer" in option["label"] for option in threshold_request["options"]))
 
     def test_clarify_defaults_to_user_confirmation_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3328,7 +3342,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
             run_state.write_state(
                 repo,
                 state_path,
-                run_state.build_state("docs/agent-runs/run", "single-review", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED"),
+                run_state.build_state("docs/agent-runs/run", "single-review", [], "docs/agent-runs/run/artifact-registry.json", "CLARIFIED"),
             )
             schedule.parent.mkdir(parents=True, exist_ok=True)
             schedule.write_text(
@@ -3380,10 +3394,10 @@ class OrchestrationArtifactTests(unittest.TestCase):
                         "tasks": [
                             {
                                 "id": "T01",
-                                "agent": "requirements-clarifier",
-                                "phase": "clarify",
+                                "agent": "test-case-developer",
+                                "phase": "tdd-red",
                                 "inputs": [],
-                                "outputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+                                "outputs": ["docs/agent-runs/run/evidence/red-test.txt"],
                                 "status": "planned",
                             }
                         ],
@@ -3463,6 +3477,226 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("planned", schedule_data["tasks"][0]["status"])
         self.assertEqual("claimed", schedule_data["tasks"][1]["status"])
         self.assertTrue(any(item["task_id"] == "T01" for item in result["skipped_tasks"]))
+
+    def test_dispatch_next_blocks_task_with_phase_not_allowed_for_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/use-case-designer.md")
+            write_role_template(repo, role_template)
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state("docs/agent-runs/run", "multi", [], "docs/agent-runs/run/artifact-registry.json", "CLARIFIED"),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T02",
+                                "agent": "use-case-designer",
+                                "phase": "",
+                                "role_group": "design",
+                                "role_template": role_template.as_posix(),
+                                "inputs": [],
+                                "outputs": ["docs/agent-runs/run/handoffs/02-use-case-designer.md"],
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_next(repo, schedule, state_path, runtime="claude-code")
+            schedule_data = json.loads(schedule.read_text(encoding="utf-8"))
+
+        self.assertFalse(result["ready"])
+        blocked_reasons = [reason for item in result["blocked_tasks"] for reason in item["blocked_reasons"]]
+        self.assertTrue(any("Task phase <missing> is not dispatchable while lifecycle is CLARIFIED" in reason for reason in blocked_reasons), blocked_reasons)
+        self.assertEqual("planned", schedule_data["tasks"][0]["status"])
+
+    def test_dispatch_next_service_design_skips_satisfied_global_design_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            use_case_template = Path("docs/agent-runs/run/agent-roles/use-case-designer.md")
+            service_template = Path("docs/agent-runs/run/agent-roles/service-designer.md")
+            write_role_template(repo, use_case_template)
+            write_role_template(repo, service_template)
+            write_ready_handoff(repo, Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md"))
+            write_ready_handoff(repo, Path("docs/agent-runs/run/handoffs/02-use-case-designer.md"), "use-case-designer")
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state(
+                    "docs/agent-runs/run",
+                    "multi",
+                    [],
+                    "docs/agent-runs/run/artifact-registry.json",
+                    "SERVICE_DESIGN_REQUIRED",
+                ),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T02",
+                                "agent": "use-case-designer",
+                                "phase": "design",
+                                "role_group": "design",
+                                "role_template": use_case_template.as_posix(),
+                                "inputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+                                "outputs": ["docs/agent-runs/run/handoffs/02-use-case-designer.md"],
+                                "status": "planned",
+                                "requires_runtime_dispatch": True,
+                            },
+                            {
+                                "id": "T03",
+                                "agent": "design-reviewer",
+                                "phase": "r1-review",
+                                "role_group": "review",
+                                "role_template": service_template.as_posix(),
+                                "inputs": ["docs/agent-runs/run/handoffs/02-use-case-designer.md"],
+                                "outputs": ["docs/agent-runs/run/reviews/R1-design-review.md"],
+                                "status": "planned",
+                                "requires_runtime_dispatch": True,
+                            },
+                            {
+                                "id": "T06",
+                                "agent": "service-designer-jeepay-core",
+                                "phase": "design",
+                                "service": "jeepay-core",
+                                "role_group": "service-design",
+                                "role_template": service_template.as_posix(),
+                                "inputs": [
+                                    "docs/agent-runs/run/handoffs/01-requirements-clarifier.md",
+                                    "docs/agent-runs/run/handoffs/02-use-case-designer.md",
+                                ],
+                                "outputs": ["docs/agent-runs/run/service-designs/jeepay-core.md"],
+                                "status": "planned",
+                                "requires_runtime_dispatch": True,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_next(repo, schedule, state_path, runtime="claude-code")
+            schedule_data = json.loads(schedule.read_text(encoding="utf-8"))
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("T06", result["task"]["id"])
+        self.assertEqual("planned", schedule_data["tasks"][0]["status"])
+        self.assertEqual("planned", schedule_data["tasks"][1]["status"])
+        self.assertEqual("claimed", schedule_data["tasks"][2]["status"])
+        self.assertTrue(
+            any(
+                item["task_id"] == "T02" and "already satisfied" in item["blocked_reasons"][0]
+                for item in result["blocked_tasks"]
+            ),
+            result["blocked_tasks"],
+        )
+        self.assertTrue(any(item["task_id"] == "T03" for item in result["blocked_tasks"]))
+
+    def test_dispatch_status_reports_lifecycle_ready_next_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            use_case_template = Path("docs/agent-runs/run/agent-roles/use-case-designer.md")
+            service_template = Path("docs/agent-runs/run/agent-roles/service-designer.md")
+            write_role_template(repo, use_case_template)
+            write_role_template(repo, service_template)
+            write_ready_handoff(repo, Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md"))
+            write_ready_handoff(repo, Path("docs/agent-runs/run/handoffs/02-use-case-designer.md"), "use-case-designer")
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state(
+                    "docs/agent-runs/run",
+                    "multi",
+                    [],
+                    "docs/agent-runs/run/artifact-registry.json",
+                    "SERVICE_DESIGN_REQUIRED",
+                ),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "role_template": use_case_template.as_posix(),
+                                "inputs": [],
+                                "outputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+                                "status": "planned",
+                            },
+                            {
+                                "id": "T02",
+                                "agent": "use-case-designer",
+                                "phase": "design",
+                                "role_group": "design",
+                                "role_template": use_case_template.as_posix(),
+                                "inputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+                                "outputs": ["docs/agent-runs/run/handoffs/02-use-case-designer.md"],
+                                "status": "completed",
+                            },
+                            {
+                                "id": "T03",
+                                "agent": "design-reviewer",
+                                "phase": "r1-review",
+                                "role_group": "review",
+                                "role_template": service_template.as_posix(),
+                                "inputs": ["docs/agent-runs/run/handoffs/02-use-case-designer.md"],
+                                "outputs": ["docs/agent-runs/run/reviews/R1-design-review.md"],
+                                "status": "planned",
+                            },
+                            {
+                                "id": "T06",
+                                "agent": "service-designer-jeepay-core",
+                                "phase": "design",
+                                "service": "jeepay-core",
+                                "role_group": "service-design",
+                                "role_template": service_template.as_posix(),
+                                "inputs": [
+                                    "docs/agent-runs/run/handoffs/01-requirements-clarifier.md",
+                                    "docs/agent-runs/run/handoffs/02-use-case-designer.md",
+                                ],
+                                "outputs": ["docs/agent-runs/run/service-designs/jeepay-core.md"],
+                                "status": "planned",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_status(repo, schedule, state_path)
+
+        self.assertEqual("T06", result["next_task"])
+        self.assertEqual("T06", result["ready_tasks"][0]["id"])
+        self.assertEqual("T01", result["open_tasks"][0]["id"])
+        self.assertTrue(any(item["task_id"] == "T03" for item in result["blocked_tasks"]))
 
     def test_dispatch_complete_runs_reviewer_gate_for_review_tasks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

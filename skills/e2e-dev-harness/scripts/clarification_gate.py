@@ -317,6 +317,80 @@ def clarification_questions(result: dict) -> list[str]:
     return questions
 
 
+def ask_user_options_for_question(question: str) -> list[dict[str, str]]:
+    lowered = question.lower()
+    if "restated intent" in lowered or "confirmation provenance" in lowered:
+        return [
+            {
+                "label": "Confirm (Recommended)",
+                "description": "Use when the restated intent or closed questions match the user's decision.",
+            },
+            {
+                "label": "Revise",
+                "description": "Use when the agent should update the design text before rerunning clarify.",
+            },
+            {
+                "label": "Keep blocked",
+                "description": "Use when the user cannot confirm this yet and later phases must remain blocked.",
+            },
+        ]
+    if question.startswith("Resolve with the user:"):
+        return [
+            {
+                "label": "Answer now (Recommended)",
+                "description": "Use the user's answer as clarification evidence with confirmation provenance.",
+            },
+            {
+                "label": "Defer out of scope",
+                "description": "Use only when the question is explicitly excluded from this implementation.",
+            },
+            {
+                "label": "Keep blocked",
+                "description": "Use when implementation should wait for a clearer product decision.",
+            },
+        ]
+    return [
+        {
+            "label": "Provide now (Recommended)",
+            "description": "Use when the user can supply the missing requirement detail now.",
+        },
+        {
+            "label": "Use evidence",
+            "description": "Use when repository evidence can answer this without inventing product intent.",
+        },
+        {
+            "label": "Keep blocked",
+            "description": "Use when the missing detail should block planning and implementation.",
+        },
+    ]
+
+
+def ask_user_request_id(index: int, question: str) -> str:
+    lowered = question.lower()
+    if "restated intent" in lowered:
+        return "confirm_restated_intent"
+    if "open questions" in lowered and "confirmation provenance" in lowered:
+        return "confirm_open_questions"
+    if question.startswith("Resolve with the user:"):
+        return f"resolve_open_question_{index}"
+    return f"clarify_requirement_{index}"
+
+
+def ask_user_requests(questions: list[str]) -> list[dict]:
+    requests: list[dict] = []
+    for index, question in enumerate(questions, start=1):
+        requests.append(
+            {
+                "id": ask_user_request_id(index, question),
+                "header": "Clarify",
+                "question": question,
+                "options": ask_user_options_for_question(question),
+                "provenance_required": "Record confirmed-by: user @<date/session/artifact> in the design doc.",
+            }
+        )
+    return requests
+
+
 def interaction_contract(result: dict) -> dict:
     questions = clarification_questions(result)
     return {
@@ -324,6 +398,8 @@ def interaction_contract(result: dict) -> dict:
         "interaction_required": bool(questions),
         "must_wait_for_user_answer": bool(questions),
         "questions_to_ask_user": questions,
+        "ask_user_schema": "codex.request_user_input.v1",
+        "ask_user_requests": ask_user_requests(questions),
         "allowed_before_user_answer": [
             "bounded GitNexus or scanner discovery for evidence",
             "drafting design sections clearly marked pending confirmation",
@@ -504,6 +580,7 @@ def validate(path: Path, require_intent: bool = False, require_user_confirmation
     result["interaction_contract"] = interaction_contract(result)
     result["interaction_required"] = result["interaction_contract"]["interaction_required"]
     result["questions_to_ask_user"] = result["interaction_contract"]["questions_to_ask_user"]
+    result["ask_user_requests"] = result["interaction_contract"]["ask_user_requests"]
     return result
 
 

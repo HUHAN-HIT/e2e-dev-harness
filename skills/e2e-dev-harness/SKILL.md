@@ -5,7 +5,7 @@ description: Use when a feature, bugfix, refactor, or design-doc task needs stri
 
 # E2E Dev Harness
 
-Turn a request or design doc into a clarified, tested code change.
+Turn requests/design docs into clarified, tested code changes.
 
 Do not implement while behavior, APIs, data effects, contracts, or tests are ambiguous.
 
@@ -31,7 +31,7 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py next . \
   --runtime <codex|claude-code|opencode|manual>
 ```
 
-Default CLI stdout is compact. Read `full_result_path` or
+CLI stdout is compact. Read `full_result_path` or
 `coordinator_summary_path`; use `--json-full` only for debugging or legacy automation.
 Coordinator minimal reading set: instructions, `next`, active design/slice, paths, blockers; keep full CLI JSON in evidence files.
 Coordinator write budget: long design/plan/handoff bodies must be worker evidence or generator outputs; keep only paths in chat.
@@ -45,6 +45,7 @@ Workers use GitNexus-first evidence; the coordinator never does local code explo
 - Load project instructions before clarification. Use discovery scope first; load affected service `AGENT.md` / `AGENTS.md` after scope is known. Read `references/agent-instructions.md`.
 - Use Superpowers when available: `brainstorming` for clarification, `test-driven-development` for TDD. Read `references/superpowers-integration.md`.
 - Clarification gate requires goals, non-goals, affected services, use cases, change logic, impact summary, contracts, ACs, test design, and closed questions.
+  CLI: `clarify`, not `gate --phase clarification`.
   Read `references/clarification-gate.md`.
   In `CREATED`, TodoList must dispatch `requirements-clarifier`, then relay returned Restated Intent/Open Questions before plan/TDD/code.
   Interactive `clarify` requires `Restated Intent` and user confirmation provenance; do not self-answer open questions.
