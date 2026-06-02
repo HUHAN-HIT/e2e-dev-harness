@@ -13,12 +13,12 @@ import session_checkpoint
 
 
 BLUEPRINT_STEPS = (
-    ("CREATED", "clarify", "Fill the design doc; clarification gate needs goals, use cases, acceptance criteria, test design, and resolved open questions."),
-    ("CLARIFIED", "plan", "Run plan --create-archive and complete the independent R1 design review."),
-    ("SERVICE_DESIGN_REQUIRED", "service-design", "Fill and validate each service-designs/<service>.md (service-design gate); use --emit-template to start."),
-    ("PLANNED", "tdd-red", "Dispatch TDD red and R2 review workers; dispatch-complete records evidence before implementation gate."),
+    ("CREATED", "clarify", "Dispatch requirements-clarifier; relay Restated Intent/Open Questions and record evidence paths."),
+    ("CLARIFIED", "r1-design-review", "Generate the archive only if missing, then dispatch the independent R1 design review."),
+    ("SERVICE_DESIGN_REQUIRED", "service-design", "Dispatch service-design workers and validate returned service-design slices."),
+    ("PLANNED", "plan-tdd-red-r2", "Dispatch implementation-planner, TDD red, and R2 review workers before implementation gate."),
     ("RED_READY", "implementation-gate", "Run gate --phase implementation to open production-code writes."),
-    ("IMPLEMENTED", "implement-or-complete", "TDD red/green for every assigned AC until ac-progress is ready, then the independent R3 implementation review."),
+    ("IMPLEMENTED", "implement-or-complete", "Dispatch code-developer work until ac-progress is ready, then dispatch independent R3 review."),
     ("REVIEWED", "completion", "Run the completion gate, strict guard, run summary, and requirements archive."),
     ("VERIFIED", "archive", "Refresh the registry, archive requirements, and report evidence."),
 )
@@ -60,6 +60,35 @@ def write_status(path: Path | None, result: dict) -> None:
 def load_run_state(repo: Path, state_path: Path) -> dict:
     path = state_path if state_path.is_absolute() else repo / state_path
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def dispatch_context_budget_gate(repo: Path, state_path: Path) -> dict:
+    state_file = require_repo_path(repo, state_path, "run state")
+    if not state_file.exists():
+        return {
+            "ready": False,
+            "blocked_reasons": [f"Run state not found: {state_file}"],
+            "warnings": [],
+            "coordinator_context_budget": {},
+            "session_checkpoint": {},
+        }
+    state = load_run_state(repo, state_file)
+    budget = session_checkpoint.context_budget(state_file, state)
+    checkpoint = session_checkpoint.validate(repo, state_file)
+    blocked: list[str] = []
+    if budget.get("handoff_recommended") and not checkpoint["ready"]:
+        blocked.append(
+            "Session checkpoint required: coordinator context budget is exceeded; run e2e_dev_harness.py next "
+            "to create a fresh checkpoint before dispatching more workers."
+        )
+        blocked.extend("Session checkpoint: " + reason for reason in checkpoint["blocked_reasons"])
+    return {
+        "ready": not blocked,
+        "blocked_reasons": blocked,
+        "warnings": session_checkpoint.budget_warnings(budget),
+        "coordinator_context_budget": budget,
+        "session_checkpoint": checkpoint,
+    }
 
 
 def load_workflow_plan(repo: Path, state: dict) -> dict | None:
@@ -147,13 +176,13 @@ def clarification_interaction_contract() -> dict:
         "interaction_required": True,
         "must_wait_for_user_answer": True,
         "questions_to_ask_user": [
-            "Confirm the agent's Restated Intent with the user.",
-            "Ask any behavior, API, data, ownership, test, or impact questions that cannot be answered from evidence.",
-            "Update the design doc Open Questions section to None only after answers are recorded or explicitly deferred out of scope.",
+            "Relay the requirements-clarifier worker's Restated Intent confirmation request to the user.",
+            "Relay only unresolved behavior, API, data, ownership, test, or impact questions returned by the worker.",
+            "Record the worker's returned evidence paths after answers are captured.",
         ],
         "allowed_before_user_answer": [
-            "bounded GitNexus or scanner discovery for evidence",
-            "drafting design sections clearly marked pending confirmation",
+            "dispatching the requirements-clarifier worker",
+            "recording dispatcher-generated context pack, invocation, and worker handle paths",
         ],
         "blocked_until_resolved": [
             "planning",
@@ -167,42 +196,42 @@ def clarification_interaction_contract() -> dict:
 def required_todo_list_for_lifecycle(lifecycle: str, state: dict | None = None) -> list[str]:
     state = state or {}
     state_path = "docs/agent-runs/<run>/run-state.json"
+    schedule_path = "docs/agent-runs/<run>/agent-schedule.json"
     lists = {
         "CREATED": [
-            "Ask the user to confirm Restated Intent and answer unresolved clarification questions.",
-            "Run kg_refresh or inspect GitNexus status before repository exploration.",
-            "Use GitNexus query/context/impact for bounded impact evidence; use rg/Read only for seed discovery.",
-            "Fill docs/design/<feature>.md with clarified requirements and bounded impact facts.",
-            f"Run e2e_dev_harness.py clarify --design-doc <design> --run-state {state_path}.",
-            "Revise the design doc until the clarification gate passes.",
+            f"Run e2e_dev_harness.py dispatch-next --schedule {schedule_path} --state {state_path} to dispatch requirements-clarifier.",
+            "Spawn or acknowledge only the dispatcher-generated requirements-clarifier worker.",
+            "Do not perform clarification, GitNexus, rg/Read, design-doc, plan, TDD, or review work in coordinator chat.",
+            "Relay unresolved Restated Intent or Open Questions from the worker to the user.",
+            "Record returned requirements handoff evidence paths, then run dispatch-complete and next.",
         ],
         "CLARIFIED": [
-            "Use GitNexus evidence to confirm affected services, routes, topics, and dependency impact.",
-            "Run e2e_dev_harness.py plan --design-doc <design> --create-archive.",
-            "Dispatch or complete the independent R1 design review.",
-            "Run e2e_dev_harness.py next before TDD or implementation work.",
+            "Run plan --create-archive only as a control-plane schedule/archive generation step when the full schedule is missing.",
+            "Run dispatch-beat/dispatch-next to spawn the independent R1 design-review worker.",
+            "Record dispatch-ack and dispatch-complete for R1 evidence, then run next.",
+            "Do not perform design, impact analysis, R1 review, TDD, or implementation work in coordinator chat.",
         ],
         "SERVICE_DESIGN_REQUIRED": [
-            "Use GitNexus context/impact for each service runtime path and dependency boundary.",
-            "Fill every service-designs/<service>.md slice with mapped ACs and runtime path.",
-            f"Run e2e_dev_harness.py service-design --run-state {state_path}.",
-            "Revise service design slices until the service-design gate passes.",
+            "Run dispatch-beat/dispatch-next to spawn service-design workers for each required slice.",
+            f"Run e2e_dev_harness.py service-design --run-state {state_path} after worker evidence is returned.",
+            "Record dispatch-complete for service-design evidence, then run next.",
+            "Do not write service-design slices or dependency/runtime-path analysis in coordinator chat.",
         ],
         "PLANNED": [
-            "Run e2e_dev_harness.py dispatch-beat --max-workers <N> to spawn service-local TDD red workers.",
-            "Capture red-test evidence and required command output for each affected service.",
-            "Dispatch or complete the independent R2 test review.",
-            "Run e2e_dev_harness.py next again after TDD red and R2 complete; run-state should advance to RED_READY.",
+            "Run dispatch-beat/dispatch-next for the next scheduled worker in order: unfinished R1, implementation-planner, TDD red, then R2.",
+            "Record dispatch-ack and dispatch-complete with returned plan/red-test/R2 evidence paths.",
+            "Run next after each dispatch wave; run-state should advance to RED_READY only after plan, TDD red, and R2 evidence.",
+            "Do not write plans, tests, reviews, or implementation code in coordinator chat.",
         ],
         "RED_READY": [
             f"Run e2e_dev_harness.py gate --phase implementation --run-state {state_path}.",
             "Do not edit production files until the implementation gate opens.",
         ],
         "IMPLEMENTED": [
-            "Dispatch or claim each code-developer task for its assigned service/module.",
-            "Continue TDD red/green/refactor for all assigned ACs in declared scope.",
-            "Run e2e_dev_harness.py ac-progress for the active service or global design.",
-            "Dispatch or complete R3 only after all assigned ACs pass ac-progress.",
+            "Run dispatch-beat/dispatch-next to spawn code-developer workers for assigned service/module scope.",
+            "Record dispatch-complete with green-test, implementation-manifest, and coverage evidence paths.",
+            "Run ac-progress after worker evidence; dispatch R3 and coverage only after all assigned ACs pass.",
+            "Do not write production/test code, R3 review, or coverage artifacts in coordinator chat.",
         ],
         "REVIEWED": [
             "Run the completion gate and strict guard.",
@@ -229,6 +258,15 @@ def required_todo_list_for_lifecycle(lifecycle: str, state: dict | None = None) 
 
 
 def exploration_policy_for_lifecycle(lifecycle: str) -> dict:
+    if lifecycle == "CREATED":
+        return {
+            "schema": "e2e-dev-harness.exploration-policy.v1",
+            "preferred": "dispatcher",
+            "direct_tools_allowed_for": [],
+            "required_for": ["requirements clarification", "Restated Intent", "impact evidence", "design doc updates"],
+            "fallback": "Run dispatch-next for the requirements-clarifier worker; coordinator may only relay returned questions and evidence paths.",
+            "lifecycle": lifecycle,
+        }
     return {
         "schema": "e2e-dev-harness.exploration-policy.v1",
         "preferred": "gitnexus",
@@ -373,6 +411,248 @@ def coordinator_action_fields(lifecycle: str, state: dict | None = None, runtime
     return {**base, **selected}
 
 
+def _unique_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if text and text not in seen:
+            seen.add(text)
+            result.append(text)
+    return result
+
+
+def execution_packet_for_lifecycle(
+    lifecycle: str,
+    state: dict | None = None,
+    runtime: str = "claude-code",
+    action: dict | None = None,
+) -> dict:
+    state = state or {}
+    action = action or next_action_for_lifecycle(lifecycle, state, runtime)
+    run_dir = run_dir_for_state(state)
+    primary_command = str(action.get("dispatch_command") or action.get("command") or "")
+    base_evidence_paths = {
+        "run_state": f"{run_dir}/run-state.json",
+        "agent_schedule": f"{run_dir}/agent-schedule.json",
+        "phase_lock": f"{run_dir}/.phase-lock",
+        "red_test_evidence": f"{run_dir}/evidence/red-test.txt",
+        "green_test_evidence": f"{run_dir}/evidence/green-test.json",
+        "coverage_matrix": f"{run_dir}/evidence/coverage-matrix.md",
+        "implementation_manifest": f"{run_dir}/evidence/implementation-manifest.md",
+        "requirements_archive": f"{run_dir}/requirements-archive.md",
+        "strict_guard": f"{run_dir}/evidence/strict-guard.json",
+    }
+    by_lifecycle = {
+        "CREATED": {
+            "objective": "Clarify intent and scope through the bootstrap requirements worker before planning.",
+            "required_actions": [
+                "Dispatch the requirements-clarifier worker or record manual isolated dispatch.",
+                "Relay only unresolved user questions back to the coordinator chat.",
+                "Run the clarification gate after the design doc is updated.",
+            ],
+            "required_evidence": [
+                "confirmed Restated Intent and closed Open Questions in the design doc",
+                "clarification gate result",
+                "requirements handoff or manual dispatch evidence",
+            ],
+            "completion_checks": [
+                "run-state lifecycle becomes CLARIFIED",
+                "no planning, TDD, or code work starts before clarification passes",
+            ],
+            "next_gate": "clarification",
+        },
+        "CLARIFIED": {
+            "objective": "Get independent R1 design review evidence ready before implementation planning.",
+            "required_actions": [
+                "Run plan --create-archive only as control-plane schedule/archive generation when missing.",
+                "Dispatch the independent R1 design-review worker.",
+                "Refresh next before TDD work starts.",
+            ],
+            "required_evidence": [
+                "agent-run archive with artifact registry and schedule",
+                "GitNexus or approved dependency/impact evidence",
+                "R1 design review report and invocation proof",
+            ],
+            "completion_checks": [
+                "run-state lifecycle becomes PLANNED or SERVICE_DESIGN_REQUIRED",
+                "R1 review blockers are routed to rework before TDD",
+            ],
+            "next_gate": "planning",
+        },
+        "SERVICE_DESIGN_REQUIRED": {
+            "objective": "Complete service-local design slices before TDD or code dispatch.",
+            "required_actions": [
+                "Dispatch service-design workers for every service-designs/<service>.md slice.",
+                "Validate returned slices with the service-design gate.",
+                "Refresh next after the service-design gate passes.",
+            ],
+            "required_evidence": [
+                "mapped AC rows for every affected service",
+                "service-local runtime path and dependency boundary",
+                "service-design gate result",
+            ],
+            "completion_checks": [
+                "run-state lifecycle becomes PLANNED",
+                "no service code-agent dispatch happens before service-design passes",
+            ],
+            "next_gate": "service_design",
+        },
+        "PLANNED": {
+            "objective": "Dispatch implementation-planner, TDD red, and independent R2 review before implementation opens.",
+            "required_actions": [
+                "Run dispatch-beat for the next ready scheduled workers: unfinished R1, implementation-planner, TDD red, then R2.",
+                "Record returned plan/red-test/R2 evidence paths through dispatch-complete.",
+                "Run next again after dispatch-complete updates the run-state.",
+            ],
+            "required_evidence": [
+                "red-test evidence for the first failing behavior",
+                "R2 test review report and invocation proof",
+                "dispatch-complete evidence for scheduled TDD/R2 tasks",
+            ],
+            "completion_checks": [
+                "run-state lifecycle becomes RED_READY",
+                "no code-developer worker is dispatched before the implementation gate",
+            ],
+            "next_gate": "tdd_red",
+        },
+        "RED_READY": {
+            "objective": "Open implementation only through the implementation gate.",
+            "required_actions": [
+                "Run the implementation gate with run-state and red/R2 evidence.",
+                "Refresh next after the gate updates run-state and phase lock.",
+            ],
+            "required_evidence": [
+                "red-test evidence",
+                "R2 test review evidence",
+                "passing implementation gate status evidence",
+            ],
+            "completion_checks": [
+                "run-state lifecycle becomes IMPLEMENTED",
+                "phase lock reports code-write-open only after the gate passes",
+            ],
+            "next_gate": "implementation",
+        },
+        "IMPLEMENTED": {
+            "objective": "Finish all assigned ACs through dispatched implementation, AC progress, and R3 review.",
+            "required_actions": [
+                "Dispatch each code-developer task for its service/module.",
+                "Record returned green-test, manifest, and coverage evidence paths.",
+                "Run ac-progress before R3, then dispatch or complete R3.",
+            ],
+            "required_evidence": [
+                "green unit-test command evidence",
+                "implementation manifest rows with concrete code refs",
+                "coverage matrix and business review",
+                "R3 implementation review report and invocation proof",
+            ],
+            "completion_checks": [
+                "all assigned ACs pass ac-progress",
+                "run-state lifecycle becomes REVIEWED or VERIFIED after required reviews/gates",
+            ],
+            "next_gate": "ac_progress",
+        },
+        "REVIEWED": {
+            "objective": "Prove completion with completion gate, strict guard, and requirements archive.",
+            "required_actions": [
+                "Run the completion gate with coverage, manifest, tests, reviews, and archive evidence.",
+                "Run strict guard and write run summaries.",
+                "Resolve or explicitly approve any rework before reporting completion.",
+            ],
+            "required_evidence": [
+                "completion gate result",
+                "strict guard result",
+                "requirements archive",
+                "run summary JSON and Markdown",
+            ],
+            "completion_checks": [
+                "run-state lifecycle becomes VERIFIED",
+                "no open rework remains without approved deferral",
+            ],
+            "next_gate": "completion",
+        },
+        "WAITING_DISPATCH": {
+            "objective": "Preserve agent isolation while waiting for runtime worker acknowledgement.",
+            "required_actions": [
+                "Record the runtime worker handle with dispatch-ack.",
+                "Keep coordinator chat limited to task id, agent id, worker handle, context-pack path, and evidence paths.",
+                "Run dispatch-status or next after acknowledgement to resume the lifecycle.",
+            ],
+            "required_evidence": [
+                "worker acknowledgement with runtime worker handle",
+                "dispatch invocation JSON or manual dispatch packet",
+                "context pack path for the dispatched task",
+            ],
+            "completion_checks": [
+                "dispatch status becomes worker_running",
+                "the scheduled task is not completed before worker evidence exists",
+            ],
+            "next_gate": "dispatch_ack",
+        },
+        "REWORK_REQUIRED": {
+            "objective": "Route findings back to the earliest required phase before more implementation changes.",
+            "required_actions": [
+                "Read each rework item return_phase and affected scope.",
+                "Return to the routed phase before editing files.",
+                "Close rework only as Status: verified or approved deferred with evidence.",
+            ],
+            "required_evidence": [
+                "rework item with return_phase, affected services, and exit criteria",
+                "verification evidence proving the rework item is closed",
+                "updated gate/review evidence for the routed phase",
+            ],
+            "completion_checks": [
+                "all blocking rework items are verified or explicitly approved deferred",
+                "new changes stay inside the routed rework scope",
+            ],
+            "next_gate": "rework",
+        },
+        "VERIFIED": {
+            "objective": "Archive final evidence and report residual risks.",
+            "required_actions": [
+                "Refresh artifact registry.",
+                "Report final evidence paths and residual risks.",
+            ],
+            "required_evidence": [
+                "fresh artifact registry",
+                "requirements archive",
+                "final evidence report",
+            ],
+            "completion_checks": [
+                "no new implementation changes are introduced after verification",
+            ],
+            "next_gate": "archive",
+        },
+    }
+    details = by_lifecycle.get(
+        lifecycle,
+        {
+            "objective": "Repair or inspect the run-state lifecycle before continuing.",
+            "required_actions": ["Run next after repairing run-state."],
+            "required_evidence": ["valid run-state and phase lock"],
+            "completion_checks": ["lifecycle is recognized by the harness"],
+            "next_gate": "unknown",
+        },
+    )
+    forbidden = _unique_strings(
+        list(action.get("forbidden_local_actions", []))
+        + [f"write {item}" for item in action.get("blocked_writes", [])]
+    )
+    return {
+        "schema": "e2e-dev-harness.execution-packet.v1",
+        "lifecycle": lifecycle or "<missing>",
+        "phase": action.get("phase", ""),
+        "objective": details["objective"],
+        "primary_command": primary_command,
+        "required_actions": details["required_actions"],
+        "required_evidence": details["required_evidence"],
+        "evidence_paths": base_evidence_paths,
+        "forbidden_actions": forbidden,
+        "completion_checks": details["completion_checks"],
+        "next_gate": details["next_gate"],
+    }
+
+
 def next_action_for_lifecycle(lifecycle: str, state: dict | None = None, runtime: str = "claude-code") -> dict:
     state = state or {}
     actions = {
@@ -383,16 +663,16 @@ def next_action_for_lifecycle(lifecycle: str, state: dict | None = None, runtime
             "blocked_writes": ["production code", "tests outside harness evidence"],
         },
         "CLARIFIED": {
-            "phase": "plan",
-            "command": "Run e2e_dev_harness.py plan --design-doc <design> --create-archive, then complete R1 review.",
+            "phase": "r1-design-review",
+            "command": "Generate the full schedule/archive only if missing, then dispatch independent R1 design-review workers.",
             "allowed_writes": ["docs/agent-runs/", "docs/design/"],
-            "blocked_writes": ["production code"],
+            "blocked_writes": ["production code", "R1/design/impact work in coordinator chat"],
         },
         "SERVICE_DESIGN_REQUIRED": {
             "phase": "service-design",
-            "command": "Fill service-designs/<service>.md for every affected service, validate with e2e_dev_harness.py service-design --run-state <state>, then continue to R1/TDD planning.",
+            "command": "Dispatch service-design workers, then validate returned slices with e2e_dev_harness.py service-design --run-state <state>.",
             "allowed_writes": ["docs/agent-runs/", "docs/design/"],
-            "blocked_writes": ["production code", "service code-agent dispatch before service-design gate passes"],
+            "blocked_writes": ["production code", "service design slice work in coordinator chat", "service code-agent dispatch before service-design gate passes"],
         },
         "PLANNED": {
             "phase": "tdd-red",
@@ -408,15 +688,21 @@ def next_action_for_lifecycle(lifecycle: str, state: dict | None = None, runtime
         },
         "IMPLEMENTED": {
             "phase": "implement-or-complete",
-            "command": "Production code writes are open. Continue TDD red/green until ac-progress is ready for all assigned ACs, then run R3 review and completion gate.",
+            "command": "Dispatch code-developer workers for TDD green, run ac-progress on returned evidence, then dispatch R3 review and completion gate.",
             "allowed_writes": ["declared production/test scope", "docs/agent-runs/"],
-            "blocked_writes": ["undeclared scope drift", "R3 review before all assigned ACs pass ac-progress"],
+            "blocked_writes": ["coordinator-local production/test code edits", "undeclared scope drift", "R3 review before all assigned ACs pass ac-progress"],
         },
         "REVIEWED": {
             "phase": "completion",
             "command": "Run completion gate, strict guard, summary, and requirements archive validation.",
             "allowed_writes": ["docs/agent-runs/"],
             "blocked_writes": ["new production changes without rework item"],
+        },
+        "WAITING_DISPATCH": {
+            "phase": "waiting-dispatch",
+            "command": "A worker dispatch is pending acknowledgement; record the worker handle with dispatch-ack before completion.",
+            "allowed_writes": ["docs/agent-runs/dispatches/", "docs/agent-runs/context-packs/"],
+            "blocked_writes": ["task completion before worker acknowledgement", "local coordinator work for the dispatched task"],
         },
         "REWORK_REQUIRED": {
             "phase": "rework",
@@ -487,6 +773,24 @@ def workflow_overview_for(lifecycle: str, state: dict | None = None) -> dict:
 
 def _dispatch_with_hook_guard(args, beat: bool) -> tuple[int, dict]:
     repo = as_repo(args.repo)
+    budget_gate = dispatch_context_budget_gate(repo, args.state)
+    if not budget_gate["ready"]:
+        hooks = runtime_hook_status(repo)
+        result = {
+            "repo": str(repo),
+            "ready": False,
+            "blocked_reasons": budget_gate["blocked_reasons"],
+            "warnings": budget_gate["warnings"],
+            "hook_status": hooks,
+            "coordinator_context_budget": budget_gate["coordinator_context_budget"],
+            "session_checkpoint": budget_gate["session_checkpoint"],
+            "next_required": {
+                "command": f"python skills/e2e-dev-harness/scripts/e2e_dev_harness.py next . --state {args.state}",
+                "reason": "refresh session checkpoint before dispatch",
+            },
+        }
+        write_status(args.status_file, result)
+        return 2, result
     hooks = runtime_hook_status(repo)
     runtime = args.runtime
     forced_waiting = hooks.get("runtime") == "generic" or not hooks.get("ready", False)
@@ -515,6 +819,8 @@ def _dispatch_with_hook_guard(args, beat: bool) -> tuple[int, dict]:
             max_files=args.max_files,
             max_chars=args.max_chars,
         )
+    result["coordinator_context_budget"] = budget_gate["coordinator_context_budget"]
+    result["session_checkpoint"] = budget_gate["session_checkpoint"]
     result["hook_status"] = hooks
     if forced_waiting:
         result.setdefault("warnings", []).append(
@@ -550,6 +856,7 @@ def next_step(args) -> tuple[int, dict]:
     lifecycle = str(state.get("lifecycle", ""))
     runtime = getattr(args, "runtime", "claude-code")
     action = next_action_for_lifecycle(lifecycle, state, runtime)
+    execution_packet = execution_packet_for_lifecycle(lifecycle, state, runtime, action)
     workflow_plan = load_workflow_plan(repo, state)
     hooks = runtime_hook_status(repo)
     blocked = [] if hooks["ready"] else [
@@ -563,6 +870,7 @@ def next_step(args) -> tuple[int, dict]:
         "hook_status": hooks,
         "lifecycle": lifecycle,
         "next": action,
+        "execution_packet": execution_packet,
         "todo_policy": action["todo_policy"],
         "required_todo_list": action["required_todo_list"],
         "exploration_policy": action["exploration_policy"],

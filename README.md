@@ -256,7 +256,7 @@ docs/agent-runs/<run>/service-plans/<service>/implementation-plan.md
 docs/agent-runs/<run>/service-plans/<service>/test-impact-plan.json
 ```
 
-Multi-service `plan --create-archive` writes run-state lifecycle `SERVICE_DESIGN_REQUIRED`. Validate the service slices before R2/TDD red or dispatching code agents; the command below transitions the run-state to `PLANNED` only when every global AC is mapped into concrete service slices with runtime path, first red test, expected failure, required Maven command, dependency boundary, and test impact. The global design template includes `System Sequence`; service slices include `Local Sequence`, and cross-service, contract, shared-state, or event dependencies must keep that local sequence concrete enough to drive the first red test and dependency-edge implementation.
+Multi-service `plan --create-archive` writes run-state lifecycle `SERVICE_DESIGN_REQUIRED`. Dispatch service-design workers to produce the slices, then validate returned evidence before R2/TDD red or dispatching code agents; the command below transitions the run-state to `PLANNED` only when every global AC is mapped into concrete service slices with runtime path, first red test, expected failure, required Maven command, dependency boundary, and test impact. The global design template includes `System Sequence`; service slices include `Local Sequence`, and cross-service, contract, shared-state, or event dependencies must keep that local sequence concrete enough to drive the first red test and dependency-edge implementation.
 
 ```powershell
 python skills\e2e-dev-harness\scripts\e2e_dev_harness.py service-design . `
@@ -314,9 +314,9 @@ scheduled tasks, reviews, handoffs, and evidence are complete.
 `start` now writes a bootstrap schedule with a `requirements-clarifier` task, so
 clarification can be delegated before the full plan archive exists. The
 coordinator still runs deterministic control-plane commands such as
-`plan --create-archive`, but requirements, use cases, tests, semantic reviews,
-service code, and coverage work should move through scheduled subagents whenever
-the runtime can provide isolated Task sessions.
+`plan --create-archive`, but requirements, use cases, implementation planning,
+tests, semantic reviews, service code, and coverage work must move through
+scheduled subagents whenever the runtime can provide isolated Task sessions.
 
 For R1/R2/R3 tasks, `dispatch-complete` immediately runs the reviewer gate against
 the reported review evidence. A reviewer task is not marked complete when the
@@ -357,7 +357,7 @@ python skills\e2e-dev-harness\scripts\e2e_dev_harness.py ac-progress . `
   --unit-test-evidence docs\agent-runs\<run>\service-plans\<service>\unit-test-evidence.txt
 ```
 
-If this blocks on `AC-2`, continue TDD red/green for `AC-2`; do not ask whether to start R3.
+If this blocks on `AC-2`, dispatch or continue code-developer TDD red/green for `AC-2`; do not ask whether to start R3.
 
 ## Hook Configuration
 
@@ -390,11 +390,11 @@ Stop/finalization guard:
 "C:\absolute\path\to\python.exe" "C:\absolute\path\to\skills\e2e-dev-harness\scripts\harness_stop_guard.py" "C:\absolute\path\to\target-repo" --hook-input - --strict --json
 ```
 
-`phase_guard.py` reads `docs/agent-runs/<run>/.phase-lock`. With `--require-active-run-for-read`, code `Read`/`Grep`/`Glob` is blocked until `start` creates an active run. It allows red-test writes under `src/test`, `test`, or `tests` during `PLANNED`/`RED_READY`, but blocks runtime production code until lifecycle `IMPLEMENTED`. `IMPLEMENTED` must come from run-state transition history with ready implementation-gate evidence; editing `.phase-lock` and `run-state.json` by hand is blocked. In multi-service runs it also requires a claimed service code-developer task for runtime code writes in the touched service/module. It recognizes direct file tools including Claude `Update`, `apply_patch`, common shell write commands, and inline Python/Node/PowerShell mutation patterns; unknown tools touching code paths fail closed. Harness artifacts under `docs/agent-runs/` may be written before implementation except control files such as `.phase-lock`, `run-state.json`, `artifact-registry.json`, and `agent-schedule.json`.
+`phase_guard.py` reads `docs/agent-runs/<run>/.phase-lock`. With `--require-active-run-for-read`, code `Read`/`Grep`/`Glob` is blocked until `start` creates an active run, and dispatch-gated phases require an active worker before code exploration. Red-test writes under `src/test`, `test`, or `tests` during `PLANNED` require an active `test-case-developer`; runtime production and test writes during `IMPLEMENTED` require an active `code-developer`. `IMPLEMENTED` must come from run-state transition history with ready implementation-gate evidence; editing `.phase-lock` and `run-state.json` by hand is blocked. In multi-service runs it also requires a claimed service code-developer task for runtime code writes in the touched service/module. It recognizes direct file tools including Claude `Update`, `apply_patch`, common shell write commands, and inline Python/Node/PowerShell mutation patterns; unknown tools touching code paths fail closed. Harness artifacts under `docs/agent-runs/` may be written before implementation except control files such as `.phase-lock`, `run-state.json`, `artifact-registry.json`, and `agent-schedule.json`.
 
 With `--require-session-checkpoint`, production/test code writes also require a fresh `session-checkpoint.json` produced by `e2e_dev_harness.py next`. If run-state changes or the checkpoint ages out, the hook blocks and forces the agent to reload the state machine before continuing.
 
-`harness_stop_guard.py` is wired to Claude Code `Stop` with `--strict`. It blocks Claude from ending a run while lifecycle is non-terminal, or while the post-code run still has open scheduled tasks. This is the guard that prevents "compiled successfully, summary emitted, R2/R3/completion skipped" behavior.
+`harness_stop_guard.py` is wired to Claude Code `Stop` with `--strict`. It blocks Claude from ending a run while lifecycle is non-terminal, or while the post-code run still has open scheduled tasks. A run directory without `run-state.json` blocks only when it contains files; empty stale scaffold directories are ignored with a warning. This is the guard that prevents "compiled successfully, summary emitted, R2/R3/completion skipped" behavior.
 
 ### Claude Code
 

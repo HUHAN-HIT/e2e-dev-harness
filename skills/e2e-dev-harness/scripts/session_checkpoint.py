@@ -75,6 +75,29 @@ def file_count_and_bytes(root: Path) -> tuple[int, int]:
     return count, total
 
 
+def open_task_count(run_dir: Path) -> int:
+    schedule = load_json(run_dir / "agent-schedule.json")
+    tasks = schedule.get("tasks") if isinstance(schedule.get("tasks"), list) else []
+    return sum(
+        1
+        for task in tasks
+        if isinstance(task, dict)
+        and str(task.get("status", "planned")).lower() not in {"completed", "cancelled"}
+    )
+
+
+def estimate_expected_handoffs(planned_tasks: int, max_tool_calls: int) -> int:
+    # Each scheduled task costs the coordinator roughly three tool calls across
+    # its dispatch lifecycle (beat -> ack -> complete). When the per-session
+    # tool-call budget is bounded, a multi-service run is expected to span
+    # several coordinator sessions; surfacing the estimate keeps checkpoint and
+    # resume a planned cadence rather than a perceived failure.
+    if planned_tasks <= 0 or max_tool_calls <= 0:
+        return 0
+    estimated_tool_calls = planned_tasks * 3
+    return (estimated_tool_calls + max_tool_calls - 1) // max_tool_calls
+
+
 def context_budget(
     state_path: Path,
     state: dict,
@@ -100,6 +123,8 @@ def context_budget(
         "max_phase_events": max_phase_events,
         "max_tool_calls": max_tool_calls,
     }
+    planned_tasks = open_task_count(run_dir)
+    expected_handoffs = estimate_expected_handoffs(planned_tasks, max_tool_calls)
     exceeded: list[str] = []
     if max_evidence_bytes >= 0 and evidence_bytes > max_evidence_bytes:
         exceeded.append("evidence_bytes")
@@ -111,6 +136,8 @@ def context_budget(
         "schema": "e2e-dev-harness.coordinator-context-budget.v1",
         "metrics": metrics,
         "limits": limits,
+        "planned_tasks": planned_tasks,
+        "expected_handoffs": expected_handoffs,
         "exceeded_limits": exceeded,
         "handoff_recommended": bool(exceeded),
         "resume_instruction": (

@@ -21,7 +21,7 @@ import ac_progress_gate  # noqa: E402
 import agent_scheduler  # noqa: E402
 import artifact_registry  # noqa: E402
 import clarification_gate  # noqa: E402
-from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, atomic_write_json, configure_utf8_stdio, posix  # noqa: E402
+from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, atomic_write_json, configure_utf8_stdio, posix, read_json_object  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import coordinator_flow  # noqa: E402
 import dispatcher  # noqa: E402
@@ -154,7 +154,7 @@ def lifecycle_from_state(repo: Path, args: argparse.Namespace, result: dict) -> 
     if lifecycle:
         return lifecycle
     state_path = run_state_path_from_args(repo, args, result)
-    data = load_run_state(repo, state_path) if state_path and state_path.exists() else {}
+    data = read_json_object(state_path) if state_path and state_path.exists() else {}
     return str(data.get("lifecycle", "")).strip()
 
 
@@ -876,17 +876,106 @@ def start(args) -> tuple[int, dict]:
     return 0, result
 
 
+def clarification_dispatch_blockers(repo: Path, run_state_path: Path | str | None) -> list[str]:
+    state_file = require_repo_path(repo, Path(str(run_state_path)), "run state") if run_state_path else None
+    if not state_file or not state_file.exists():
+        return [f"Run state not found for clarification dispatch check: {run_state_path}"]
+    state_data = read_json_object(state_file)
+    if not state_data:
+        return [f"Run state is unreadable for clarification dispatch check: {state_file}"]
+    if str(state_data.get("lifecycle", "")).upper() != "CREATED":
+        return []
+
+    schedule_path = state_file.parent / "agent-schedule.json"
+    if not schedule_path.exists():
+        return [
+            "Clarification gate blocked: CREATED run-state requires completed requirements-clarifier dispatch evidence; "
+            "agent-schedule.json is missing beside run-state."
+        ]
+    schedule = read_json_object(schedule_path)
+    if not schedule:
+        return [f"Clarification gate blocked: agent schedule is unreadable: {schedule_path}"]
+
+    tasks = [task for task in schedule.get("tasks", []) or [] if isinstance(task, dict)]
+    clarifier_tasks = [
+        task
+        for task in tasks
+        if str(task.get("agent", "")).strip() == "requirements-clarifier"
+        or str(task.get("phase", "")).strip().lower() == "clarify"
+    ]
+    if not clarifier_tasks:
+        return [
+            "Clarification gate blocked: CREATED run-state requires a scheduled requirements-clarifier task."
+        ]
+
+    blockers = agent_scheduler.dispatch_completion_blockers_for_tasks(
+        repo,
+        schedule_path,
+        state_file,
+        clarifier_tasks,
+        "Clarification gate blocked",
+    )
+    return blockers or []
+
+
+def service_design_dispatch_blockers(repo: Path, run_state_path: Path | str | None) -> list[str]:
+    state_file = require_repo_path(repo, Path(str(run_state_path)), "run state") if run_state_path else None
+    if not state_file or not state_file.exists():
+        return [f"Run state not found for service-design dispatch check: {run_state_path}"]
+    state_data = read_json_object(state_file)
+    if not state_data:
+        return [f"Run state is unreadable for service-design dispatch check: {state_file}"]
+    if str(state_data.get("lifecycle", "")).upper() != "SERVICE_DESIGN_REQUIRED":
+        return []
+
+    schedule_path = state_file.parent / "agent-schedule.json"
+    if not schedule_path.exists():
+        return [
+            "Service-design gate blocked: SERVICE_DESIGN_REQUIRED requires dispatcher-confirmed "
+            "service-design worker task outputs; agent-schedule.json is missing beside run-state."
+        ]
+    schedule = read_json_object(schedule_path)
+    if not schedule:
+        return [f"Service-design gate blocked: agent schedule is unreadable: {schedule_path}"]
+
+    service_design_tasks = agent_scheduler.tasks_with_output_fragments(schedule, ["/service-designs/"])
+    if not service_design_tasks:
+        return [
+            "Service-design gate blocked: SERVICE_DESIGN_REQUIRED requires scheduled service-design worker "
+            "tasks that output service-designs/*.md before the main coordinator may transition to PLANNED."
+        ]
+    return agent_scheduler.dispatch_completion_blockers_for_tasks(
+        repo,
+        schedule_path,
+        state_file,
+        service_design_tasks,
+        "Service-design gate blocked",
+    )
+
+
 def clarify(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
     design_path = resolve_repo_path(repo, args.design_doc)
     if not design_path or not design_path.exists():
         return 2, {"ready_for_implementation": False, "error": f"Design doc not found: {design_path}"}
+    run_state_path = getattr(args, "run_state", None)
     result = clarification_gate.validate(
         design_path,
         require_intent=getattr(args, "require_intent", True),
         require_user_confirmation=getattr(args, "require_user_confirmation", True),
     )
-    run_state_path = getattr(args, "run_state", None)
+    if run_state_path and result.get("ready_for_implementation"):
+        dispatch_blockers = clarification_dispatch_blockers(repo, run_state_path)
+        if dispatch_blockers:
+            result["ready_for_implementation"] = False
+            result.setdefault("blocked_reasons", []).extend(dispatch_blockers)
+            result["clarification_dispatch"] = {"ready": False, "blocked_reasons": dispatch_blockers}
+            result["interaction_required"] = True
+            result["questions_to_ask_user"] = [
+                "Run dispatch-next for requirements-clarifier and relay its returned Restated Intent/Open Questions first."
+            ]
+            write_status(args.status_file, result)
+            return 2, result
     if run_state_path and result.get("ready_for_implementation"):
         result["run_state_transition"] = run_state.transition_state(
             repo,
@@ -2309,6 +2398,13 @@ def service_design(args) -> tuple[int, dict]:
         result["templates_written"] = templates_written
     run_state_path = getattr(args, "run_state", None)
     if run_state_path and result["ready"]:
+        dispatch_blockers = service_design_dispatch_blockers(repo, run_state_path)
+        if dispatch_blockers:
+            result["ready"] = False
+            result.setdefault("blocked_reasons", []).extend(dispatch_blockers)
+            result["service_design_dispatch"] = {"ready": False, "blocked_reasons": dispatch_blockers}
+            write_status(args.status_file, result)
+            return 2, result
         transition = run_state.transition_state(
             repo,
             run_state_path,

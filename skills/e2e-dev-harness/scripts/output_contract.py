@@ -10,7 +10,7 @@ from typing import Any
 
 from common import atomic_write_json, now_iso
 
-MAX_COMPACT_CHARS = 8_000
+MAX_COMPACT_CHARS = 2_048
 MAX_SUMMARY_ITEMS = 12
 
 
@@ -24,6 +24,18 @@ def _resolve(repo: Path, value: str | Path | None) -> Path | None:
         return None
     path = value if isinstance(value, Path) else Path(str(value))
     return path if path.is_absolute() else repo / path
+
+
+def _display_path(repo: Path, value: Any) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    path = Path(text)
+    try:
+        resolved = path if path.is_absolute() else repo / path
+        return resolved.resolve().relative_to(repo.resolve()).as_posix()
+    except (OSError, ValueError):
+        return path.as_posix()
 
 
 def _run_dir_from_result(repo: Path, result: dict, args: Any | None = None) -> Path:
@@ -92,8 +104,34 @@ def _compact_next(next_action: Any) -> dict:
     return {key: next_action[key] for key in keys if key in next_action}
 
 
-def _artifact_paths(result: dict, full_result_path: Path, coordinator_summary_path: str = "") -> dict:
-    artifacts: dict[str, Any] = {"full_result": str(full_result_path)}
+def _compact_execution_packet(packet: Any) -> dict:
+    if not isinstance(packet, dict):
+        return {}
+    keys = [
+        "schema",
+        "lifecycle",
+        "phase",
+        "objective",
+        "primary_command",
+        "required_actions",
+        "required_evidence",
+        "forbidden_actions",
+        "completion_checks",
+        "next_gate",
+    ]
+    compact = {key: packet[key] for key in keys if key in packet}
+    evidence_paths = packet.get("evidence_paths")
+    if isinstance(evidence_paths, dict):
+        compact["evidence_paths"] = {
+            key: evidence_paths[key]
+            for key in ("run_state", "agent_schedule", "red_test_evidence", "green_test_evidence", "coverage_matrix")
+            if key in evidence_paths
+        }
+    return compact
+
+
+def _artifact_paths(repo: Path, result: dict, full_result_path: Path, coordinator_summary_path: str = "") -> dict:
+    artifacts: dict[str, Any] = {"full_result": _display_path(repo, full_result_path)}
     for key in (
         "run_state",
         "phase_lock",
@@ -106,13 +144,27 @@ def _artifact_paths(result: dict, full_result_path: Path, coordinator_summary_pa
         "coordinator_summary_path",
     ):
         if result.get(key):
-            artifacts[key] = result[key]
+            artifacts[key] = _display_path(repo, result[key])
     handoffs = result.get("handoff_artifacts")
     if isinstance(handoffs, dict):
-        artifacts["handoff_artifacts"] = handoffs
+        artifacts["handoff_artifacts"] = {
+            key: _display_path(repo, value)
+            for key, value in handoffs.items()
+            if isinstance(value, (str, Path))
+        }
     if coordinator_summary_path:
-        artifacts["coordinator_summary"] = coordinator_summary_path
+        artifacts["coordinator_summary"] = _display_path(repo, coordinator_summary_path)
     return artifacts
+
+
+def _minimal_execution_packet(packet: Any) -> dict:
+    if not isinstance(packet, dict):
+        return {}
+    return {
+        key: packet[key]
+        for key in ("schema", "lifecycle", "phase", "primary_command", "next_gate")
+        if key in packet
+    }
 
 
 def compact_payload(
@@ -139,8 +191,9 @@ def compact_payload(
             "claimed_tasks": _limited_list(result.get("claimed_tasks", []), 5),
             "blocked_tasks": _limited_list(result.get("blocked_tasks", []), 5),
         },
-        "artifact_paths": _artifact_paths(result, full_result_path, coordinator_summary_path),
+        "artifact_paths": _artifact_paths(repo, result, full_result_path, coordinator_summary_path),
         "next_action": _compact_next(result.get("next")),
+        "execution_packet": _compact_execution_packet(result.get("execution_packet")),
         "checkpoint": session.get("checkpoint", ""),
         "coordinator_context_budget": coordinator_budget,
         "resume_instruction": (
@@ -167,7 +220,7 @@ def compact_payload(
         "blocked_tasks": _limited_list(result.get("blocked_tasks", result.get("skipped_tasks", [])), 5),
         "recent_events": _limited_list(result.get("recent_events", []), 5),
         "full_result_path": str(full_result_path),
-        "coordinator_summary_path": coordinator_summary_path,
+        "coordinator_summary_path": str(coordinator_summary_path) if coordinator_summary_path else "",
         "stdout_mode": "compact",
         "truncated": False,
     }
@@ -182,10 +235,24 @@ def compact_payload(
         "lifecycle": result.get("lifecycle", ""),
         "message": "Compact stdout truncated; read full_result_path for complete machine-readable output.",
     }
+    payload["execution_packet"] = _minimal_execution_packet(result.get("execution_packet"))
+    payload["claimed_tasks"] = []
+    payload["blocked_tasks"] = []
+    payload["recent_events"] = []
+    payload["spawn_request_paths"] = []
+    payload["task_prompt_paths"] = []
     if len(json.dumps(payload, ensure_ascii=False)) > MAX_COMPACT_CHARS:
         payload["artifact_paths"] = {
-            "full_result": str(full_result_path),
-            **({"coordinator_summary": coordinator_summary_path} if coordinator_summary_path else {}),
+            "full_result": _display_path(repo, full_result_path),
+            **({"coordinator_summary": _display_path(repo, coordinator_summary_path)} if coordinator_summary_path else {}),
+        }
+    if len(json.dumps(payload, ensure_ascii=False)) > MAX_COMPACT_CHARS:
+        payload["next_action"] = {}
+        payload["execution_packet"] = _minimal_execution_packet(result.get("execution_packet"))
+        payload["coordinator_context_budget"] = {
+            key: coordinator_budget[key]
+            for key in ("exceeded_limits", "handoff_recommended")
+            if key in coordinator_budget
         }
     return payload
 

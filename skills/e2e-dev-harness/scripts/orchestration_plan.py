@@ -707,6 +707,21 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
         for service, paths in service_plans.items():
             agents.append(
                 {
+                    "name": f"service-designer-{service_slug(service)}",
+                    "owns": [f"service design slice for {service}", "allowed edit scope", "service-local TDD plan"],
+                    "inputs": [
+                        artifact_paths["requirements"],
+                        artifact_paths["impact_summary"],
+                        artifact_paths["use_cases"],
+                        artifact_paths["dependency_report"],
+                        paths["service_plan"],
+                    ],
+                    "outputs": [paths["service_design"]],
+                    "gate": "Produce the service-local design slice before service-local TDD or implementation tasks may proceed.",
+                }
+            )
+            agents.append(
+                {
                     "name": f"test-case-developer-{service_slug(service)}",
                     "owns": [f"service-local first red test for {service}", "service-local TDD evidence"],
                     "inputs": [

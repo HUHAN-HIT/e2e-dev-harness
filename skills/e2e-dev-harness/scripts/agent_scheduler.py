@@ -122,6 +122,93 @@ def phases_completed(schedule: dict, phases: list[str]) -> tuple[bool, list[str]
     return not missing, missing
 
 
+def completion_event_dir(repo: Path, schedule_path: Path | None, state_path: Path | None = None) -> Path:
+    state_file = resolve(repo, state_path)
+    schedule_file = resolve(repo, schedule_path)
+    run_dir = state_file.parent if state_file else (schedule_file.parent if schedule_file else repo)
+    return run_dir / "dispatch-events"
+
+
+def completion_event_for_task(repo: Path, schedule_path: Path | None, state_path: Path | None, task: dict) -> dict:
+    task_id = str(task.get("id", "")).strip()
+    if not task_id:
+        return {}
+    path = completion_event_dir(repo, schedule_path, state_path) / f"{task_id}-completed.json"
+    if not path.exists():
+        return {}
+    try:
+        event = load_json(path)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    event["_path"] = str(path)
+    return event
+
+
+def task_has_dispatch_completion(repo: Path, schedule_path: Path | None, state_path: Path | None, task: dict) -> bool:
+    task_id = str(task.get("id", "")).strip()
+    agent = str(task.get("agent", "")).strip()
+    if not task_id or not agent or str(task.get("status", "")).strip().lower() != "completed":
+        return False
+    event = completion_event_for_task(repo, schedule_path, state_path, task)
+    return (
+        event.get("event") == "worker_completed"
+        and str(event.get("task_id", "")).strip() == task_id
+        and str(event.get("agent", "")).strip() == agent
+    )
+
+
+def dispatch_completion_blockers_for_tasks(
+    repo: Path,
+    schedule_path: Path | None,
+    state_path: Path | None,
+    tasks: list[dict],
+    label: str,
+) -> list[str]:
+    blocked: list[str] = []
+    for task in tasks:
+        task_id = str(task.get("id", "")).strip() or "<missing>"
+        agent = str(task.get("agent", "")).strip() or "<missing>"
+        if not task_has_dispatch_completion(repo, schedule_path, state_path, task):
+            blocked.append(
+                f"{label}: task {task_id} ({agent}) must be completed through dispatch-complete "
+                "with a worker_completed dispatch event."
+            )
+    return blocked
+
+
+def dispatch_completion_blockers_for_phases(
+    repo: Path,
+    schedule_path: Path | None,
+    state_path: Path | None,
+    schedule: dict,
+    phases: list[str],
+    label: str,
+) -> list[str]:
+    tasks = schedule.get("tasks", []) or []
+    blocked: list[str] = []
+    for phase in phases:
+        matching = [task for task in tasks if str(task.get("phase", "")).strip() == phase]
+        if phase == "tdd-red":
+            service_matching = [task for task in matching if str(task.get("service", "")).strip()]
+            if service_matching:
+                matching = service_matching
+        if not matching:
+            blocked.append(f"{label}: missing scheduled {phase} task.")
+            continue
+        blocked.extend(dispatch_completion_blockers_for_tasks(repo, schedule_path, state_path, matching, label))
+    return blocked
+
+
+def tasks_with_output_fragments(schedule: dict, fragments: list[str]) -> list[dict]:
+    normalized_fragments = [posix_path(fragment) for fragment in fragments]
+    matching: list[dict] = []
+    for task in schedule.get("tasks", []) or []:
+        outputs = [posix_path(str(output)) for output in task.get("outputs", []) or [] if isinstance(output, str)]
+        if any(fragment in output for output in outputs for fragment in normalized_fragments):
+            matching.append(task)
+    return matching
+
+
 def lifecycle_satisfied_phases(repo: Path, state_path: Path | None) -> set[str]:
     state_file = resolve(repo, state_path)
     if not state_file or not state_file.exists():
@@ -655,7 +742,7 @@ def complete(
     task["evidence"] = resolved_evidence
     atomic_write_json(path, schedule)
     state_result = update_state_owner(repo, state_path, task, agent, "completed", resolved_evidence)
-    transition = maybe_transition_red_ready(repo, state_path, schedule, resolved_evidence)
+    transition = None if dispatcher_confirmed else maybe_transition_red_ready(repo, state_path, schedule, resolved_evidence)
     blocked = [] if state_result["ready"] else state_result["blocked_reasons"]
     if transition and not transition["ready"]:
         blocked.extend("Run state transition: " + reason for reason in transition["blocked_reasons"])

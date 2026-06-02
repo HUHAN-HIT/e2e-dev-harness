@@ -485,11 +485,15 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertIn("full_result_path", payload)
         self.assertIn("checkpoint", payload)
         self.assertIn("resume_instruction", payload)
+        self.assertIn("execution_packet", payload)
+        self.assertEqual("CREATED", payload["execution_packet"]["lifecycle"])
+        self.assertIn("dispatch-next", payload["execution_packet"]["primary_command"])
         self.assertNotIn("workflow_plan", payload)
         self.assertNotIn("todo_policy", payload)
         self.assertTrue(full_path_exists)
         self.assertIn("workflow_plan", full_payload)
         self.assertIn("todo_policy", full_payload)
+        self.assertIn("execution_packet", full_payload)
 
     def test_next_cli_quiet_surfaces_coordinator_context_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

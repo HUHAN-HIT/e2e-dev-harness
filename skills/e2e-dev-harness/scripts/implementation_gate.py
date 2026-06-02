@@ -157,6 +157,31 @@ def validate_multi_service_preconditions(repo: Path, request: GateRequest, state
                         "Agent schedule: implementation gate waits for completed upstream phases before code-agent claims: "
                         + ", ".join(missing_deps)
                     )
+                else:
+                    dispatch_blockers = agent_scheduler.dispatch_completion_blockers_for_phases(
+                        repo,
+                        resolved_schedule,
+                        request.run_state,
+                        schedule,
+                        ["tdd-red", "r2-review"],
+                        "Agent schedule",
+                    )
+                    blocked.extend(dispatch_blockers)
+            if request.phase == "completion":
+                runtime_tasks = [
+                    task
+                    for task in schedule.get("tasks", []) or []
+                    if isinstance(task, dict) and task.get("requires_runtime_dispatch", True)
+                ]
+                blocked.extend(
+                    agent_scheduler.dispatch_completion_blockers_for_tasks(
+                        repo,
+                        resolved_schedule,
+                        request.run_state,
+                        runtime_tasks,
+                        "Agent schedule",
+                    )
+                )
             if not schedule_result["ready"]:
                 blocked.extend("Agent schedule: " + reason for reason in schedule_result["blocked_reasons"])
             warnings.extend("Agent schedule: " + warning for warning in schedule_result["warnings"])

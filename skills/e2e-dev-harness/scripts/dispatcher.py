@@ -584,7 +584,31 @@ def dispatch_completion_blockers(repo: Path, state_path: Path | None, task_id: s
         or str(dispatch.get("spawn_acknowledged_at", "")).strip()
     ):
         blocked.append("Dispatch has no worker confirmation proof; record dispatch-ack or runtime hook confirmation before dispatch-complete.")
+    blocked.extend(worker_identity_blockers(repo, dispatch))
     return blocked, dispatch
+
+
+def worker_identity_blockers(repo: Path, dispatch: dict, worker_handle: str = "", worker_session: str = "") -> list[str]:
+    invocation_path = resolve(repo, dispatch.get("invocation_path", ""))
+    if not invocation_path or not invocation_path.exists():
+        return []
+    invocation = read_json(invocation_path)
+    developer_session = str(invocation.get("developer_session", "")).strip()
+    developer_agent = str(invocation.get("developer_agent", "")).strip()
+    acknowledged_handle = worker_handle.strip() or str(dispatch.get("worker_handle", "")).strip()
+    acknowledged_session = worker_session.strip() or str(dispatch.get("worker_session", "")).strip() or acknowledged_handle
+    blocked: list[str] = []
+    if developer_session and acknowledged_session == developer_session:
+        blocked.append(
+            "Worker acknowledgement blocked: worker_session must be a fresh isolated worker, "
+            "not the coordinator session recorded in the invocation."
+        )
+    if developer_agent and acknowledged_handle == developer_agent:
+        blocked.append(
+            "Worker acknowledgement blocked: worker_handle must identify a fresh isolated worker, "
+            "not the coordinator agent recorded in the invocation."
+        )
+    return blocked
 
 
 def dispatch_for_task(state: dict, task_id: str) -> dict:
@@ -959,6 +983,7 @@ def dispatch_complete(
         )
         _state_path, state = load_state(repo, state_path)
         previous_lifecycle = ""
+        current_lifecycle = str(state.get("lifecycle", "")) if state else ""
         prior_dispatch = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
         if str(state.get("lifecycle", "")) == "WAITING_DISPATCH":
             previous_lifecycle = str(prior_dispatch.get("previous_lifecycle", ""))
@@ -983,9 +1008,18 @@ def dispatch_complete(
         }
         update = update_dispatch_state(repo, state_path, dispatch or legacy_dispatch, lifecycle=previous_lifecycle or None)
         transition = None
-        if previous_lifecycle == "PLANNED":
+        transition_source_lifecycle = previous_lifecycle or current_lifecycle
+        if transition_source_lifecycle == "PLANNED":
             ready_for_implementation, _missing = agent_scheduler.phases_completed(completed_schedule, ["tdd-red", "r2-review"])
-            if ready_for_implementation:
+            dispatch_blockers = agent_scheduler.dispatch_completion_blockers_for_phases(
+                repo,
+                schedule_path,
+                state_path,
+                completed_schedule,
+                ["tdd-red", "r2-review"],
+                "TDD red gate",
+            )
+            if ready_for_implementation and not dispatch_blockers:
                 _restored_path, restored_state = load_state(repo, state_path)
                 if restored_state and str(restored_state.get("lifecycle", "")) == "PLANNED":
                     transition = run_state.transition_state(
@@ -1030,6 +1064,7 @@ def dispatch_ack(
         blocked.append(f"Dispatch agent mismatch: expected {dispatch.get('current_agent', '')}, got {agent}.")
     if not worker_handle.strip():
         blocked.append("Worker handle is required.")
+    blocked.extend(worker_identity_blockers(repo, dispatch, worker_handle, worker_session))
     if blocked:
         return {"ready": False, "blocked_reasons": blocked, "warnings": [], "dispatch": dispatch}
     acknowledged = dict(dispatch)

@@ -36,8 +36,9 @@ Default CLI stdout is compact. Read `full_result_path` or
 Coordinator minimal reading set: instructions, `next`, active design/slice, paths, blockers; keep full CLI JSON in evidence files.
 Coordinator write budget: long design/plan/handoff bodies must be worker evidence or generator outputs; keep only paths in chat.
 
-Use `next.required_todo_list`; GitNexus-first; no code items before implementation gate.
-Fill the design doc, run `clarify`, then plan with affected `--service` or `--path`.
+Use `next.required_todo_list`; the coordinator stays control-plane only.
+In `CREATED`, dispatch `requirements-clarifier` and relay only returned Restated Intent/Open Questions and evidence paths.
+Workers use GitNexus-first evidence; the coordinator never does local code exploration, design writing, TDD, review, or implementation.
 
 ## Hard Rules
 
@@ -45,7 +46,7 @@ Fill the design doc, run `clarify`, then plan with affected `--service` or `--pa
 - Use Superpowers when available: `brainstorming` for clarification, `test-driven-development` for TDD. Read `references/superpowers-integration.md`.
 - Clarification gate requires goals, non-goals, affected services, use cases, change logic, impact summary, contracts, ACs, test design, and closed questions.
   Read `references/clarification-gate.md`.
-  In `CREATED`, TodoList must include user confirmation of Restated Intent and open questions before plan/TDD/code.
+  In `CREATED`, TodoList must dispatch `requirements-clarifier`, then relay returned Restated Intent/Open Questions before plan/TDD/code.
   Interactive `clarify` requires `Restated Intent` and user confirmation provenance; do not self-answer open questions.
   MQ/DMQ/Kafka requirements must name the cross-layer call chain and sender/producer injection point before implementation.
 - Prefer GitNexus for code-level cross-service evidence and explicit impact artifacts.
@@ -56,14 +57,14 @@ Fill the design doc, run `clarify`, then plan with affected `--service` or `--pa
 - Memory is optional context, not authority. Capture only verified or user-approved facts; Obsidian tags and links help selection but never replace explicit text. Read `references/memory-integration.md`.
 - TDD is mandatory for production changes; enforcement depth is scenario-based.
   Use the default `--tdd-mode auto`; it resolves to strict red/green command evidence for critical/audited work.
-  Write a red test, observe the expected failure, implement minimally, then broaden Maven verification. Read `references/tdd-java-spring.md`.
+  Test/code workers write red tests, observe expected failures, implement minimally, then broaden Maven verification. Read `references/tdd-java-spring.md`.
 - Large repositories use planned incremental verification, not ad hoc test selection.
   Generate `evidence/test-impact-plan.json` from changed files and dependency evidence; completion must prove every required command passed in unit-test JSON.
   Root/shared build or source changes expand to full `mvn test`.
 - Multi-service designs use one global design anchor plus service-local design slices.
   Global design includes `System Sequence`; each `service-designs/<service>.md` includes mapped ACs, edit scope, runtime path, local sequence, TDD plan, dependency boundary, and test impact.
   Local sequence is required for cross-service, contract, shared-state, or event dependencies.
-  Multi-service `plan --create-archive` enters `SERVICE_DESIGN_REQUIRED`; validate slices with `e2e_dev_harness.py service-design --run-state <state>` before R2/TDD red or service code-agent dispatch.
+  Multi-service `plan --create-archive` enters `SERVICE_DESIGN_REQUIRED`; dispatch service-design workers and validate returned slices before R2/TDD red or service code-agent dispatch.
 - Design, test, code, review, and coverage are separate role groups.
   `agent-schedule.json` assigns different agents, references generated `agent-roles/*.md`, and downstream agents consume ready handoffs instead of chat memory.
 - Review profiles are portable project policy. Auto-discover project profiles and extend bundled profiles only when useful.
@@ -75,7 +76,7 @@ Fill the design doc, run `clarify`, then plan with affected `--service` or `--pa
   Semantic reviews, implementation manifest, coverage matrix, unit-test JSON, business review, dependency report when cross-service,
   task-alignment evidence, closed rework, and passing guard are completion evidence.
 - The implementation completion unit is all assigned ACs, not the first passing AC.
-  After any individual AC turns green, run or mentally apply `ac-progress`; if assigned ACs remain, continue TDD red/green without asking whether to proceed or whether to start R3.
+  After any AC turns green, apply `ac-progress` to worker evidence; if ACs remain, continue code-developer dispatch without asking whether to proceed or start R3.
   R3 review is allowed only after `e2e_dev_harness.py ac-progress` is ready for the current service slice or global design.
 - Skipped phases are blockers in strict completion. R1/R2/R3 reviews, harness plan state, TDD red/green, completion gate, and strict guard must have machine-readable evidence; do not mark them as skipped in the final report.
 - Task drift is a blocker. Changed production files must stay inside declared design/manifest/coverage scope.
@@ -106,14 +107,14 @@ Fill the design doc, run `clarify`, then plan with affected `--service` or `--pa
 ## Workflow
 
 1. Prepare: load root instructions, scan memory, probe Superpowers, refresh GitNexus-first dependency evidence.
-2. Clarify: use Superpowers brainstorming and the Markdown gate; confirm Restated Intent, resolve questions, then record answers.
-3. R1 design review: independent semantic reviewer checks AC completeness, affected modules, security paths, and reference patterns.
-4. Plan: choose `single`, `single-review`, or `multi`; dispatch `implementation-planner` for ExecPlan evidence.
-5. Service design split for multi-service: fill and validate every `service-designs/<service>.md`; do not proceed while run-state is `SERVICE_DESIGN_REQUIRED`.
-6. TDD red: write the first failing service-local test and capture failing evidence.
-7. R2 test review: independent reviewer checks happy/failure paths, security cases, and contract coverage before production code.
+2. Clarify: dispatch `requirements-clarifier`; relay Restated Intent/Open Questions and record evidence paths.
+3. R1 design review: dispatch an independent semantic reviewer.
+4. Plan: choose `single`, `single-review`, or `multi`; dispatch `implementation-planner` after R1 evidence is ready.
+5. Service design split: dispatch workers for `service-designs/<service>.md`, then validate; block while `SERVICE_DESIGN_REQUIRED`.
+6. TDD red: dispatch test workers to write the first failing service-local test and capture evidence.
+7. R2 test review: dispatch an independent reviewer before production code.
 8. Dispatch/claim service code tasks: each service code agent claims its `agent-schedule.json` task before writing code; one claimed task edits only its service/module.
-9. TDD green/refactor: implement with the Superpowers Red-Green-Refactor cycle for every assigned AC; run the test-impact plan's required Maven commands before broadening verification.
+9. TDD green/refactor: dispatch code-developer workers for every assigned AC; run required test-impact commands before broader verification.
 10. AC progress gate: prove all assigned ACs for the service slice or global design have coverage rows, implementation manifest rows, and passing green/unit command evidence. Do not ask to start R3 while ACs remain.
 11. R3 implementation review: independent reviewer traces every AC through the concrete code path.
    Then check completeness, tests, security, anti-patterns, and project-pattern consistency. The bundled default review profile is enforced unless an explicit project profile overrides it.
@@ -127,6 +128,8 @@ Fill the design doc, run `clarify`, then plan with affected `--service` or `--pa
 Default to `single` only for small low-risk single-service work.
 Use explicit `single-review` only for single-service medium work with separated design/test/code agents plus formal reviewer invocations.
 Use `multi` for cross-service, contract/data-risk, design-heavy, or user-requested context isolation.
+
+Large `multi` schedules are normal: `expected_handoffs` predicts sessions; never downgrade to manual coding.
 
 ```bash
 python skills/e2e-dev-harness/scripts/orchestration_plan.py . \

@@ -21,13 +21,13 @@ TERMINAL_LIFECYCLES = {"VERIFIED", "ARCHIVED"}
 DEFAULT_BLOCK_LIFECYCLES = {"IMPLEMENTED", "REVIEWED", "REWORK_REQUIRED"}
 
 NEXT_ACTIONS = {
-    "CREATED": "Fill the design doc and run clarify before planning or coding.",
-    "CLARIFIED": "Run plan, create the agent-run archive, and complete R1 review.",
-    "SERVICE_DESIGN_REQUIRED": "Complete and validate every service design slice before TDD red.",
-    "PLANNED": "Write the red test evidence, run R2 review, then open implementation through the implementation gate.",
+    "CREATED": "Dispatch requirements-clarifier; relay returned Restated Intent/Open Questions before planning or coding.",
+    "CLARIFIED": "Create the archive only if missing, then dispatch independent R1 review.",
+    "SERVICE_DESIGN_REQUIRED": "Dispatch service-design workers and validate returned slices before TDD red.",
+    "PLANNED": "Dispatch implementation-planner, TDD red, and R2 review, then open implementation through the implementation gate.",
     "RED_READY": "Complete R2 test review if missing, then run gate --phase implementation with red evidence and run-state.",
     "WAITING_DISPATCH": "Start the required independent subagent/session with dispatch-next or complete the manual dispatch packet.",
-    "IMPLEMENTED": "Continue TDD red/green for all assigned ACs, run ac-progress, R3 review, completion gate, strict guard, and archive.",
+    "IMPLEMENTED": "Dispatch code-developer work for all assigned ACs, run ac-progress, dispatch R3 review, completion gate, strict guard, and archive.",
     "REVIEWED": "Run completion gate, strict guard, run summary, and requirements archive validation.",
     "REWORK_REQUIRED": "Follow the rework return phase and verify the rework item before finalizing.",
     "VERIFIED": "Archive the requirement summary and report evidence.",
@@ -117,29 +117,28 @@ REMAINING_PHASES = {
 
 COMMAND_HINTS = {
     "CREATED": [
-        "e2e_dev_harness.py clarify . --design-doc docs/design/<feature>.md --run-state <run-state>",
+        "e2e_dev_harness.py dispatch-next . --schedule <agent-schedule> --state <run-state> --runtime claude-code",
     ],
     "CLARIFIED": [
-        "create an independent R1 design review artifact",
         "e2e_dev_harness.py plan . --design-doc docs/design/<feature>.md --agent-run-dir docs/agent-runs/<run> --create-archive",
+        "e2e_dev_harness.py dispatch-next . --schedule <agent-schedule> --state <run-state> --runtime claude-code",
     ],
     "SERVICE_DESIGN_REQUIRED": [
         "e2e_dev_harness.py service-design . --global-design docs/design/<feature>.md --service-design-dir docs/agent-runs/<run>/service-designs --run-state <run-state>",
     ],
     "PLANNED": [
-        "write the first failing test and capture red evidence",
-        "create an independent R2 test review artifact",
+        "e2e_dev_harness.py dispatch-beat . --schedule <agent-schedule> --state <run-state> --runtime claude-code",
     ],
     "RED_READY": [
-        "create an independent R2 test review artifact if it is missing",
         "e2e_dev_harness.py gate . --phase implementation --run-state <run-state> --red-test-evidence <red-evidence> --review-dir <reviews>",
     ],
     "WAITING_DISPATCH": [
         "e2e_dev_harness.py dispatch-next . --schedule <agent-schedule> --state <run-state> --runtime claude-code",
     ],
     "IMPLEMENTED": [
+        "e2e_dev_harness.py dispatch-beat . --schedule <agent-schedule> --state <run-state> --runtime claude-code",
         "e2e_dev_harness.py ac-progress . --design-doc <design> --coverage-matrix <coverage> --implementation-manifest <manifest> --unit-test-evidence <green-evidence>",
-        "create independent R3 implementation review, then run gate --phase completion",
+        "dispatch independent R3 implementation review, then run gate --phase completion",
     ],
     "REVIEWED": [
         "e2e_dev_harness.py gate . --phase completion --run-state <run-state> --design-doc <design> --unit-test-evidence <green-evidence>",
@@ -178,11 +177,33 @@ def latest_run_state(repo: Path) -> Path | None:
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
-def latest_run_dir(repo: Path) -> Path | None:
+def run_dir_has_files(path: Path) -> bool:
+    try:
+        return any(child.is_file() for child in path.rglob("*"))
+    except OSError:
+        return False
+
+
+def stale_empty_run_dirs(repo: Path) -> list[Path]:
+    run_root = repo / "docs" / "agent-runs"
+    if not run_root.exists():
+        return []
+    return [
+        path
+        for path in run_root.iterdir()
+        if path.is_dir() and not (path / "run-state.json").exists() and not run_dir_has_files(path)
+    ]
+
+
+def latest_run_dir_without_state_with_files(repo: Path) -> Path | None:
     run_root = repo / "docs" / "agent-runs"
     if not run_root.exists():
         return None
-    candidates = [path for path in run_root.iterdir() if path.is_dir()]
+    candidates = [
+        path
+        for path in run_root.iterdir()
+        if path.is_dir() and not (path / "run-state.json").exists() and run_dir_has_files(path)
+    ]
     if not candidates:
         return None
     return max(candidates, key=lambda path: path.stat().st_mtime)
@@ -319,7 +340,7 @@ def evaluate(
     if not state_path:
         state_path = latest_run_state(repo)
     if not state_path:
-        run_dir_candidate = latest_run_dir(repo)
+        run_dir_candidate = latest_run_dir_without_state_with_files(repo)
         if run_dir_candidate:
             return {
                 "ready": False,
@@ -330,10 +351,16 @@ def evaluate(
                 "repo": str(repo),
                 "run_state": str(run_dir_candidate / "run-state.json"),
             }
+        empty_dirs = stale_empty_run_dirs(repo)
+        warnings = ["No active harness run-state found; stop guard allowed finalization."]
+        if empty_dirs:
+            names = ", ".join(rel(repo, path) or str(path) for path in empty_dirs[:5])
+            suffix = "" if len(empty_dirs) <= 5 else f" (+{len(empty_dirs) - 5} more)"
+            warnings.append(f"Ignored empty harness run directories without run-state.json: {names}{suffix}.")
         return {
             "ready": True,
             "blocked_reasons": [],
-            "warnings": ["No active harness run-state found; stop guard allowed finalization."],
+            "warnings": warnings,
             "repo": str(repo),
             "run_state": None,
         }

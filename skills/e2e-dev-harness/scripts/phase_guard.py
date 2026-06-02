@@ -68,6 +68,7 @@ HOOK_CONFIG_PATHS = {
     ".opencode/plugins/e2e-dev-harness.js",
 }
 CLAIMED_OWNER_STATUSES = {"claimed", "in-progress", "in_progress", "completed"}
+DISPATCH_GATED_READ_LIFECYCLES = {"CLARIFIED", "SERVICE_DESIGN_REQUIRED", "PLANNED", "IMPLEMENTED"}
 TEST_CODE_MARKERS = ("/src/test/", "/test/", "/tests/")
 REVIEW_DISPATCH_PHASES = {"r1-review", "r2-review", "r3-review"}
 REVIEW_REPORT_NAME_RE = re.compile(r"^R[123](?:[-_].*)?\.md$", re.IGNORECASE)
@@ -167,8 +168,12 @@ READ_ONLY_EXPLORATION_TASK_RE = re.compile(
     re.IGNORECASE,
 )
 USER_INTERACTION_TODO_RE = re.compile(
-    r"\b(?:ask|confirm|confirmation|clarifying\s+questions?|obtain\s+user\s+approval|wait\s+for\s+user|user\s+answer)\b|"
+    r"\b(?:ask|confirm|confirmation|clarifying\s+questions?|obtain\s+user\s+approval|wait\s+for\s+user|user\s+answer|relay)\b|"
     r"(?:\u7528\u6237|\u786e\u8ba4|\u63d0\u95ee|\u7b49\u5f85\u56de\u7b54|\u56de\u7b54|\u6279\u51c6)",
+    re.IGNORECASE,
+)
+CREATED_COORDINATOR_TODO_RE = re.compile(
+    r"\b(?:dispatch-next|requirements-clarifier|dispatch-complete|worker\s+handle|context\s+pack|relay)\b",
     re.IGNORECASE,
 )
 
@@ -265,26 +270,26 @@ def is_coordinator_inline_write_path(repo: Path, path: Path) -> bool:
 
 def required_todo_list_for_lifecycle(lifecycle: str) -> list[str]:
     state_path = "docs/agent-runs/<run>/run-state.json"
+    schedule_path = "docs/agent-runs/<run>/agent-schedule.json"
     lists = {
         "CREATED": [
-            "Ask the user to confirm Restated Intent and answer unresolved clarification questions.",
-            "Run kg_refresh or inspect GitNexus status before repository exploration.",
-            "Use GitNexus query/context/impact for bounded impact evidence; use rg/Read only for seed discovery.",
-            "Fill docs/design/<feature>.md with clarified requirements and bounded impact facts.",
-            f"Run e2e_dev_harness.py clarify --design-doc <design> --run-state {state_path}.",
-            "Revise the design doc until the clarification gate passes.",
+            f"Run e2e_dev_harness.py dispatch-next --schedule {schedule_path} --state {state_path} to dispatch requirements-clarifier.",
+            "Spawn or acknowledge only the dispatcher-generated requirements-clarifier worker.",
+            "Do not perform clarification, GitNexus, rg/Read, design-doc, plan, TDD, or review work in coordinator chat.",
+            "Relay unresolved Restated Intent or Open Questions from the worker to the user.",
+            "Record returned requirements handoff evidence paths, then run dispatch-complete and next.",
         ],
         "CLARIFIED": [
-            "Use GitNexus evidence to confirm affected services, routes, topics, and dependency impact.",
-            "Run e2e_dev_harness.py plan --design-doc <design> --create-archive.",
-            "Dispatch or complete the independent R1 design review.",
-            "Run e2e_dev_harness.py next before TDD or implementation work.",
+            "Run plan --create-archive only as a control-plane schedule/archive generation step when the full schedule is missing.",
+            "Run dispatch-beat/dispatch-next to spawn the independent R1 design-review worker.",
+            "Record dispatch-ack and dispatch-complete for R1 evidence, then run next.",
+            "Do not perform design, impact analysis, R1 review, TDD, or implementation work in coordinator chat.",
         ],
         "SERVICE_DESIGN_REQUIRED": [
-            "Use GitNexus context/impact for each service runtime path and dependency boundary.",
-            "Fill every service-designs/<service>.md slice with mapped ACs and runtime path.",
-            f"Run e2e_dev_harness.py service-design --run-state {state_path}.",
-            "Revise service design slices until the service-design gate passes.",
+            "Run dispatch-beat/dispatch-next to spawn service-design workers for each required slice.",
+            f"Run e2e_dev_harness.py service-design --run-state {state_path} after worker evidence is returned.",
+            "Record dispatch-complete for service-design evidence, then run next.",
+            "Do not write service-design slices or dependency/runtime-path analysis in coordinator chat.",
         ],
         "PLANNED": [
             "Run dispatch-beat/dispatch-next to spawn TDD red and R2 review workers.",
@@ -296,9 +301,10 @@ def required_todo_list_for_lifecycle(lifecycle: str) -> list[str]:
             "Do not edit production files until the implementation gate opens.",
         ],
         "IMPLEMENTED": [
-            "Continue TDD red/green/refactor for all assigned ACs in declared scope.",
-            "Run e2e_dev_harness.py ac-progress for the active service or global design.",
-            "Dispatch or complete R3 only after all assigned ACs pass ac-progress.",
+            "Run dispatch-beat/dispatch-next to spawn code-developer workers for assigned service/module scope.",
+            "Record dispatch-complete with green-test, implementation-manifest, and coverage evidence paths.",
+            "Run ac-progress after worker evidence; dispatch R3 and coverage only after all assigned ACs pass.",
+            "Do not write production/test code, R3 review, or coverage artifacts in coordinator chat.",
         ],
         "REVIEWED": [
             "Run the completion gate and strict guard.",
@@ -325,6 +331,15 @@ def required_todo_list_for_lifecycle(lifecycle: str) -> list[str]:
 
 
 def exploration_policy_for_lifecycle(lifecycle: str) -> dict:
+    if lifecycle == "CREATED":
+        return {
+            "schema": "e2e-dev-harness.exploration-policy.v1",
+            "preferred": "dispatcher",
+            "direct_tools_allowed_for": [],
+            "required_for": ["requirements clarification", "Restated Intent", "impact evidence", "design doc updates"],
+            "fallback": "Run dispatch-next for the requirements-clarifier worker; coordinator may only relay returned questions and evidence paths.",
+            "lifecycle": lifecycle,
+        }
     return {
         "schema": "e2e-dev-harness.exploration-policy.v1",
         "preferred": "gitnexus",
@@ -341,9 +356,9 @@ def clarification_interaction_for_lifecycle(lifecycle: str) -> dict:
         "interaction_required": lifecycle == "CREATED",
         "must_wait_for_user_answer": lifecycle == "CREATED",
         "questions_to_ask_user": [
-            "Confirm the agent's Restated Intent with the user.",
-            "Ask any behavior, API, data, ownership, test, or impact questions that cannot be answered from evidence.",
-            "Update the design doc Open Questions section to None only after answers are recorded or explicitly deferred out of scope.",
+            "Relay the requirements-clarifier worker's Restated Intent confirmation request to the user.",
+            "Relay only unresolved behavior, API, data, ownership, test, or impact questions returned by the worker.",
+            "Record the worker's returned evidence paths after answers are captured.",
         ] if lifecycle == "CREATED" else [],
         "blocked_until_resolved": [
             "planning",
@@ -399,27 +414,29 @@ def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -
         },
         "CREATED": {
             "allowed_actions": [
-                "edit docs/design/<feature>.md",
-                "run e2e_dev_harness.py clarify . --design-doc <design> --run-state " + state_path,
+                "run dispatch-next for requirements-clarifier",
+                "record dispatch-ack for the spawned requirements worker",
+                "run dispatch-complete with returned requirements evidence paths",
                 "run e2e_dev_harness.py next . --state " + state_path,
             ],
-            "phase_guidance": "Current lifecycle is CREATED. Fill the design document and pass clarify before planning or coding.",
+            "phase_guidance": "Current lifecycle is CREATED. Coordinator dispatches requirements-clarifier and relays only returned questions/evidence.",
         },
         "CLARIFIED": {
             "allowed_actions": [
-                "run e2e_dev_harness.py plan . --design-doc <design> --run-state " + state_path,
-                "create R1 design review artifacts",
+                "run plan --create-archive only when the full schedule/archive is missing",
+                "run dispatch-beat/dispatch-next for R1 design review",
+                "record dispatch-ack and dispatch-complete for R1 evidence",
                 "run e2e_dev_harness.py next . --state " + state_path,
             ],
-            "phase_guidance": "Current lifecycle is CLARIFIED. Plan and review design before TDD or implementation.",
+            "phase_guidance": "Current lifecycle is CLARIFIED. Coordinator dispatches R1/design workers; it does not perform design review locally.",
         },
         "SERVICE_DESIGN_REQUIRED": {
             "allowed_actions": [
-                "fill docs/agent-runs/<run>/service-designs/<service>.md",
+                "run dispatch-beat/dispatch-next for service-design workers",
                 "run e2e_dev_harness.py service-design . --run-state " + state_path,
                 "run e2e_dev_harness.py next . --state " + state_path,
             ],
-            "phase_guidance": "Current lifecycle requires service design slices before service code agents can proceed.",
+            "phase_guidance": "Current lifecycle requires dispatched service-design slice evidence before service code agents can proceed.",
         },
         "PLANNED": {
             "allowed_actions": [
@@ -439,11 +456,12 @@ def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -
         },
         "IMPLEMENTED": {
             "allowed_actions": [
-                "continue TDD green/refactor within declared scope",
+                "run dispatch-beat/dispatch-next for code-developer workers",
+                "record dispatch-complete with green-test and manifest evidence",
                 "run e2e_dev_harness.py ac-progress ...",
-                "create R3 review artifacts after all assigned ACs are covered",
+                "dispatch R3 review after all assigned ACs are covered",
             ],
-            "phase_guidance": "Current lifecycle is IMPLEMENTED. Continue assigned ACs to completion; do not stop after compile only.",
+            "phase_guidance": "Current lifecycle is IMPLEMENTED. Coordinator monitors dispatched code work and gates; it does not code locally.",
         },
     }
     selected = actions.get(lifecycle, actions[""])
@@ -612,6 +630,24 @@ def dispatch_for_task(state_data: dict, task_id: str) -> dict:
     return {}
 
 
+def requirements_clarifier_worker_running(state_data: dict) -> bool:
+    return active_worker_running(state_data, ["requirements-clarifier"])
+
+
+def active_worker_running(state_data: dict, agent_markers: list[str] | None = None) -> bool:
+    dispatches = state_data.get("dispatches") if isinstance(state_data.get("dispatches"), dict) else {}
+    candidates = [value for value in dispatches.values() if isinstance(value, dict)]
+    latest = state_data.get("dispatch") if isinstance(state_data.get("dispatch"), dict) else {}
+    if latest:
+        candidates.append(latest)
+    markers = [marker.lower() for marker in agent_markers or [] if marker]
+    return any(
+        str(item.get("status", "")).lower() == "worker_running"
+        and (not markers or any(marker in str(item.get("current_agent", "")).strip().lower() for marker in markers))
+        for item in candidates
+    )
+
+
 def review_report_write_blockers(repo: Path, lock: Path | None, review_paths: list[Path]) -> list[str]:
     if not review_paths:
         return []
@@ -687,11 +723,19 @@ def todo_list_blockers(repo: Path, lock: Path | None, task_text: str) -> tuple[l
         return state_blockers, ""
     lifecycle = str(state_data.get("lifecycle", ""))
     if lifecycle != "IMPLEMENTED":
+        if lifecycle == "CREATED" and not CREATED_COORDINATOR_TODO_RE.search(text):
+            return [
+                "Todo list blocked: CREATED coordinator work is dispatch-only. Run dispatch-next for requirements-clarifier, relay only worker-returned Restated Intent/Open Questions, and do not perform local clarification or code exploration."
+            ], lifecycle
         if has_code_todo:
             return [
                 "Todo list blocked: current lifecycle "
                 + (lifecycle or "<missing>")
                 + " requires a phase-scoped TodoList. Do not list implementation/code/module-development tasks until the implementation gate opens."
+            ], lifecycle
+        if lifecycle == "CREATED" and EXPLORATION_TODO_RE.search(text):
+            return [
+                "Todo list blocked: CREATED coordinator work must dispatch requirements-clarifier instead of doing local GitNexus/rg/Read exploration."
             ], lifecycle
         if lifecycle == "CREATED" and CLARIFICATION_TODO_RE.search(text) and not USER_INTERACTION_TODO_RE.search(text):
             return [
@@ -1226,11 +1270,38 @@ def validate_action(
                     **guidance_from_lock(repo, lock),
                 }
         else:
-            _, _, state_blockers = lock_state_pair(repo, lock)
+            _, state_data, state_blockers = lock_state_pair(repo, lock)
             if state_blockers:
                 return {
                     "ready": False,
                     "blocked_reasons": state_blockers,
+                    "warnings": warnings,
+                    "phase_lock": str(lock),
+                    "run_state": str(run_state_path_for_lock(repo, lock)),
+                    "read_paths": result_paths(repo, read_targets),
+                    **guidance_from_lock(repo, lock),
+                }
+            lifecycle = str(state_data.get("lifecycle", ""))
+            if lifecycle == "CREATED" and (repo_wide or read_code_paths) and not requirements_clarifier_worker_running(state_data):
+                return {
+                    "ready": False,
+                    "blocked_reasons": [
+                        "Code exploration blocked: CREATED coordinator must dispatch requirements-clarifier and wait for worker acknowledgement before any code Read/Grep/Glob exploration."
+                    ],
+                    "warnings": warnings,
+                    "phase_lock": str(lock),
+                    "run_state": str(run_state_path_for_lock(repo, lock)),
+                    "read_paths": result_paths(repo, read_targets),
+                    **guidance_from_lock(repo, lock),
+                }
+            if lifecycle in DISPATCH_GATED_READ_LIFECYCLES and (repo_wide or read_code_paths) and not active_worker_running(state_data):
+                return {
+                    "ready": False,
+                    "blocked_reasons": [
+                        "Code exploration blocked: lifecycle "
+                        + lifecycle
+                        + " requires an active dispatched worker before Read/Grep/Glob code exploration; coordinator may only run next/dispatch/gate commands and relay evidence paths."
+                    ],
                     "warnings": warnings,
                     "phase_lock": str(lock),
                     "run_state": str(run_state_path_for_lock(repo, lock)),
@@ -1344,6 +1415,21 @@ def validate_action(
             "runtime_code_paths": result_paths(repo, runtime_code_paths),
             **guidance_from_lock(repo, lock),
         }
+    if test_code_paths and not runtime_code_paths and lifecycle == "PLANNED" and not active_worker_running(data, ["test-case-developer"]):
+        return {
+            "ready": False,
+            "blocked_reasons": [
+                "Test write blocked: PLANNED coordinator must dispatch a test-case-developer worker for TDD red evidence before writing test files."
+            ],
+            "warnings": warnings,
+            "phase_lock": str(lock),
+            "run_state": str(run_state_path_for_lock(repo, lock)),
+            "lifecycle": lifecycle,
+            "code_paths": result_paths(repo, code_paths),
+            "test_code_paths": result_paths(repo, test_code_paths),
+            "runtime_code_paths": result_paths(repo, runtime_code_paths),
+            **guidance_from_lock(repo, lock),
+        }
     selected_mode = str(data.get("selected_mode", ""))
     services = [str(service).replace("\\", "/").strip("/") for service in data.get("services", []) or []]
     if selected_mode == "multi" and services and runtime_code_paths:
@@ -1418,6 +1504,21 @@ def validate_action(
                     "code_paths": result_paths(repo, code_paths),
                     "touched_services": sorted(touched_services),
                 }
+    if code_paths and lifecycle == "IMPLEMENTED" and not active_worker_running(data, ["code-developer"]):
+        return {
+            "ready": False,
+            "blocked_reasons": [
+                "Code write blocked: IMPLEMENTED coordinator must dispatch an active code-developer worker before writing production or test code."
+            ],
+            "warnings": warnings,
+            "phase_lock": str(lock),
+            "run_state": str(run_state_path_for_lock(repo, lock)),
+            "lifecycle": lifecycle,
+            "code_paths": result_paths(repo, code_paths),
+            "test_code_paths": result_paths(repo, test_code_paths),
+            "runtime_code_paths": result_paths(repo, runtime_code_paths),
+            **guidance_from_lock(repo, lock),
+        }
     return {
         "ready": True,
         "blocked_reasons": [],

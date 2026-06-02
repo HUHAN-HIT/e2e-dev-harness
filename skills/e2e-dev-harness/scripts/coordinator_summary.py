@@ -35,6 +35,30 @@ def _compact_next(next_action: dict | None) -> dict:
     return {key: next_action[key] for key in keys if key in next_action}
 
 
+def _compact_execution_packet(packet: dict | None) -> dict:
+    packet = packet or {}
+    keys = [
+        "schema",
+        "lifecycle",
+        "phase",
+        "objective",
+        "primary_command",
+        "required_actions",
+        "required_evidence",
+        "forbidden_actions",
+        "completion_checks",
+        "next_gate",
+    ]
+    compact = {key: packet[key] for key in keys if key in packet}
+    if "evidence_paths" in packet and isinstance(packet["evidence_paths"], dict):
+        compact["evidence_paths"] = {
+            key: packet["evidence_paths"][key]
+            for key in ("run_state", "agent_schedule", "red_test_evidence", "green_test_evidence", "coverage_matrix")
+            if key in packet["evidence_paths"]
+        }
+    return compact
+
+
 def _active_dispatches(state: dict) -> dict:
     dispatches = state.get("dispatches", {}) if isinstance(state.get("dispatches"), dict) else {}
     return {
@@ -94,6 +118,7 @@ def write(
         "warnings": _limited(result.get("warnings", [])),
         "next_action": _compact_next(action)
         or {"orchestration_action": "phase-transition", "command": "Run e2e_dev_harness.py next to refresh coordinator action."},
+        "execution_packet": _compact_execution_packet(result.get("execution_packet")),
         "active_dispatches": _active_dispatches(state),
         "artifact_pointers": _artifact_pointers(target.parent / "run-state.json", result, full_result_path),
         "manual_recovery_events": _manual_recovery_events(target.parent / "run-state.json"),

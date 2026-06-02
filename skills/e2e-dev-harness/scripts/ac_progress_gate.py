@@ -124,7 +124,9 @@ def validate(
         if ac_id in coverage_ids and ac_id in manifest_ids and unit_commands and not blocked
     ]
     if missing_coverage or missing_manifest:
-        warnings.append("Continue TDD red/green for remaining assigned ACs; do not ask for R3 review yet.")
+        warnings.append(
+            "Dispatch or continue code-developer TDD red/green for remaining assigned ACs; do not ask for R3 review yet."
+        )
     return {
         "repo": str(repo),
         "ready": not blocked,

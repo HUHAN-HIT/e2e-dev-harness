@@ -69,7 +69,7 @@ class AcProgressGateTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertEqual(["AC-2"], result["missing_coverage"])
         self.assertEqual(["AC-2"], result["missing_manifest"])
-        self.assertTrue(any("Continue TDD" in warning for warning in result["warnings"]))
+        self.assertTrue(any("code-developer TDD" in warning for warning in result["warnings"]))
 
     def test_ac_progress_allows_r3_when_all_service_slice_acs_are_done(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
