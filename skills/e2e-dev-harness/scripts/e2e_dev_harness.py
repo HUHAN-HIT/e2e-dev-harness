@@ -615,6 +615,10 @@ def orchestration_status(
     slug = orchestration_plan.feature_slug(design_path)
     dependency_services = orchestration_plan.services_from_dependency_report(resolve_repo_path(repo, dependency_report))
     design_services = [] if design_is_template else orchestration_plan.services_from_design(design_text, facts)
+    # Capture what the operator explicitly asked for before auto-fill. Only explicit --service/--path
+    # (and dependency-report services) force an isolated slice; design auto-fill does not.
+    explicit_services = list(services_requested or [])
+    explicit_paths = list(paths_requested or [])
     if service_scope == "auto" and not services_requested and not paths_requested:
         if dependency_services:
             services_requested = dependency_services
@@ -663,8 +667,21 @@ def orchestration_status(
         return result
     mode_facts = orchestration_plan.mode_facts_for_service_scope(facts, services, resolved_service_scope)
     selected, reasons = orchestration_plan.choose_mode(mode, mode_facts, design_text, design_is_template)
-    artifacts = orchestration_plan.artifacts(slug, agent_run_dir, run_date, services)
-    agents = orchestration_plan.agent_plan(selected, artifacts, services)
+    # Risk-tier the selected services: only isolation-needing services keep their own slice; the rest
+    # collapse into a single merged slice routed via shared_edit_scopes. selected_services stays full.
+    layout = orchestration_plan.plan_service_layout(
+        services,
+        explicit_services=explicit_services,
+        explicit_paths=explicit_paths,
+        dependency_services=dependency_services,
+        design_text=design_text,
+        facts=facts,
+    )
+    artifact_services = layout["artifact_services"]
+    artifacts = orchestration_plan.artifacts(
+        slug, agent_run_dir, run_date, artifact_services, merged_members=layout["merged_services"]
+    )
+    agents = orchestration_plan.agent_plan(selected, artifacts, artifact_services)
     return {
         "requested_mode": mode,
         "enabled": True,
@@ -675,12 +692,16 @@ def orchestration_status(
         "design_selected_services": design_services,
         "requested_paths": paths_requested or [],
         "selected_services": services,
+        "slice_services": layout["slice_services"],
+        "merged_services": layout["merged_services"],
+        "shared_edit_scopes": layout["shared_edit_scopes"],
+        "shared_edit_scope_owners": layout["shared_edit_scope_owners"],
         "reasons": reasons,
         "agent_run_dir": artifacts["agent_run_dir"],
         "handoff_artifacts": artifacts,
         "multi_agent_decision": orchestration_plan.multi_agent_decision(selected, services, reasons),
         "agents": agents,
-        "agent_schedule": orchestration_plan.agent_schedule(selected, services, agents),
+        "agent_schedule": orchestration_plan.agent_schedule(selected, artifact_services, agents),
     }
 
 
@@ -1213,7 +1234,7 @@ memory_updates_proposed: []
 
 # Agent Handoff
 
-This is a draft starter handoff. It is NOT READY for downstream consumption until the owner replaces every TODO, records hashes, sets `status: ready`, and writes the matching `.ready.json` marker.
+This is a draft starter handoff. It is NOT READY for downstream consumption until the owner replaces every TODO, records hashes for consumed/produced artifacts, sets `status: ready`, and writes the matching `.ready.json` marker. Do not put this handoff file in output_hashes; the ready marker records this handoff file hash.
 
 {section("Summary")}
 
@@ -1402,7 +1423,12 @@ def create_handoff_files(repo: Path, artifacts: dict, agent_schedule: dict | Non
         service_design.parent.mkdir(parents=True, exist_ok=True)
         if not service_design.exists():
             service_design.write_text(
-                service_design_template(service, global_design_ref, global_design_text),
+                service_design_template(
+                    service,
+                    global_design_ref,
+                    global_design_text,
+                    merged_members=paths.get("merged_members"),
+                ),
                 encoding="utf-8",
             )
             created.append(str(service_design))
@@ -1532,11 +1558,25 @@ def service_scope_excerpt(service: str, global_design_text: str) -> str:
     return scope or f"{service} service/module slice from the global design."
 
 
-def service_design_template(service: str, global_design: str, global_design_text: str = "") -> str:
+def service_design_template(
+    service: str,
+    global_design: str,
+    global_design_text: str = "",
+    merged_members: list[str] | None = None,
+) -> str:
     ac_rows = service_acceptance_rows(service, global_design_text)
     test_class = service_test_class_name(service)
     intent = one_line_section(global_design_text, "restated_intent") or one_line_section(global_design_text, "goal")
     service_scope = service_scope_excerpt(service, global_design_text)
+    # A merged slice owns several real modules; enumerate each so the code agent gets one allowed
+    # edit scope and one Maven command per member module instead of the synthetic merged id.
+    members = merged_members or [service]
+    module_label = ", ".join(members) if merged_members else service
+    allowed_scope = "\n".join(f"  - {member}/" for member in members)
+    maven_block = "\n".join(f"- Required Maven command: mvn -pl {member} -am test" for member in members)
+    test_impact_block = "\n".join(
+        f"- Service-local test impact plan: mvn -pl {member} -am test" for member in members
+    )
     return f"""# Service Design Slice: {service}
 
 Global design: {global_design}
@@ -1544,9 +1584,9 @@ Global design: {global_design}
 Primary development contract: this service design is the primary input for the service code agent. Keep global context bounded; copy only the ACs, constraints, and dependency facts this service needs.
 
 ## Service Scope
-- Service/module: {service}
+- Service/module: {module_label}
 - Allowed edit scope:
-  - {service}/
+{allowed_scope}
 - Explicitly out of scope: other services unless listed in Dependency Boundary
 
 ## Global Intent Summary
@@ -1584,7 +1624,7 @@ sequenceDiagram
 - Expected failure: missing mapped service-local behavior
 - Minimal green implementation: implement only the mapped AC rows above
 - Refactor checks: keep edits inside allowed scope and declared dependency boundary
-- Required Maven command: mvn -pl {service} -am test
+{maven_block}
 
 ## Dependency Boundary
 - Independent service change: generated starter requires service owner confirmation before code dispatch
@@ -1594,7 +1634,7 @@ sequenceDiagram
 - Required contracts or explicit non-applicability: record before implementation
 
 ## Test Impact
-- Service-local test impact plan: mvn -pl {service} -am test
+{test_impact_block}
 - Broadened verification: run impacted upstream/downstream modules from test-impact plan
 
 ## Reviewer Focus
@@ -1969,9 +2009,11 @@ def plan(args) -> tuple[int, dict]:
         state = run_state.build_state(
             result["agent_run_dir"],
             result.get("selected_mode", ""),
-            result.get("selected_services", []),
+            result.get("slice_services", result.get("selected_services", [])),
             result["handoff_artifacts"]["artifact_registry"],
             lifecycle=lifecycle,
+            shared_edit_scopes=result.get("shared_edit_scopes", []),
+            shared_edit_scope_owners=result.get("shared_edit_scope_owners", {}),
         )
         state_path = require_repo_path(repo, Path(result["handoff_artifacts"]["run_state"]), "run state")
         run_state.write_state(repo, state_path, state)

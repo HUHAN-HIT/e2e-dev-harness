@@ -147,6 +147,68 @@ class HandoffGateTests(unittest.TestCase):
         self.assertTrue(result["ready"], result["blocked_reasons"])
         self.assertEqual(1, len(result["items"]))
 
+    def test_handoff_gate_blocks_self_referential_output_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            handoff_dir.mkdir(parents=True)
+            handoff = handoff_dir / "04-code-developer.md"
+            handoff.write_text(
+                textwrap.dedent(
+                    """
+                    ---
+                    agent: code-developer
+                    agent_id: developer-agent-1
+                    status: ready
+                    inputs:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md
+                    outputs:
+                      - docs/agent-runs/run/handoffs/04-code-developer.md
+                    input_hashes:
+                      - docs/agent-runs/run/handoffs/03-test-case-developer.md sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    output_hashes:
+                      - docs/agent-runs/run/handoffs/04-code-developer.md sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                    consumed_by:
+                      - coverage-reviewer
+                    open_questions: None
+                    ---
+
+                    # Agent Handoff
+
+                    ## Summary
+
+                    Implemented order-service refund flow.
+
+                    ## Facts Used
+
+                    Consumed the test handoff and service plan.
+
+                    ## Decisions Made
+
+                    Reused the existing service-layer pattern.
+
+                    ## Open Questions
+
+                    None
+
+                    ## Downstream Assumptions
+
+                    Coverage reviewer may rely on the implementation manifest.
+
+                    ## Verification Evidence
+
+                    mvn -pl services/order-service -am test passed.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            self.write_ready_marker(handoff)
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("self-referential" in reason.lower() for reason in result["blocked_reasons"]))
+
     def test_handoff_gate_blocks_ready_handoff_with_empty_body_sections(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

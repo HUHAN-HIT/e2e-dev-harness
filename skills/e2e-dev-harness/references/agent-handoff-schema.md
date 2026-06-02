@@ -15,11 +15,11 @@ inputs:
   - AGENT.md load order
   - knowledge graph status
 outputs:
-  - docs/agent-runs/<date-feature>/handoffs/01-requirements-clarifier.md
+  - docs/agent-runs/<date-feature>/evidence/impact-summary.md
 input_hashes:
   - user-request sha256:<64-hex>
 output_hashes:
-  - docs/agent-runs/<date-feature>/handoffs/01-requirements-clarifier.md sha256:<64-hex>
+  - docs/agent-runs/<date-feature>/evidence/impact-summary.md sha256:<64-hex>
 blocked_by: []
 consumed_by:
   - use-case-designer
@@ -43,7 +43,7 @@ memory_updates_proposed: []
 Each role owns a narrow context boundary and writes only its promised outputs. Later roles consume the previous files as artifacts instead of reloading the whole conversation.
 Design, test, code, semantic review, and coverage are incompatible role groups. The same `agent_id` must not own tasks across those groups in `agent-schedule.json`; every role task references a generated `agent-roles/*.md` template, and handoff files are the communication boundary between groups.
 
-Run `scripts/handoff_gate.py` before a downstream agent consumes a handoff. Use `--require-handoffs` for multi-service, contract/data-risk, or split-agent completion gates so an empty `handoffs/` directory blocks. The gate requires a concrete `agent_id`, a pass status, non-empty inputs/outputs, input/output SHA-256 entries, `consumed_by`, `open_questions: None`, a matching ready marker, and non-template body content in `Summary`, `Facts Used`, `Decisions Made`, `Downstream Assumptions`, and `Verification Evidence`. Draft starter files are intentionally not ready until the owning agent fills them.
+Run `scripts/handoff_gate.py` before a downstream agent consumes a handoff. Use `--require-handoffs` for multi-service, contract/data-risk, or split-agent completion gates so an empty `handoffs/` directory blocks. The gate requires a concrete `agent_id`, a pass status, non-empty inputs/outputs, input/output SHA-256 entries, `consumed_by`, `open_questions: None`, a matching ready marker, and non-template body content in `Summary`, `Facts Used`, `Decisions Made`, `Downstream Assumptions`, and `Verification Evidence`. Draft starter files are intentionally not ready until the owning agent fills them. Do not list the handoff file itself in `outputs` or `output_hashes`; `<handoff>.ready.json` is the only place that records the handoff file hash.
 
 Handoff writes must be atomic:
 

@@ -894,6 +894,7 @@ def next_step(args) -> tuple[int, dict]:
         "phase_lock": str(state_path.parent / run_state.PHASE_LOCK),
         "hook_status": hooks,
         "lifecycle": lifecycle,
+        "workflow_stage": action.get("workflow_stage", workflow_stage_for_lifecycle(lifecycle)),
         "next": action,
         "execution_packet": execution_packet,
         "todo_policy": action["todo_policy"],

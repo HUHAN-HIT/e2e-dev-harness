@@ -63,6 +63,11 @@ class UnifiedCliTests(unittest.TestCase):
     def write_ready_handoff(self, repo: Path, path: Path, agent_id: str = "requirements-agent") -> None:
         full = repo / path
         full.parent.mkdir(parents=True, exist_ok=True)
+        evidence = full.parents[1] / "evidence" / "requirements-summary.md"
+        evidence.parent.mkdir(parents=True, exist_ok=True)
+        evidence.write_text("Requirements clarification evidence.\n", encoding="utf-8")
+        evidence_ref = evidence.relative_to(repo).as_posix()
+        evidence_hash = hashlib.sha256(evidence.read_bytes()).hexdigest()
         full.write_text(
             textwrap.dedent(
                 f"""
@@ -73,11 +78,11 @@ class UnifiedCliTests(unittest.TestCase):
                 inputs:
                   - user request
                 outputs:
-                  - {path.as_posix()}
+                  - {evidence_ref}
                 input_hashes:
                   - user-request sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
                 output_hashes:
-                  - {path.as_posix()} sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                  - {evidence_ref} sha256:{evidence_hash}
                 consumed_by:
                   - code-developer
                 open_questions: None
@@ -505,6 +510,7 @@ class UnifiedCliTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
 
         self.assertEqual(0, completed.returncode)
+        self.assertEqual("TEST_READY", payload["workflow_stage"])
         self.assertIn("workflow_plan", payload)
         self.assertNotIn("stdout_mode", payload)
 
@@ -541,10 +547,12 @@ class UnifiedCliTests(unittest.TestCase):
             )
             payload = json.loads(completed.stdout)
             status_exists = status_file.exists()
+            saved = json.loads(status_file.read_text(encoding="utf-8"))
 
         self.assertEqual(0, completed.returncode)
         self.assertEqual(str(status_file), payload["full_result_path"])
         self.assertTrue(status_exists)
+        self.assertEqual("TEST_READY", saved["workflow_stage"])
 
     def test_install_command_full_defaults_to_current_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

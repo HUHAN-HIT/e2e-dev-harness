@@ -87,6 +87,8 @@ def build_state(
     services: list[str],
     artifact_registry_path: str,
     lifecycle: str = "PLANNED",
+    shared_edit_scopes: list[str] | None = None,
+    shared_edit_scope_owners: dict[str, str] | None = None,
 ) -> dict:
     return {
         "schema": "e2e-dev-harness.run-state.v1",
@@ -94,6 +96,8 @@ def build_state(
         "lifecycle": lifecycle,
         "selected_mode": selected_mode,
         "services": services,
+        "shared_edit_scopes": list(shared_edit_scopes or []),
+        "shared_edit_scope_owners": dict(shared_edit_scope_owners or {}),
         "artifact_registry": posix(artifact_registry_path),
         "gates": {
             "clarification": "planned",
@@ -158,6 +162,7 @@ def phase_lock_payload(state: dict) -> dict:
         "services": state.get("services", []),
         "owners": state.get("owners", {}),
         "shared_edit_scopes": state.get("shared_edit_scopes", []),
+        "shared_edit_scope_owners": state.get("shared_edit_scope_owners", {}),
         "updated_at": state.get("updated_at", now_iso()),
     }
 

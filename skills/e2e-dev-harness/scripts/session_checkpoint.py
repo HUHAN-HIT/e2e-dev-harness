@@ -118,19 +118,30 @@ def context_budget(
         "tool_calls": cli_response_count,
         "dispatch_events": dispatch_event_count,
     }
-    limits = {
-        "max_evidence_bytes": max_evidence_bytes,
-        "max_phase_events": max_phase_events,
-        "max_tool_calls": max_tool_calls,
-    }
     planned_tasks = open_task_count(run_dir)
     expected_handoffs = estimate_expected_handoffs(planned_tasks, max_tool_calls)
+    # The phase-event and tool-call metrics are cumulative across the whole run,
+    # but a large multi-service run legitimately spans several coordinator
+    # sessions (see expected_handoffs). With fixed base ceilings the budget flags
+    # a handoff after the first few dispatch events and the coordinator perceives
+    # the harness as failing and abandons it for manual coding. Scale these chatty
+    # ceilings by the number of expected handoffs so the per-session signal stays
+    # proportional to planned work. evidence_bytes is left unscaled because it
+    # approximates real memory pressure rather than dispatch chatter.
+    handoff_scale = max(1, expected_handoffs)
+    effective_max_phase_events = max_phase_events * handoff_scale if max_phase_events >= 0 else max_phase_events
+    effective_max_tool_calls = max_tool_calls * handoff_scale if max_tool_calls >= 0 else max_tool_calls
+    limits = {
+        "max_evidence_bytes": max_evidence_bytes,
+        "max_phase_events": effective_max_phase_events,
+        "max_tool_calls": effective_max_tool_calls,
+    }
     exceeded: list[str] = []
     if max_evidence_bytes >= 0 and evidence_bytes > max_evidence_bytes:
         exceeded.append("evidence_bytes")
-    if max_phase_events >= 0 and phase_events > max_phase_events:
+    if effective_max_phase_events >= 0 and phase_events > effective_max_phase_events:
         exceeded.append("phase_events")
-    if max_tool_calls >= 0 and cli_response_count > max_tool_calls:
+    if effective_max_tool_calls >= 0 and cli_response_count > effective_max_tool_calls:
         exceeded.append("tool_calls")
     return {
         "schema": "e2e-dev-harness.coordinator-context-budget.v1",

@@ -267,6 +267,38 @@ def validate_ready_marker(path: Path, agent_id: str, status: str) -> list[str]:
     return blocked
 
 
+def normalize_artifact_path(repo: Path, value: str) -> str:
+    text = value.strip().strip("\"'")
+    if not text:
+        return ""
+    match = SHA_RE.search(text)
+    if match:
+        text = text[: match.start()].strip().strip("\"'")
+    path = Path(text)
+    try:
+        full = path if path.is_absolute() else repo / path
+        return full.resolve().relative_to(repo.resolve()).as_posix().lower()
+    except (OSError, ValueError):
+        return text.replace("\\", "/").strip("/").lower()
+
+
+def self_referential_output_blockers(path: Path, fields: dict[str, str | list[str]]) -> list[str]:
+    blocked: list[str] = []
+    repo = Path.cwd()
+    for parent in path.parents:
+        if parent.name == "docs":
+            repo = parent.parent
+            break
+    handoff_ref = normalize_artifact_path(repo, str(path))
+    for key in ("outputs", "output_hashes"):
+        for value in as_list(fields.get(key)):
+            if normalize_artifact_path(repo, value) == handoff_ref:
+                blocked.append(
+                    f"Handoff {path} has self-referential {key}; the handoff file hash belongs in the ready marker, not frontmatter."
+                )
+    return blocked
+
+
 def validate_item(path: Path, fields: dict[str, str | list[str]], body: str) -> tuple[dict, list[str]]:
     blocked: list[str] = []
     missing = [label for key, label in REQUIRED_FIELDS.items() if key not in fields]
@@ -294,6 +326,7 @@ def validate_item(path: Path, fields: dict[str, str | list[str]], body: str) -> 
         for value in as_list(fields.get(key)):
             if not SHA_RE.search(value):
                 blocked.append(f"Handoff {path} {key} entry must include sha256:<64-hex>: {value}")
+    blocked.extend(self_referential_output_blockers(path, fields))
 
     open_questions = as_text(fields.get("open_questions"))
     body_open_questions = open_questions_section(body)

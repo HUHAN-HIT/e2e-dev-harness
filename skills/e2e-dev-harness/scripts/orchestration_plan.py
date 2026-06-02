@@ -45,6 +45,15 @@ RISK_KEYWORDS = {
     "rocketmq",
     "kafka",
     "rabbitmq",
+    "payment",
+    "refund",
+    "settlement",
+    "payout",
+    "withdraw",
+    "notify",
+    "notice",
+    "callback",
+    "webhook",
     "跨服务",
     "契约",
     "消息契约",
@@ -63,6 +72,7 @@ RISK_KEYWORDS = {
     "重试",
 }
 SERVICE_SCOPES = ("auto", "discovery", "affected", "all")
+MERGED_SERVICE_ID = "merged-modules"
 
 
 def env_default(primary: str, legacy: str, default: str) -> str:
@@ -387,6 +397,125 @@ def unmatched_requested_services(facts: dict, requested_services: list[str] | No
     ]
 
 
+def design_risk_in_text(lowered_text: str) -> bool:
+    """Risk-keyword scan for service-design slicing.
+
+    Unlike ``keyword_matches`` this treats ``-`` and ``_`` as token boundaries so a keyword that is
+    only present as part of a hyphenated module name (e.g. ``payment`` inside ``jeepay-payment``)
+    does not count as risk. A standalone ``payment`` word still matches.
+    """
+    for keyword in RISK_KEYWORDS:
+        if re.fullmatch(r"[a-z0-9][a-z0-9 -]*", keyword):
+            pattern = r"(?<![a-z0-9_-])" + re.escape(keyword).replace(r"\ ", r"\s+") + r"(?![a-z0-9_-])"
+            if re.search(pattern, lowered_text):
+                return True
+        elif keyword.lower() in lowered_text:
+            return True
+    return False
+
+
+def service_design_risk(service: str, design_text: str) -> bool:
+    """True when any design section that mentions the service also carries a risk keyword."""
+    if not design_text:
+        return False
+    for body in design_sections(design_text).values():
+        if not body or not service_mentioned_in_text(service, body):
+            continue
+        if design_risk_in_text(body.lower()):
+            return True
+    return False
+
+
+def _service_in_requested(service: str, requested: list[str] | None) -> bool:
+    return any(match_requested_service([service], value) for value in requested or [])
+
+
+def _service_in_paths(service: str, requested_paths: list[str] | None) -> bool:
+    return any(service_for_path([service], path) for path in requested_paths or [])
+
+
+def slice_worthy_service(
+    service: str,
+    explicit_services: list[str] | None,
+    explicit_paths: list[str] | None,
+    dependency_services: list[str] | None,
+    design_text: str,
+) -> bool:
+    """A service earns its own slice when isolation is explicitly required or design risk is detected."""
+    return (
+        _service_in_requested(service, explicit_services)
+        or _service_in_paths(service, explicit_paths)
+        or _service_in_requested(service, dependency_services)
+        or service_design_risk(service, design_text)
+    )
+
+
+def partition_services(
+    services: list[str],
+    explicit_services: list[str] | None = None,
+    explicit_paths: list[str] | None = None,
+    dependency_services: list[str] | None = None,
+    design_text: str = "",
+    facts: dict | None = None,
+) -> tuple[list[str], list[str]]:
+    """Split selected services into independent slices and a low-risk merge group, preserving order."""
+    slice_services: list[str] = []
+    merged_services: list[str] = []
+    for service in services:
+        if slice_worthy_service(service, explicit_services, explicit_paths, dependency_services, design_text):
+            slice_services.append(service)
+        else:
+            merged_services.append(service)
+    return slice_services, merged_services
+
+
+def plan_service_layout(
+    services: list[str],
+    explicit_services: list[str] | None = None,
+    explicit_paths: list[str] | None = None,
+    dependency_services: list[str] | None = None,
+    design_text: str = "",
+    facts: dict | None = None,
+) -> dict:
+    """Return the artifact/run-state layout: per-service slices plus one merged slice for low-risk services.
+
+    A merge only happens when 2+ services are selected; otherwise the single service stays a slice so
+    single-service runs keep their existing behavior. Merged services are routed through run-state
+    ``shared_edit_scopes`` (not ``services``) so phase_guard treats them as one shared edit scope.
+    """
+    if len(services) < 2:
+        return {
+            "slice_services": list(services),
+            "merged_services": [],
+            "merged_id": "",
+            "artifact_services": list(services),
+            "shared_edit_scopes": [],
+            "shared_edit_scope_owners": {},
+        }
+    slice_services, merged_services = partition_services(
+        services,
+        explicit_services,
+        explicit_paths,
+        dependency_services,
+        design_text,
+        facts,
+    )
+    merged_id = MERGED_SERVICE_ID if merged_services else ""
+    artifact_services = list(slice_services)
+    if merged_services:
+        artifact_services.append(merged_id)
+    shared_edit_scopes = [normalize_path(service) + "/" for service in merged_services]
+    shared_edit_scope_owners = {scope: merged_id for scope in shared_edit_scopes}
+    return {
+        "slice_services": slice_services,
+        "merged_services": merged_services,
+        "merged_id": merged_id,
+        "artifact_services": artifact_services,
+        "shared_edit_scopes": shared_edit_scopes,
+        "shared_edit_scope_owners": shared_edit_scope_owners,
+    }
+
+
 def select_services(
     facts: dict,
     requested_services: list[str] | None = None,
@@ -472,12 +601,12 @@ def discovery_result(
     }
 
 
-def service_artifacts(base: str, services: list[str] | None) -> dict:
+def service_artifacts(base: str, services: list[str] | None, merged_members: list[str] | None = None) -> dict:
     result: dict[str, dict[str, str]] = {}
     for service in services or []:
         slug = service_slug(service)
         service_base = f"{base}/service-plans/{slug}"
-        result[service] = {
+        entry: dict[str, object] = {
             "service_dir": service,
             "service_design": f"{base}/service-designs/{slug}.md",
             "service_plan": f"{service_base}/implementation-plan.md",
@@ -497,6 +626,9 @@ def service_artifacts(base: str, services: list[str] | None) -> dict:
             "rework_dir": service_base,
             "rework_pattern": f"{service_base}/rework-NNN.md",
         }
+        if merged_members and service == MERGED_SERVICE_ID:
+            entry["merged_members"] = list(merged_members)
+        result[service] = entry
     return result
 
 
@@ -520,7 +652,7 @@ def role_templates(base: str) -> dict[str, str]:
     }
 
 
-def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None = None, services: list[str] | None = None) -> dict:
+def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None = None, services: list[str] | None = None, merged_members: list[str] | None = None) -> dict:
     base = (agent_run_dir or f"docs/agent-runs/{default_run_id(slug, run_date)}").replace("\\", "/")
     handoffs = f"{base}/handoffs"
     evidence = f"{base}/evidence"
@@ -573,7 +705,7 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
         "strict_guard_result": f"{evidence}/strict-guard.json",
         "coverage_matrix": f"{evidence}/coverage-matrix.md",
         "business_review": f"{evidence}/business-review.md",
-        "service_plans": service_artifacts(base, services),
+        "service_plans": service_artifacts(base, services, merged_members),
 }
 
 

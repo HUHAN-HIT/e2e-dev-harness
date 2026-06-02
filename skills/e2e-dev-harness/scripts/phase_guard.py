@@ -565,6 +565,30 @@ def claimed_owners(owners: dict) -> list[str]:
     return claimed
 
 
+def normalized_shared_scope_owners(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, str] = {}
+    for scope, owner in value.items():
+        scope_key = str(scope).strip("/").replace("\\", "/")
+        owner_key = str(owner).strip("/").replace("\\", "/")
+        if scope_key and owner_key:
+            result[scope_key] = owner_key
+    return result
+
+
+def owner_task_worker_running(state_data: dict, owner: dict) -> bool:
+    task_id = str(owner.get("task_id", "")).strip()
+    if not task_id:
+        return False
+    dispatch = dispatch_for_task(state_data, task_id)
+    return (
+        str(dispatch.get("status", "")).lower() == "worker_running"
+        and str(dispatch.get("current_task_id", "")).strip() in {"", task_id}
+        and "code-developer" in str(dispatch.get("current_agent", "")).strip().lower()
+    )
+
+
 def first_match(pattern: re.Pattern[str], text: str, group: str) -> str:
     match = pattern.search(text)
     return match.group(group).strip() if match else ""
@@ -1439,6 +1463,12 @@ def validate_action(
         }
         touched_services.discard("")
         shared_edit_scopes = [str(scope) for scope in data.get("shared_edit_scopes", []) or []]
+        shared_scope_owners = normalized_shared_scope_owners(data.get("shared_edit_scope_owners"))
+        touched_shared_scopes = {
+            shared_scope_for_code_path(repo, path, shared_edit_scopes)
+            for path in runtime_code_paths
+        }
+        touched_shared_scopes.discard("")
         unscoped_runtime = [
             path
             for path in runtime_code_paths
@@ -1473,6 +1503,49 @@ def validate_action(
                 "touched_services": sorted(touched_services),
             }
         owners = data.get("owners") if isinstance(data.get("owners"), dict) else {}
+        for scope in sorted(touched_shared_scopes):
+            required_owner = shared_scope_owners.get(scope)
+            if not required_owner:
+                continue
+            owner = owners.get(required_owner) if isinstance(owners.get(required_owner), dict) else {}
+            status = str(owner.get("status", "")).lower()
+            agent = str(owner.get("agent", "")).strip()
+            if not agent or status not in CLAIMED_OWNER_STATUSES:
+                return {
+                    "ready": False,
+                    "blocked_reasons": [
+                        "Multi-service code write blocked: shared edit scope "
+                        + scope
+                        + " is owned by "
+                        + required_owner
+                        + ", which has no claimed code-developer task in run-state owners."
+                    ],
+                    "warnings": warnings,
+                    "phase_lock": str(lock),
+                    "run_state": str(run_state_path_for_lock(repo, lock)),
+                    "lifecycle": lifecycle,
+                    "code_paths": result_paths(repo, code_paths),
+                    "shared_scope": scope,
+                    "required_owner": required_owner,
+                }
+            if not owner_task_worker_running(data, owner):
+                return {
+                    "ready": False,
+                    "blocked_reasons": [
+                        "Multi-service code write blocked: shared edit scope "
+                        + scope
+                        + " must be written by the active code-developer worker for "
+                        + required_owner
+                        + "."
+                    ],
+                    "warnings": warnings,
+                    "phase_lock": str(lock),
+                    "run_state": str(run_state_path_for_lock(repo, lock)),
+                    "lifecycle": lifecycle,
+                    "code_paths": result_paths(repo, code_paths),
+                    "shared_scope": scope,
+                    "required_owner": required_owner,
+                }
         if not touched_services and runtime_code_paths and not claimed_owners(owners):
             return {
                 "ready": False,

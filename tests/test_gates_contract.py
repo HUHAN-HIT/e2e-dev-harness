@@ -117,6 +117,8 @@ class ContractGateTests(unittest.TestCase):
         self.assertIn("output_hashes:", text)
         self.assertIn("consumed_by:", text)
         self.assertIn("open_questions:", text)
+        self.assertIn("Do not put this handoff file in output_hashes", text)
+        self.assertIn("ready marker records this handoff file hash", text)
         self.assertIn("Summarize implementation scope", text)
         self.assertIn("This is a draft starter handoff", text)
 

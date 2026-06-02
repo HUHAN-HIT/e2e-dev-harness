@@ -106,6 +106,11 @@ def write_role_template(repo: Path, path: Path) -> None:
 def write_ready_handoff(repo: Path, path: Path, agent_id: str = "requirements-agent") -> None:
     full = repo / path
     full.parent.mkdir(parents=True, exist_ok=True)
+    evidence = full.parents[1] / "evidence" / "requirements-summary.md"
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    evidence.write_text("Requirements clarification evidence.\n", encoding="utf-8")
+    evidence_ref = evidence.relative_to(repo).as_posix()
+    evidence_hash = hashlib.sha256(evidence.read_bytes()).hexdigest()
     full.write_text(
         textwrap.dedent(
             f"""
@@ -116,11 +121,11 @@ def write_ready_handoff(repo: Path, path: Path, agent_id: str = "requirements-ag
             inputs:
               - user request
             outputs:
-              - {path.as_posix()}
+              - {evidence_ref}
             input_hashes:
               - user-request sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
             output_hashes:
-              - {path.as_posix()} sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+              - {evidence_ref} sha256:{evidence_hash}
             consumed_by:
               - code-developer
             open_questions: None
@@ -375,6 +380,43 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(budget["planned_tasks"], 25)
         self.assertGreaterEqual(budget["expected_handoffs"], 2)
         self.assertIn("expected_handoffs", budget)
+
+    def test_context_budget_scales_phase_and_tool_limits_with_expected_handoffs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            events_dir = state_path.parent / "dispatch-events"
+            events_dir.mkdir(parents=True)
+            schedule = {"tasks": [{"id": f"T{index:02d}", "status": "planned"} for index in range(29)]}
+            (state_path.parent / "agent-schedule.json").write_text(
+                json.dumps(schedule), encoding="utf-8"
+            )
+            # Cumulative dispatch events above the BASE phase-event ceiling (8) but
+            # below the ceiling once it is scaled by expected handoffs for a large run.
+            for index in range(12):
+                (events_dir / f"T{index:02d}-completed.json").write_text("{}", encoding="utf-8")
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "multi",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            run_state.write_state(repo, state_path, state)
+
+            budget = session_checkpoint.context_budget(state_path, state)
+
+        # A 29-task multi run is expected to span >=2 coordinator handoffs, so the
+        # chatty phase-event/tool-call ceilings scale with that planned workload
+        # instead of forcing a handoff after the first few dispatch events.
+        self.assertGreaterEqual(budget["expected_handoffs"], 2)
+        self.assertGreater(budget["metrics"]["phase_events"], session_checkpoint.DEFAULT_MAX_PHASE_EVENTS)
+        self.assertGreaterEqual(
+            budget["limits"]["max_phase_events"],
+            session_checkpoint.DEFAULT_MAX_PHASE_EVENTS * 2,
+        )
+        self.assertNotIn("phase_events", budget["exceeded_limits"])
+        self.assertFalse(budget["handoff_recommended"])
 
     def test_next_surfaces_coordinator_context_budget_handoff(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1152,6 +1194,318 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertEqual(["jeepay-core", "jeepay-service", "jeepay-payment"], selected)
 
+    @staticmethod
+    def _risk_partition_design() -> str:
+        return textwrap.dedent(
+            """
+            # VNPay
+
+            ## Affected services/modules
+            - jeepay-core
+            - jeepay-service
+            - jeepay-payment
+
+            ### jeepay-core
+            jeepay-core adds VNPay constants and params.
+
+            ### jeepay-service
+            jeepay-service registers the VNPay channel config.
+
+            ### jeepay-payment
+            jeepay-payment adds payment and refund services with notify callback handling.
+            """
+        ).strip()
+
+    def test_service_design_risk_flags_only_risky_section_bodies(self) -> None:
+        design_text = self._risk_partition_design()
+
+        self.assertTrue(orchestration_plan.service_design_risk("jeepay-payment", design_text))
+        self.assertFalse(orchestration_plan.service_design_risk("jeepay-core", design_text))
+        self.assertFalse(orchestration_plan.service_design_risk("jeepay-service", design_text))
+
+    def test_service_design_risk_uses_expanded_financial_keywords(self) -> None:
+        design_text = textwrap.dedent(
+            """
+            # Settlement
+
+            ### jeepay-settle
+            jeepay-settle handles settlement payout and withdraw flows.
+            """
+        ).strip()
+
+        self.assertTrue(orchestration_plan.service_design_risk("jeepay-settle", design_text))
+
+    def test_partition_services_keeps_only_risky_service_as_slice(self) -> None:
+        design_text = self._risk_partition_design()
+        facts = {"service_candidates": ["jeepay-core", "jeepay-service", "jeepay-payment"]}
+
+        slice_services, merged_services = orchestration_plan.partition_services(
+            ["jeepay-core", "jeepay-service", "jeepay-payment"],
+            explicit_services=None,
+            explicit_paths=None,
+            dependency_services=[],
+            design_text=design_text,
+            facts=facts,
+        )
+
+        self.assertEqual(["jeepay-payment"], slice_services)
+        self.assertEqual(["jeepay-core", "jeepay-service"], merged_services)
+
+    def test_partition_services_explicit_service_forces_slice(self) -> None:
+        design_text = self._risk_partition_design()
+        facts = {"service_candidates": ["jeepay-core", "jeepay-service", "jeepay-payment"]}
+
+        slice_services, merged_services = orchestration_plan.partition_services(
+            ["jeepay-core", "jeepay-service", "jeepay-payment"],
+            explicit_services=["jeepay-core"],
+            explicit_paths=None,
+            dependency_services=[],
+            design_text=design_text,
+            facts=facts,
+        )
+
+        self.assertEqual(["jeepay-core", "jeepay-payment"], slice_services)
+        self.assertEqual(["jeepay-service"], merged_services)
+
+    def test_partition_services_explicit_path_and_dependency_force_slice(self) -> None:
+        design_text = self._risk_partition_design()
+        facts = {"service_candidates": ["jeepay-core", "jeepay-service", "jeepay-payment"]}
+
+        slice_services, merged_services = orchestration_plan.partition_services(
+            ["jeepay-core", "jeepay-service", "jeepay-payment"],
+            explicit_services=None,
+            explicit_paths=["jeepay-core/src/main/java/Constants.java"],
+            dependency_services=["jeepay-service"],
+            design_text=design_text,
+            facts=facts,
+        )
+
+        self.assertEqual(["jeepay-core", "jeepay-service", "jeepay-payment"], slice_services)
+        self.assertEqual([], merged_services)
+
+    def test_plan_service_layout_merges_low_risk_services(self) -> None:
+        design_text = self._risk_partition_design()
+        facts = {"service_candidates": ["jeepay-core", "jeepay-service", "jeepay-payment"]}
+
+        layout = orchestration_plan.plan_service_layout(
+            ["jeepay-core", "jeepay-service", "jeepay-payment"],
+            explicit_services=None,
+            explicit_paths=None,
+            dependency_services=[],
+            design_text=design_text,
+            facts=facts,
+        )
+
+        self.assertEqual(["jeepay-payment"], layout["slice_services"])
+        self.assertEqual(["jeepay-core", "jeepay-service"], layout["merged_services"])
+        self.assertEqual("merged-modules", layout["merged_id"])
+        self.assertEqual(["jeepay-payment", "merged-modules"], layout["artifact_services"])
+        self.assertEqual(["jeepay-core/", "jeepay-service/"], layout["shared_edit_scopes"])
+        self.assertEqual(
+            {"jeepay-core/": "merged-modules", "jeepay-service/": "merged-modules"},
+            layout["shared_edit_scope_owners"],
+        )
+
+    def test_plan_service_layout_without_merge_keeps_services(self) -> None:
+        layout = orchestration_plan.plan_service_layout(
+            ["jeepay-core", "jeepay-payment"],
+            explicit_services=["jeepay-core", "jeepay-payment"],
+            explicit_paths=None,
+            dependency_services=[],
+            design_text="",
+            facts={"service_candidates": ["jeepay-core", "jeepay-payment"]},
+        )
+
+        self.assertEqual(["jeepay-core", "jeepay-payment"], layout["slice_services"])
+        self.assertEqual([], layout["merged_services"])
+        self.assertEqual("", layout["merged_id"])
+        self.assertEqual(["jeepay-core", "jeepay-payment"], layout["artifact_services"])
+        self.assertEqual([], layout["shared_edit_scopes"])
+
+    def test_plan_service_layout_single_service_never_merges(self) -> None:
+        layout = orchestration_plan.plan_service_layout(
+            ["jeepay-core"],
+            explicit_services=None,
+            explicit_paths=None,
+            dependency_services=[],
+            design_text="",
+            facts={"service_candidates": ["jeepay-core"]},
+        )
+
+        self.assertEqual(["jeepay-core"], layout["slice_services"])
+        self.assertEqual([], layout["merged_services"])
+        self.assertEqual(["jeepay-core"], layout["artifact_services"])
+        self.assertEqual([], layout["shared_edit_scopes"])
+
+    @staticmethod
+    def _vnpay_risk_tiered_design() -> str:
+        return textwrap.dedent(
+            """
+            # VNPay
+
+            ## Goal
+            - Add VNPay channel.
+
+            ## Affected services/modules
+            - jeepay-core
+            - jeepay-service
+            - jeepay-payment
+
+            ### jeepay-core
+            jeepay-core adds VNPay constants and params.
+
+            ### jeepay-service
+            jeepay-service registers the VNPay channel config.
+
+            ### jeepay-payment
+            jeepay-payment adds payment and refund services with notify callback handling.
+
+            ## Use Cases
+            - Merchant creates a VNPay QR payment.
+
+            ## Acceptance Criteria
+            - AC-1 VNPay order can be created.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+
+    def test_orchestration_status_merges_low_risk_services_into_one_slice(self) -> None:
+        facts = {
+            "service_candidates": ["jeepay-core", "jeepay-service", "jeepay-payment"],
+            "multi_service": True,
+            "design_docs_or_media_count": 0,
+            "spring_entrypoints": [],
+        }
+        design_text = self._vnpay_risk_tiered_design()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "vnpay.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(design_text, encoding="utf-8")
+
+            result = e2e_dev_harness.orchestration_status(
+                repo,
+                "auto",
+                design,
+                run_date="2026-05-23",
+                service_scope="auto",
+                facts=facts,
+            )
+
+        # selected_services stays full so reporting and require_handoffs see every affected module.
+        self.assertEqual(
+            ["jeepay-core", "jeepay-service", "jeepay-payment"], result["selected_services"]
+        )
+        # Only the risky payment module earns its own slice; the rest collapse into one merged slice.
+        self.assertEqual(["jeepay-payment"], result["slice_services"])
+        self.assertEqual(["jeepay-core", "jeepay-service"], result["merged_services"])
+        self.assertEqual(["jeepay-core/", "jeepay-service/"], result["shared_edit_scopes"])
+        self.assertEqual(
+            {"jeepay-core/": "merged-modules", "jeepay-service/": "merged-modules"},
+            result["shared_edit_scope_owners"],
+        )
+        service_plans = result["handoff_artifacts"]["service_plans"]
+        self.assertIn("jeepay-payment", service_plans)
+        self.assertIn("merged-modules", service_plans)
+        self.assertNotIn("jeepay-core", service_plans)
+        self.assertNotIn("jeepay-service", service_plans)
+        agent_names = [agent["name"] for agent in result["agents"]]
+        self.assertIn("code-developer-jeepay-payment", agent_names)
+        self.assertIn("code-developer-merged-modules", agent_names)
+        self.assertNotIn("code-developer-jeepay-service", agent_names)
+        self.assertNotIn("code-developer-jeepay-core", agent_names)
+        # Slice count (one per service-designer agent) drops below the full service count.
+        designer_count = len([name for name in agent_names if name.startswith("service-designer-")])
+        self.assertEqual(2, designer_count)
+        self.assertLess(designer_count, len(result["selected_services"]))
+        self.assertTrue(result["multi_agent_decision"]["use_multi_agent"])
+
+    def test_plan_archive_merges_low_risk_services_into_shared_slice(self) -> None:
+        design_text = self._vnpay_risk_tiered_design()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            repo.joinpath("pom.xml").write_text(
+                textwrap.dedent(
+                    """
+                    <project xmlns="http://maven.apache.org/POM/4.0.0">
+                      <modelVersion>4.0.0</modelVersion>
+                      <modules>
+                        <module>jeepay-core</module>
+                        <module>jeepay-service</module>
+                        <module>jeepay-payment</module>
+                      </modules>
+                    </project>
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            for module in ("jeepay-core", "jeepay-service", "jeepay-payment"):
+                module_dir = repo / module
+                (module_dir / "src" / "main" / "java").mkdir(parents=True)
+                (module_dir / "pom.xml").write_text("<project />", encoding="utf-8")
+            design = repo / "docs" / "design" / "vnpay.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(design_text, encoding="utf-8")
+            args = SimpleNamespace(
+                repo=repo,
+                mode="auto",
+                design_doc=design,
+                agent_run_dir=None,
+                run_date="2026-05-23",
+                service_scope="auto",
+                service=None,
+                path=None,
+                dependency_report=None,
+                create_archive=True,
+                write_exec_plan=None,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.plan(args)
+
+            self.assertEqual(0, code)
+            self.assertEqual(
+                ["jeepay-core", "jeepay-payment", "jeepay-service"],
+                sorted(result["selected_services"]),
+            )
+            self.assertEqual(["jeepay-payment"], result["slice_services"])
+            self.assertEqual(["jeepay-core/", "jeepay-service/"], result["shared_edit_scopes"])
+            service_plans = result["handoff_artifacts"]["service_plans"]
+            self.assertIn("merged-modules", service_plans)
+            self.assertIn("jeepay-payment", service_plans)
+            self.assertNotIn("jeepay-core", service_plans)
+            self.assertNotIn("jeepay-service", service_plans)
+
+            # Run-state routes the slice through `services` and the merged modules through shared scopes.
+            state = json.loads(
+                (repo / result["handoff_artifacts"]["run_state"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual("SERVICE_DESIGN_REQUIRED", state["lifecycle"])
+            self.assertEqual(["jeepay-payment"], state["services"])
+            self.assertEqual(["jeepay-core/", "jeepay-service/"], state["shared_edit_scopes"])
+            self.assertEqual(
+                {"jeepay-core/": "merged-modules", "jeepay-service/": "merged-modules"},
+                state["shared_edit_scope_owners"],
+            )
+
+            # Merged slice still has its own service-design + forced R2/R3 review requests on disk.
+            merged_paths = service_plans["merged-modules"]
+            merged_design = (repo / merged_paths["service_design"]).read_text(encoding="utf-8")
+            self.assertIn("mvn -pl jeepay-core -am test", merged_design)
+            self.assertIn("mvn -pl jeepay-service -am test", merged_design)
+            self.assertTrue((repo / merged_paths["test_review_request"]).exists())
+            self.assertTrue((repo / merged_paths["implementation_review_request"]).exists())
+            self.assertTrue((repo / merged_paths["code_agent"]).exists())
+
+            payment_paths = service_plans["jeepay-payment"]
+            payment_design = (repo / payment_paths["service_design"]).read_text(encoding="utf-8")
+            self.assertIn("mvn -pl jeepay-payment -am test", payment_design)
+
     def test_design_affected_services_accepts_table_and_comma_list(self) -> None:
         facts = {"service_candidates": ["services/refund-service", "services/ledger-service", "services/notice-service"]}
         design_text = textwrap.dedent(
@@ -1183,31 +1537,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
             "design_docs_or_media_count": 0,
             "spring_entrypoints": [],
         }
-        design_text = textwrap.dedent(
-            """
-            # VNPay
-
-            ## Goal
-            - Add VNPay channel.
-
-            ## Affected services/modules
-            - jeepay-core: constants and params
-            - jeepay-service: channel config service
-            - jeepay-payment: payment, notice, refund services
-
-            ## Use Cases
-            - Merchant creates a VNPay QR payment.
-
-            ## Acceptance Criteria
-            - AC-1 VNPay order can be created.
-
-            ## Test Design
-            - Unit test first.
-
-            ## Open Questions
-            None
-            """
-        ).strip()
+        design_text = self._vnpay_risk_tiered_design()
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             design = repo / "docs" / "design" / "vnpay.md"
@@ -1227,41 +1557,20 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(["jeepay-core", "jeepay-service", "jeepay-payment"], result["selected_services"])
         self.assertTrue(result["multi_agent_decision"]["use_multi_agent"])
         self.assertIn("multiple affected services/modules", result["multi_agent_decision"]["criteria"])
-        self.assertIn("jeepay-service", result["handoff_artifacts"]["service_plans"])
-        self.assertIn("code-developer-jeepay-service", [agent["name"] for agent in result["agents"]])
-        code_agent = next(agent for agent in result["agents"] if agent["name"] == "code-developer-jeepay-service")
-        service_paths = result["handoff_artifacts"]["service_plans"]["jeepay-service"]
+        # Only the risky payment module earns its own slice; low-risk core/service collapse into merged-modules.
+        self.assertIn("jeepay-payment", result["handoff_artifacts"]["service_plans"])
+        self.assertIn("merged-modules", result["handoff_artifacts"]["service_plans"])
+        self.assertNotIn("jeepay-service", result["handoff_artifacts"]["service_plans"])
+        self.assertIn("code-developer-jeepay-payment", [agent["name"] for agent in result["agents"]])
+        code_agent = next(agent for agent in result["agents"] if agent["name"] == "code-developer-jeepay-payment")
+        service_paths = result["handoff_artifacts"]["service_plans"]["jeepay-payment"]
         self.assertIn(service_paths["service_design"], code_agent["inputs"])
         self.assertIn(service_paths["test_impact_plan"], code_agent["inputs"])
         self.assertEqual("e2e-dev-harness.agent-schedule.v1", result["agent_schedule"]["schema"])
-        self.assertTrue(any(task["parallel_group"] == "service:jeepay-service" for task in result["agent_schedule"]["tasks"]))
+        self.assertTrue(any(task["parallel_group"] == "service:jeepay-payment" for task in result["agent_schedule"]["tasks"]))
 
     def test_plan_archive_creates_handoffs_for_design_affected_root_modules(self) -> None:
-        design_text = textwrap.dedent(
-            """
-            # VNPay
-
-            ## Goal
-            - Add VNPay channel.
-
-            ## Affected services/modules
-            - jeepay-core: constants and params
-            - jeepay-service: channel config service
-            - jeepay-payment: payment, notice, refund services
-
-            ## Use Cases
-            - Merchant creates a VNPay QR payment.
-
-            ## Acceptance Criteria
-            - AC-1 VNPay order can be created.
-
-            ## Test Design
-            - Unit test first.
-
-            ## Open Questions
-            None
-            """
-        ).strip()
+        design_text = self._vnpay_risk_tiered_design()
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             repo.joinpath("pom.xml").write_text(
@@ -1326,6 +1635,9 @@ class OrchestrationArtifactTests(unittest.TestCase):
             self.assertEqual("SERVICE_DESIGN_REQUIRED", state["lifecycle"])
             self.assertEqual("planned", state["gates"]["service_design"])
             self.assertEqual(result["handoff_artifacts"]["artifact_registry"], state["artifact_registry"])
+            # Slice goes through run-state services; the merged low-risk modules go through shared edit scopes.
+            self.assertEqual(["jeepay-payment"], state["services"])
+            self.assertEqual(["jeepay-core/", "jeepay-service/"], state["shared_edit_scopes"])
             self.assertTrue(any(item["type"] == "design_doc" for item in registry["artifacts"]))
             archive_text = (repo / result["handoff_artifacts"]["requirements_archive"]).read_text(encoding="utf-8")
             self.assertIn("Final Clarified Requirement", archive_text)
@@ -1333,14 +1645,16 @@ class OrchestrationArtifactTests(unittest.TestCase):
             impact_text = (repo / result["handoff_artifacts"]["impact_summary"]).read_text(encoding="utf-8")
             self.assertIn("Raw Evidence", impact_text)
             self.assertIn("affected callers/consumers", impact_text)
-            for module in ("jeepay-core", "jeepay-service", "jeepay-payment"):
-                paths = result["handoff_artifacts"]["service_plans"][module]
+            # Two slices on disk: one real (payment) plus one merged slice covering core + service. Every
+            # slice still gets a service-design and forced R2/R3 review requests so coverage is preserved.
+            service_plans = result["handoff_artifacts"]["service_plans"]
+            self.assertEqual(["jeepay-payment", "merged-modules"], list(service_plans))
+            for slice_id in ("jeepay-payment", "merged-modules"):
+                paths = service_plans[slice_id]
                 self.assertTrue((repo / paths["service_design"]).exists())
                 service_design_text = (repo / paths["service_design"]).read_text(encoding="utf-8")
                 self.assertIn("Primary development contract", service_design_text)
                 self.assertIn("AC-1", service_design_text)
-                self.assertIn("VNPay order can be created", service_design_text)
-                self.assertIn(f"mvn -pl {module} -am test", service_design_text)
                 self.assertTrue((repo / paths["service_plan"]).exists())
                 self.assertTrue((repo / paths["code_agent"]).exists())
                 self.assertTrue((repo / paths["implementation_manifest"]).exists())
@@ -1349,6 +1663,11 @@ class OrchestrationArtifactTests(unittest.TestCase):
                 self.assertTrue((repo / paths["implementation_review_request"]).exists())
                 self.assertFalse((repo / paths["test_review"]).exists())
                 self.assertFalse((repo / paths["implementation_review"]).exists())
+            payment_design = (repo / service_plans["jeepay-payment"]["service_design"]).read_text(encoding="utf-8")
+            self.assertIn("mvn -pl jeepay-payment -am test", payment_design)
+            merged_design = (repo / service_plans["merged-modules"]["service_design"]).read_text(encoding="utf-8")
+            self.assertIn("mvn -pl jeepay-core -am test", merged_design)
+            self.assertIn("mvn -pl jeepay-service -am test", merged_design)
             self.assertTrue((repo / result["handoff_artifacts"]["service_designs_dir"]).exists())
             self.assertTrue((repo / result["handoff_artifacts"]["verification_evidence"]).exists())
 
@@ -4914,6 +5233,45 @@ class OrchestrationArtifactTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_multi_phase_guard_blocks_merged_shared_scope_without_merged_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state(
+                "run",
+                "multi",
+                ["jeepay-payment"],
+                "docs/agent-runs/run/artifact-registry.json",
+                "IMPLEMENTED",
+            )
+            state["owners"]["jeepay-payment"] = {
+                "task_id": "T01",
+                "agent": "agent-payment",
+                "status": "claimed",
+            }
+            state["shared_edit_scopes"] = ["jeepay-core/"]
+            state["shared_edit_scope_owners"] = {"jeepay-core/": "merged-modules"}
+            state["dispatches"] = {
+                "T01": {
+                    "status": "worker_running",
+                    "current_task_id": "T01",
+                    "current_agent": "code-developer-jeepay-payment",
+                    "worker_handle": "code-worker-payment",
+                }
+            }
+            state["dispatch"] = state["dispatches"]["T01"]
+            write_implemented_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Edit",
+                [Path("jeepay-core/src/main/java/com/example/Core.java")],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("merged-modules" in reason for reason in result["blocked_reasons"]))
 
     def test_agent_task_complete_requires_existing_declared_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
