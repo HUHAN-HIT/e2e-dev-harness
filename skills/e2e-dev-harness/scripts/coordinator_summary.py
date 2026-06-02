@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from common import atomic_write_json, now_iso
+from output_contract import workflow_stage_for_lifecycle
 
 SCHEMA = "e2e-dev-harness.coordinator-summary.v1"
 FILENAME = "coordinator-summary.json"
@@ -24,6 +25,7 @@ def _limited(values, limit: int = 20) -> list:
 def _compact_next(next_action: dict | None) -> dict:
     next_action = next_action or {}
     keys = [
+        "workflow_stage",
         "phase",
         "command",
         "coordinator_mode",
@@ -108,16 +110,26 @@ def write(
     target = summary_path(state_path if state_path.is_absolute() else repo / state_path)
     result = result or {}
     action = next_action if next_action is not None else result.get("next") if isinstance(result.get("next"), dict) else None
+    lifecycle = state.get("lifecycle", result.get("lifecycle", ""))
+    workflow_stage = workflow_stage_for_lifecycle(lifecycle)
+    compact_action = _compact_next(action)
+    if compact_action:
+        compact_action.setdefault("workflow_stage", workflow_stage)
     data = {
         "schema": SCHEMA,
         "run_id": state.get("run_id", result.get("run_id", "")),
-        "lifecycle": state.get("lifecycle", result.get("lifecycle", "")),
+        "lifecycle": lifecycle,
+        "workflow_stage": workflow_stage,
         "selected_mode": state.get("selected_mode", result.get("selected_mode", "")),
         "ready": bool(result.get("ready", True)),
         "blocked_reasons": _limited(result.get("blocked_reasons", [])),
         "warnings": _limited(result.get("warnings", [])),
-        "next_action": _compact_next(action)
-        or {"orchestration_action": "phase-transition", "command": "Run e2e_dev_harness.py next to refresh coordinator action."},
+        "next_action": compact_action
+        or {
+            "workflow_stage": workflow_stage,
+            "orchestration_action": "phase-transition",
+            "command": "Run e2e_dev_harness.py next to refresh coordinator action.",
+        },
         "execution_packet": _compact_execution_packet(result.get("execution_packet")),
         "active_dispatches": _active_dispatches(state),
         "artifact_pointers": _artifact_pointers(target.parent / "run-state.json", result, full_result_path),

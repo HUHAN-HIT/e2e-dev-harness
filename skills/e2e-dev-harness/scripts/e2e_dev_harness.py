@@ -2233,7 +2233,7 @@ def guard(args) -> tuple[int, dict]:
 
 def doctor(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
-    result = harness_doctor.evaluate(repo, getattr(args, "strict", False))
+    result = harness_doctor.evaluate(repo, getattr(args, "strict", False), getattr(args, "state", None))
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
 
@@ -2481,6 +2481,7 @@ def dispatch_complete(args) -> tuple[int, dict]:
         args.task_id,
         args.agent or "agent",
         args.evidence or [],
+        manual_recovery=getattr(args, "manual_recovery", False),
     )
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
@@ -2713,6 +2714,7 @@ def main() -> int:
     doctor_parser = subparsers.add_parser("doctor", help="Check install, runtime hooks, and local tool readiness.")
     doctor_parser.add_argument("repo", nargs="?", default=".", type=Path)
     doctor_parser.add_argument("--strict", action="store_true", help="Treat warnings as blockers.")
+    doctor_parser.add_argument("--state", type=Path, help="Check consistency for docs/agent-runs/<run>/run-state.json.")
     doctor_parser.add_argument("--json", action="store_true", help="Print JSON output.")
     doctor_parser.add_argument("--status-file", type=Path)
 
@@ -2811,6 +2813,7 @@ def main() -> int:
     dispatch_complete_parser.add_argument("--task-id", required=True)
     dispatch_complete_parser.add_argument("--agent", default="")
     dispatch_complete_parser.add_argument("--evidence", action="append")
+    dispatch_complete_parser.add_argument("--manual-recovery", action="store_true")
     dispatch_complete_parser.add_argument("--status-file", type=Path)
     add_full_json_arg(dispatch_complete_parser)
 

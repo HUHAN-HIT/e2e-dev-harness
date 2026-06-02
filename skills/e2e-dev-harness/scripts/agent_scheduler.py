@@ -682,6 +682,7 @@ def complete(
     evidence: list[str] | None = None,
     dispatcher_confirmed: bool = False,
     allow_local_completion: bool = False,
+    manual_recovery: bool = False,
 ) -> dict:
     path = resolve(repo, schedule_path)
     if not path or not path.exists():
@@ -702,7 +703,7 @@ def complete(
                 "warnings": [],
             }
         warnings.append(
-            f"Local completion override used for dispatcher-confirmed task {task_id}; prefer dispatch-complete for normal coordinator-only runs."
+            f"Local completion override requested for dispatcher-confirmed task {task_id}; it was recorded for manual recovery audit only."
         )
         schedule.setdefault("manual_recovery_events", []).append(
             {
@@ -710,9 +711,22 @@ def complete(
                 "agent": agent,
                 "event": "allow-local-completion",
                 "warning": warnings[-1],
+                "evidence": evidence or [],
                 "recorded_at": now_iso(),
             }
         )
+        atomic_write_json(path, schedule)
+        return {
+            "ready": False,
+            "blocked_reasons": [
+                f"Task {task_id} remains incomplete; run dispatch-complete --manual-recovery with valid evidence to close dispatcher-confirmed recovery."
+            ],
+            "warnings": warnings,
+            "schedule": str(path),
+            "task": task,
+        }
+    if manual_recovery:
+        warnings.append(f"Manual recovery completion used for dispatcher-confirmed task {task_id}.")
     owner = str(task.get("owner", ""))
     if owner and owner != agent:
         return {"ready": False, "blocked_reasons": [f"Task {task_id} is owned by {owner}, not {agent}."], "warnings": []}
@@ -740,6 +754,18 @@ def complete(
     task["status"] = "completed"
     task["completed_at"] = now_iso()
     task["evidence"] = resolved_evidence
+    if manual_recovery:
+        task["manual_recovery"] = True
+        schedule.setdefault("manual_recovery_events", []).append(
+            {
+                "task_id": task_id,
+                "agent": agent,
+                "event": "dispatch-complete-manual-recovery",
+                "evidence": resolved_evidence,
+                "warning": warnings[-1],
+                "recorded_at": now_iso(),
+            }
+        )
     atomic_write_json(path, schedule)
     state_result = update_state_owner(repo, state_path, task, agent, "completed", resolved_evidence)
     transition = None if dispatcher_confirmed else maybe_transition_red_ready(repo, state_path, schedule, resolved_evidence)

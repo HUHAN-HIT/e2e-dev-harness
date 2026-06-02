@@ -588,6 +588,20 @@ def dispatch_completion_blockers(repo: Path, state_path: Path | None, task_id: s
     return blocked, dispatch
 
 
+def manual_recovery_dispatch(repo: Path, state_path: Path | None, task_id: str, agent: str) -> tuple[list[str], dict, list[str]]:
+    _state_path, state = load_state(repo, state_path)
+    dispatch = dispatch_for_task(state, task_id)
+    warnings = [f"Manual recovery dispatch-complete used for task {task_id}; verify evidence and keep this event auditable."]
+    if not dispatch:
+        return [], {"current_task_id": task_id, "current_agent": agent, "status": "manual_recovery"}, warnings
+    if str(dispatch.get("current_agent", "")).strip() and str(dispatch.get("current_agent", "")).strip() != agent:
+        return [f"Dispatch agent mismatch: expected {dispatch.get('current_agent', '')}, got {agent}."], dispatch, []
+    recovered = dict(dispatch)
+    recovered.setdefault("current_task_id", task_id)
+    recovered.setdefault("current_agent", agent)
+    return [], recovered, warnings
+
+
 def worker_identity_blockers(repo: Path, dispatch: dict, worker_handle: str = "", worker_session: str = "") -> list[str]:
     invocation_path = resolve(repo, dispatch.get("invocation_path", ""))
     if not invocation_path or not invocation_path.exists():
@@ -654,6 +668,7 @@ def write_completion_event(
     evidence: list[str],
     schedule_after: dict,
     dispatch: dict,
+    manual_recovery: bool = False,
 ) -> Path:
     event_dir = completion_event_path(repo, state_path, schedule_path)
     task_id = str(task.get("id", ""))
@@ -669,11 +684,65 @@ def write_completion_event(
         "worker_summary": evidence[0] if evidence else "",
         "worker_handle": dispatch.get("worker_handle", ""),
         "worker_session": dispatch.get("worker_session", ""),
+        "manual_recovery": manual_recovery,
         "unblocked_candidates": unblocked_candidates(repo, schedule_after),
         "created_at": run_state.now_iso(),
     }
     atomic_write_json(path, data)
     return path
+
+
+def next_required_for_task(repo: Path, state_path: Path | None, task: dict, evidence: list[str]) -> dict:
+    state_file = resolve(repo, state_path)
+    run_dir = state_file.parent if state_file else repo / "docs" / "agent-runs" / "run"
+    state_arg = rel(repo, state_file) if state_file else "docs/agent-runs/<run>/run-state.json"
+    cli = posix(str(SCRIPT_DIR / "e2e_dev_harness.py"))
+    phase = str(task.get("phase", "")).strip().lower()
+    agent = str(task.get("agent", "")).strip()
+    service = str(task.get("service", "")).strip()
+    service_slug = service.replace("\\", "/").rstrip("/").split("/")[-1] if service else "<service>"
+    service_plan_dir = run_dir / "service-plans" / service_slug
+    service_design = run_dir / "service-designs" / f"{service_slug}.md"
+    unit_evidence = evidence[0] if evidence else rel(repo, service_plan_dir / "unit-test-evidence.json")
+    if phase == "clarify" or agent == "requirements-clarifier":
+        return {
+            "phase": "clarification",
+            "command": f"{sys.executable} {cli} clarify . --design-doc {rel(repo, run_dir / 'design.md')} --run-state {state_arg}",
+        }
+    if phase == "design" or "service-designer" in agent:
+        return {
+            "phase": "service_design",
+            "command": (
+                f"{sys.executable} {cli} service-design . "
+                f"--global-design {rel(repo, run_dir / 'design.md')} "
+                f"--service-design-dir {rel(repo, run_dir / 'service-designs')} --run-state {state_arg}"
+            ),
+        }
+    if phase == "implement" or "code-developer" in agent:
+        return {
+            "phase": "ac_progress",
+            "command": (
+                f"{sys.executable} {cli} ac-progress . "
+                f"--service-design {rel(repo, service_design)} "
+                f"--coverage-matrix {rel(repo, service_plan_dir / 'coverage-matrix.md')} "
+                f"--implementation-manifest {rel(repo, service_plan_dir / 'implementation-manifest.md')} "
+                f"--unit-test-evidence {unit_evidence}"
+            ),
+        }
+    if phase in {"r3-review", "completion"} or "coverage-reviewer" in agent:
+        return {
+            "phase": "completion",
+            "command": f"{sys.executable} {cli} gate . --phase completion --run-state {state_arg}",
+        }
+    if phase in {"tdd-red", "r2-review"}:
+        return {
+            "phase": "implementation",
+            "command": f"{sys.executable} {cli} gate . --phase implementation --run-state {state_arg}",
+        }
+    return {
+        "phase": "dispatch",
+        "command": f"{sys.executable} {cli} dispatch-beat . --schedule {rel(repo, run_dir / 'agent-schedule.json')} --state {state_arg}",
+    }
 
 
 def recent_completion_events(repo: Path, state_path: Path | None, schedule_path: Path, limit: int = 20) -> list[dict]:
@@ -710,7 +779,7 @@ def waiting_dispatch_result(
         "invocation_path": "",
         "context_pack": "",
     }
-    state_update = update_dispatch_state(repo, state_path, dispatch, lifecycle="WAITING_DISPATCH")
+    state_update = update_dispatch_state(repo, state_path, dispatch)
     packet = {
         "task_id": task.get("id", ""),
         "agent": task.get("agent", ""),
@@ -720,6 +789,7 @@ def waiting_dispatch_result(
     }
     return {
         "ready": False,
+        "lifecycle": str(state.get("lifecycle", "")),
         "blocked_reasons": [packet["reason"]],
         "warnings": state_update.get("warnings", []),
         "capabilities": capabilities,
@@ -750,6 +820,7 @@ def dispatch_beat(
     if not schedule:
         return {"ready": False, "blocked_reasons": [f"Agent schedule not found or unreadable: {schedule_file}"], "warnings": []}
     _state_path, state_data = load_state(repo, state_path)
+    lifecycle = str(state_data.get("lifecycle", "")) if isinstance(state_data, dict) else ""
     recent_events = recent_completion_events(repo, state_path, schedule_path)
     tasks, blocked_tasks = ready_tasks(repo, schedule, max_workers=max_workers, parallel_policy=parallel_policy, state=state_data)
     if not tasks:
@@ -757,6 +828,7 @@ def dispatch_beat(
         if open_task:
             return {
                 "ready": False,
+                "lifecycle": lifecycle,
                 "blocked_reasons": ["No scheduled task is ready to dispatch."],
                 "warnings": [],
                 "blocked_tasks": blocked_tasks,
@@ -765,6 +837,7 @@ def dispatch_beat(
             }
         return {
             "ready": True,
+            "lifecycle": lifecycle,
             "blocked_reasons": [],
             "warnings": [],
             "message": "No open scheduled tasks.",
@@ -873,6 +946,7 @@ def dispatch_beat(
     spawn_requests = [packet["runtime_spawn_request"] for packet in packets if packet.get("runtime_spawn_request")]
     return {
         "ready": state_update["ready"],
+        "lifecycle": lifecycle,
         "blocked_reasons": state_update["blocked_reasons"],
         "warnings": warnings + state_update["warnings"],
         "capabilities": capabilities,
@@ -937,12 +1011,17 @@ def dispatch_complete(
     task_id: str,
     agent: str,
     evidence: list[str] | None = None,
+    manual_recovery: bool = False,
 ) -> dict:
     repo = repo.resolve()
     schedule_file = resolve(repo, schedule_path)
     schedule = read_json(schedule_file)
     task = agent_scheduler.find_task(schedule, task_id) if schedule else {}
-    dispatch_blockers, active_dispatch = dispatch_completion_blockers(repo, state_path, task_id, agent)
+    manual_warnings: list[str] = []
+    if manual_recovery:
+        dispatch_blockers, active_dispatch, manual_warnings = manual_recovery_dispatch(repo, state_path, task_id, agent)
+    else:
+        dispatch_blockers, active_dispatch = dispatch_completion_blockers(repo, state_path, task_id, agent)
     if dispatch_blockers:
         return {"ready": False, "blocked_reasons": dispatch_blockers, "warnings": [], "dispatch": active_dispatch}
     mark_invocation_completed(repo, active_dispatch, evidence or [])
@@ -966,9 +1045,11 @@ def dispatch_complete(
         state_path,
         evidence or [],
         dispatcher_confirmed=True,
+        manual_recovery=manual_recovery,
     )
     if reviewer_result is not None:
         complete["reviewer_gate"] = reviewer_result
+    complete["warnings"] = manual_warnings + complete.get("warnings", [])
     if complete["ready"]:
         completed_schedule = read_json(schedule_file)
         event_path = write_completion_event(
@@ -980,6 +1061,7 @@ def dispatch_complete(
             complete.get("task", {}).get("evidence", evidence or []),
             completed_schedule,
             active_dispatch,
+            manual_recovery=manual_recovery,
         )
         _state_path, state = load_state(repo, state_path)
         previous_lifecycle = ""
@@ -995,6 +1077,8 @@ def dispatch_complete(
                 "evidence": complete.get("task", {}).get("evidence", evidence or []),
             }
         )
+        if manual_recovery:
+            dispatch["manual_recovery"] = True
         if previous_lifecycle:
             dispatch["previous_lifecycle"] = previous_lifecycle
         legacy_dispatch = {
@@ -1032,6 +1116,12 @@ def dispatch_complete(
                     )
         complete["dispatch_event"] = rel(repo, event_path)
         complete["run_state_update"] = update
+        complete["next_required"] = next_required_for_task(
+            repo,
+            state_path,
+            complete.get("task", task),
+            complete.get("task", {}).get("evidence", evidence or []),
+        )
         if transition:
             complete["run_state_transition"] = transition
             if not transition["ready"]:
@@ -1131,6 +1221,7 @@ def main() -> int:
     parser.add_argument("--task-id")
     parser.add_argument("--agent")
     parser.add_argument("--evidence", action="append")
+    parser.add_argument("--manual-recovery", action="store_true")
     parser.add_argument("--action", choices=["capabilities", "next", "beat", "complete", "status"], default="status")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -1150,7 +1241,15 @@ def main() -> int:
     elif args.action == "complete":
         if not args.schedule or not args.task_id:
             parser.error("--schedule and --task-id are required for --action complete")
-        result = dispatch_complete(repo, args.schedule, args.state, args.task_id, args.agent or "agent", args.evidence or [])
+        result = dispatch_complete(
+            repo,
+            args.schedule,
+            args.state,
+            args.task_id,
+            args.agent or "agent",
+            args.evidence or [],
+            manual_recovery=args.manual_recovery,
+        )
     else:
         if not args.schedule:
             parser.error("--schedule is required for --action status")

@@ -10,6 +10,7 @@ import dispatcher
 import install_hooks
 import run_state
 import session_checkpoint
+from output_contract import workflow_stage_for_lifecycle
 
 
 BLUEPRINT_STEPS = (
@@ -422,6 +423,27 @@ def _unique_strings(values: list[str]) -> list[str]:
     return result
 
 
+ACTIVE_DISPATCH_STATUSES = {
+    "awaiting_runtime_spawn",
+    "waiting_dispatch",
+    "worker_dispatched",
+    "dispatched",
+    "worker_running",
+}
+
+
+def has_active_dispatch(state: dict) -> bool:
+    dispatch = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
+    dispatches = state.get("dispatches") if isinstance(state.get("dispatches"), dict) else {}
+    if str(dispatch.get("status", "")).lower() in ACTIVE_DISPATCH_STATUSES:
+        return True
+    return any(
+        str(item.get("status", "")).lower() in ACTIVE_DISPATCH_STATUSES
+        for item in dispatches.values()
+        if isinstance(item, dict)
+    )
+
+
 def execution_packet_for_lifecycle(
     lifecycle: str,
     state: dict | None = None,
@@ -624,8 +646,9 @@ def execution_packet_for_lifecycle(
             "next_gate": "archive",
         },
     }
+    detail_lifecycle = "WAITING_DISPATCH" if action.get("phase") == "waiting-dispatch" else lifecycle
     details = by_lifecycle.get(
-        lifecycle,
+        detail_lifecycle,
         {
             "objective": "Repair or inspect the run-state lifecycle before continuing.",
             "required_actions": ["Run next after repairing run-state."],
@@ -655,6 +678,7 @@ def execution_packet_for_lifecycle(
 
 def next_action_for_lifecycle(lifecycle: str, state: dict | None = None, runtime: str = "claude-code") -> dict:
     state = state or {}
+    action_lifecycle = "WAITING_DISPATCH" if lifecycle != "WAITING_DISPATCH" and has_active_dispatch(state) else lifecycle
     actions = {
         "CREATED": {
             "phase": "clarify",
@@ -718,7 +742,7 @@ def next_action_for_lifecycle(lifecycle: str, state: dict | None = None, runtime
         },
     }
     action = actions.get(
-        lifecycle,
+        action_lifecycle,
         {
             "phase": "unknown",
             "command": "Inspect run-state.json and repair lifecycle before continuing.",
@@ -726,7 +750,7 @@ def next_action_for_lifecycle(lifecycle: str, state: dict | None = None, runtime
             "blocked_writes": ["production code"],
         },
     )
-    if lifecycle == "PLANNED" and state.get("selected_mode") == "multi":
+    if action_lifecycle == "PLANNED" and state.get("selected_mode") == "multi":
         action = dict(action)
         action["command"] = (
             "Run dispatch-beat --max-workers <N> to spawn service-local TDD red workers, then dispatch/complete R2 review. After run-state reaches RED_READY, "
@@ -737,10 +761,11 @@ def next_action_for_lifecycle(lifecycle: str, state: dict | None = None, runtime
             "code-developer claim/dispatch before RED_READY and implementation gate",
         ]
     action = dict(action)
-    action["required_todo_list"] = required_todo_list_for_lifecycle(lifecycle, state)
-    action["todo_policy"] = todo_policy_for_lifecycle(lifecycle, state)
-    action["exploration_policy"] = exploration_policy_for_lifecycle(lifecycle)
-    action.update(coordinator_action_fields(lifecycle, state, runtime))
+    action["workflow_stage"] = workflow_stage_for_lifecycle(lifecycle)
+    action["required_todo_list"] = required_todo_list_for_lifecycle(action_lifecycle, state)
+    action["todo_policy"] = todo_policy_for_lifecycle(action_lifecycle, state)
+    action["exploration_policy"] = exploration_policy_for_lifecycle(action_lifecycle)
+    action.update(coordinator_action_fields(action_lifecycle, state, runtime))
     if lifecycle == "CREATED":
         action["clarification_interaction"] = clarification_interaction_contract()
     return action
@@ -824,7 +849,7 @@ def _dispatch_with_hook_guard(args, beat: bool) -> tuple[int, dict]:
     result["hook_status"] = hooks
     if forced_waiting:
         result.setdefault("warnings", []).append(
-            "Runtime hook is missing or not enforceable; dispatch forced to WAITING_DISPATCH until an isolated worker is acknowledged."
+            "Runtime hook is missing or not enforceable; dispatch is held in waiting_dispatch until an isolated worker is acknowledged."
         )
         summary = session_checkpoint.create_coordinator_summary(repo, args.state, result)
         result["coordinator_summary_path"] = summary.get("coordinator_summary", "")

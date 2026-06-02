@@ -15,6 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import install_hooks  # noqa: E402
+import run_state  # noqa: E402
 
 
 MIN_PYTHON = (3, 10)
@@ -190,7 +191,173 @@ def opencode_hook_check(repo: Path) -> dict:
     )
 
 
-def evaluate(repo: Path, strict: bool = False) -> dict:
+def resolve_repo_path(repo: Path, value: Path) -> Path:
+    return value if value.is_absolute() else repo / value
+
+
+def read_json_file(path: Path) -> tuple[dict | None, str]:
+    if not path.exists():
+        return None, f"File not found: {path}"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return None, f"File is not readable JSON: {path}: {error}"
+    if not isinstance(data, dict):
+        return None, f"File must contain a JSON object: {path}"
+    return data, ""
+
+
+def completed_schedule_tasks(schedule: dict) -> list[dict]:
+    return [
+        task
+        for task in schedule.get("tasks", []) or []
+        if isinstance(task, dict) and str(task.get("status", "")).lower() == "completed"
+    ]
+
+
+def state_consistency_checks(repo: Path, state: Path) -> list[dict]:
+    state_path = resolve_repo_path(repo, state)
+    state_data, state_error = read_json_file(state_path)
+    if state_error or state_data is None:
+        return [
+            check(
+                "state-run-state",
+                "fail",
+                "error",
+                state_error,
+                "Pass --state docs/agent-runs/<run>/run-state.json from an existing harness run.",
+            )
+        ]
+
+    run_dir = state_path.parent
+    schedule_path = run_dir / "agent-schedule.json"
+    schedule_data, schedule_error = read_json_file(schedule_path)
+    task_blockers: list[str] = []
+    if schedule_error or schedule_data is None:
+        task_blockers.append(f"agent-schedule.json is missing or invalid beside run-state: {schedule_error}")
+        schedule_data = {}
+
+    dispatches = state_data.get("dispatches", {}) if isinstance(state_data.get("dispatches"), dict) else {}
+    top_dispatch = state_data.get("dispatch", {}) if isinstance(state_data.get("dispatch"), dict) else {}
+    event_dir = run_dir / "dispatch-events"
+    for task in completed_schedule_tasks(schedule_data):
+        task_id = str(task.get("id", ""))
+        if not task_id:
+            continue
+        event_path = event_dir / f"{task_id}-completed.json"
+        if not event_path.exists():
+            task_blockers.append(
+                f"Schedule task {task_id} is completed but dispatch event is missing: {event_path.name}."
+            )
+        dispatch = dispatches.get(task_id, {})
+        if not isinstance(dispatch, dict):
+            dispatch = {}
+        status = str(dispatch.get("status", ""))
+        if not status and str(top_dispatch.get("current_task_id", "")) == task_id:
+            status = str(top_dispatch.get("status", ""))
+        if status in {"worker_running", "worker_dispatched", "dispatched", "waiting_dispatch", "awaiting_runtime_spawn"}:
+            task_blockers.append(
+                f"Schedule task {task_id} is completed but dispatch status is still {status}."
+            )
+
+    task_check = check(
+        "state-dispatch-tasks",
+        "pass" if not task_blockers else "fail",
+        "info" if not task_blockers else "error",
+        "Run-state dispatch tasks are consistent with schedule and completion events."
+        if not task_blockers
+        else " ".join(task_blockers),
+        "Run dispatch-complete or manual recovery dispatch-complete for the completed task so schedule, dispatches, and dispatch-events close together.",
+    )
+
+    view_blockers: list[str] = []
+    current_task = str(top_dispatch.get("current_task_id", ""))
+    if current_task and isinstance(dispatches.get(current_task), dict):
+        nested = dispatches[current_task]
+        for key in ("status", "current_agent", "worker_handle", "worker_session"):
+            top_value = str(top_dispatch.get(key, ""))
+            nested_value = str(nested.get(key, ""))
+            if top_value and nested_value and top_value != nested_value:
+                view_blockers.append(
+                    f"Top-level dispatch {key}={top_value} does not match dispatches[{current_task}].{key}={nested_value}."
+                )
+    view_check = check(
+        "state-dispatch-view",
+        "pass" if not view_blockers else "fail",
+        "info" if not view_blockers else "error",
+        "Top-level dispatch compatibility view matches dispatches."
+        if not view_blockers
+        else " ".join(view_blockers),
+        "Rebuild the top-level dispatch compatibility view from run-state dispatches without changing lifecycle.",
+    )
+
+    lifecycle = str(state_data.get("lifecycle", ""))
+    lifecycle_warning = ""
+    if lifecycle == "WAITING_DISPATCH":
+        lifecycle_warning = (
+            "Legacy run-state lifecycle WAITING_DISPATCH detected; dispatch waiting should live in dispatches[task_id].status."
+        )
+    lifecycle_check = check(
+        "state-lifecycle",
+        "pass" if not lifecycle_warning else "warn",
+        "info" if not lifecycle_warning else "warning",
+        "Run-state lifecycle does not use legacy dispatch wait state." if not lifecycle_warning else lifecycle_warning,
+        "Migrate by restoring the previous main lifecycle and preserving waiting_dispatch under dispatches[task_id].status.",
+    )
+
+    lock_path = run_dir / run_state.PHASE_LOCK
+    lock_data, lock_error = read_json_file(lock_path)
+    lock_blockers: list[str] = []
+    if lock_error or lock_data is None:
+        lock_blockers.append(f".phase-lock is missing or invalid beside run-state: {lock_error}")
+    else:
+        lock_lifecycle = str(lock_data.get("lifecycle", ""))
+        if lock_lifecycle != lifecycle:
+            lock_blockers.append(
+                f".phase-lock lifecycle {lock_lifecycle} does not match run-state lifecycle {lifecycle}."
+            )
+    lock_check = check(
+        "state-phase-lock",
+        "pass" if not lock_blockers else "fail",
+        "info" if not lock_blockers else "error",
+        ".phase-lock matches run-state lifecycle."
+        if not lock_blockers
+        else " ".join(lock_blockers),
+        "Rebuild .phase-lock from run-state by rewriting run-state through the harness transition/write API.",
+    )
+
+    summary_path = run_dir / "coordinator-summary.json"
+    summary_data, summary_error = read_json_file(summary_path)
+    summary_warnings: list[str] = []
+    if summary_error or summary_data is None:
+        summary_warnings.append(f"coordinator-summary.json is missing or invalid beside run-state: {summary_error}")
+    else:
+        summary_lifecycle = str(summary_data.get("lifecycle", ""))
+        if summary_lifecycle != lifecycle:
+            summary_warnings.append(
+                f"coordinator-summary lifecycle {summary_lifecycle} does not match run-state lifecycle {lifecycle}."
+            )
+    summary_check = check(
+        "state-coordinator-summary",
+        "pass" if not summary_warnings else "warn",
+        "info" if not summary_warnings else "warning",
+        "coordinator-summary lifecycle matches run-state."
+        if not summary_warnings
+        else " ".join(summary_warnings),
+        "Run next or rebuild coordinator summary from run-state; this is a derived view.",
+    )
+
+    return [
+        check("state-run-state", "pass", "info", f"Run-state loaded: {state_path}"),
+        lifecycle_check,
+        task_check,
+        view_check,
+        lock_check,
+        summary_check,
+    ]
+
+
+def evaluate(repo: Path, strict: bool = False, state: Path | None = None) -> dict:
     repo = repo.resolve()
     checks = [
         python_check(),
@@ -202,6 +369,8 @@ def evaluate(repo: Path, strict: bool = False) -> dict:
         claude_hook_check(repo),
         opencode_hook_check(repo),
     ]
+    if state:
+        checks.extend(state_consistency_checks(repo, state))
     blockers = [
         item for item in checks
         if item["status"] == "fail" or (strict and item["status"] == "warn")
@@ -231,10 +400,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", nargs="?", default=".", type=Path)
     parser.add_argument("--strict", action="store_true", help="Treat warnings as blockers.")
+    parser.add_argument("--state", type=Path, help="Check consistency for docs/agent-runs/<run>/run-state.json.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    result = evaluate(args.repo, args.strict)
+    result = evaluate(args.repo, args.strict, args.state)
     print(json.dumps(result, indent=2, ensure_ascii=False) if args.json else format_text(result))
     return 0 if result["ready"] else 2
 

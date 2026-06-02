@@ -10,8 +10,23 @@ from typing import Any
 
 from common import atomic_write_json, now_iso
 
-MAX_COMPACT_CHARS = 2_048
+MAX_COMPACT_CHARS = 1_000
 MAX_SUMMARY_ITEMS = 12
+MAX_COMPACT_STRING_CHARS = 140
+
+WORKFLOW_STAGE_BY_LIFECYCLE = {
+    "CREATED": "CLARIFY",
+    "CLARIFIED": "PLAN_REVIEW",
+    "SERVICE_DESIGN_REQUIRED": "PLAN_REVIEW",
+    "PLANNED": "TEST_READY",
+    "RED_READY": "TEST_READY",
+    "IMPLEMENTED": "IMPLEMENT",
+    "REVIEWED": "VERIFY",
+    "VERIFIED": "VERIFY",
+    "ARCHIVED": "VERIFY",
+    "REWORK_REQUIRED": "VERIFY",
+    "WAITING_DISPATCH": "TEST_READY",
+}
 
 
 def _slug(value: str) -> str:
@@ -36,6 +51,10 @@ def _display_path(repo: Path, value: Any) -> str:
         return resolved.resolve().relative_to(repo.resolve()).as_posix()
     except (OSError, ValueError):
         return path.as_posix()
+
+
+def workflow_stage_for_lifecycle(lifecycle: Any) -> str:
+    return WORKFLOW_STAGE_BY_LIFECYCLE.get(str(lifecycle or "").strip(), "UNKNOWN")
 
 
 def _run_dir_from_result(repo: Path, result: dict, args: Any | None = None) -> Path:
@@ -89,10 +108,24 @@ def _limited_list(values: Any, limit: int = MAX_SUMMARY_ITEMS) -> list:
     return values[:limit]
 
 
+def _compact_string(value: Any, limit: int = MAX_COMPACT_STRING_CHARS) -> str:
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 12)] + "...<truncated>"
+
+
+def _limited_strings(values: Any, limit: int = MAX_SUMMARY_ITEMS) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [_compact_string(value) for value in values[:limit]]
+
+
 def _compact_next(next_action: Any) -> dict:
     if not isinstance(next_action, dict):
         return {}
     keys = [
+        "workflow_stage",
         "phase",
         "command",
         "coordinator_mode",
@@ -157,6 +190,13 @@ def _artifact_paths(repo: Path, result: dict, full_result_path: Path, coordinato
     return artifacts
 
 
+def _stdout_path(repo: Path, path: Path | str) -> str:
+    value = Path(str(path))
+    if "coordinator-results" in value.parts or value.name == "coordinator-summary.json":
+        return _display_path(repo, value)
+    return str(path)
+
+
 def _minimal_execution_packet(packet: Any) -> dict:
     if not isinstance(packet, dict):
         return {}
@@ -179,13 +219,17 @@ def compact_payload(
     if not isinstance(coordinator_budget, dict):
         coordinator_budget = session.get("context_budget") if isinstance(session.get("context_budget"), dict) else {}
     dispatch_packets = result.get("dispatch_packets") if isinstance(result.get("dispatch_packets"), list) else []
+    lifecycle = result.get("lifecycle", "")
+    workflow_stage = workflow_stage_for_lifecycle(lifecycle)
     payload = {
         "ready": bool(result.get("ready", False)),
-        "blocked_reasons": _limited_list(result.get("blocked_reasons", [])),
-        "warnings": _limited_list(result.get("warnings", [])),
+        "workflow_stage": workflow_stage,
+        "blocked_reasons": _limited_strings(result.get("blocked_reasons", [])),
+        "warnings": _limited_strings(result.get("warnings", [])),
         "summary": {
             "command": command,
-            "lifecycle": result.get("lifecycle", ""),
+            "workflow_stage": workflow_stage,
+            "lifecycle": lifecycle,
             "phase": result.get("phase", ""),
             "message": result.get("message", "") or result.get("next_beat_hint", ""),
             "claimed_tasks": _limited_list(result.get("claimed_tasks", []), 5),
@@ -228,11 +272,12 @@ def compact_payload(
     if len(text) <= MAX_COMPACT_CHARS:
         return payload
     payload["truncated"] = True
-    payload["warnings"] = payload["warnings"][:3]
-    payload["blocked_reasons"] = payload["blocked_reasons"][:5]
+    payload["warnings"] = _limited_strings(payload["warnings"], 3)
+    payload["blocked_reasons"] = _limited_strings(payload["blocked_reasons"], 5)
     payload["summary"] = {
         "command": command,
-        "lifecycle": result.get("lifecycle", ""),
+        "workflow_stage": workflow_stage,
+        "lifecycle": lifecycle,
         "message": "Compact stdout truncated; read full_result_path for complete machine-readable output.",
     }
     payload["execution_packet"] = _minimal_execution_packet(result.get("execution_packet"))
@@ -254,8 +299,38 @@ def compact_payload(
             for key in ("exceeded_limits", "handoff_recommended")
             if key in coordinator_budget
         }
+    if len(json.dumps(payload, ensure_ascii=False)) > MAX_COMPACT_CHARS:
+        next_action = _compact_next(result.get("next"))
+        payload = {
+            "ready": bool(result.get("ready", False)),
+            "workflow_stage": workflow_stage,
+            "blocked_reasons": _limited_strings(result.get("blocked_reasons", []), 3),
+            "warnings": _limited_strings(result.get("warnings", []), 2),
+            "summary": {
+                "command": command,
+                "workflow_stage": workflow_stage,
+                "lifecycle": lifecycle,
+                "message": "Read full_result_path for complete machine-readable output.",
+            },
+            "next_action": {
+                key: next_action[key]
+                for key in ("workflow_stage", "phase", "orchestration_action", "dispatch_command")
+                if key in next_action
+            },
+            "full_result_path": _stdout_path(repo, full_result_path),
+            "coordinator_summary_path": _stdout_path(repo, coordinator_summary_path) if coordinator_summary_path else "",
+            "stdout_mode": "compact",
+            "truncated": True,
+        }
+        budget_signal = {
+            key: coordinator_budget[key]
+            for key in ("exceeded_limits", "handoff_recommended")
+            if key in coordinator_budget and coordinator_budget[key]
+        }
+        if budget_signal:
+            payload["coordinator_context_budget"] = budget_signal
     return payload
 
 
 def render_json(data: dict) -> str:
-    return json.dumps(data, indent=2, ensure_ascii=False)
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n"

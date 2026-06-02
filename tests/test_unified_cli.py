@@ -24,6 +24,7 @@ if str(SCRIPTS) not in sys.path:
 import e2e_dev_harness  # noqa: E402
 import run_state  # noqa: E402
 import install_hooks  # noqa: E402
+import output_contract  # noqa: E402
 
 from conftest import REVIEW_CHECKLIST, write_command_evidence  # noqa: E402
 import agent_instructions  # noqa: E402
@@ -344,6 +345,132 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertNotIn("gates", payload)
         self.assertIn("workflow_plan", full)
 
+    def test_next_compact_stdout_under_one_kb_with_visible_workflow_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            state = e2e_dev_harness.run_state.build_state(
+                "docs/agent-runs/run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            e2e_dev_harness.run_state.write_state(repo, state_path, state)
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "e2e_dev_harness.py"),
+                    "next",
+                    str(repo),
+                    "--state",
+                    str(state_path),
+                    "--runtime",
+                    "claude-code",
+                ],
+                cwd=str(repo),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(completed.stdout)
+
+        self.assertEqual(0, completed.returncode)
+        self.assertLess(len(completed.stdout.encode("utf-8")), 1024)
+        self.assertEqual("TEST_READY", payload["workflow_stage"])
+        self.assertEqual("TEST_READY", payload["summary"]["workflow_stage"])
+        self.assertIn("full_result_path", payload)
+
+    def test_next_coordinator_summary_records_visible_workflow_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            state = e2e_dev_harness.run_state.build_state(
+                "docs/agent-runs/run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "IMPLEMENTED",
+            )
+            e2e_dev_harness.run_state.write_state(repo, state_path, state)
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "e2e_dev_harness.py"),
+                    "next",
+                    str(repo),
+                    "--state",
+                    str(state_path),
+                    "--runtime",
+                    "claude-code",
+                ],
+                cwd=str(repo),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(completed.stdout)
+            summary_path = Path(payload["coordinator_summary_path"])
+            if not summary_path.is_absolute():
+                summary_path = repo / summary_path
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, completed.returncode)
+        self.assertEqual("IMPLEMENT", payload["workflow_stage"])
+        self.assertEqual("IMPLEMENT", summary["workflow_stage"])
+        self.assertEqual("IMPLEMENT", summary["next_action"]["workflow_stage"])
+
+    def test_workflow_stage_mapping_covers_known_lifecycles_and_unknown_is_explicit(self) -> None:
+        expected = {
+            "CREATED": "CLARIFY",
+            "CLARIFIED": "PLAN_REVIEW",
+            "SERVICE_DESIGN_REQUIRED": "PLAN_REVIEW",
+            "PLANNED": "TEST_READY",
+            "RED_READY": "TEST_READY",
+            "WAITING_DISPATCH": "TEST_READY",
+            "IMPLEMENTED": "IMPLEMENT",
+            "REVIEWED": "VERIFY",
+            "REWORK_REQUIRED": "VERIFY",
+            "VERIFIED": "VERIFY",
+            "ARCHIVED": "VERIFY",
+        }
+
+        self.assertEqual(expected, {item: output_contract.workflow_stage_for_lifecycle(item) for item in expected})
+        self.assertFalse(set(run_state.LIFECYCLE) - set(expected))
+        self.assertEqual("UNKNOWN", output_contract.workflow_stage_for_lifecycle("CORRUPT_STATE"))
+
+    def test_compact_payload_truncates_oversized_blockers_and_warnings_under_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            full_result = repo / "docs" / "agent-runs" / "run" / "coordinator-results" / "next.json"
+            payload = output_contract.compact_payload(
+                repo,
+                "next",
+                {
+                    "ready": False,
+                    "lifecycle": "PLANNED",
+                    "blocked_reasons": ["blocker-" + ("x" * 5000)],
+                    "warnings": ["warning-" + ("y" * 5000)],
+                    "next": {
+                        "phase": "tdd-red",
+                        "orchestration_action": "dispatch_worker",
+                        "dispatch_command": "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-beat .",
+                    },
+                },
+                full_result,
+                "docs/agent-runs/run/coordinator-summary.json",
+            )
+            rendered = output_contract.render_json(payload)
+
+        self.assertLess(len(rendered.encode("utf-8")), output_contract.MAX_COMPACT_CHARS)
+        self.assertLessEqual(len(payload["blocked_reasons"][0]), 160)
+        self.assertLessEqual(len(payload["warnings"][0]), 160)
+        self.assertEqual("TEST_READY", payload["workflow_stage"])
+
     def test_main_json_full_preserves_complete_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -483,17 +610,17 @@ class UnifiedCliTests(unittest.TestCase):
 
         self.assertEqual(0, exit_code)
         self.assertIn("full_result_path", payload)
-        self.assertIn("checkpoint", payload)
-        self.assertIn("resume_instruction", payload)
-        self.assertIn("execution_packet", payload)
-        self.assertEqual("CREATED", payload["execution_packet"]["lifecycle"])
-        self.assertIn("dispatch-next", payload["execution_packet"]["primary_command"])
+        self.assertEqual("CLARIFY", payload["workflow_stage"])
+        self.assertIn("dispatch-next", payload["next_action"]["dispatch_command"])
         self.assertNotIn("workflow_plan", payload)
         self.assertNotIn("todo_policy", payload)
         self.assertTrue(full_path_exists)
         self.assertIn("workflow_plan", full_payload)
         self.assertIn("todo_policy", full_payload)
         self.assertIn("execution_packet", full_payload)
+        self.assertIn("checkpoint", full_payload["session_checkpoint"])
+        self.assertEqual("CREATED", full_payload["execution_packet"]["lifecycle"])
+        self.assertIn("dispatch-next", full_payload["execution_packet"]["primary_command"])
 
     def test_next_cli_quiet_surfaces_coordinator_context_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -645,11 +772,14 @@ class UnifiedCliTests(unittest.TestCase):
             full_payload = json.loads((repo / payload["full_result_path"]).read_text(encoding="utf-8"))
 
         self.assertEqual(0, exit_code)
-        self.assertIn("spawn_request_paths", payload)
-        self.assertIn("task_prompt_paths", payload)
+        self.assertEqual("IMPLEMENT", payload["workflow_stage"])
+        self.assertNotIn("spawn_request_paths", payload)
+        self.assertNotIn("task_prompt_paths", payload)
         self.assertNotIn("task_prompt", payload)
         self.assertNotIn("dispatch_packets", payload)
         self.assertIn("dispatch_packets", full_payload)
+        self.assertIn("spawn_request_path", full_payload["dispatch_packets"][0])
+        self.assertIn("task_prompt_path", full_payload["dispatch_packets"][0])
         self.assertIn("task_prompt", full_payload["dispatch_packets"][0])
 
     def test_prepare_reuses_single_knowledge_graph_detection(self) -> None:
