@@ -16,8 +16,10 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import agent_scheduler  # noqa: E402
 import context_pack  # noqa: E402
+import event_log  # noqa: E402
 import reviewer_gate  # noqa: E402
 import run_state  # noqa: E402
+import runtime_adapters  # noqa: E402
 from common import atomic_write_json, configure_utf8_stdio, posix, read_json_object  # noqa: E402
 
 
@@ -55,30 +57,11 @@ MANUAL_CAPABILITIES = {
 
 
 def normalize_runtime(runtime: str | None) -> str:
-    text = (runtime or "claude-code").strip().lower().replace("_", "-")
-    aliases = {
-        "claude": "claude-code",
-        "claude-code": "claude-code",
-        "manual": "manual",
-        "codex": "codex",
-        "codex-app": "codex",
-        "gemini": "gemini",
-        "opencode": "opencode",
-    }
-    return aliases.get(text, text)
+    return runtime_adapters.normalize_runtime(runtime)
 
 
 def runtime_capabilities(runtime: str | None = "claude-code") -> dict:
-    normalized = normalize_runtime(runtime)
-    if normalized == "claude-code":
-        return dict(CLAUDE_CAPABILITIES)
-    if normalized == "codex":
-        return dict(CODEX_CAPABILITIES)
-    if normalized == "manual":
-        return dict(MANUAL_CAPABILITIES)
-    data = dict(MANUAL_CAPABILITIES)
-    data["runtime"] = normalized
-    return data
+    return runtime_adapters.adapter_for(runtime).capabilities()
 
 
 def resolve(repo: Path, path: Path | str | None) -> Path | None:
@@ -565,56 +548,13 @@ def spawn_request_for_runtime(
     state_path: Path | None,
     repo: Path,
 ) -> dict | None:
-    task_id = str(task.get("id", ""))
-    agent = str(task.get("agent", "")) or "agent"
-    evidence_args = " ".join(f"--evidence {item}" for item in task.get("outputs", []) or ["<evidence-path>"])
-    state_arg = f" --state {rel(repo, resolve(repo, state_path) or state_path)}" if state_path else ""
-    completion_command = (
-        "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-complete . "
-        f"--schedule {rel(repo, resolve(repo, schedule_path) or schedule_path)}"
-        f"{state_arg} --task-id {task_id} --agent {agent} {evidence_args}"
+    return runtime_adapters.adapter_for(str(capabilities.get("runtime", ""))).spawn(
+        task,
+        prompt,
+        schedule_path,
+        state_path,
+        repo,
     )
-    ack_command = (
-        "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-ack ."
-        f"{state_arg} --task-id {task_id} --agent {agent}"
-        " --worker-handle <runtime-worker-id> --worker-session <runtime-worker-session>"
-    )
-    # Honor the task's declared subagent type so schedules can route review
-    # work to a project's specialized reviewer agent; default stays portable.
-    subagent_type = str(task.get("runtime_subagent_type") or "").strip() or "general-purpose"
-    if capabilities.get("spawn_tool") == "Task":
-        return {
-            "schema": "e2e-dev-harness.runtime-spawn-request.v1",
-            "runtime": capabilities.get("runtime", ""),
-            "tool": "Task",
-            "arguments": {
-                "description": f"{task_id} {agent}",
-                "prompt": prompt,
-                "subagent_type": subagent_type,
-            },
-            "task_id": task_id,
-            "agent": agent,
-            "ack_command": ack_command,
-            "completion_command": completion_command,
-            "context_policy": "fresh Claude Code Task only; no inherited coordinator chat beyond this prompt and context pack.",
-        }
-    if capabilities.get("spawn_tool") != "multi_agent_v1.spawn_agent":
-        return None
-    return {
-        "schema": "e2e-dev-harness.runtime-spawn-request.v1",
-        "runtime": capabilities.get("runtime", ""),
-        "tool": "multi_agent_v1.spawn_agent",
-        "arguments": {
-            "agent_type": worker_agent_type(task),
-            "fork_context": False,
-            "message": prompt,
-        },
-        "task_id": task_id,
-        "agent": agent,
-        "ack_command": ack_command,
-        "completion_command": completion_command,
-        "context_policy": "fresh worker only; fork_context=false; use context pack instead of coordinator chat.",
-    }
 
 
 def sync_invocation_for_ack(repo: Path, dispatch: dict, worker_handle: str, worker_session: str) -> None:
@@ -902,6 +842,43 @@ def completion_event_path(repo: Path, state_path: Path | None, schedule_path: Pa
     return run_dir / "dispatch-events"
 
 
+def run_dir_for_paths(repo: Path, state_path: Path | None, schedule_path: Path) -> Path:
+    state_file = resolve(repo, state_path)
+    return state_file.parent if state_file else (resolve(repo, schedule_path) or schedule_path).parent
+
+
+def write_dispatched_event(
+    repo: Path,
+    schedule_path: Path,
+    state_path: Path | None,
+    task: dict,
+    dispatch: dict,
+    spawn_request_path: str,
+) -> Path:
+    event_dir = completion_event_path(repo, state_path, schedule_path)
+    task_id = str(task.get("id", ""))
+    path = event_dir / f"{task_id}-dispatched.json"
+    data = {
+        "schema": "e2e-dev-harness.dispatch-event.v1",
+        "event": "worker_dispatched",
+        "task_id": task_id,
+        "agent": task.get("agent", ""),
+        "phase": task.get("phase", ""),
+        "service": task.get("service", ""),
+        "runtime": dispatch.get("runtime", ""),
+        "status": dispatch.get("status", ""),
+        "spawn_request_path": spawn_request_path,
+        "created_at": run_state.now_iso(),
+    }
+    atomic_write_json(path, data)
+    event_log.append_event(
+        run_dir_for_paths(repo, state_path, schedule_path),
+        "worker_dispatched",
+        data,
+    )
+    return path
+
+
 def unblocked_candidates(repo: Path, schedule: dict) -> list[dict]:
     candidates: list[dict] = []
     for task in schedule.get("tasks", []) or []:
@@ -951,6 +928,11 @@ def write_completion_event(
         "created_at": run_state.now_iso(),
     }
     atomic_write_json(path, data)
+    event_log.append_event(
+        event_dir.parent,
+        "worker_completed",
+        data,
+    )
     return path
 
 
@@ -1176,12 +1158,21 @@ def dispatch_beat(
         prompt = task_prompt(claimed_task, pack, invocation, repo)
         spawn_request = spawn_request_for_runtime(capabilities, claimed_task, prompt, schedule_path, state_path, repo)
         spawn_request_path, task_prompt_path = write_spawn_artifacts(repo, run_dir, task_id, spawn_request, prompt)
+        dispatch_event_path = write_dispatched_event(
+            repo,
+            schedule_path,
+            state_path,
+            claimed_task,
+            dispatch,
+            spawn_request_path,
+        )
         packet = {
             "task": {"id": task_id, "agent": agent, "phase": claimed_task.get("phase", ""), "service": claimed_task.get("service", "")},
             "claim": claim,
             "context_pack": rel(repo, context_path),
             "invocation_path": rel(repo, invocation),
             "spawn_request_path": spawn_request_path,
+            "dispatch_event": rel(repo, dispatch_event_path),
             "task_prompt_path": task_prompt_path,
             "task_prompt": prompt,
             "dispatch": dispatch,
@@ -1451,6 +1442,18 @@ def dispatch_ack(
     )
     sync_invocation_for_ack(repo, dispatch, worker_handle, worker_session)
     update = update_dispatch_state(repo, state_path, acknowledged)
+    if update["ready"] and state_file:
+        event_log.append_event(
+            state_file.parent,
+            "worker_acknowledged",
+            {
+                "task_id": task_id,
+                "agent": agent,
+                "runtime": acknowledged.get("runtime", ""),
+                "worker_handle": acknowledged.get("worker_handle", ""),
+                "worker_session": acknowledged.get("worker_session", ""),
+            },
+        )
     return {
         "ready": update["ready"],
         "blocked_reasons": update["blocked_reasons"],

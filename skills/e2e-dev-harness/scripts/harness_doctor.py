@@ -15,6 +15,8 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import install_hooks  # noqa: E402
+import event_log  # noqa: E402
+import plugin_registry  # noqa: E402
 import run_state  # noqa: E402
 
 
@@ -215,6 +217,48 @@ def completed_schedule_tasks(schedule: dict) -> list[dict]:
     ]
 
 
+def run_timeline(run_dir: Path) -> list[dict]:
+    timeline: list[dict] = []
+    for item in event_log.read_events(run_dir):
+        timeline.append(
+            {
+                "sequence": item.get("sequence", 0),
+                "event": item.get("event", ""),
+                "task_id": item.get("task_id", ""),
+                "agent": item.get("agent", ""),
+                "status": item.get("status", ""),
+                "created_at": item.get("created_at", ""),
+            }
+        )
+    return timeline
+
+
+def active_dispatch_recommendation(state_data: dict, state_path: Path) -> tuple[list[dict], str]:
+    dispatch = state_data.get("dispatch") if isinstance(state_data.get("dispatch"), dict) else {}
+    task_id = str(dispatch.get("current_task_id", "")).strip()
+    agent = str(dispatch.get("current_agent", "")).strip()
+    status = str(dispatch.get("status", "")).strip()
+    if not task_id or status not in {"awaiting_runtime_spawn", "waiting_dispatch", "worker_running", "worker_dispatched", "dispatched"}:
+        return [], ""
+    state_arg = state_path.as_posix()
+    schedule_arg = (state_path.parent / "agent-schedule.json").as_posix()
+    taxonomy = [
+        {
+            "code": "dispatch-complete",
+            "task_id": task_id,
+            "status": status,
+            "message": f"Task {task_id} has an active dispatch that has not closed with validated evidence.",
+        }
+    ]
+    command = (
+        "Spawn or acknowledge the worker if needed, then run "
+        "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-complete . "
+        f"--schedule {schedule_arg} --state {state_arg} --task-id {task_id} --agent {agent} "
+        "--evidence <worker-output-path>"
+    )
+    return taxonomy, command
+
+
 def state_consistency_checks(repo: Path, state: Path) -> list[dict]:
     state_path = resolve_repo_path(repo, state)
     state_data, state_error = read_json_file(state_path)
@@ -399,6 +443,10 @@ def evaluate(repo: Path, strict: bool = False, state: Path | None = None) -> dic
     ]
     if state:
         checks.extend(state_consistency_checks(repo, state))
+    state_path = resolve_repo_path(repo, state) if state else None
+    state_data, _state_error = read_json_file(state_path) if state_path else ({}, "")
+    timeline = run_timeline(state_path.parent) if state_path and state_path.exists() else []
+    taxonomy, recommended_command = active_dispatch_recommendation(state_data or {}, state_path) if state_path else ([], "")
     blockers = [
         item for item in checks
         if item["status"] == "fail" or (strict and item["status"] == "warn")
@@ -411,6 +459,10 @@ def evaluate(repo: Path, strict: bool = False, state: Path | None = None) -> dic
         "checks": checks,
         "blocked_reasons": [item["message"] for item in blockers],
         "warnings": [item["message"] for item in checks if item["status"] == "warn"],
+        "extension_registry": plugin_registry.load_registry(repo),
+        "run_timeline": timeline,
+        "failure_taxonomy": taxonomy,
+        "recommended_command": recommended_command,
     }
 
 
