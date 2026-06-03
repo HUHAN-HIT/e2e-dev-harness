@@ -3472,6 +3472,15 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(result["requires_fresh_worker"])
         self.assertEqual("pause_for_manual_worker", result["coordinator_action"])
         self.assertIn("fresh manual worker", result["worker_context_policy"])
+        packet = result["manual_worker_packet"]
+        self.assertEqual("T01", packet["task_id"])
+        self.assertEqual("test-case-developer", packet["agent"])
+        self.assertEqual(["docs/agent-runs/run/evidence/red-test.txt"], packet["outputs"])
+        self.assertIn("dispatch-ack", packet["next_commands"][0])
+        self.assertIn("dispatch-complete", packet["next_commands"][-1])
+        self.assertTrue(any("coordinator context" in item for item in packet["forbidden_actions"]))
+        self.assertIn("next_commands", result)
+        self.assertIn("forbidden_artifact_writes", result)
 
     def test_dispatch_next_skips_blocked_task_and_claims_next_ready_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -681,6 +681,58 @@ def dispatch_completion_blockers(repo: Path, state_path: Path | None, task_id: s
     return blocked, dispatch
 
 
+def manual_worker_packet(repo: Path, schedule_path: Path, state_path: Path | None, task: dict | None, reason: str = "") -> dict:
+    task = task or {}
+    run_dir = (resolve(repo, state_path).parent if state_path else resolve(repo, schedule_path).parent)  # type: ignore[union-attr]
+    task_id = str(task.get("id", "")).strip()
+    agent = str(task.get("agent", "")).strip()
+    schedule_rel = rel(repo, resolve(repo, schedule_path) or schedule_path)
+    state_rel = rel(repo, resolve(repo, state_path) or state_path) if state_path else ""
+    outputs = [str(item) for item in task.get("outputs", []) or []]
+    worker_handle = f"<fresh-{agent or 'worker'}-handle>"
+    return {
+        "schema": "e2e-dev-harness.manual-worker-packet.v1",
+        "task_id": task_id,
+        "agent": agent,
+        "schedule": schedule_rel,
+        "run_state": state_rel,
+        "run_dir": rel(repo, run_dir) if run_dir else "",
+        "inputs": [str(item) for item in task.get("inputs", []) or []],
+        "outputs": outputs,
+        "reason": reason
+        or "Runtime cannot spawn an independent subagent/session; use a fresh manual reviewer/worker session.",
+        "worker_context_policy": "Open a fresh worker session with only the scheduled role, task inputs, and context pack; do not inherit coordinator chat context.",
+        "forbidden_actions": [
+            "do the scheduled worker work in coordinator context",
+            "inherit coordinator context or paste full coordinator chat into the worker",
+            "write scheduled outputs before dispatch-ack records a fresh worker handle",
+            "run clarify, plan, TDD, review, or implementation work from the coordinator while this dispatch is waiting",
+        ],
+        "next_commands": [
+            f"python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-ack . --schedule {schedule_rel} --state {state_rel} --task-id {task_id} --agent {agent} --worker-handle {worker_handle}",
+            "Fresh worker writes only the scheduled outputs: " + (", ".join(outputs) if outputs else "<task outputs>"),
+            f"python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-complete . --schedule {schedule_rel} --state {state_rel} --task-id {task_id} --agent {agent} --evidence <returned-output-path>",
+        ],
+        "completion_evidence_required": outputs,
+    }
+
+
+def dispatch_recovery_packet(repo: Path, schedule_path: Path, state_path: Path | None, task: dict | None, dispatch: dict | None = None) -> dict:
+    task = task or {}
+    packet = manual_worker_packet(repo, schedule_path, state_path, task)
+    return {
+        "manual_worker_packet": packet,
+        "next_commands": packet["next_commands"],
+        "forbidden_artifact_writes": [
+            "docs/design/",
+            "docs/agent-runs/<run>/handoffs/01-requirements-clarifier.md",
+            "docs/agent-runs/<run>/evidence/impact-summary.md",
+            "docs/agent-runs/<run>/evidence/impact-analysis.json",
+        ],
+        "dispatch": dispatch or {},
+    }
+
+
 def manual_recovery_dispatch(repo: Path, state_path: Path | None, task_id: str, agent: str) -> tuple[list[str], dict, list[str]]:
     _state_path, state = load_state(repo, state_path)
     dispatch = dispatch_for_task(state, task_id)
@@ -880,6 +932,7 @@ def waiting_dispatch_result(
         "run_dir": rel(repo, run_dir) if run_dir else "",
         "reason": "Runtime cannot spawn an independent subagent/session; use a fresh manual reviewer/worker session.",
     }
+    recovery = dispatch_recovery_packet(repo, schedule_path, state_path, task, dispatch)
     return {
         "ready": False,
         "lifecycle": str(state.get("lifecycle", "")),
@@ -891,6 +944,7 @@ def waiting_dispatch_result(
         "worker_context_policy": "Use a fresh manual worker session with only the context pack and allowed inputs; do not continue in coordinator context.",
         "dispatch": dispatch,
         "manual_dispatch_packet": packet,
+        **recovery,
         "run_state_update": state_update,
     }
 
@@ -1116,7 +1170,8 @@ def dispatch_complete(
     else:
         dispatch_blockers, active_dispatch = dispatch_completion_blockers(repo, state_path, task_id, agent)
     if dispatch_blockers:
-        return {"ready": False, "blocked_reasons": dispatch_blockers, "warnings": [], "dispatch": active_dispatch}
+        recovery = dispatch_recovery_packet(repo, schedule_path, state_path, task, active_dispatch)
+        return {"ready": False, "blocked_reasons": dispatch_blockers, "warnings": [], **recovery}
     mark_invocation_completed(repo, active_dispatch, evidence or [])
     reviewer_result = None
     if task and str(task.get("phase", "")).lower() in {"r1-review", "r2-review", "r3-review"}:
@@ -1140,6 +1195,16 @@ def dispatch_complete(
         dispatcher_confirmed=True,
         manual_recovery=manual_recovery,
     )
+    if not complete["ready"]:
+        recovery = dispatch_recovery_packet(repo, schedule_path, state_path, task, active_dispatch)
+        complete.update(
+            {
+                "missing_evidence_type": "task_output_reference",
+                "required_outputs": [str(item) for item in task.get("outputs", []) or []],
+                **recovery,
+            }
+        )
+        return complete
     if reviewer_result is not None:
         complete["reviewer_gate"] = reviewer_result
     complete["warnings"] = manual_warnings + complete.get("warnings", [])
@@ -1247,6 +1312,9 @@ def dispatch_ack(
         blocked.append(f"Dispatch agent mismatch: expected {dispatch.get('current_agent', '')}, got {agent}.")
     if not worker_handle.strip():
         blocked.append("Worker handle is required.")
+    identity_text = (worker_session.strip() or worker_handle.strip()).strip().lower()
+    if identity_text in {"coordinator", "coordinator-agent", "coordinator-session", "main-agent", "main-session"}:
+        blocked.append("Worker acknowledgement blocked: worker handle/session must identify a fresh isolated worker, not the coordinator.")
     blocked.extend(worker_identity_blockers(repo, dispatch, worker_handle, worker_session))
     if blocked:
         return {"ready": False, "blocked_reasons": blocked, "warnings": [], "dispatch": dispatch}
@@ -1258,6 +1326,7 @@ def dispatch_ack(
             "worker_session": worker_session.strip() or worker_handle.strip(),
             "spawn_acknowledged_at": run_state.now_iso(),
             "spawn_confirmed_by": "dispatch_ack",
+            "manual_worker_confirmed": str(dispatch.get("runtime", "")).strip() == "manual",
         }
     )
     sync_invocation_for_ack(repo, dispatch, worker_handle, worker_session)

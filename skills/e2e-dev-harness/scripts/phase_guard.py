@@ -178,6 +178,7 @@ CREATED_COORDINATOR_TODO_RE = re.compile(
 )
 
 import ask_user_bridge  # noqa: E402
+import dispatcher  # noqa: E402
 import run_state  # noqa: E402
 import session_checkpoint  # noqa: E402
 
@@ -267,6 +268,43 @@ def is_coordinator_inline_write_path(repo: Path, path: Path) -> bool:
     if is_harness_control_path(repo, path):
         return False
     return not any(part in f"/{relative}" for part in COORDINATOR_INLINE_WRITE_EXCLUDED_RUN_PARTS)
+
+
+def is_requirements_clarifier_owned_artifact(repo: Path, path: Path) -> bool:
+    relative = posix_relative(repo, resolve_for_repo(repo, path)).replace("\\", "/")
+    return (
+        relative.startswith("docs/design/")
+        or relative.endswith("/handoffs/01-requirements-clarifier.md")
+        or relative.endswith("/evidence/impact-summary.md")
+        or relative.endswith("/evidence/impact-analysis.json")
+    )
+
+
+def requirements_clarifier_task_for_state(repo: Path, state_path: Path, state_data: dict) -> dict:
+    schedule_path = state_path.parent / "agent-schedule.json"
+    schedule: dict = {}
+    if schedule_path.exists():
+        try:
+            schedule = json.loads(schedule_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            schedule = {}
+    tasks = [task for task in schedule.get("tasks", []) or [] if isinstance(task, dict)]
+    current = state_data.get("dispatch") if isinstance(state_data.get("dispatch"), dict) else {}
+    task_id = str(current.get("current_task_id", "")).strip()
+    return next(
+        (
+            task
+            for task in tasks
+            if str(task.get("id", "")).strip() == task_id
+            or str(task.get("agent", "")).strip() == "requirements-clarifier"
+            or str(task.get("phase", "")).strip().lower() == "clarify"
+        ),
+        {
+            "id": task_id or "T01",
+            "agent": "requirements-clarifier",
+            "outputs": ["docs/agent-runs/<run>/handoffs/01-requirements-clarifier.md"],
+        },
+    )
 
 
 def required_todo_list_for_lifecycle(lifecycle: str) -> list[str]:
@@ -1379,6 +1417,39 @@ def validate_action(
                     "phase_lock": str(lock),
                     "run_state": str(run_state_path_for_lock(repo, lock)),
                     "read_paths": result_paths(repo, read_targets),
+                    **guidance_from_lock(repo, lock),
+                }
+    clarifier_artifact_paths = [path for path in paths if is_requirements_clarifier_owned_artifact(repo, path)]
+    if normalized in WRITE_TOOLS and clarifier_artifact_paths and (normalized not in SHELL_TOOLS or shell_mutation):
+        if lock and lock.exists():
+            _, state_data, state_blockers = lock_state_pair(repo, lock)
+            state_path = run_state_path_for_lock(repo, lock)
+            lifecycle = str(state_data.get("lifecycle", ""))
+            if state_blockers:
+                return {
+                    "ready": False,
+                    "blocked_reasons": state_blockers,
+                    "warnings": warnings,
+                    "phase_lock": str(lock),
+                    "run_state": str(state_path),
+                    "artifact_paths": result_paths(repo, clarifier_artifact_paths),
+                    **guidance_from_lock(repo, lock),
+                }
+            if lifecycle == "CREATED" and not requirements_clarifier_worker_running(state_data):
+                task = requirements_clarifier_task_for_state(repo, state_path, state_data)
+                schedule_path = state_path.parent / "agent-schedule.json"
+                dispatch = dispatcher.dispatch_for_task(state_data, str(task.get("id", "")).strip())
+                recovery = dispatcher.dispatch_recovery_packet(repo, schedule_path, state_path, task, dispatch)
+                return {
+                    "ready": False,
+                    "blocked_reasons": [
+                        "Requirements-clarifier artifact write blocked: CREATED coordinator must wait for an active requirements-clarifier worker before writing design, requirements handoff, or impact evidence."
+                    ],
+                    "warnings": warnings,
+                    "phase_lock": str(lock),
+                    "run_state": str(state_path),
+                    "artifact_paths": result_paths(repo, clarifier_artifact_paths),
+                    **recovery,
                     **guidance_from_lock(repo, lock),
                 }
     code_paths = [path for path in paths if is_code_path(repo, resolve_for_repo(repo, path))]

@@ -938,6 +938,41 @@ def clarification_dispatch_blockers(repo: Path, run_state_path: Path | str | Non
     return blockers or []
 
 
+def clarification_dispatch_recovery(repo: Path, run_state_path: Path | str | None, blockers: list[str]) -> dict:
+    state_file = require_repo_path(repo, Path(str(run_state_path)), "run state") if run_state_path else None
+    schedule_path = state_file.parent / "agent-schedule.json" if state_file else repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+    schedule = read_json_object(schedule_path) if schedule_path.exists() else {}
+    tasks = [task for task in schedule.get("tasks", []) or [] if isinstance(task, dict)]
+    task = next(
+        (
+            item
+            for item in tasks
+            if str(item.get("agent", "")).strip() == "requirements-clarifier"
+            or str(item.get("phase", "")).strip().lower() == "clarify"
+        ),
+        {
+            "id": "T01",
+            "agent": "requirements-clarifier",
+            "outputs": ["docs/agent-runs/<run>/handoffs/01-requirements-clarifier.md"],
+        },
+    )
+    state = read_json_object(state_file) if state_file and state_file.exists() else {}
+    dispatch = dispatcher.dispatch_for_task(state, str(task.get("id", "")).strip()) if state else {}
+    recovery = dispatcher.dispatch_recovery_packet(repo, schedule_path, state_file, task, dispatch)
+    return {
+        "ready": False,
+        "ready_for_implementation": False,
+        "code": "clarification_dispatch_incomplete",
+        "blocked_reasons": blockers,
+        "clarification_dispatch": {"ready": False, "blocked_reasons": blockers},
+        "interaction_required": True,
+        "questions_to_ask_user": [
+            "Run dispatch-next/dispatch-ack for requirements-clarifier and relay its returned Restated Intent/Open Questions first."
+        ],
+        **recovery,
+    }
+
+
 def service_design_dispatch_blockers(repo: Path, run_state_path: Path | str | None) -> list[str]:
     state_file = require_repo_path(repo, Path(str(run_state_path)), "run state") if run_state_path else None
     if not state_file or not state_file.exists():
@@ -1094,6 +1129,12 @@ def clarify(args) -> tuple[int, dict]:
     if not design_path or not design_path.exists():
         return 2, {"ready_for_implementation": False, "error": f"Design doc not found: {design_path}"}
     run_state_path = getattr(args, "run_state", None)
+    if run_state_path:
+        dispatch_blockers = clarification_dispatch_blockers(repo, run_state_path)
+        if dispatch_blockers:
+            result = clarification_dispatch_recovery(repo, run_state_path, dispatch_blockers)
+            write_status(args.status_file, result)
+            return 2, result
     result = clarification_gate.validate(
         design_path,
         require_intent=getattr(args, "require_intent", True),

@@ -714,6 +714,10 @@ def execution_packet_for_lifecycle(
         "phase": action.get("phase", ""),
         "objective": details["objective"],
         "primary_command": primary_command,
+        "allowed_now": list(action.get("allowed_writes", [])),
+        "forbidden_now": forbidden,
+        "exact_next_command": primary_command,
+        "recovery_path": list(details["required_actions"]),
         "required_actions": details["required_actions"],
         "required_evidence": details["required_evidence"],
         "evidence_paths": base_evidence_paths,
@@ -730,8 +734,8 @@ def next_action_for_lifecycle(lifecycle: str, state: dict | None = None, runtime
         "CREATED": {
             "phase": "clarify",
             "command": "Dispatch the bootstrap requirements-clarifier worker; coordinator only relays unresolved user questions and records returned evidence.",
-            "allowed_writes": ["docs/design/", "docs/agent-runs/"],
-            "blocked_writes": ["production code", "tests outside harness evidence"],
+            "allowed_writes": ["docs/agent-runs/ control-plane dispatch artifacts"],
+            "blocked_writes": ["docs/design/ clarification drafts", "requirements handoff or impact evidence", "production code", "tests outside harness evidence"],
         },
         "CLARIFIED": {
             "phase": "r1-design-review",

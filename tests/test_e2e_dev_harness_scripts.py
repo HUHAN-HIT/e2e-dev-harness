@@ -7861,6 +7861,58 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(result["blocked_next_without_plan"])
         self.assertFalse(result["next_required"]["code_writes_allowed"])
 
+    def test_clarify_blocks_before_requirements_worker_completion_without_design_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text("# Feature\n\n## Restated Intent\n", encoding="utf-8")
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            state["dispatch"] = {
+                "status": "waiting_dispatch",
+                "runtime": "manual",
+                "previous_lifecycle": "CREATED",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            schedule = state_path.parent / "agent-schedule.json"
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=Path("docs/design/feature.md"),
+                run_state=state_path,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.clarify(args)
+
+        self.assertEqual(2, code)
+        self.assertFalse(result["ready"])
+        self.assertEqual("clarification_dispatch_incomplete", result["code"])
+        self.assertIn("manual_worker_packet", result)
+        self.assertIn("dispatch-ack", " ".join(result["next_commands"]))
+        self.assertNotIn("missing_sections", result)
+        self.assertNotIn("empty_sections", result)
+
     def test_gate_auto_transitions_implementation_phase_when_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -8303,11 +8355,48 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
 
-    def test_phase_guard_allows_run_artifact_writes_before_implementation(self) -> None:
+    def test_phase_guard_blocks_created_coordinator_writing_requirements_worker_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
-            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED")
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            state["dispatch"] = {
+                "status": "waiting_dispatch",
+                "runtime": "manual",
+                "previous_lifecycle": "CREATED",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Write",
+                [Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("requirements-clarifier" in reason for reason in result["blocked_reasons"]))
+        self.assertIn("manual_worker_packet", result)
+        self.assertIn("dispatch-ack", " ".join(result["manual_worker_packet"]["next_commands"]))
+
+    def test_phase_guard_allows_requirements_worker_writing_owned_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            state["dispatch"] = {
+                "status": "worker_running",
+                "runtime": "manual",
+                "previous_lifecycle": "CREATED",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "worker_handle": "requirements-worker-1",
+                "worker_session": "requirements-worker-session-1",
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
             run_state.write_state(repo, state_path, state)
 
             result = phase_guard.validate_action(
