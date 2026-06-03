@@ -90,6 +90,17 @@ count as a tool-call proxy. If `coordinator_context_budget.handoff_recommended`
 is true, do not keep reading more evidence in the same chat; checkpoint and
 resume from the compact run-state plus paths.
 
+One of these metrics is a hard, unscaled signal: `dispatch_waves_since_checkpoint`.
+Every `dispatch-beat`/`dispatch-next` wave grows coordinator context, so the
+counter increments per wave and resets to zero only when `next` writes a fresh
+checkpoint. Unlike the chatty phase/tool ceilings it is NOT scaled by
+`expected_handoffs`. Once it reaches `max_dispatch_waves_since_checkpoint`
+(default 4), `dispatch_context_budget_gate` blocks the next dispatch wave and
+returns the `next` command to run; the coordinator must checkpoint and resume
+before dispatching again. This is the portable substitute for a real
+context-window cap: it bounds how many dispatch waves accumulate in one session
+without requiring the harness to observe the LLM context directly.
+
 Coordinator write actions are budgeted too. Runtime hooks extract inline
 Write/Edit/MultiEdit/patch payloads for coordinator-owned design, plan, and
 handoff artifacts. Medium bodies produce a `Coordinator write budget warning`;
@@ -178,7 +189,12 @@ Generated tasks also declare `requires_runtime_dispatch: true`,
 `dispatch_contract: fresh-subagent`, and `runtime_subagent_type:
 general-purpose`; the coordinator may write archive scaffolding, but it must not
 treat R1/R2/R3 review or implementation planning as completed until the
-corresponding dispatched task writes its scheduled evidence.
+corresponding dispatched task writes its scheduled evidence. The dispatcher
+honors each task's `runtime_subagent_type` when it builds the runtime spawn
+request, so review/coverage tasks can target a specialized reviewer agent. Set
+`E2E_HARNESS_REVIEWER_SUBAGENT_TYPE` to a runtime subagent your project actually
+has to route R1/R2/R3 and coverage reviews to it; left unset, every task stays
+on `general-purpose` so the harness remains runtime-portable.
 It also writes short role templates under `agent-roles/`; generated schedules set `require_role_templates: true`, so claim is blocked if the referenced template is missing or malformed.
 
 For multi-service work, `plan --create-archive` leaves run-state at `SERVICE_DESIGN_REQUIRED`. Fill and validate every service design slice with `service-design --run-state` before service code dispatch. Service-scoped code-developer tasks in different `service:<name>` parallel groups may run concurrently only after shared contracts, service designs, the implementation-planner task, service-local TDD plans, and R2 review are stable.

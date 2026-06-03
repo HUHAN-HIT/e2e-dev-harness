@@ -9025,6 +9025,141 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertIn("coverage-reviewer", [agent["name"] for agent in result["agents"]])
 
 
+class DispatchWaveCheckpointCadenceTest(unittest.TestCase):
+    """#1: an unscaled per-session dispatch-wave signal that hard-blocks dispatch."""
+
+    def _state(self, repo: Path) -> tuple[Path, dict]:
+        state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state = run_state.build_state(
+            "docs/agent-runs/run",
+            "multi",
+            [],
+            "docs/agent-runs/run/artifact-registry.json",
+            "PLANNED",
+        )
+        return state_path, state
+
+    def test_context_budget_flags_dispatch_waves_unscaled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path, state = self._state(repo)
+            # A large schedule scales the chatty phase/tool ceilings, but the
+            # dispatch-wave ceiling must stay unscaled so it is a real signal.
+            (state_path.parent / "agent-schedule.json").write_text(
+                json.dumps({"tasks": [{"id": f"T{i:02d}", "status": "planned"} for i in range(29)]}),
+                encoding="utf-8",
+            )
+            state["dispatch_waves_since_checkpoint"] = 5
+            run_state.write_state(repo, state_path, state)
+
+            budget = session_checkpoint.context_budget(state_path, state)
+
+        self.assertEqual(budget["metrics"]["dispatch_waves_since_checkpoint"], 5)
+        self.assertEqual(budget["limits"]["max_dispatch_waves_since_checkpoint"], 4)
+        self.assertIn("dispatch_waves_since_checkpoint", budget["exceeded_limits"])
+        self.assertTrue(budget["handoff_recommended"])
+
+    def test_dispatch_wave_counter_does_not_trip_below_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path, state = self._state(repo)
+            state["dispatch_waves_since_checkpoint"] = 2
+            run_state.write_state(repo, state_path, state)
+
+            budget = session_checkpoint.context_budget(state_path, state)
+
+        self.assertNotIn("dispatch_waves_since_checkpoint", budget["exceeded_limits"])
+
+    def test_update_dispatches_state_increments_wave_counter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path, state = self._state(repo)
+            run_state.write_state(repo, state_path, state)
+
+            dispatch = {"status": "awaiting_runtime_spawn", "current_task_id": "T01"}
+            dispatcher.update_dispatches_state(repo, state_path, dispatch, {"T01": dispatch})
+            reloaded = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(reloaded["dispatch_waves_since_checkpoint"], 1)
+
+            dispatcher.update_dispatches_state(repo, state_path, dispatch, {"T02": dispatch})
+            reloaded = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(reloaded["dispatch_waves_since_checkpoint"], 2)
+
+    def test_session_checkpoint_create_resets_wave_counter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path, state = self._state(repo)
+            state["dispatch_waves_since_checkpoint"] = 3
+            run_state.write_state(repo, state_path, state)
+
+            session_checkpoint.create(repo, state_path, {"phase": "tdd-red"})
+
+            reloaded = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(reloaded["dispatch_waves_since_checkpoint"], 0)
+
+    def test_dispatch_budget_gate_blocks_when_waves_exceed_without_fresh_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path, state = self._state(repo)
+            state["dispatch_waves_since_checkpoint"] = 6
+            run_state.write_state(repo, state_path, state)
+
+            gate = coordinator_flow.dispatch_context_budget_gate(repo, state_path)
+
+        self.assertFalse(gate["ready"])
+        self.assertTrue(
+            any("session checkpoint" in reason.lower() for reason in gate["blocked_reasons"]),
+            gate["blocked_reasons"],
+        )
+
+
+class ReviewerSubagentTypeTest(unittest.TestCase):
+    """#3: route review/coverage tasks to a specialized reviewer subagent type."""
+
+    def _spawn(self, repo: Path, task: dict) -> dict:
+        caps = dispatcher.runtime_capabilities("claude-code")
+        return dispatcher.spawn_request_for_runtime(
+            caps, task, "prompt body", repo / "agent-schedule.json", repo / "run-state.json", repo
+        )
+
+    def test_spawn_request_honors_task_runtime_subagent_type(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            task = {"id": "T05", "agent": "r2-reviewer", "phase": "r2-review", "runtime_subagent_type": "code-reviewer"}
+            request = self._spawn(repo, task)
+        self.assertEqual(request["tool"], "Task")
+        self.assertEqual(request["arguments"]["subagent_type"], "code-reviewer")
+
+    def test_spawn_request_defaults_subagent_type_to_general_purpose(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            task = {"id": "T01", "agent": "code-developer", "phase": "implement"}
+            request = self._spawn(repo, task)
+        self.assertEqual(request["arguments"]["subagent_type"], "general-purpose")
+
+    def test_agent_schedule_routes_reviews_to_reviewer_subagent_when_env_set(self) -> None:
+        artifacts = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
+        agents = orchestration_plan.agent_plan("single-review", artifacts, [])
+        with patch.dict(
+            orchestration_plan.os.environ,
+            {"E2E_HARNESS_REVIEWER_SUBAGENT_TYPE": "code-reviewer"},
+            clear=False,
+        ):
+            schedule = orchestration_plan.agent_schedule("single-review", [], agents)
+        by_phase = {task["phase"]: task for task in schedule["tasks"]}
+        for review_phase in ("r1-review", "r2-review", "r3-review"):
+            self.assertEqual("code-reviewer", by_phase[review_phase]["runtime_subagent_type"], review_phase)
+        # Non-review work stays on the portable default.
+        self.assertEqual("general-purpose", by_phase["plan"]["runtime_subagent_type"])
+
+    def test_agent_schedule_defaults_reviews_to_general_purpose_without_env(self) -> None:
+        artifacts = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
+        agents = orchestration_plan.agent_plan("single-review", artifacts, [])
+        with patch.dict(orchestration_plan.os.environ, {"E2E_HARNESS_REVIEWER_SUBAGENT_TYPE": ""}, clear=False):
+            schedule = orchestration_plan.agent_schedule("single-review", [], agents)
+        for task in schedule["tasks"]:
+            self.assertEqual("general-purpose", task["runtime_subagent_type"], task["phase"])
 
 
 if __name__ == "__main__":

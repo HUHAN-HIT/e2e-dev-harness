@@ -11,7 +11,7 @@ Do not implement while behavior, APIs, data effects, contracts, or tests are amb
 
 ## Platform Compatibility
 
-This skill is agent-neutral for Codex, Claude Code, Gemini CLI, OpenCode, and runtimes that can read `SKILL.md` plus bundled scripts. Read `references/platform-compatibility.md`.
+This skill is agent-neutral for Codex, Claude Code, Gemini CLI, OpenCode, and runtimes that can read `SKILL.md` plus bundled scripts. `references/platform-compatibility.md`.
 
 ## Fast Path
 
@@ -42,11 +42,12 @@ Workers use GitNexus-first evidence; the coordinator never does local code explo
 
 ## Hard Rules
 
-- Load project instructions before clarification. Use discovery scope first; load affected service `AGENT.md` / `AGENTS.md` after scope is known. Read `references/agent-instructions.md`.
-- Use Superpowers when available: `brainstorming` for clarification, `test-driven-development` for TDD. Read `references/superpowers-integration.md`.
+Load each `references/*.md` only when its rule's phase begins, never all at start.
+
+- Load project instructions before clarification: discovery scope first, then affected service `AGENT.md`/`AGENTS.md` once scope is known (`references/agent-instructions.md`).
+- Use Superpowers when available: `brainstorming` for clarification, `test-driven-development` for TDD (`references/superpowers-integration.md`).
 - Clarification gate requires goals, non-goals, affected services, use cases, change logic, impact summary, contracts, ACs, test design, and closed questions.
-  CLI: `clarify`, not `gate --phase clarification`.
-  Read `references/clarification-gate.md`.
+  CLI: `clarify`, not `gate --phase clarification` (`references/clarification-gate.md`).
   In `CREATED`, TodoList must dispatch `requirements-clarifier`, then relay returned Restated Intent/Open Questions before plan/TDD/code.
   Interactive `clarify` requires `Restated Intent` and user confirmation provenance; do not self-answer open questions.
   MQ/DMQ/Kafka requirements must name the cross-layer call chain and sender/producer injection point before implementation.
@@ -54,11 +55,11 @@ Workers use GitNexus-first evidence; the coordinator never does local code explo
   Do not duplicate low-level `grep`/`rg` instructions just because GitNexus augments searches.
   Use explicit GitNexus commands for auditable gate evidence; failures block unless the user approves documented degradation.
   Put raw impact output in evidence files; keep only a bounded affected-interface summary in agent context.
-  Use Graphify for docs, ADRs, diagrams, and semantic context. Scanner facts seed both. Read `references/kg-tool-selection.md`.
-- Memory is optional context, not authority. Capture only verified or user-approved facts; Obsidian tags and links help selection but never replace explicit text. Read `references/memory-integration.md`.
+  Use Graphify for docs, ADRs, diagrams, and semantic context. Scanner facts seed both. `references/kg-tool-selection.md`.
+- Memory is optional context, not authority. Capture only verified or user-approved facts; Obsidian tags and links help selection but never replace explicit text. `references/memory-integration.md`.
 - TDD is mandatory for production changes; enforcement depth is scenario-based.
   Use the default `--tdd-mode auto`; it resolves to strict red/green command evidence for critical/audited work.
-  Test/code workers write red tests, observe expected failures, implement minimally, then broaden Maven verification. Read `references/tdd-java-spring.md`.
+  Test/code workers write red tests, observe expected failures, implement minimally, then broaden Maven verification. `references/tdd-java-spring.md`.
 - Large repositories use planned incremental verification, not ad hoc test selection.
   Generate `evidence/test-impact-plan.json` from changed files and dependency evidence; completion must prove every required command passed in unit-test JSON.
   Root/shared build or source changes expand to full `mvn test`.
@@ -69,10 +70,10 @@ Workers use GitNexus-first evidence; the coordinator never does local code explo
 - Design, test, code, review, and coverage are separate role groups.
   `agent-schedule.json` assigns different agents, references generated `agent-roles/*.md`, and downstream agents consume ready handoffs instead of chat memory.
 - Review profiles are portable project policy. Auto-discover project profiles and extend bundled profiles only when useful.
-  Use common issue guidance for reviewer focus. Read `references/review-profiles.md` and `references/common-review-issues.md`.
+  Use common issue guidance for reviewer focus. `references/review-profiles.md` and `references/common-review-issues.md`.
 - R1/R2/R3 are independent-agent reviews, not same-chat roleplay.
   Reviewer Invocation JSON must prove runtime/session isolation; same agent or same session blocks.
-- Archive the final requirement summary so future analysis avoids replaying every run artifact. Read `references/requirements-archive.md`.
+- Archive the final requirement summary so future analysis avoids replaying every run artifact. `references/requirements-archive.md`.
 - Completion requires task-completion proof, not chat claims: every AC has concrete code refs and concrete test refs.
   Semantic reviews, implementation manifest, coverage matrix, unit-test JSON, business review, dependency report when cross-service,
   task-alignment evidence, closed rework, and passing guard are completion evidence.
@@ -90,7 +91,7 @@ Workers use GitNexus-first evidence; the coordinator never does local code explo
   Claude Code hooks must include `Read/Grep/Glob/Bash` plus `Stop`; read hooks force `start`, stop hooks block ending before R3/completion/guard/archive.
   OpenCode installs `.opencode/plugins/e2e-dev-harness.js` via `install_hooks.py --runtime opencode`.
   If runtime hooks are unavailable, run `e2e_dev_harness.py pre-code --path <planned-code-file> --run-dir docs/agent-runs/<run>` before each code edit.
-  Read `references/execution-control.md`.
+  `references/execution-control.md`.
   After red-test evidence exists, run `e2e_dev_harness.py gate --phase implementation --run-state docs/agent-runs/<run>/run-state.json`;
   a passing gate opens the `IMPLEMENTED` phase automatically.
 - Replay with `harness_verify.py` or `verify --harness`; emit summaries for CI, reviewers, evaluation, and later analysis.

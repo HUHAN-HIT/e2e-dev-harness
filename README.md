@@ -278,6 +278,17 @@ The pack lists allowed inputs, allowed outputs, dependency phase, and budget. A 
 
 For Claude Code project integrations, start with L0 serial isolated dispatch instead of trying true parallelism first: read `agent-schedule.json`, claim the next ready task, spawn a fresh subagent/session with only its role template and context pack, complete the task with a scheduled evidence file, then dispatch the next dependent task. This keeps role isolation and handoff gates active without making the core skill depend on a specific runtime scheduler.
 
+**Prerequisite for autonomous dispatch:** install the runtime hooks first with
+`python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime claude --json`
+(see [Hook Configuration](#hook-configuration)). The hooks back the
+`supports_task_hook`/`supports_blocking_stop` capabilities the dispatcher relies
+on to confirm a spawned `Task` and to block premature finalization. Without an
+enforceable runtime hook, `dispatch-next`/`dispatch-beat` force
+`WAITING_DISPATCH`: the coordinator must then acknowledge each spawned worker
+manually with `dispatch-ack` before `dispatch-complete` will accept its evidence.
+Autonomous, hook-confirmed dispatch is the installed-hooks path; manual `dispatch-ack`
+is the fallback when hooks are absent.
+
 The bundled dispatcher provides the first Claude Code/Superpowers execution loop:
 
 ```powershell

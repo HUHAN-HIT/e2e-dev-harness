@@ -138,6 +138,14 @@ def update_dispatches_state(
     merged = dict(existing)
     merged.update(dispatches)
     state["dispatches"] = merged
+    # Each dispatched wave grows coordinator context. Track waves since the last
+    # checkpoint so session_checkpoint.context_budget can hard-block further
+    # dispatch (via dispatch_context_budget_gate) until `next` checkpoints.
+    try:
+        prior_waves = int(state.get("dispatch_waves_since_checkpoint", 0) or 0)
+    except (TypeError, ValueError):
+        prior_waves = 0
+    state["dispatch_waves_since_checkpoint"] = max(0, prior_waves) + 1
     state["updated_at"] = run_state.now_iso()
     run_state.write_state(repo, path, state)
     return {"ready": True, "blocked_reasons": [], "warnings": [], "run_state": str(path)}
@@ -505,6 +513,9 @@ def spawn_request_for_runtime(
         f"{state_arg} --task-id {task_id} --agent {agent}"
         " --worker-handle <runtime-worker-id> --worker-session <runtime-worker-session>"
     )
+    # Honor the task's declared subagent type so schedules can route review
+    # work to a project's specialized reviewer agent; default stays portable.
+    subagent_type = str(task.get("runtime_subagent_type") or "").strip() or "general-purpose"
     if capabilities.get("spawn_tool") == "Task":
         return {
             "schema": "e2e-dev-harness.runtime-spawn-request.v1",
@@ -513,7 +524,7 @@ def spawn_request_for_runtime(
             "arguments": {
                 "description": f"{task_id} {agent}",
                 "prompt": prompt,
-                "subagent_type": "general-purpose",
+                "subagent_type": subagent_type,
             },
             "task_id": task_id,
             "agent": agent,

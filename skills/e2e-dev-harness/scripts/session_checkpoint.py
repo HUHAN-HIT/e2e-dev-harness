@@ -23,6 +23,13 @@ FILENAME = "session-checkpoint.json"
 DEFAULT_MAX_EVIDENCE_BYTES = 240_000
 DEFAULT_MAX_PHASE_EVENTS = 8
 DEFAULT_MAX_TOOL_CALLS = 40
+# Maximum dispatch waves a single coordinator session may run before it must
+# checkpoint and resume. Unlike phase_events/tool_calls this ceiling is NOT
+# scaled by expected_handoffs: it is a direct, per-session chat-context signal
+# (each dispatched wave grows coordinator context), so it must stay a hard
+# bound. The counter resets to zero whenever `next` writes a fresh checkpoint.
+DEFAULT_MAX_DISPATCH_WAVES = 4
+WAVE_FIELD = "dispatch_waves_since_checkpoint"
 
 
 def now_dt() -> datetime:
@@ -98,12 +105,20 @@ def estimate_expected_handoffs(planned_tasks: int, max_tool_calls: int) -> int:
     return (estimated_tool_calls + max_tool_calls - 1) // max_tool_calls
 
 
+def dispatch_waves_since_checkpoint(state: dict) -> int:
+    try:
+        return max(0, int(state.get(WAVE_FIELD, 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def context_budget(
     state_path: Path,
     state: dict,
     max_evidence_bytes: int = DEFAULT_MAX_EVIDENCE_BYTES,
     max_phase_events: int = DEFAULT_MAX_PHASE_EVENTS,
     max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
+    max_dispatch_waves: int = DEFAULT_MAX_DISPATCH_WAVES,
 ) -> dict:
     run_dir = state_path.parent
     evidence_count, evidence_bytes = file_count_and_bytes(run_dir / "evidence")
@@ -111,12 +126,14 @@ def context_budget(
     dispatch_event_count, _dispatch_event_bytes = file_count_and_bytes(run_dir / "dispatch-events")
     history = state.get("history") if isinstance(state.get("history"), list) else []
     phase_events = len(history) + dispatch_event_count
+    waves_since_checkpoint = dispatch_waves_since_checkpoint(state)
     metrics = {
         "evidence_files": evidence_count,
         "evidence_bytes": evidence_bytes,
         "phase_events": phase_events,
         "tool_calls": cli_response_count,
         "dispatch_events": dispatch_event_count,
+        WAVE_FIELD: waves_since_checkpoint,
     }
     planned_tasks = open_task_count(run_dir)
     expected_handoffs = estimate_expected_handoffs(planned_tasks, max_tool_calls)
@@ -135,6 +152,7 @@ def context_budget(
         "max_evidence_bytes": max_evidence_bytes,
         "max_phase_events": effective_max_phase_events,
         "max_tool_calls": effective_max_tool_calls,
+        "max_dispatch_waves_since_checkpoint": max_dispatch_waves,
     }
     exceeded: list[str] = []
     if max_evidence_bytes >= 0 and evidence_bytes > max_evidence_bytes:
@@ -143,6 +161,9 @@ def context_budget(
         exceeded.append("phase_events")
     if effective_max_tool_calls >= 0 and cli_response_count > effective_max_tool_calls:
         exceeded.append("tool_calls")
+    # Unscaled: N dispatch waves in one session force a checkpoint+resume.
+    if max_dispatch_waves >= 0 and waves_since_checkpoint >= max_dispatch_waves:
+        exceeded.append(WAVE_FIELD)
     return {
         "schema": "e2e-dev-harness.coordinator-context-budget.v1",
         "metrics": metrics,
@@ -175,6 +196,7 @@ def create(
     max_evidence_bytes: int = DEFAULT_MAX_EVIDENCE_BYTES,
     max_phase_events: int = DEFAULT_MAX_PHASE_EVENTS,
     max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
+    max_dispatch_waves: int = DEFAULT_MAX_DISPATCH_WAVES,
 ) -> dict:
     repo = repo.resolve()
     resolved_state = resolve(repo, state_path)
@@ -186,7 +208,15 @@ def create(
             "warnings": [],
             "checkpoint": str(checkpoint_path(resolved_state)),
         }
-    budget = context_budget(resolved_state, state, max_evidence_bytes, max_phase_events, max_tool_calls)
+    # A fresh checkpoint is the resume boundary: clear the per-session
+    # dispatch-wave counter so the next session starts the cadence over. Only
+    # rewrite run-state when the counter is non-zero to avoid touching state on
+    # the common path. updated_at is preserved so the checkpoint fingerprint
+    # stays consistent with the run-state it was created from.
+    if dispatch_waves_since_checkpoint(state) != 0:
+        state[WAVE_FIELD] = 0
+        run_state.write_state(repo, resolved_state, state)
+    budget = context_budget(resolved_state, state, max_evidence_bytes, max_phase_events, max_tool_calls, max_dispatch_waves)
     data = {
         "schema": SCHEMA,
         "run_id": state.get("run_id", ""),

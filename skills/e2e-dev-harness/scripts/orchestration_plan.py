@@ -1023,6 +1023,26 @@ def role_group_for_phase(phase: str) -> str:
     return groups.get(phase, "coordination")
 
 
+REVIEWER_SUBAGENT_TYPE_ENV = "E2E_HARNESS_REVIEWER_SUBAGENT_TYPE"
+
+
+def reviewer_subagent_type() -> str:
+    """Project-supplied reviewer subagent type, or the portable default.
+
+    Set E2E_HARNESS_REVIEWER_SUBAGENT_TYPE to a runtime subagent your project
+    actually has (e.g. a dedicated code-reviewer agent) to route R1/R2/R3 and
+    coverage reviews to it. Left unset, every task stays on general-purpose so
+    the harness remains runtime-portable.
+    """
+    return str(os.environ.get(REVIEWER_SUBAGENT_TYPE_ENV, "") or "").strip() or "general-purpose"
+
+
+def runtime_subagent_type_for_phase(phase: str) -> str:
+    if role_group_for_phase(phase) in {"review", "coverage"}:
+        return reviewer_subagent_type()
+    return "general-purpose"
+
+
 def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) -> dict:
     tasks: list[dict] = []
     for index, agent in enumerate(agents, start=1):
@@ -1049,7 +1069,7 @@ def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) 
                 "status": "planned",
                 "requires_runtime_dispatch": True,
                 "dispatch_contract": "fresh-subagent",
-                "runtime_subagent_type": "general-purpose",
+                "runtime_subagent_type": runtime_subagent_type_for_phase(phase),
             }
         )
     return {
