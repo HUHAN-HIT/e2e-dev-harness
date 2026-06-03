@@ -62,12 +62,13 @@ def append_command_event(
     blocked_reason_codes: list[str] | None = None,
     next_command: str = "",
     trace_id: str = "",
+    run_id: str = "",
 ) -> Path:
     return append_event(
         run_dir,
         "command_observed",
         {
-            "run_id": str(run_dir).replace("\\", "/"),
+            "run_id": run_id or str(run_dir).replace("\\", "/"),
             "trace_id": trace_id,
             "command": command,
             "lifecycle": lifecycle,

@@ -25,6 +25,7 @@ from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, atomic_write_json, config
 import cross_service_dependency_scan  # noqa: E402
 import coordinator_flow  # noqa: E402
 import dispatcher  # noqa: E402
+import event_log  # noqa: E402
 import execution_trace  # noqa: E402
 import implementation_gate  # noqa: E402
 import install_hooks  # noqa: E402
@@ -166,6 +167,62 @@ def write_cli_response_artifact(repo: Path, command: str, args: argparse.Namespa
     timestamp = f"{time.strftime('%Y%m%dT%H%M%S')}-{time.time_ns() % 1_000_000_000:09d}"
     path = run_dir / "evidence" / "cli-responses" / f"{command}-{timestamp}.json"
     atomic_write_json(path, result)
+    return normalize_cli_path(repo, path)
+
+
+def blocked_reason_codes_from_result(result: dict) -> list[str]:
+    codes: list[str] = []
+    for key in ("blocked_reason_codes", "reason_codes"):
+        values = result.get(key)
+        if isinstance(values, list):
+            for value in values:
+                append_unique(codes, str(value).strip())
+    blockers = result.get("blockers")
+    if isinstance(blockers, list):
+        for item in blockers:
+            if isinstance(item, dict):
+                append_unique(codes, str(item.get("code", "")).strip())
+            else:
+                append_unique(codes, str(item).strip())
+    return codes
+
+
+def next_command_from_result(result: dict) -> str:
+    next_action = result.get("next_action")
+    if isinstance(next_action, dict):
+        for key in ("dispatch_command", "command", "next_command"):
+            value = str(next_action.get(key, "")).strip()
+            if value:
+                return value
+    execution_packet = result.get("execution_packet")
+    if isinstance(execution_packet, dict):
+        value = str(execution_packet.get("primary_command", "")).strip()
+        if value:
+            return value
+    for key in ("next_command", "recommended_command", "next_beat_hint"):
+        value = str(result.get(key, "")).strip()
+        if value:
+            return value
+    return ""
+
+
+def emit_command_event(repo: Path, command: str, args: argparse.Namespace, result: dict, exit_code: int) -> str:
+    state_path = run_state_path_from_args(repo, args, result)
+    if not state_path:
+        return ""
+    run_dir = state_path.parent
+    lifecycle = lifecycle_from_state(repo, args, result)
+    trace_id = f"{command}-{time.time_ns()}"
+    path = event_log.append_command_event(
+        run_dir,
+        command=command,
+        lifecycle=lifecycle,
+        status="ok" if exit_code == 0 else "blocked",
+        blocked_reason_codes=blocked_reason_codes_from_result(result),
+        next_command=next_command_from_result(result),
+        trace_id=trace_id,
+        run_id=normalize_cli_path(repo, run_dir),
+    )
     return normalize_cli_path(repo, path)
 
 
@@ -2974,10 +3031,13 @@ def main() -> int:
         print(f"e2e-dev-harness error: {error}", file=sys.stderr)
         return 2
 
+    repo = as_repo(getattr(args, "repo", Path(".")))
     if getattr(args, "json_full", False):
+        command_event_path = emit_command_event(repo, args.command or "verify", args, result, exit_code)
+        if command_event_path:
+            result["command_event_path"] = command_event_path
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return exit_code
-    repo = as_repo(getattr(args, "repo", Path(".")))
     full_result_path = output_contract.write_full_result(repo, args.command or "verify", result, args)
     coordinator_summary_path = ""
     if args.command == "next":
@@ -2989,6 +3049,9 @@ def main() -> int:
         )
         coordinator_summary_path = summary.get("coordinator_summary", "")
         result["coordinator_summary_path"] = coordinator_summary_path
+    command_event_path = emit_command_event(repo, args.command or "verify", args, result, exit_code)
+    if command_event_path:
+        result["command_event_path"] = command_event_path
     compact = output_contract.compact_payload(
         repo,
         args.command or "verify",

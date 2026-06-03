@@ -638,6 +638,55 @@ class UnifiedCliTests(unittest.TestCase):
             )
         )
 
+    def test_next_cli_quiet_default_writes_structured_command_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _code, start_result = e2e_dev_harness.start(
+                SimpleNamespace(
+                    repo=repo,
+                    feature="Quote",
+                    request="Return a quote.",
+                    design_doc=None,
+                    agent_run_dir=None,
+                    run_id="run",
+                    run_date=None,
+                    force=False,
+                    status_file=None,
+                )
+            )
+
+            stdout = io.StringIO()
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "e2e_dev_harness.py",
+                    "next",
+                    str(repo),
+                    "--state",
+                    str(start_result["run_state"]),
+                ],
+            ), patch("sys.stdout", stdout):
+                exit_code = e2e_dev_harness.main()
+            events = sorted((repo / "docs" / "agent-runs" / "run" / "events").glob("*.json"))
+            command_events = [
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in events
+                if path.name.endswith("-command-observed.json")
+            ]
+
+        self.assertEqual(0, exit_code)
+        self.assertTrue(command_events)
+        event = command_events[-1]
+        self.assertEqual("command_observed", event["event"])
+        self.assertEqual("docs/agent-runs/run", event["run_id"])
+        self.assertTrue(event["trace_id"])
+        self.assertEqual("next", event["command"])
+        self.assertEqual("CREATED", event["lifecycle"])
+        self.assertEqual("ok", event["status"])
+        self.assertEqual([], event["blocked_reason_codes"])
+        self.assertIn("dispatch-beat", event["next_command"])
+
     def test_gate_phase_clarification_error_routes_to_clarify_or_dispatch(self) -> None:
         result = subprocess.run(
             [
@@ -740,6 +789,50 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertIn("workflow_plan", payload)
         self.assertIn("todo_policy", payload)
         self.assertNotIn("full_result_path", payload)
+
+    def test_next_cli_full_json_still_writes_structured_command_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _code, start_result = e2e_dev_harness.start(
+                SimpleNamespace(
+                    repo=repo,
+                    feature="Quote",
+                    request="Return a quote.",
+                    design_doc=None,
+                    agent_run_dir=None,
+                    run_id="run",
+                    run_date=None,
+                    force=False,
+                    status_file=None,
+                )
+            )
+
+            stdout = io.StringIO()
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "e2e_dev_harness.py",
+                    "next",
+                    str(repo),
+                    "--state",
+                    str(start_result["run_state"]),
+                    "--full-json",
+                ],
+            ), patch("sys.stdout", stdout):
+                exit_code = e2e_dev_harness.main()
+            payload = json.loads(stdout.getvalue())
+            events = sorted((repo / "docs" / "agent-runs" / "run" / "events").glob("*.json"))
+            command_events = [
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in events
+                if path.name.endswith("-command-observed.json")
+            ]
+
+        self.assertEqual(0, exit_code)
+        self.assertIn("workflow_plan", payload)
+        self.assertTrue(command_events)
+        self.assertEqual("next", command_events[-1]["command"])
 
     def test_dispatch_beat_cli_quiet_default_omits_prompt_and_keeps_full_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
