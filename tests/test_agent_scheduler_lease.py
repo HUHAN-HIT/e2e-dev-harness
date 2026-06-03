@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import agent_scheduler as sched
-import agent_scheduler  # noqa: E402
 
 T0 = datetime(2026, 5, 30, 12, 0, 0, tzinfo=timezone.utc)
 

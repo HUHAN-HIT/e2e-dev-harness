@@ -5,6 +5,10 @@ const PYTHON = __E2E_DEV_HARNESS_PYTHON__;
 const PHASE_GUARD = __E2E_DEV_HARNESS_PHASE_GUARD__;
 const TARGET_REPO = __E2E_DEV_HARNESS_TARGET_REPO__;
 
+// Read-only exploration tools take the fast lane: phase_guard does not gate
+// them, so pure exploration never triggers the harness gate tug-of-war.
+const READ_ONLY_TOOLS = new Set(["read", "read_file", "grep", "glob", "list", "ls"]);
+
 function normalizeToolInput(args = {}) {
   const input = { ...args };
   if (input.filePath && !input.file_path) input.file_path = input.filePath;
@@ -42,6 +46,7 @@ function guard(tool, args) {
 export const E2EDevHarnessPhaseGuard = async () => ({
   "tool.execute.before": async (input, output) => {
     const tool = input?.tool || input?.toolID || output?.tool || "unknown";
+    if (READ_ONLY_TOOLS.has(String(tool).toLowerCase())) return;
     const args = output?.args || input?.args || input?.tool_input || {};
     guard(tool, args);
   },

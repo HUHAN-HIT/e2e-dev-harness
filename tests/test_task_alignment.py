@@ -17,7 +17,6 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import task_alignment_guard  # noqa: E402
-import task_tier  # noqa: E402
 
 
 class TaskAlignmentGuardTests(unittest.TestCase):

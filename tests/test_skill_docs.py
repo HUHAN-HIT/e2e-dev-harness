@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import sys
-import json
-import os
 import tempfile
 import unittest
 
@@ -17,7 +15,6 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import superpowers_probe  # noqa: E402
-import phase_guard  # noqa: E402
 import reviewer_gate  # noqa: E402
 
 

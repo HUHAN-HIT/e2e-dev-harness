@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -101,6 +102,62 @@ def load_state(repo: Path, state_path: Path | None) -> tuple[Path | None, dict]:
     return path, read_json(path)
 
 
+def normalized_main_lifecycle(value: object) -> str:
+    lifecycle = str(value or "").strip().upper()
+    if lifecycle in run_state.LIFECYCLE and lifecycle != "WAITING_DISPATCH":
+        return lifecycle
+    return ""
+
+
+def lifecycle_from_phase_lock(path: Path | None) -> str:
+    if not path:
+        return ""
+    lock = path.parent / run_state.PHASE_LOCK
+    if not lock.exists():
+        return ""
+    return normalized_main_lifecycle(read_json(lock).get("lifecycle", ""))
+
+
+def lifecycle_from_history(state: dict) -> str:
+    history = state.get("history") if isinstance(state.get("history"), list) else []
+    for event in reversed(history):
+        if isinstance(event, dict):
+            lifecycle = normalized_main_lifecycle(event.get("to", ""))
+            if lifecycle:
+                return lifecycle
+    return ""
+
+
+def recover_main_lifecycle(
+    path: Path | None,
+    state: dict,
+    dispatches: list[dict],
+    lifecycle: str | None = None,
+) -> tuple[list[str], list[str]]:
+    requested = normalized_main_lifecycle(lifecycle)
+    current = normalized_main_lifecycle(state.get("lifecycle", ""))
+    if requested:
+        state["lifecycle"] = requested
+        return [], []
+    if current:
+        return [], []
+
+    candidates: list[tuple[str, str]] = []
+    for dispatch in dispatches:
+        if isinstance(dispatch, dict):
+            candidates.append(("dispatch previous_lifecycle", str(dispatch.get("previous_lifecycle", ""))))
+    existing_dispatch = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
+    candidates.append(("existing dispatch previous_lifecycle", str(existing_dispatch.get("previous_lifecycle", ""))))
+    candidates.append((".phase-lock", lifecycle_from_phase_lock(path)))
+    candidates.append(("transition history", lifecycle_from_history(state)))
+    for source, value in candidates:
+        recovered = normalized_main_lifecycle(value)
+        if recovered:
+            state["lifecycle"] = recovered
+            return [], [f"Recovered missing run-state lifecycle from {source}: {recovered}."]
+    return ["Run-state lifecycle is missing or legacy WAITING_DISPATCH has no previous_lifecycle; repair run-state.json before updating dispatch state."], []
+
+
 def update_dispatch_state(
     repo: Path,
     state_path: Path | None,
@@ -110,15 +167,16 @@ def update_dispatch_state(
     path, state = load_state(repo, state_path)
     if not path or not state:
         return {"ready": True, "blocked_reasons": [], "warnings": ["No run-state supplied; dispatch state not recorded."]}
-    if lifecycle:
-        state["lifecycle"] = lifecycle
+    lifecycle_blockers, lifecycle_warnings = recover_main_lifecycle(path, state, [dispatch], lifecycle)
+    if lifecycle_blockers:
+        return {"ready": False, "blocked_reasons": lifecycle_blockers, "warnings": lifecycle_warnings, "run_state": str(path)}
     state["dispatch"] = dispatch
     task_id = str(dispatch.get("current_task_id", "")).strip()
     if task_id:
         state.setdefault("dispatches", {})[task_id] = dispatch
     state["updated_at"] = run_state.now_iso()
     run_state.write_state(repo, path, state)
-    return {"ready": True, "blocked_reasons": [], "warnings": [], "run_state": str(path)}
+    return {"ready": True, "blocked_reasons": [], "warnings": lifecycle_warnings, "run_state": str(path)}
 
 
 def update_dispatches_state(
@@ -131,8 +189,14 @@ def update_dispatches_state(
     path, state = load_state(repo, state_path)
     if not path or not state:
         return {"ready": True, "blocked_reasons": [], "warnings": ["No run-state supplied; dispatch state not recorded."]}
-    if lifecycle:
-        state["lifecycle"] = lifecycle
+    lifecycle_blockers, lifecycle_warnings = recover_main_lifecycle(
+        path,
+        state,
+        [latest_dispatch, *dispatches.values()],
+        lifecycle,
+    )
+    if lifecycle_blockers:
+        return {"ready": False, "blocked_reasons": lifecycle_blockers, "warnings": lifecycle_warnings, "run_state": str(path)}
     state["dispatch"] = latest_dispatch
     existing = state.get("dispatches") if isinstance(state.get("dispatches"), dict) else {}
     merged = dict(existing)
@@ -148,7 +212,7 @@ def update_dispatches_state(
     state["dispatch_waves_since_checkpoint"] = max(0, prior_waves) + 1
     state["updated_at"] = run_state.now_iso()
     run_state.write_state(repo, path, state)
-    return {"ready": True, "blocked_reasons": [], "warnings": [], "run_state": str(path)}
+    return {"ready": True, "blocked_reasons": [], "warnings": lifecycle_warnings, "run_state": str(path)}
 
 
 def task_done(task: dict) -> bool:

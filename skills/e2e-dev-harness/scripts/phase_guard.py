@@ -177,6 +177,7 @@ CREATED_COORDINATOR_TODO_RE = re.compile(
     re.IGNORECASE,
 )
 
+import ask_user_bridge  # noqa: E402
 import run_state  # noqa: E402
 import session_checkpoint  # noqa: E402
 
@@ -335,15 +336,17 @@ def exploration_policy_for_lifecycle(lifecycle: str) -> dict:
         return {
             "schema": "e2e-dev-harness.exploration-policy.v1",
             "preferred": "dispatcher",
-            "direct_tools_allowed_for": [],
-            "required_for": ["requirements clarification", "Restated Intent", "impact evidence", "design doc updates"],
-            "fallback": "Run dispatch-next for the requirements-clarifier worker; coordinator may only relay returned questions and evidence paths.",
+            "direct_tools_allowed_for": ["design-doc requirements analysis", "Restated Intent", "Open Questions"],
+            "direct_tools_blocked_for": ["code Read/Grep/Glob", "GitNexus impact evidence", "implementation planning"],
+            "required_for": ["requirements clarification", "Restated Intent", "Open Questions"],
+            "fallback": "Run dispatch-next for the requirements-clarifier worker; coordinator may only relay returned questions and evidence paths. The clarifier worker may continue design-doc analysis without treating code exploration as evidence.",
             "lifecycle": lifecycle,
         }
     return {
         "schema": "e2e-dev-harness.exploration-policy.v1",
         "preferred": "gitnexus",
         "direct_tools_allowed_for": ["seed discovery", "small quoted evidence after GitNexus points to a file"],
+        "direct_tools_blocked_for": [],
         "required_for": ["impact analysis", "call path tracing", "cross-service dependencies", "route/topic/contract ownership"],
         "fallback": "If GitNexus is unavailable, write degradation evidence before treating rg/Read findings as workflow evidence.",
         "lifecycle": lifecycle or "<missing>",
@@ -351,7 +354,7 @@ def exploration_policy_for_lifecycle(lifecycle: str) -> dict:
 
 
 def clarification_interaction_for_lifecycle(lifecycle: str) -> dict:
-    ask_user_requests = [
+    all_requests = [
         {
             "id": "confirm_restated_intent",
             "header": "Intent",
@@ -393,6 +396,7 @@ def clarification_interaction_for_lifecycle(lifecycle: str) -> dict:
             "provenance_required": "Record confirmed-by: user @<date/session/artifact> in Open Questions.",
         },
     ]
+    ask_user_requests = all_requests if lifecycle == "CREATED" else []
     return {
         "schema": "e2e-dev-harness.clarification-interaction.v1",
         "interaction_required": lifecycle == "CREATED",
@@ -403,7 +407,8 @@ def clarification_interaction_for_lifecycle(lifecycle: str) -> dict:
             "Record the worker's returned evidence paths after answers are captured.",
         ] if lifecycle == "CREATED" else [],
         "ask_user_schema": "codex.request_user_input.v1",
-        "ask_user_requests": ask_user_requests if lifecycle == "CREATED" else [],
+        "ask_user_requests": ask_user_requests,
+        "runtime_action": ask_user_bridge.request_user_input_action(ask_user_requests),
         "blocked_until_resolved": [
             "planning",
             "TDD",
@@ -1354,7 +1359,7 @@ def validate_action(
                 return {
                     "ready": False,
                     "blocked_reasons": [
-                        "Code exploration blocked: CREATED coordinator must dispatch requirements-clarifier and wait for worker acknowledgement before any code Read/Grep/Glob exploration."
+                        "Code exploration blocked: CREATED coordinator must dispatch requirements-clarifier and wait for worker acknowledgement before any code Read/Grep/Glob exploration; design-doc analysis may continue without direct code evidence."
                     ],
                     "warnings": warnings,
                     "phase_lock": str(lock),

@@ -9,6 +9,7 @@ import re
 import sys
 from pathlib import Path
 
+import ask_user_bridge
 from common import configure_utf8_stdio
 
 
@@ -306,15 +307,20 @@ def clarification_questions(result: dict) -> list[str]:
         questions.append(f"Ask the user to clarify {label}, or record the evidence-backed answer in the design doc.")
     for question in result.get("unresolved_open_questions", []):
         questions.append(f"Resolve with the user: {question}")
-    for gap in result.get("integration_gaps", []):
-        questions.append(f"Clarify integration behavior before implementation: {gap}")
-    for gap in result.get("impact_gaps", []):
-        questions.append(f"Clarify impact evidence before implementation: {gap}")
-    for gap in result.get("change_logic_gaps", []):
-        questions.append(f"Clarify change logic before implementation: {gap}")
     for gap in result.get("user_confirmation_gaps", []):
         questions.append(f"Ask the user for confirmation provenance before implementation: {gap}")
     return questions
+
+
+def agent_remediation_actions(result: dict) -> list[str]:
+    actions: list[str] = []
+    for gap in result.get("integration_gaps", []):
+        actions.append(f"Update integration evidence in the design doc before implementation: {gap}")
+    for gap in result.get("impact_gaps", []):
+        actions.append(f"Collect or reference bounded Impact Summary evidence before implementation: {gap}")
+    for gap in result.get("change_logic_gaps", []):
+        actions.append(f"Update Change Logic in the design doc before implementation: {gap}")
+    return actions
 
 
 def ask_user_options_for_question(question: str) -> list[dict[str, str]]:
@@ -393,13 +399,19 @@ def ask_user_requests(questions: list[str]) -> list[dict]:
 
 def interaction_contract(result: dict) -> dict:
     questions = clarification_questions(result)
+    requests = ask_user_requests(questions)
+    remediation_actions = agent_remediation_actions(result)
     return {
         "schema": "e2e-dev-harness.clarification-interaction.v1",
         "interaction_required": bool(questions),
         "must_wait_for_user_answer": bool(questions),
         "questions_to_ask_user": questions,
         "ask_user_schema": "codex.request_user_input.v1",
-        "ask_user_requests": ask_user_requests(questions),
+        "ask_user_requests": requests,
+        "runtime_action": ask_user_bridge.request_user_input_action(requests),
+        "agent_remediation_required": bool(remediation_actions),
+        "agent_remediation_actions": remediation_actions,
+        "next_agent_action": "continue_clarification_remediation" if remediation_actions and not questions else "",
         "allowed_before_user_answer": [
             "bounded GitNexus or scanner discovery for evidence",
             "drafting design sections clearly marked pending confirmation",
@@ -581,6 +593,9 @@ def validate(path: Path, require_intent: bool = False, require_user_confirmation
     result["interaction_required"] = result["interaction_contract"]["interaction_required"]
     result["questions_to_ask_user"] = result["interaction_contract"]["questions_to_ask_user"]
     result["ask_user_requests"] = result["interaction_contract"]["ask_user_requests"]
+    result["agent_remediation_required"] = result["interaction_contract"]["agent_remediation_required"]
+    result["agent_remediation_actions"] = result["interaction_contract"]["agent_remediation_actions"]
+    result["next_agent_action"] = result["interaction_contract"]["next_agent_action"]
     return result
 
 
@@ -623,6 +638,10 @@ def main() -> int:
             print("Change logic gaps:")
             for gap in result["change_logic_gaps"]:
                 print(f"- {gap}")
+        if result.get("agent_remediation_actions"):
+            print("Agent remediation actions:")
+            for action in result["agent_remediation_actions"]:
+                print(f"- {action}")
 
     return 0 if result["ready_for_implementation"] else 2
 

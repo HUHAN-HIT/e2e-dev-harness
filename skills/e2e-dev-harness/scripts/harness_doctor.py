@@ -291,25 +291,53 @@ def state_consistency_checks(repo: Path, state: Path) -> list[dict]:
         "Rebuild the top-level dispatch compatibility view from run-state dispatches without changing lifecycle.",
     )
 
-    lifecycle = str(state_data.get("lifecycle", ""))
-    lifecycle_warning = ""
-    if lifecycle == "WAITING_DISPATCH":
-        lifecycle_warning = (
+    lifecycle = str(state_data.get("lifecycle", "")).strip()
+    lifecycle_status = "pass"
+    lifecycle_severity = "info"
+    lifecycle_message = "Run-state lifecycle is present and uses a main workflow phase."
+    lifecycle_remediation = "Keep dispatch waiting under dispatches[task_id].status; do not edit run-state.json directly."
+    if not lifecycle:
+        lifecycle_status = "fail"
+        lifecycle_severity = "error"
+        lifecycle_message = "Run-state lifecycle is missing."
+        lifecycle_remediation = (
+            "Repair run-state.json first by restoring one main lifecycle from dispatch.previous_lifecycle, "
+            ".phase-lock, or transition history, then rerun doctor/next so derived views rebuild."
+        )
+    elif lifecycle not in run_state.LIFECYCLE:
+        lifecycle_status = "fail"
+        lifecycle_severity = "error"
+        lifecycle_message = f"Run-state lifecycle is invalid: {lifecycle}."
+        lifecycle_remediation = (
+            "Repair run-state.json first with a valid main lifecycle, then rerun doctor/next so derived views rebuild."
+        )
+    elif lifecycle == "WAITING_DISPATCH":
+        lifecycle_status = "warn"
+        lifecycle_severity = "warning"
+        lifecycle_message = (
             "Legacy run-state lifecycle WAITING_DISPATCH detected; dispatch waiting should live in dispatches[task_id].status."
+        )
+        lifecycle_remediation = (
+            "Migrate by restoring the previous main lifecycle and preserving waiting_dispatch under dispatches[task_id].status."
         )
     lifecycle_check = check(
         "state-lifecycle",
-        "pass" if not lifecycle_warning else "warn",
-        "info" if not lifecycle_warning else "warning",
-        "Run-state lifecycle does not use legacy dispatch wait state." if not lifecycle_warning else lifecycle_warning,
-        "Migrate by restoring the previous main lifecycle and preserving waiting_dispatch under dispatches[task_id].status.",
+        lifecycle_status,
+        lifecycle_severity,
+        lifecycle_message,
+        lifecycle_remediation,
     )
 
     lock_path = run_dir / run_state.PHASE_LOCK
     lock_data, lock_error = read_json_file(lock_path)
     lock_blockers: list[str] = []
+    lock_warnings: list[str] = []
     if lock_error or lock_data is None:
         lock_blockers.append(f".phase-lock is missing or invalid beside run-state: {lock_error}")
+    elif lifecycle_status == "fail":
+        lock_warnings.append(
+            ".phase-lock lifecycle comparison skipped until run-state lifecycle is repaired."
+        )
     else:
         lock_lifecycle = str(lock_data.get("lifecycle", ""))
         if lock_lifecycle != lifecycle:
@@ -318,11 +346,11 @@ def state_consistency_checks(repo: Path, state: Path) -> list[dict]:
             )
     lock_check = check(
         "state-phase-lock",
-        "pass" if not lock_blockers else "fail",
-        "info" if not lock_blockers else "error",
+        "fail" if lock_blockers else ("warn" if lock_warnings else "pass"),
+        "error" if lock_blockers else ("warning" if lock_warnings else "info"),
         ".phase-lock matches run-state lifecycle."
-        if not lock_blockers
-        else " ".join(lock_blockers),
+        if not lock_blockers and not lock_warnings
+        else " ".join(lock_blockers + lock_warnings),
         "Rebuild .phase-lock from run-state by rewriting run-state through the harness transition/write API.",
     )
 

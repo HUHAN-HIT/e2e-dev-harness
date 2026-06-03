@@ -30,7 +30,6 @@ import implementation_gate  # noqa: E402
 import install_hooks  # noqa: E402
 import harness_doctor  # noqa: E402
 import kg_refresh  # noqa: E402
-import handoff_gate  # noqa: E402
 import harness_verify  # noqa: E402
 import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
@@ -974,6 +973,45 @@ def service_design_dispatch_blockers(repo: Path, run_state_path: Path | str | No
     )
 
 
+def tdd_red_dispatch_blockers(repo: Path, run_state_path: Path | str | None) -> list[str]:
+    state_file = require_repo_path(repo, Path(str(run_state_path)), "run state") if run_state_path else None
+    if not state_file or not state_file.exists():
+        return [f"Run state not found for TDD-red dispatch check: {run_state_path}"]
+    state_data = read_json_object(state_file)
+    if not state_data:
+        return [f"Run state is unreadable for TDD-red dispatch check: {state_file}"]
+    if str(state_data.get("lifecycle", "")).upper() != "PLANNED":
+        return []
+
+    # The tdd-red/r2-review dispatch precondition only gates multi-service
+    # implementation (see implementation_gate.validate_multi_service_preconditions);
+    # single-service PLANNED runs may transition straight to IMPLEMENTED, so do not
+    # over-block them with a TDD-red dispatch requirement they never owed.
+    services = [str(service) for service in state_data.get("services", []) or []]
+    is_multi = str(state_data.get("selected_mode", "")) == "multi" or len(services) > 1
+    if not is_multi:
+        return []
+
+    schedule_path = state_file.parent / "agent-schedule.json"
+    if not schedule_path.exists():
+        return [
+            "TDD-red gate blocked: multi-service PLANNED run-state requires completed tdd-red and "
+            "r2-review dispatch evidence; agent-schedule.json is missing beside run-state."
+        ]
+    schedule = read_json_object(schedule_path)
+    if not schedule:
+        return [f"TDD-red gate blocked: agent schedule is unreadable: {schedule_path}"]
+
+    return agent_scheduler.dispatch_completion_blockers_for_phases(
+        repo,
+        schedule_path,
+        state_file,
+        schedule,
+        ["tdd-red", "r2-review"],
+        "TDD-red gate blocked",
+    ) or []
+
+
 def _preflight_checks() -> list[dict]:
     """Lifecycle-applicable gate precondition checks.
 
@@ -1001,6 +1039,16 @@ def _preflight_checks() -> list[dict]:
                 "service-designs/<service>.md, then validate the returned slices."
             ),
             "fn": service_design_dispatch_blockers,
+        },
+        {
+            "gate": "tdd_red",
+            "code": "BLK_TDD_RED_DISPATCH",
+            "return_phase": "PLANNED",
+            "minimal_fix": (
+                "Run dispatch-beat/dispatch-complete for the scheduled tdd-red and r2-review "
+                "workers so their worker_completed dispatch events exist before the implementation gate."
+            ),
+            "fn": tdd_red_dispatch_blockers,
         },
     ]
 

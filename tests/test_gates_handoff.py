@@ -17,7 +17,6 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import handoff_gate  # noqa: E402
-import execution_trace  # noqa: E402
 import e2e_dev_harness  # noqa: E402
 
 

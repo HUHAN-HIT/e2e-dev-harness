@@ -285,6 +285,30 @@ class HarnessDoctorTests(unittest.TestCase):
         self.assertIn("WAITING_DISPATCH", checks["state-lifecycle"]["message"])
         self.assertIn("dispatches", checks["state-lifecycle"]["remediation"])
 
+    def test_state_doctor_blocks_missing_lifecycle_with_single_repair_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            harness_doctor.shutil,
+            "which",
+            return_value="C:/tools/tool.exe",
+        ):
+            repo = Path(tmp)
+            state_path = write_state_doctor_fixture(repo)
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state.pop("lifecycle")
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+
+            code, result = e2e_dev_harness.doctor(
+                SimpleNamespace(repo=repo, strict=False, status_file=None, state=state_path)
+            )
+
+        checks = {item["id"]: item for item in result["checks"]}
+        self.assertEqual(2, code)
+        self.assertFalse(result["ready"])
+        self.assertEqual("fail", checks["state-lifecycle"]["status"])
+        self.assertIn("missing", checks["state-lifecycle"]["message"])
+        self.assertIn("run-state.json", checks["state-lifecycle"]["remediation"])
+        self.assertTrue(any("lifecycle is missing" in reason for reason in result["blocked_reasons"]))
+
     def test_state_doctor_passes_consistent_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.object(
             harness_doctor.shutil,

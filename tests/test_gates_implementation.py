@@ -20,10 +20,6 @@ if str(SCRIPTS) not in sys.path:
 
 import implementation_gate  # noqa: E402
 import kg_refresh  # noqa: E402
-import service_design_gate  # noqa: E402
-import context_pack  # noqa: E402
-import harness_verify  # noqa: E402
-import artifact_registry  # noqa: E402
 import run_state  # noqa: E402
 from conftest import write_command_evidence, REVIEW_CHECKLIST, write_service_review  # noqa: E402
 import e2e_dev_harness  # noqa: E402
@@ -1044,8 +1040,8 @@ class ImplementationGateTests(unittest.TestCase):
             unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
             manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
-            approval = repo / "approval.md"
-            approval = repo / "approval.md"
+            repo / "approval.md"
+            repo / "approval.md"
             design.parent.mkdir(parents=True)
             kg.parent.mkdir(parents=True)
             matrix.parent.mkdir(parents=True)
@@ -1235,7 +1231,7 @@ class ImplementationGateTests(unittest.TestCase):
             unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
             rework_file = repo / "docs" / "agent-runs" / "run" / "rework" / "rework-001.md"
-            approval = repo / "approval.md"
+            repo / "approval.md"
             design.parent.mkdir(parents=True)
             kg.parent.mkdir(parents=True)
             matrix.parent.mkdir(parents=True)
@@ -1532,12 +1528,12 @@ class ImplementationGateTests(unittest.TestCase):
             matrix = repo / "docs" / "agent-runs" / "run" / "evidence" / "coverage.md"
             unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
-            manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
             dependency_report = repo / "knowledge-graph" / "cross-service-dependencies.json"
-            approval = repo / "approval.md"
-            approval = repo / "approval.md"
-            approval = repo / "approval.md"
-            approval = repo / "approval.md"
+            repo / "approval.md"
+            repo / "approval.md"
+            repo / "approval.md"
+            repo / "approval.md"
             for path in (
                 "services/quote-service/src/main/java/com/example/BillingClient.java",
                 "services/billing-service/src/main/java/com/example/BillingController.java",
@@ -1969,7 +1965,6 @@ class ImplementationGateTests(unittest.TestCase):
                 encoding="utf-8",
             )
             review_dir = self.write_semantic_reviews(repo)
-            service_review_helper = None  # using conftest.write_service_review
             write_service_review(repo, "sample-service", "test")
             service_r3 = write_service_review(repo, "sample-service", "implementation")
             service_r3.write_text(

@@ -4613,8 +4613,8 @@ class ImplementationGateTests(unittest.TestCase):
             unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
             manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
-            approval = repo / "approval.md"
-            approval = repo / "approval.md"
+            repo / "approval.md"
+            repo / "approval.md"
             design.parent.mkdir(parents=True)
             kg.parent.mkdir(parents=True)
             matrix.parent.mkdir(parents=True)
@@ -4804,7 +4804,7 @@ class ImplementationGateTests(unittest.TestCase):
             unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
             rework_file = repo / "docs" / "agent-runs" / "run" / "rework" / "rework-001.md"
-            approval = repo / "approval.md"
+            repo / "approval.md"
             design.parent.mkdir(parents=True)
             kg.parent.mkdir(parents=True)
             matrix.parent.mkdir(parents=True)
@@ -5101,12 +5101,12 @@ class ImplementationGateTests(unittest.TestCase):
             matrix = repo / "docs" / "agent-runs" / "run" / "evidence" / "coverage.md"
             unit = repo / "docs" / "agent-runs" / "run" / "evidence" / "unit.txt"
             review = repo / "docs" / "agent-runs" / "run" / "evidence" / "business.md"
-            manifest_path = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
             dependency_report = repo / "knowledge-graph" / "cross-service-dependencies.json"
-            approval = repo / "approval.md"
-            approval = repo / "approval.md"
-            approval = repo / "approval.md"
-            approval = repo / "approval.md"
+            repo / "approval.md"
+            repo / "approval.md"
+            repo / "approval.md"
+            repo / "approval.md"
             for path in (
                 "services/quote-service/src/main/java/com/example/BillingClient.java",
                 "services/billing-service/src/main/java/com/example/BillingController.java",

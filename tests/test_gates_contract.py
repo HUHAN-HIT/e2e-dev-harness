@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import sys
-import json
 import tempfile
 import textwrap
 import unittest
@@ -17,7 +16,6 @@ if str(SCRIPTS) not in sys.path:
 
 import contract_gate  # noqa: E402
 import rework_gate  # noqa: E402
-import harness_policy  # noqa: E402
 import e2e_dev_harness  # noqa: E402
 import orchestration_plan  # noqa: E402
 

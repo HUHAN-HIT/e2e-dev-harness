@@ -33,6 +33,29 @@ def _write_state(repo: Path, lifecycle: str) -> Path:
     return state
 
 
+def _write_multi_state(repo: Path, lifecycle: str) -> Path:
+    state = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(
+        json.dumps(
+            {
+                "lifecycle": lifecycle,
+                "run_id": "r1",
+                "selected_mode": "multi",
+                "services": ["svc-a", "svc-b"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return state
+
+
+def _write_schedule(state_path: Path, tasks: list) -> Path:
+    schedule = state_path.parent / "agent-schedule.json"
+    schedule.write_text(json.dumps({"tasks": tasks}), encoding="utf-8")
+    return schedule
+
+
 class PreflightAggregatorTests(unittest.TestCase):
     def test_created_state_consolidates_clarification_blocker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -62,6 +85,62 @@ class PreflightAggregatorTests(unittest.TestCase):
             self.assertTrue(result["ready"])
             self.assertEqual([], result["blockers"])
             self.assertEqual("", result["next_single_action"])
+
+    def test_multi_service_planned_consolidates_tdd_red_dispatch_blocker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state = _write_multi_state(repo, "PLANNED")
+            _write_schedule(
+                state,
+                [
+                    {
+                        "id": "t-red",
+                        "agent": "tdd-red-author",
+                        "phase": "tdd-red",
+                        "service": "svc-a",
+                        "status": "pending",
+                    },
+                    {
+                        "id": "t-r2",
+                        "agent": "r2-reviewer",
+                        "phase": "r2-review",
+                        "status": "pending",
+                    },
+                ],
+            )
+
+            result = harness.aggregate_preflight_blockers(repo, state)
+
+            self.assertFalse(result["ready"])
+            gates = [blocker["gate"] for blocker in result["blockers"]]
+            self.assertIn("tdd_red", gates)
+            blocker = next(b for b in result["blockers"] if b["gate"] == "tdd_red")
+            self.assertEqual("PLANNED", blocker["return_phase"])
+            self.assertTrue(blocker["code"].startswith("BLK_"))
+            self.assertTrue(blocker["minimal_fix"])
+            self.assertTrue(blocker["message"])
+
+    def test_single_service_planned_skips_tdd_red_dispatch_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state = _write_state(repo, "PLANNED")
+            _write_schedule(
+                state,
+                [
+                    {
+                        "id": "t-red",
+                        "agent": "tdd-red-author",
+                        "phase": "tdd-red",
+                        "service": "svc-a",
+                        "status": "pending",
+                    },
+                ],
+            )
+
+            result = harness.aggregate_preflight_blockers(repo, state)
+
+            self.assertTrue(result["ready"])
+            self.assertEqual([], result["blockers"])
 
     def test_preflight_command_blocks_with_nonzero_exit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import sys
-import json
 import tempfile
 import textwrap
 import unittest
@@ -401,6 +400,102 @@ class ClarificationGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready_for_implementation"])
         self.assertTrue(any("Impact Summary" in reason for reason in result["impact_gaps"]))
+
+    def test_agent_fixable_impact_gaps_do_not_request_user_input(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Restated Intent
+            - The agent understands the user wants a refund callback API.
+            - User confirmation: confirmed-by: user @2026-06-03-session.
+
+            ## Goal
+            - Add a refund callback API.
+
+            ## Scope
+            - services/payment-service
+
+            ## Use Cases
+            - Merchant calls HTTP refund callback endpoint.
+
+            ## Acceptance Criteria
+            - AC-1 POST /api/refunds/callback returns accepted status.
+
+            ## Change Logic
+            - Current behavior: no public refund callback endpoint exists.
+            - Target behavior: POST /api/refunds/callback accepts merchant refund callback requests.
+            - Runtime path: RefundCallbackController -> RefundCallbackService -> RefundRepository.
+            - State/data effect: persists refund status field and response body.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None. confirmed-by: user @2026-06-03-session.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path, require_intent=True, require_user_confirmation=True)
+
+        self.assertFalse(result["ready_for_implementation"])
+        self.assertTrue(result["agent_remediation_required"])
+        self.assertFalse(result["interaction_required"])
+        self.assertFalse(result["interaction_contract"]["must_wait_for_user_answer"])
+        self.assertEqual([], result["questions_to_ask_user"])
+        self.assertEqual([], result["ask_user_requests"])
+        self.assertTrue(any("Impact Summary" in item for item in result["agent_remediation_actions"]))
+
+    def test_agent_fixable_change_logic_gaps_do_not_request_user_input(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Restated Intent
+            - The agent understands the user wants a refund callback API.
+            - User confirmation: confirmed-by: user @2026-06-03-session.
+
+            ## Goal
+            - Add a refund callback API.
+
+            ## Scope
+            - services/payment-service
+
+            ## Use Cases
+            - Merchant calls HTTP refund callback endpoint.
+
+            ## Acceptance Criteria
+            - AC-1 POST /api/refunds/callback returns accepted status.
+
+            ## Impact Summary
+            - Source: GitNexus impact + dependency scanner
+            - Raw Evidence: docs/agent-runs/run/evidence/impact-analysis.json
+
+            | type | interface | affected callers/consumers | related AC | required tests/contracts | risk |
+            | --- | --- | --- | --- | --- | --- |
+            | HTTP | POST /api/refunds/callback | merchant-admin | AC-1 | controller contract test | medium |
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None. confirmed-by: user @2026-06-03-session.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path, require_intent=True, require_user_confirmation=True)
+
+        self.assertFalse(result["ready_for_implementation"])
+        self.assertTrue(result["agent_remediation_required"])
+        self.assertFalse(result["interaction_required"])
+        self.assertEqual([], result["questions_to_ask_user"])
+        self.assertTrue(any("Change Logic" in item for item in result["agent_remediation_actions"]))
 
     def test_interface_requirement_requires_change_logic(self) -> None:
         markdown = textwrap.dedent(

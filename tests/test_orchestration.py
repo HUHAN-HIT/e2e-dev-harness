@@ -909,6 +909,16 @@ class OrchestrationArtifactTests(unittest.TestCase):
         intent_request = next(request for request in requests if request["id"] == "confirm_restated_intent")
         self.assertTrue(any("Confirm" in option["label"] for option in intent_request["options"]))
         self.assertTrue(any("Revise" in option["label"] for option in intent_request["options"]))
+        runtime_action = result["clarification_interaction"]["runtime_action"]
+        self.assertEqual("request_user_input", runtime_action["tool"])
+        self.assertEqual("codex.request_user_input.v1", runtime_action["schema"])
+        self.assertEqual(requests, runtime_action["source_requests"])
+        self.assertTrue(
+            any(question["id"] == "confirm_restated_intent" for question in runtime_action["arguments"]["questions"])
+        )
+        self.assertFalse(
+            any("provenance_required" in question for question in runtime_action["arguments"]["questions"])
+        )
 
     def test_clarify_blocked_returns_questions_to_ask_user(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -957,6 +967,14 @@ class OrchestrationArtifactTests(unittest.TestCase):
         threshold_request = next(request for request in requests if "risk score threshold" in request["question"])
         self.assertTrue(any("Answer now" in option["label"] for option in threshold_request["options"]))
         self.assertTrue(any("Defer" in option["label"] for option in threshold_request["options"]))
+        runtime_action = result["interaction_contract"]["runtime_action"]
+        self.assertEqual("request_user_input", runtime_action["tool"])
+        self.assertTrue(
+            any("risk score threshold" in question["question"] for question in runtime_action["arguments"]["questions"])
+        )
+        self.assertFalse(
+            any("provenance_required" in question for question in runtime_action["arguments"]["questions"])
+        )
 
     def test_clarify_defaults_to_user_confirmation_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2480,6 +2498,43 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("claimed", schedule_data["tasks"][0]["status"])
         self.assertEqual("claimed", schedule_data["tasks"][1]["status"])
         self.assertEqual("T11", updated_state["dispatch"]["current_task_id"])
+
+    def test_dispatch_state_update_repairs_missing_lifecycle_from_phase_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state(
+                    "docs/agent-runs/run",
+                    "single-review",
+                    [],
+                    "docs/agent-runs/run/artifact-registry.json",
+                    "PLANNED",
+                ),
+            )
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state.pop("lifecycle")
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+
+            result = dispatcher.update_dispatch_state(
+                repo,
+                state_path,
+                {
+                    "status": "worker_completed",
+                    "current_task_id": "T01",
+                    "current_agent": "test-case-developer",
+                },
+            )
+            updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+            lock = json.loads((run_dir / run_state.PHASE_LOCK).read_text(encoding="utf-8"))
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("PLANNED", updated_state["lifecycle"])
+        self.assertEqual("PLANNED", lock["lifecycle"])
+        self.assertIn("Recovered missing run-state lifecycle", " ".join(result["warnings"]))
 
     def test_dispatch_beat_spawns_parallel_service_tdd_red_tasks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6614,7 +6669,16 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("requirements-clarifier" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any("design-doc analysis may continue" in reason for reason in result["blocked_reasons"]))
         self.assertIn("required_todo_list", result)
+        self.assertEqual(
+            ["design-doc requirements analysis", "Restated Intent", "Open Questions"],
+            result["exploration_policy"]["direct_tools_allowed_for"],
+        )
+        self.assertEqual(
+            ["code Read/Grep/Glob", "GitNexus impact evidence", "implementation planning"],
+            result["exploration_policy"]["direct_tools_blocked_for"],
+        )
 
     def test_phase_guard_blocks_code_read_in_dispatch_lifecycle_without_active_worker(self) -> None:
         for lifecycle in ("CLARIFIED", "SERVICE_DESIGN_REQUIRED", "PLANNED", "IMPLEMENTED"):
@@ -9160,6 +9224,33 @@ class ReviewerSubagentTypeTest(unittest.TestCase):
             schedule = orchestration_plan.agent_schedule("single-review", [], agents)
         for task in schedule["tasks"]:
             self.assertEqual("general-purpose", task["runtime_subagent_type"], task["phase"])
+
+
+class DispatcherJsonOutputTest(unittest.TestCase):
+    """Regression: `dispatcher.py --json` must emit valid JSON, not raise NameError."""
+
+    def test_main_json_flag_prints_valid_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            stdout = io.StringIO()
+            argv = [
+                "dispatcher.py",
+                str(repo),
+                "--action",
+                "status",
+                "--schedule",
+                str(repo / "missing-schedule.json"),
+                "--state",
+                str(repo / "missing-state.json"),
+                "--json",
+            ]
+            with patch.object(sys, "argv", argv), patch("sys.stdout", stdout):
+                exit_code = dispatcher.main()
+        payload = json.loads(stdout.getvalue())
+        self.assertIsInstance(payload, dict)
+        self.assertIn("ready", payload)
+        # Exit code must stay consistent with the emitted JSON result.
+        self.assertEqual(0 if payload["ready"] else 2, exit_code)
 
 
 if __name__ == "__main__":

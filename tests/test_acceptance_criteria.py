@@ -14,7 +14,6 @@ SCRIPTS = ROOT / "skills" / "e2e-dev-harness" / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-import ac_progress_gate  # noqa: E402
 import clarification_gate  # noqa: E402
 
 

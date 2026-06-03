@@ -79,7 +79,8 @@ def test_routes_ast_matches_regex(tmp_path):
     services = scan_mod.detect_services(repo)
     regex_routes = scan_mod.extract_routes(repo, services, ast=False)
     ast_routes = scan_mod.extract_routes(repo, services, ast=True)
-    norm = lambda rs: sorted((r["service"], r["method"], r["path"]) for r in rs)
+    def norm(rs):
+        return sorted((r["service"], r["method"], r["path"]) for r in rs)
     assert norm(ast_routes) == norm(regex_routes)
     assert ("services/orders", "GET", "/api/orders") in norm(ast_routes)
 
@@ -102,7 +103,8 @@ def test_messaging_ast_matches_regex(tmp_path):
     services = scan_mod.detect_services(repo)
     p_regex, c_regex = scan_mod.extract_messaging(repo, services, ast=False)
     p_ast, c_ast = scan_mod.extract_messaging(repo, services, ast=True)
-    topics = lambda items: sorted((i["service"], i["topic"]) for i in items)
+    def topics(items):
+        return sorted((i["service"], i["topic"]) for i in items)
     assert topics(p_ast) == topics(p_regex)
     assert topics(c_ast) == topics(c_regex)
     assert ("services/orders", "order.created") in topics(p_ast)
