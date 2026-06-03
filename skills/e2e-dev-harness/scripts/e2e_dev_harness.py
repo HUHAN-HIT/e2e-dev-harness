@@ -974,6 +974,72 @@ def service_design_dispatch_blockers(repo: Path, run_state_path: Path | str | No
     )
 
 
+def _preflight_checks() -> list[dict]:
+    """Lifecycle-applicable gate precondition checks.
+
+    Each entry reuses an existing read-only blocker function so preflight never
+    duplicates or mutates gate logic; it only consolidates results. Extend this
+    list as more gate blocker functions are surfaced as pure functions.
+    """
+    return [
+        {
+            "gate": "clarification",
+            "code": "BLK_CLARIFY_DISPATCH",
+            "return_phase": "CREATED",
+            "minimal_fix": (
+                "Run dispatch-next for the requirements-clarifier worker, then relay its "
+                "returned Restated Intent/Open Questions."
+            ),
+            "fn": clarification_dispatch_blockers,
+        },
+        {
+            "gate": "service_design",
+            "code": "BLK_SVC_DESIGN_DISPATCH",
+            "return_phase": "SERVICE_DESIGN_REQUIRED",
+            "minimal_fix": (
+                "Run dispatch-beat to launch service-design workers that output "
+                "service-designs/<service>.md, then validate the returned slices."
+            ),
+            "fn": service_design_dispatch_blockers,
+        },
+    ]
+
+
+def aggregate_preflight_blockers(repo: Path, run_state_path: Path | str | None) -> dict:
+    """Run every applicable gate precondition in a single pass.
+
+    Returns one ordered blocker chain plus the single next action so the
+    coordinator resolves all current preconditions at once, instead of hitting
+    one gate, fixing it, then hitting the next on a separate round trip.
+    """
+    blockers: list[dict] = []
+    for check in _preflight_checks():
+        for message in check["fn"](repo, run_state_path) or []:
+            blockers.append(
+                {
+                    "order": len(blockers) + 1,
+                    "gate": check["gate"],
+                    "code": check["code"],
+                    "return_phase": check["return_phase"],
+                    "message": message,
+                    "minimal_fix": check["minimal_fix"],
+                }
+            )
+    return {
+        "schema": "e2e-dev-harness.preflight.v1",
+        "ready": not blockers,
+        "blockers": blockers,
+        "next_single_action": blockers[0]["minimal_fix"] if blockers else "",
+    }
+
+
+def preflight(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    result = aggregate_preflight_blockers(repo, getattr(args, "state", None))
+    write_status(getattr(args, "status_file", None), result)
+    return (0 if result["ready"] else 2), result
+
+
 def clarify(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
     design_path = resolve_repo_path(repo, args.design_doc)
@@ -2911,6 +2977,14 @@ def main() -> int:
     next_parser.add_argument("--status-file", type=Path)
     add_full_json_arg(next_parser)
 
+    preflight_parser = subparsers.add_parser(
+        "preflight",
+        help="Aggregate every applicable gate blocker for the current run-state in one pass.",
+    )
+    preflight_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    preflight_parser.add_argument("--state", required=True, type=Path)
+    preflight_parser.add_argument("--status-file", type=Path)
+
     for output_parser in (
         start_parser,
         prepare_parser,
@@ -2933,6 +3007,7 @@ def main() -> int:
         dispatch_status_parser,
         ac_progress_parser,
         next_parser,
+        preflight_parser,
     ):
         add_output_args(output_parser)
 
@@ -2983,6 +3058,8 @@ def main() -> int:
             exit_code, result = ac_progress(args)
         elif args.command == "next":
             exit_code, result = next_step(args)
+        elif args.command == "preflight":
+            exit_code, result = preflight(args)
         else:
             exit_code, result = verify(args)
     except (FileNotFoundError, ValueError) as error:
