@@ -45,6 +45,10 @@ def _compact_execution_packet(packet: dict | None) -> dict:
         "phase",
         "objective",
         "primary_command",
+        "exact_next_command",
+        "allowed_writes",
+        "forbidden_writes",
+        "completion_requires",
         "required_actions",
         "required_evidence",
         "forbidden_actions",
@@ -85,6 +89,20 @@ def _manual_recovery_events(state_path: Path) -> list:
     return _limited(data.get("manual_recovery_events", []))
 
 
+def _manual_recovery_blockers(events: list) -> list[str]:
+    blockers: list[str] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if event.get("recovery_approved") is True:
+            continue
+        task_id = str(event.get("task_id", "")).strip() or "<unknown>"
+        blockers.append(
+            f"Manual recovery event for task {task_id} is not backed by approved recovery evidence; return to dispatch-status recovery approval or rerun a fresh worker."
+        )
+    return blockers
+
+
 def _artifact_pointers(state_path: Path, result: dict | None = None, full_result_path: str = "") -> dict:
     result = result or {}
     pointers: dict[str, object] = {"run_state": str(state_path)}
@@ -115,14 +133,17 @@ def write(
     compact_action = _compact_next(action)
     if compact_action:
         compact_action.setdefault("workflow_stage", workflow_stage)
+    manual_recovery_events = _manual_recovery_events(target.parent / "run-state.json")
+    manual_recovery_blockers = _manual_recovery_blockers(manual_recovery_events)
+    blocked_reasons = _limited(list(result.get("blocked_reasons", [])) + manual_recovery_blockers)
     data = {
         "schema": SCHEMA,
         "run_id": state.get("run_id", result.get("run_id", "")),
         "lifecycle": lifecycle,
         "workflow_stage": workflow_stage,
         "selected_mode": state.get("selected_mode", result.get("selected_mode", "")),
-        "ready": bool(result.get("ready", True)),
-        "blocked_reasons": _limited(result.get("blocked_reasons", [])),
+        "ready": bool(result.get("ready", True)) and not manual_recovery_blockers,
+        "blocked_reasons": blocked_reasons,
         "warnings": _limited(result.get("warnings", [])),
         "next_action": compact_action
         or {
@@ -133,7 +154,7 @@ def write(
         "execution_packet": _compact_execution_packet(result.get("execution_packet")),
         "active_dispatches": _active_dispatches(state),
         "artifact_pointers": _artifact_pointers(target.parent / "run-state.json", result, full_result_path),
-        "manual_recovery_events": _manual_recovery_events(target.parent / "run-state.json"),
+        "manual_recovery_events": manual_recovery_events,
         "created_at": now_iso(),
         "truncated": False,
     }

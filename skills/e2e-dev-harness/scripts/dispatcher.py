@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -733,12 +735,127 @@ def dispatch_recovery_packet(repo: Path, schedule_path: Path, state_path: Path |
     }
 
 
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def parse_iso_datetime(value: str) -> datetime | None:
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def recovery_approval_blockers(
+    repo: Path,
+    approval_path: Path | None,
+    task_id: str,
+    agent: str,
+    evidence: list[str],
+) -> list[str]:
+    if not approval_path:
+        return ["Manual recovery requires --recovery-approval generated from dispatch-status/doctor and approved by the user."]
+    approval_file = resolve(repo, approval_path)
+    if not approval_file or not approval_file.exists():
+        return [f"Manual recovery approval file not found: {approval_path}"]
+    approval = read_json(approval_file)
+    blocked: list[str] = []
+    if str(approval.get("task_id", "")).strip() != task_id:
+        blocked.append(f"Recovery approval task mismatch: expected {task_id}, got {approval.get('task_id', '')}.")
+    if str(approval.get("agent", "")).strip() != agent:
+        blocked.append(f"Recovery approval agent mismatch: expected {agent}, got {approval.get('agent', '')}.")
+    approved = approval.get("approved", approval.get("user_approved", False))
+    if approved is not True:
+        blocked.append("Recovery approval must include approved: true after explicit user approval.")
+    expires_at = parse_iso_datetime(str(approval.get("expires_at", "")).strip())
+    if not expires_at:
+        blocked.append("Recovery approval must include a valid expires_at timestamp.")
+    elif expires_at < datetime.now(timezone.utc):
+        blocked.append("Recovery approval has expired.")
+    allowed = {posix(str(item)) for item in approval.get("allowed_evidence", []) or []}
+    evidence_set = {posix(str(item)) for item in evidence}
+    if allowed and not evidence_set.issubset(allowed):
+        blocked.append("Manual recovery evidence is outside the approved evidence list.")
+    expected_hashes: dict[str, str] = {}
+    raw_hashes = approval.get("evidence_hashes", {})
+    if isinstance(raw_hashes, dict):
+        expected_hashes = {posix(str(path)): str(digest).strip().lower() for path, digest in raw_hashes.items()}
+    elif isinstance(raw_hashes, list):
+        for item in raw_hashes:
+            if isinstance(item, dict):
+                path = posix(str(item.get("path", "")))
+                digest = str(item.get("sha256", "")).strip().lower()
+                if path and digest:
+                    expected_hashes[path] = digest
+    if not expected_hashes:
+        blocked.append("Recovery approval must include evidence_hashes for approved evidence.")
+    for item in evidence_set:
+        expected = expected_hashes.get(item)
+        if not expected:
+            blocked.append(f"Recovery approval missing evidence hash for {item}.")
+            continue
+        full = resolve(repo, item)
+        if not full or not full.exists():
+            blocked.append(f"Recovery evidence is missing: {item}")
+            continue
+        actual = file_sha256(full)
+        if actual != expected:
+            blocked.append(f"Recovery approval hash does not match current evidence for {item}.")
+    return blocked
+
+
+def write_recovery_request(
+    repo: Path,
+    request_path: Path,
+    task_id: str,
+    agent: str,
+    evidence: list[str],
+    reason: str = "Manual recovery requested for a dispatcher-confirmed task.",
+) -> dict:
+    request_file = resolve(repo, request_path)
+    if not request_file:
+        return {"ready": False, "blocked_reasons": [f"Invalid recovery request path: {request_path}"], "warnings": []}
+    evidence_hashes: dict[str, str] = {}
+    blocked: list[str] = []
+    for item in evidence:
+        normalized = posix(str(item))
+        full = resolve(repo, item)
+        if not full or not full.exists():
+            blocked.append(f"Recovery request evidence is missing: {item}")
+            continue
+        evidence_hashes[normalized] = file_sha256(full)
+    if blocked:
+        return {"ready": False, "blocked_reasons": blocked, "warnings": []}
+    request_file.parent.mkdir(parents=True, exist_ok=True)
+    expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+    payload = {
+        "schema": "e2e-dev-harness.recovery-approval.v1",
+        "task_id": task_id,
+        "agent": agent,
+        "reason": reason,
+        "approved": False,
+        "expires_at": expires_at,
+        "allowed_evidence": [posix(str(item)) for item in evidence],
+        "evidence_hashes": evidence_hashes,
+    }
+    atomic_write_json(request_file, payload)
+    return {"ready": True, "blocked_reasons": [], "warnings": [], "path": str(request_file), "request": payload}
+
+
 def manual_recovery_dispatch(repo: Path, state_path: Path | None, task_id: str, agent: str) -> tuple[list[str], dict, list[str]]:
     _state_path, state = load_state(repo, state_path)
     dispatch = dispatch_for_task(state, task_id)
     warnings = [f"Manual recovery dispatch-complete used for task {task_id}; verify evidence and keep this event auditable."]
     if not dispatch:
-        return [], {"current_task_id": task_id, "current_agent": agent, "status": "manual_recovery"}, warnings
+        return [f"Manual recovery requires an active dispatch for task {task_id}; run dispatch-beat/dispatch-next and dispatch-ack first."], {}, []
     if str(dispatch.get("current_agent", "")).strip() and str(dispatch.get("current_agent", "")).strip() != agent:
         return [f"Dispatch agent mismatch: expected {dispatch.get('current_agent', '')}, got {agent}."], dispatch, []
     recovered = dict(dispatch)
@@ -1159,6 +1276,7 @@ def dispatch_complete(
     agent: str,
     evidence: list[str] | None = None,
     manual_recovery: bool = False,
+    recovery_approval: Path | None = None,
 ) -> dict:
     repo = repo.resolve()
     schedule_file = resolve(repo, schedule_path)
@@ -1167,6 +1285,7 @@ def dispatch_complete(
     manual_warnings: list[str] = []
     if manual_recovery:
         dispatch_blockers, active_dispatch, manual_warnings = manual_recovery_dispatch(repo, state_path, task_id, agent)
+        dispatch_blockers.extend(recovery_approval_blockers(repo, recovery_approval, task_id, agent, evidence or []))
     else:
         dispatch_blockers, active_dispatch = dispatch_completion_blockers(repo, state_path, task_id, agent)
     if dispatch_blockers:
@@ -1194,6 +1313,7 @@ def dispatch_complete(
         evidence or [],
         dispatcher_confirmed=True,
         manual_recovery=manual_recovery,
+        recovery_approved=bool(manual_recovery and recovery_approval),
     )
     if not complete["ready"]:
         recovery = dispatch_recovery_packet(repo, schedule_path, state_path, task, active_dispatch)
@@ -1340,7 +1460,15 @@ def dispatch_ack(
     }
 
 
-def dispatch_status(repo: Path, schedule_path: Path, state_path: Path | None = None) -> dict:
+def dispatch_status(
+    repo: Path,
+    schedule_path: Path,
+    state_path: Path | None = None,
+    write_recovery_request_path: Path | None = None,
+    recovery_task_id: str = "",
+    recovery_agent: str = "",
+    recovery_evidence: list[str] | None = None,
+) -> dict:
     repo = repo.resolve()
     schedule_file = resolve(repo, schedule_path)
     schedule = read_json(schedule_file)
@@ -1348,7 +1476,7 @@ def dispatch_status(repo: Path, schedule_path: Path, state_path: Path | None = N
     tasks = [task for task in schedule.get("tasks", []) or [] if isinstance(task, dict)]
     open_tasks = [task for task in tasks if not task_done(task)]
     selected_tasks, blocked_tasks = ready_tasks(repo, schedule, max_workers=1, state=state)
-    return {
+    result = {
         "ready": True,
         "blocked_reasons": [],
         "warnings": [],
@@ -1382,6 +1510,21 @@ def dispatch_status(repo: Path, schedule_path: Path, state_path: Path | None = N
         "skipped_tasks": blocked_tasks,
         "next_task": (selected_tasks[0].get("id", "") if selected_tasks else ""),
     }
+    if write_recovery_request_path:
+        recovery = write_recovery_request(
+            repo,
+            write_recovery_request_path,
+            recovery_task_id,
+            recovery_agent,
+            recovery_evidence or [],
+        )
+        if not recovery["ready"]:
+            result["ready"] = False
+            result["blocked_reasons"].extend(recovery["blocked_reasons"])
+        else:
+            result["recovery_request_path"] = recovery["path"]
+            result["recovery_request"] = recovery["request"]
+    return result
 
 
 def main() -> int:
@@ -1398,6 +1541,8 @@ def main() -> int:
     parser.add_argument("--agent")
     parser.add_argument("--evidence", action="append")
     parser.add_argument("--manual-recovery", action="store_true")
+    parser.add_argument("--recovery-approval", type=Path)
+    parser.add_argument("--write-recovery-request", type=Path)
     parser.add_argument("--action", choices=["capabilities", "next", "beat", "complete", "status"], default="status")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -1425,11 +1570,20 @@ def main() -> int:
             args.agent or "agent",
             args.evidence or [],
             manual_recovery=args.manual_recovery,
+            recovery_approval=getattr(args, "recovery_approval", None),
         )
     else:
         if not args.schedule:
             parser.error("--schedule is required for --action status")
-        result = dispatch_status(repo, args.schedule, args.state)
+        result = dispatch_status(
+            repo,
+            args.schedule,
+            args.state,
+            write_recovery_request_path=args.write_recovery_request,
+            recovery_task_id=args.task_id or "",
+            recovery_agent=args.agent or "",
+            recovery_evidence=args.evidence or [],
+        )
 
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))

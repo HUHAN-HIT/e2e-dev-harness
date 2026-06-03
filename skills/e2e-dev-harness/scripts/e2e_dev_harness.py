@@ -2679,6 +2679,7 @@ def dispatch_complete(args) -> tuple[int, dict]:
         args.agent or "agent",
         args.evidence or [],
         manual_recovery=getattr(args, "manual_recovery", False),
+        recovery_approval=getattr(args, "recovery_approval", None),
     )
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
@@ -2700,7 +2701,15 @@ def dispatch_ack(args) -> tuple[int, dict]:
 
 def dispatch_status(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
-    result = dispatcher.dispatch_status(repo, args.schedule, args.state)
+    result = dispatcher.dispatch_status(
+        repo,
+        args.schedule,
+        args.state,
+        write_recovery_request_path=getattr(args, "write_recovery_request", None),
+        recovery_task_id=getattr(args, "task_id", "") or "",
+        recovery_agent=getattr(args, "agent", "") or "",
+        recovery_evidence=getattr(args, "evidence", None) or [],
+    )
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
 
@@ -3031,6 +3040,7 @@ def main() -> int:
     dispatch_complete_parser.add_argument("--agent", default="")
     dispatch_complete_parser.add_argument("--evidence", action="append")
     dispatch_complete_parser.add_argument("--manual-recovery", action="store_true")
+    dispatch_complete_parser.add_argument("--recovery-approval", type=Path)
     dispatch_complete_parser.add_argument("--status-file", type=Path)
     add_full_json_arg(dispatch_complete_parser)
 
@@ -3048,6 +3058,10 @@ def main() -> int:
     dispatch_status_parser.add_argument("repo", nargs="?", default=".", type=Path)
     dispatch_status_parser.add_argument("--schedule", required=True, type=Path)
     dispatch_status_parser.add_argument("--state", type=Path)
+    dispatch_status_parser.add_argument("--write-recovery-request", type=Path)
+    dispatch_status_parser.add_argument("--task-id")
+    dispatch_status_parser.add_argument("--agent", default="")
+    dispatch_status_parser.add_argument("--evidence", action="append")
     dispatch_status_parser.add_argument("--status-file", type=Path)
 
     ac_progress_parser = subparsers.add_parser("ac-progress", help="Block R3 review until all assigned ACs have implementation and test evidence.")

@@ -2228,10 +2228,14 @@ class HandoffGateTests(unittest.TestCase):
             repo = Path(tmp)
             handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
             handoff_dir.mkdir(parents=True)
+            evidence = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            evidence.parent.mkdir(parents=True)
+            evidence.write_text("Implementation manifest evidence.\n", encoding="utf-8")
+            evidence_hash = hashlib.sha256(evidence.read_bytes()).hexdigest()
             handoff = handoff_dir / "04-code-developer.md"
             handoff.write_text(
                 textwrap.dedent(
-                    """
+                    f"""
                     ---
                     agent: code-developer
                     agent_id: developer-agent-1
@@ -2243,7 +2247,7 @@ class HandoffGateTests(unittest.TestCase):
                     input_hashes:
                       - docs/agent-runs/run/handoffs/03-test-case-developer.md sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
                     output_hashes:
-                      - docs/agent-runs/run/evidence/implementation-manifest.md sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                      - docs/agent-runs/run/evidence/implementation-manifest.md sha256:{evidence_hash}
                     blocked_by: []
                     consumed_by:
                       - coverage-reviewer

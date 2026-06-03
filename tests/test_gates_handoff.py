@@ -86,10 +86,14 @@ class HandoffGateTests(unittest.TestCase):
             repo = Path(tmp)
             handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
             handoff_dir.mkdir(parents=True)
+            evidence = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-manifest.md"
+            evidence.parent.mkdir(parents=True)
+            evidence.write_text("Implementation manifest evidence.\n", encoding="utf-8")
+            evidence_hash = hashlib.sha256(evidence.read_bytes()).hexdigest()
             handoff = handoff_dir / "04-code-developer.md"
             handoff.write_text(
                 textwrap.dedent(
-                    """
+                    f"""
                     ---
                     agent: code-developer
                     agent_id: developer-agent-1
@@ -101,7 +105,7 @@ class HandoffGateTests(unittest.TestCase):
                     input_hashes:
                       - docs/agent-runs/run/handoffs/03-test-case-developer.md sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
                     output_hashes:
-                      - docs/agent-runs/run/evidence/implementation-manifest.md sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                      - docs/agent-runs/run/evidence/implementation-manifest.md sha256:{evidence_hash}
                     blocked_by: []
                     consumed_by:
                       - coverage-reviewer
@@ -396,6 +400,133 @@ class HandoffGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("path" in reason.lower() for reason in result["blocked_reasons"]))
+
+    def test_handoff_gate_blocks_output_hash_mismatch_against_current_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            evidence = repo / "docs" / "agent-runs" / "run" / "evidence" / "impact-summary.md"
+            handoff_dir.mkdir(parents=True)
+            evidence.parent.mkdir(parents=True)
+            evidence.write_text("current impact evidence\n", encoding="utf-8")
+            handoff = handoff_dir / "01-requirements-clarifier.md"
+            handoff.write_text(
+                textwrap.dedent(
+                    """
+                    ---
+                    agent: requirements-clarifier
+                    agent_id: requirements-agent-1
+                    status: ready
+                    inputs:
+                      - user request
+                    outputs:
+                      - docs/agent-runs/run/evidence/impact-summary.md
+                    input_hashes:
+                      - user-request sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    output_hashes:
+                      - docs/agent-runs/run/evidence/impact-summary.md sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+                    consumed_by:
+                      - implementation-planner
+                    open_questions: None
+                    ---
+
+                    ## Summary
+                    Requirements are clarified.
+
+                    ## Facts Used
+                    The design document was inspected.
+
+                    ## Decisions Made
+                    Downstream agents may proceed.
+
+                    ## Open Questions
+                    None
+
+                    ## Downstream Assumptions
+                    Workers consume evidence files.
+
+                    ## Verification Evidence
+                    Evidence hashes are declared in frontmatter.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            self.write_ready_marker(handoff, producer_agent="requirements-agent-1")
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("output_hashes" in reason and "does not match" in reason for reason in result["blocked_reasons"]))
+
+    def test_handoff_gate_blocks_duplicate_ready_marker_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            evidence = repo / "docs" / "agent-runs" / "run" / "evidence" / "requirements-summary.md"
+            handoff_dir.mkdir(parents=True)
+            evidence.parent.mkdir(parents=True)
+            evidence.write_text("requirements evidence\n", encoding="utf-8")
+            evidence_hash = hashlib.sha256(evidence.read_bytes()).hexdigest()
+            handoff = handoff_dir / "01-requirements-clarifier.md"
+            handoff.write_text(
+                textwrap.dedent(
+                    f"""
+                    ---
+                    agent: requirements-clarifier
+                    agent_id: requirements-agent-1
+                    status: ready
+                    inputs:
+                      - user request
+                    outputs:
+                      - docs/agent-runs/run/evidence/requirements-summary.md
+                    input_hashes:
+                      - user-request sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    output_hashes:
+                      - docs/agent-runs/run/evidence/requirements-summary.md sha256:{evidence_hash}
+                    consumed_by:
+                      - implementation-planner
+                    open_questions: None
+                    ---
+
+                    ## Summary
+                    Requirements are clarified.
+
+                    ## Facts Used
+                    The design document was inspected.
+
+                    ## Decisions Made
+                    Downstream agents may proceed.
+
+                    ## Open Questions
+                    None
+
+                    ## Downstream Assumptions
+                    Workers consume evidence files.
+
+                    ## Verification Evidence
+                    Evidence hashes are declared in frontmatter.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            self.write_ready_marker(handoff, producer_agent="requirements-agent-1")
+            duplicate = handoff.with_name(handoff.name + ".ready.json")
+            duplicate.write_text(
+                json.dumps(
+                    {
+                        "path": handoff.name,
+                        "sha256": hashlib.sha256(handoff.read_bytes()).hexdigest(),
+                        "producer_agent": "requirements-agent-1",
+                        "status": "ready",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("duplicate ready marker" in reason.lower() for reason in result["blocked_reasons"]))
 
 
 

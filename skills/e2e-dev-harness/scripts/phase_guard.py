@@ -72,6 +72,7 @@ DISPATCH_GATED_READ_LIFECYCLES = {"CLARIFIED", "SERVICE_DESIGN_REQUIRED", "PLANN
 TEST_CODE_MARKERS = ("/src/test/", "/test/", "/tests/")
 REVIEW_DISPATCH_PHASES = {"r1-review", "r2-review", "r3-review"}
 REVIEW_REPORT_NAME_RE = re.compile(r"^R[123](?:[-_].*)?\.md$", re.IGNORECASE)
+ACTIVE_DISPATCH_STATUSES = {"awaiting_runtime_spawn", "waiting_dispatch", "worker_dispatched", "dispatched", "worker_running"}
 DEFAULT_ALLOWED_RUNTIME_LIFECYCLES = {"IMPLEMENTED"}
 DEFAULT_ALLOWED_TEST_LIFECYCLES = {"PLANNED", "RED_READY", "IMPLEMENTED"}
 COORDINATOR_INLINE_WRITE_WARN_CHARS = 8_000
@@ -818,6 +819,66 @@ def review_report_write_blockers(repo: Path, lock: Path | None, review_paths: li
     return blocked
 
 
+def active_dispatches(state_data: dict) -> list[dict]:
+    dispatches: list[dict] = []
+    current = state_data.get("dispatch") if isinstance(state_data.get("dispatch"), dict) else {}
+    if current:
+        dispatches.append(current)
+    all_dispatches = state_data.get("dispatches") if isinstance(state_data.get("dispatches"), dict) else {}
+    for dispatch in all_dispatches.values():
+        if isinstance(dispatch, dict) and dispatch not in dispatches:
+            dispatches.append(dispatch)
+    return [
+        dispatch
+        for dispatch in dispatches
+        if str(dispatch.get("status", "")).strip() in ACTIVE_DISPATCH_STATUSES
+        and str(dispatch.get("current_task_id", "")).strip()
+    ]
+
+
+def task_outputs_for_dispatch(repo: Path, state_path: Path, task_id: str) -> set[str]:
+    schedule_path = state_path.parent / "agent-schedule.json"
+    schedule = load_json(schedule_path)
+    outputs: set[str] = set()
+    for task in schedule.get("tasks", []) or []:
+        if not isinstance(task, dict) or str(task.get("id", "")).strip() != task_id:
+            continue
+        outputs.update(posix_relative(repo, resolve_for_repo(repo, Path(item))) for item in task.get("outputs", []) or [])
+    return outputs
+
+
+def worker_output_write_blockers(repo: Path, lock: Path | None, output_paths: list[Path]) -> list[str]:
+    if not lock or not lock.exists() or not output_paths:
+        return []
+    _lock_data, state_data, state_blockers = lock_state_pair(repo, lock)
+    if state_blockers:
+        return state_blockers
+    state_path = run_state_path_for_lock(repo, lock)
+    requested = {
+        posix_relative(repo, resolve_for_repo(repo, path))
+        for path in output_paths
+        if not is_review_report_path(repo, path)
+    }
+    if not requested:
+        return []
+    blocked: list[str] = []
+    for dispatch in active_dispatches(state_data):
+        task_id = str(dispatch.get("current_task_id", "")).strip()
+        owned_outputs = task_outputs_for_dispatch(repo, state_path, task_id)
+        touched = sorted(requested & owned_outputs)
+        if not touched:
+            continue
+        if str(dispatch.get("status", "")).strip() != "worker_running" or str(dispatch.get("spawn_confirmed_by", "")).strip() != "phase_guard":
+            blocked.append(
+                "Worker output write blocked: scheduled output is owned by active dispatch "
+                + task_id
+                + "; spawn the dispatcher-generated worker and let the Task hook prove the worker session before writing "
+                + ", ".join(touched)
+                + "."
+            )
+    return blocked
+
+
 def todo_list_blockers(repo: Path, lock: Path | None, task_text: str) -> tuple[list[str], str]:
     text = task_text.strip()
     if not text:
@@ -1314,6 +1375,16 @@ def validate_action(
                 "blocked_reasons": review_blockers,
                 "warnings": warnings,
                 "review_report_paths": result_paths(repo, review_report_paths),
+                **guidance_from_lock(repo, lock),
+            }
+    if normalized in WRITE_TOOLS and (normalized not in SHELL_TOOLS or shell_mutation):
+        output_blockers = worker_output_write_blockers(repo, lock, paths)
+        if output_blockers:
+            return {
+                "ready": False,
+                "blocked_reasons": output_blockers,
+                "warnings": warnings,
+                "artifact_paths": result_paths(repo, paths),
                 **guidance_from_lock(repo, lock),
             }
     if normalized in TODO_TOOLS:

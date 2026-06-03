@@ -3766,6 +3766,74 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("T01", result["open_tasks"][0]["id"])
         self.assertTrue(any(item["task_id"] == "T03" for item in result["blocked_tasks"]))
 
+    def test_dispatch_status_can_write_manual_recovery_request_for_user_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            evidence = run_dir / "service-plans" / "order-service" / "unit-test-evidence.txt"
+            request_path = run_dir / "recovery-requests" / "T03.json"
+            evidence.parent.mkdir(parents=True)
+            evidence.write_text("passed\n", encoding="utf-8")
+            evidence_ref = evidence.relative_to(repo).as_posix()
+            state = run_state.build_state("run", "multi", ["services/order-service"], "docs/agent-runs/run/artifact-registry.json", "IMPLEMENTED")
+            state["dispatches"] = {
+                "T03": {
+                    "status": "worker_running",
+                    "current_task_id": "T03",
+                    "current_agent": "code-developer-order-service",
+                    "worker_handle": "manual-worker-T03",
+                    "worker_session": "manual-worker-session-T03",
+                    "spawn_confirmed_by": "dispatch_ack",
+                }
+            }
+            state["dispatch"] = state["dispatches"]["T03"]
+            run_state.write_state(repo, state_path, state)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "tasks": [
+                            {
+                                "id": "T03",
+                                "phase": "implement",
+                                "agent": "code-developer-order-service",
+                                "service": "services/order-service",
+                                "status": "claimed",
+                                "owner": "code-developer-order-service",
+                                "outputs": [evidence_ref],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, result = e2e_dev_harness.dispatch_status(
+                SimpleNamespace(
+                    repo=repo,
+                    schedule=schedule,
+                    state=state_path,
+                    write_recovery_request=request_path,
+                    task_id="T03",
+                    agent="code-developer-order-service",
+                    evidence=[evidence_ref],
+                    status_file=None,
+                )
+            )
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code)
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(str(request_path), result["recovery_request_path"])
+        self.assertFalse(request["approved"])
+        self.assertEqual("T03", request["task_id"])
+        self.assertEqual("code-developer-order-service", request["agent"])
+        self.assertIn(evidence_ref, request["allowed_evidence"])
+        self.assertIn(evidence_ref, request["evidence_hashes"])
+
     def test_dispatch_complete_runs_reviewer_gate_for_review_tasks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -5802,7 +5870,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertTrue(summary["manual_recovery_events"])
 
-    def test_dispatch_complete_manual_recovery_writes_event_and_closes_dispatch(self) -> None:
+    def test_dispatch_complete_manual_recovery_requires_approval_before_closing_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             schedule_path = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
@@ -5815,6 +5883,10 @@ class OrchestrationArtifactTests(unittest.TestCase):
                 "status": "worker_running",
                 "current_task_id": "T03",
                 "current_agent": "code-developer-order-service",
+                "worker_handle": "fresh-worker-T03",
+                "worker_session": "fresh-worker-session-T03",
+                "spawn_acknowledged_at": "2026-06-03T14:44:24Z",
+                "spawn_confirmed_by": "dispatch_ack",
             }
             state["dispatches"] = {"T03": dict(state["dispatch"])}
             run_state.write_state(repo, state_path, state)
@@ -5849,23 +5921,155 @@ class OrchestrationArtifactTests(unittest.TestCase):
                     agent="code-developer-order-service",
                     evidence=["docs/agent-runs/run/service-plans/order-service/unit-test-evidence.txt"],
                     manual_recovery=True,
+                    recovery_approval=None,
                     status_file=None,
                 )
             )
             updated_schedule = json.loads(schedule_path.read_text(encoding="utf-8"))
             updated_state = json.loads(state_path.read_text(encoding="utf-8"))
             event_path = state_path.parent / "dispatch-events" / "T03-completed.json"
-            event_exists = event_path.exists()
-            event = json.loads(event_path.read_text(encoding="utf-8")) if event_exists else {}
+
+        self.assertEqual(2, code)
+        self.assertFalse(result["ready"])
+        self.assertTrue(
+            any("recovery" in reason.lower() and "approval" in reason.lower() for reason in result["blocked_reasons"]),
+            result["blocked_reasons"],
+        )
+        self.assertEqual("claimed", updated_schedule["tasks"][1]["status"])
+        self.assertEqual("worker_running", updated_state["dispatches"]["T03"]["status"])
+        self.assertFalse(event_path.exists())
+
+    def test_dispatch_complete_manual_recovery_blocks_without_active_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule_path = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            evidence = repo / "docs" / "agent-runs" / "run" / "service-plans" / "order-service" / "unit-test-evidence.txt"
+            evidence.parent.mkdir(parents=True)
+            evidence.write_text("passed\n", encoding="utf-8")
+            state = run_state.build_state("run", "multi", ["services/order-service"], "docs/agent-runs/run/artifact-registry.json", "IMPLEMENTED")
+            run_state.write_state(repo, state_path, state)
+            schedule_path.parent.mkdir(parents=True, exist_ok=True)
+            schedule_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "tasks": [
+                            {
+                                "id": "T03",
+                                "phase": "implement",
+                                "agent": "code-developer-order-service",
+                                "service": "services/order-service",
+                                "status": "claimed",
+                                "owner": "code-developer-order-service",
+                                "outputs": ["docs/agent-runs/run/service-plans/order-service/unit-test-evidence.txt"],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, result = e2e_dev_harness.dispatch_complete(
+                SimpleNamespace(
+                    repo=repo,
+                    schedule=schedule_path,
+                    state=state_path,
+                    task_id="T03",
+                    agent="code-developer-order-service",
+                    evidence=["docs/agent-runs/run/service-plans/order-service/unit-test-evidence.txt"],
+                    manual_recovery=True,
+                    recovery_approval=None,
+                    status_file=None,
+                )
+            )
+            updated_schedule = json.loads(schedule_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(2, code)
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("active dispatch" in reason.lower() for reason in result["blocked_reasons"]))
+        self.assertEqual("claimed", updated_schedule["tasks"][0]["status"])
+
+    def test_dispatch_complete_manual_recovery_with_approval_closes_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule_path = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            evidence = repo / "docs" / "agent-runs" / "run" / "service-plans" / "order-service" / "unit-test-evidence.txt"
+            approval = repo / "docs" / "agent-runs" / "run" / "recovery-requests" / "T03-approved.json"
+            evidence.parent.mkdir(parents=True)
+            approval.parent.mkdir(parents=True)
+            evidence.write_text("passed\n", encoding="utf-8")
+            evidence_ref = evidence.relative_to(repo).as_posix()
+            state = run_state.build_state("run", "multi", ["services/order-service"], "docs/agent-runs/run/artifact-registry.json", "IMPLEMENTED")
+            state["dispatch"] = {
+                "status": "worker_running",
+                "current_task_id": "T03",
+                "current_agent": "code-developer-order-service",
+                "worker_handle": "fresh-worker-T03",
+                "worker_session": "fresh-worker-session-T03",
+                "spawn_acknowledged_at": "2026-06-03T14:44:24Z",
+                "spawn_confirmed_by": "dispatch_ack",
+            }
+            state["dispatches"] = {"T03": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            schedule_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "tasks": [
+                            {
+                                "id": "T03",
+                                "phase": "implement",
+                                "agent": "code-developer-order-service",
+                                "service": "services/order-service",
+                                "status": "claimed",
+                                "owner": "code-developer-order-service",
+                                "outputs": [evidence_ref],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            approval.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.recovery-approval.v1",
+                        "task_id": "T03",
+                        "agent": "code-developer-order-service",
+                        "approved": True,
+                        "expires_at": "2099-01-01T00:00:00Z",
+                        "allowed_evidence": [evidence_ref],
+                        "evidence_hashes": {evidence_ref: hashlib.sha256(evidence.read_bytes()).hexdigest()},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, result = e2e_dev_harness.dispatch_complete(
+                SimpleNamespace(
+                    repo=repo,
+                    schedule=schedule_path,
+                    state=state_path,
+                    task_id="T03",
+                    agent="code-developer-order-service",
+                    evidence=[evidence_ref],
+                    manual_recovery=True,
+                    recovery_approval=approval,
+                    status_file=None,
+                )
+            )
+            updated_schedule = json.loads(schedule_path.read_text(encoding="utf-8"))
+            updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+            event = json.loads((state_path.parent / "dispatch-events" / "T03-completed.json").read_text(encoding="utf-8"))
 
         self.assertEqual(0, code)
         self.assertTrue(result["ready"], result["blocked_reasons"])
-        self.assertTrue(any("manual recovery" in warning.lower() for warning in result["warnings"]))
-        self.assertEqual("completed", updated_schedule["tasks"][1]["status"])
-        self.assertTrue(updated_schedule["manual_recovery_events"])
+        self.assertEqual("completed", updated_schedule["tasks"][0]["status"])
         self.assertEqual("worker_completed", updated_state["dispatches"]["T03"]["status"])
-        self.assertTrue(updated_state["dispatches"]["T03"]["manual_recovery"])
-        self.assertTrue(event_exists)
         self.assertTrue(event["manual_recovery"])
 
     def test_agent_task_claim_allows_service_implementation_plan_input_without_ready_marker(self) -> None:
@@ -7029,6 +7233,57 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("Review report write blocked" in reason for reason in result["blocked_reasons"]))
+
+    def test_phase_guard_blocks_coordinator_write_to_active_worker_output_without_task_hook_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            schedule = run_dir / "agent-schedule.json"
+            output = Path("docs/agent-runs/run/evidence/impact-summary.md")
+            state = run_state.build_state("run", "bootstrap", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            state["dispatches"] = {
+                "T01": {
+                    "status": "worker_running",
+                    "current_task_id": "T01",
+                    "current_agent": "requirements-clarifier",
+                    "worker_handle": "manual-worker-T01",
+                    "worker_session": "manual-worker-session-T01",
+                    "spawn_acknowledged_at": "2026-06-03T14:44:24Z",
+                    "spawn_confirmed_by": "dispatch_ack",
+                }
+            }
+            state["dispatch"] = state["dispatches"]["T01"]
+            run_state.write_state(repo, state_path, state)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "role_group": "design",
+                                "outputs": [output.as_posix()],
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = phase_guard.validate_action(
+                repo,
+                "Write",
+                [output],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("worker output write blocked" in reason.lower() for reason in result["blocked_reasons"]))
 
     def test_phase_guard_allows_reviewer_report_write_from_active_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

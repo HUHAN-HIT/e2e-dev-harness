@@ -228,6 +228,10 @@ def marker_path(path: Path) -> Path:
     return path.with_suffix(".ready.json")
 
 
+def alternate_marker_path(path: Path) -> Path:
+    return path.with_name(path.name + ".ready.json")
+
+
 def read_json(path: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -238,8 +242,13 @@ def read_json(path: Path) -> dict:
 def validate_ready_marker(path: Path, agent_id: str, status: str) -> list[str]:
     blocked: list[str] = []
     marker = marker_path(path)
+    alternate = alternate_marker_path(path)
     if status not in PASS_STATUSES:
         return blocked
+    if marker.exists() and alternate.exists():
+        blocked.append(
+            f"Handoff {path} has duplicate ready marker files: {marker.name} and {alternate.name}; keep only the canonical marker."
+        )
     if not marker.exists():
         blocked.append(f"Handoff {path} is ready but missing ready marker: {marker.name}")
         return blocked
@@ -299,7 +308,54 @@ def self_referential_output_blockers(path: Path, fields: dict[str, str | list[st
     return blocked
 
 
-def validate_item(path: Path, fields: dict[str, str | list[str]], body: str) -> tuple[dict, list[str]]:
+def hash_entry_parts(value: str) -> tuple[str, str]:
+    match = SHA_RE.search(value)
+    if not match:
+        return value.strip(), ""
+    return value[: match.start()].strip().strip("\"'"), match.group(0).split(":", 1)[1].lower()
+
+
+def looks_like_artifact_path(value: str) -> bool:
+    path = value.replace("\\", "/").strip()
+    if not path or " " in path:
+        return False
+    return "/" in path or Path(path).suffix.lower() in {".md", ".json", ".txt", ".xml", ".yaml", ".yml"}
+
+
+def artifact_hash_blockers(
+    repo: Path,
+    fields: dict[str, str | list[str]],
+    require_files: bool,
+) -> list[str]:
+    blocked: list[str] = []
+    output_refs = {normalize_artifact_path(repo, item) for item in as_list(fields.get("outputs"))}
+    for key in ("input_hashes", "output_hashes"):
+        for value in as_list(fields.get(key)):
+            artifact_ref, expected_hash = hash_entry_parts(value)
+            if not expected_hash or not looks_like_artifact_path(artifact_ref):
+                continue
+            full = Path(artifact_ref)
+            if not full.is_absolute():
+                full = repo / full
+            normalized_ref = normalize_artifact_path(repo, artifact_ref)
+            must_exist = key == "output_hashes" and (require_files or normalized_ref in output_refs)
+            if not full.exists():
+                if must_exist:
+                    blocked.append(f"Handoff {key} entry references missing artifact: {artifact_ref}")
+                continue
+            actual_hash = hashlib.sha256(full.read_bytes()).hexdigest()
+            if actual_hash != expected_hash:
+                blocked.append(f"Handoff {key} hash for {artifact_ref} does not match current file content.")
+    return blocked
+
+
+def validate_item(
+    repo: Path,
+    path: Path,
+    fields: dict[str, str | list[str]],
+    body: str,
+    require_files: bool,
+) -> tuple[dict, list[str]]:
     blocked: list[str] = []
     missing = [label for key, label in REQUIRED_FIELDS.items() if key not in fields]
     if missing:
@@ -327,6 +383,7 @@ def validate_item(path: Path, fields: dict[str, str | list[str]], body: str) -> 
             if not SHA_RE.search(value):
                 blocked.append(f"Handoff {path} {key} entry must include sha256:<64-hex>: {value}")
     blocked.extend(self_referential_output_blockers(path, fields))
+    blocked.extend(artifact_hash_blockers(repo, fields, require_files))
 
     open_questions = as_text(fields.get("open_questions"))
     body_open_questions = open_questions_section(body)
@@ -373,7 +430,7 @@ def validate(
     items: list[dict] = []
     for path in files:
         fields, body = parse_frontmatter(path)
-        item, item_blocked = validate_item(path, fields, body)
+        item, item_blocked = validate_item(repo, path, fields, body, require_files)
         items.append(item)
         blocked.extend(item_blocked)
     return {

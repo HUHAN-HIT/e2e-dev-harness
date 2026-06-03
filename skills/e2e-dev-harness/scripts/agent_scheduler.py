@@ -683,6 +683,7 @@ def complete(
     dispatcher_confirmed: bool = False,
     allow_local_completion: bool = False,
     manual_recovery: bool = False,
+    recovery_approved: bool = False,
 ) -> dict:
     path = resolve(repo, schedule_path)
     if not path or not path.exists():
@@ -719,7 +720,7 @@ def complete(
         return {
             "ready": False,
             "blocked_reasons": [
-                f"Task {task_id} remains incomplete; run dispatch-complete --manual-recovery with valid evidence to close dispatcher-confirmed recovery."
+                f"Task {task_id} remains incomplete; write a recovery approval request with dispatch-status --write-recovery-request, get explicit user approval, then rerun dispatch-complete --manual-recovery --recovery-approval <file>."
             ],
             "warnings": warnings,
             "schedule": str(path),
@@ -763,6 +764,7 @@ def complete(
                 "event": "dispatch-complete-manual-recovery",
                 "evidence": resolved_evidence,
                 "warning": warnings[-1],
+                "recovery_approved": recovery_approved,
                 "recorded_at": now_iso(),
             }
         )
