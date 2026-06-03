@@ -18,15 +18,20 @@
   - `preflight(args)` 命令 + argparse 注册（`preflight` 子命令）+ main 分发。
 - 测试：`tests/test_preflight_aggregator.py`（3 用例，全绿）。
 - 验证：全量 887 测试通过；CLI 冒烟 `preflight --state <CREATED-state>` → exit 2 / gate=clarification。
-- 当前仅覆盖 2 门禁：clarification、service_design。
+- 当前覆盖 3 门禁：clarification、service_design、tdd_red。
+
+### 任务 #3 — P0 扩展（tdd_red 门禁）✅ 2026-06-03 完成
+- 新增 `tdd_red_dispatch_blockers(repo, run_state_path)`（`e2e_dev_harness.py`，紧接 `service_design_dispatch_blockers` 之后），并注册进 `_preflight_checks()`（gate=`tdd_red`, code=`BLK_TDD_RED_DISPATCH`, return_phase=`PLANNED`）。
+- 复用 `agent_scheduler.dispatch_completion_blockers_for_phases(... ["tdd-red","r2-review"] ...)`，镜像 `implementation_gate.validate_multi_service_preconditions`（`implementation_gate.py:161`）。
+- **关键设计决定（防过度拦截）**：tdd_red 仅在 **lifecycle==PLANNED 且 multi-service** 时触发。原因：`TRANSITIONS["PLANNED"]={"RED_READY","IMPLEMENTED"}` 有两个后继，单服务/直奔 IMPLEMENTED 的流程本就不欠 tdd-red dispatch；只有 multi-service 的 implementation gate 才强制 tdd-red+r2-review dispatch。无条件拦会制造更多拉扯。
+- 测试：`tests/test_preflight_aggregator.py` 新增 2 用例（multi-service PLANNED 报 blocker；single-service PLANNED 不拦），全 5 绿。
+- 验证：CLI 冒烟 `preflight <repo> --state <multi PLANNED>` → exit 2 / ready=false。全量回归仅 2 个**先前已存在**的失败（`test_hook_examples_call_phase_guard`，源于上个会话改了 `claude-code-settings.example.json` 删掉 matcher 里的 `Read`；已 stash 我的改动复现确认与本次无关）。
+- 未提交。implementation/completion 门禁是 evidence 校验形态（非纯 dispatch-completion），不适配本聚合器的纯 blocker 契约，属另一条更高风险工作线，未纳入。
 
 ## 待续
 
-### 任务 #3 — P0 扩展（低风险，建议先做）
-把 `_preflight_checks()` 从 2 个门禁扩到更多 lifecycle 门禁。
-- 复用：`agent_scheduler.dispatch_completion_blockers_for_phases`（`agent_scheduler.py:179`）等现成纯函数。
-- 聚合器主循环无需改；每加一门禁加一红测（参照 `tests/test_preflight_aggregator.py`）。
-- 注意：blocker 函数需 `(repo, run_state_path)->list[str]` 形态，否则在 `_preflight_checks` 里包一层适配。
+### 先前已存在的失败（非本工作线，建议顺手修）
+`test_hook_examples_call_phase_guard` 2 处 SUBFAILED：`claude-code-settings.example.json` 的 matcher 缺 `Read`，而测试 `assertIn("Read")`。要么把 `Read` 加回 example matcher，要么改测试预期——取决于上个会话改 matcher 的本意。
 
 ### 任务 #4 — P1 harness 指引去重（中风险）
 `phase_guard.py:guidance_for_lifecycle()`（~:422）每次 block 全量重发 forbidden_actions/exploration_policy/clarification_interaction，无去重。

@@ -596,6 +596,82 @@ class OrchestrationArtifactTests(unittest.TestCase):
                 self.assertNotIn("Continue TDD red/green", joined)
                 self.assertNotIn("Capture red-test evidence", joined)
 
+    def test_next_and_phase_guard_share_lifecycle_policy(self) -> None:
+        for lifecycle in ("CREATED", "CLARIFIED", "SERVICE_DESIGN_REQUIRED", "PLANNED", "RED_READY", "IMPLEMENTED"):
+            with self.subTest(lifecycle=lifecycle):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    lock = repo / "docs" / "agent-runs" / "run" / ".phase-lock"
+                    lock.parent.mkdir(parents=True, exist_ok=True)
+                    lock.write_text(lifecycle + "\n", encoding="utf-8")
+                    state = run_state.build_state(
+                        "docs/agent-runs/run",
+                        "single-review",
+                        [],
+                        "docs/agent-runs/run/artifact-registry.json",
+                        lifecycle,
+                    )
+
+                    action = e2e_dev_harness.next_action_for_lifecycle(lifecycle, state)
+                    guidance = phase_guard.guidance_for_lifecycle(repo, lock, lifecycle)
+
+                self.assertEqual(action["required_todo_list"], guidance["required_todo_list"])
+                self.assertEqual(action["exploration_policy"], guidance["exploration_policy"])
+
+    def test_next_includes_preflight_summary_and_prioritizes_single_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "bootstrap",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            run_state.write_state(repo, state_path, state)
+
+            _code, result = e2e_dev_harness.next_step(
+                SimpleNamespace(repo=repo, state=state_path, status_file=None, runtime="codex")
+            )
+
+        self.assertIn("preflight", result)
+        self.assertFalse(result["preflight"]["ready"])
+        self.assertEqual("clarification", result["preflight"]["blockers"][0]["gate"])
+        self.assertEqual(result["preflight"]["next_single_action"], result["next"]["next_single_action"])
+
+    def test_phase_guard_compact_guidance_keeps_full_policy_out_of_hook_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            lock = run_dir / ".phase-lock"
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "bootstrap",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            run_state.write_state(repo, state_path, state)
+            lock.write_text(json.dumps({"lifecycle": "CREATED"}), encoding="utf-8")
+
+            result = phase_guard.validate_action(
+                repo,
+                "TodoWrite",
+                [],
+                lock_path=lock,
+                task_text="Read the codebase locally before dispatching clarification",
+                compact_guidance=True,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertIn("phase_guidance", result)
+        self.assertIn("next_single_action", result)
+        self.assertIn("guidance_ref", result)
+        self.assertNotIn("required_todo_list", result)
+        self.assertNotIn("exploration_policy", result)
+
     def test_next_planned_routes_tdd_and_r2_through_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -6071,6 +6147,238 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("completed", updated_schedule["tasks"][0]["status"])
         self.assertEqual("worker_completed", updated_state["dispatches"]["T03"]["status"])
         self.assertTrue(event["manual_recovery"])
+
+    def test_dispatch_complete_manual_recovery_blocks_expired_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule_path = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            evidence = repo / "docs" / "agent-runs" / "run" / "service-plans" / "order-service" / "unit-test-evidence.txt"
+            approval = repo / "docs" / "agent-runs" / "run" / "recovery-requests" / "T03-expired.json"
+            evidence.parent.mkdir(parents=True)
+            approval.parent.mkdir(parents=True)
+            evidence.write_text("passed\n", encoding="utf-8")
+            evidence_ref = evidence.relative_to(repo).as_posix()
+            state = run_state.build_state("run", "multi", ["services/order-service"], "docs/agent-runs/run/artifact-registry.json", "IMPLEMENTED")
+            state["dispatch"] = {
+                "status": "worker_running",
+                "current_task_id": "T03",
+                "current_agent": "code-developer-order-service",
+                "worker_handle": "fresh-worker-T03",
+                "worker_session": "fresh-worker-session-T03",
+                "spawn_acknowledged_at": "2026-06-03T14:44:24Z",
+                "spawn_confirmed_by": "dispatch_ack",
+            }
+            state["dispatches"] = {"T03": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            schedule_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "tasks": [
+                            {
+                                "id": "T03",
+                                "phase": "implement",
+                                "agent": "code-developer-order-service",
+                                "service": "services/order-service",
+                                "status": "claimed",
+                                "owner": "code-developer-order-service",
+                                "outputs": [evidence_ref],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            approval.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.recovery-approval.v1",
+                        "task_id": "T03",
+                        "agent": "code-developer-order-service",
+                        "approved": True,
+                        "expires_at": "2000-01-01T00:00:00Z",
+                        "allowed_evidence": [evidence_ref],
+                        "evidence_hashes": {evidence_ref: hashlib.sha256(evidence.read_bytes()).hexdigest()},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, result = e2e_dev_harness.dispatch_complete(
+                SimpleNamespace(
+                    repo=repo,
+                    schedule=schedule_path,
+                    state=state_path,
+                    task_id="T03",
+                    agent="code-developer-order-service",
+                    evidence=[evidence_ref],
+                    manual_recovery=True,
+                    recovery_approval=approval,
+                    status_file=None,
+                )
+            )
+            updated_schedule = json.loads(schedule_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(2, code)
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("expired" in reason.lower() for reason in result["blocked_reasons"]))
+        self.assertEqual("claimed", updated_schedule["tasks"][0]["status"])
+
+    def test_dispatch_complete_manual_recovery_blocks_approval_identity_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule_path = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            evidence = repo / "docs" / "agent-runs" / "run" / "service-plans" / "order-service" / "unit-test-evidence.txt"
+            approval = repo / "docs" / "agent-runs" / "run" / "recovery-requests" / "T03-wrong-task.json"
+            evidence.parent.mkdir(parents=True)
+            approval.parent.mkdir(parents=True)
+            evidence.write_text("passed\n", encoding="utf-8")
+            evidence_ref = evidence.relative_to(repo).as_posix()
+            state = run_state.build_state("run", "multi", ["services/order-service"], "docs/agent-runs/run/artifact-registry.json", "IMPLEMENTED")
+            state["dispatch"] = {
+                "status": "worker_running",
+                "current_task_id": "T03",
+                "current_agent": "code-developer-order-service",
+                "worker_handle": "fresh-worker-T03",
+                "worker_session": "fresh-worker-session-T03",
+                "spawn_acknowledged_at": "2026-06-03T14:44:24Z",
+                "spawn_confirmed_by": "dispatch_ack",
+            }
+            state["dispatches"] = {"T03": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            schedule_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "tasks": [
+                            {
+                                "id": "T03",
+                                "phase": "implement",
+                                "agent": "code-developer-order-service",
+                                "service": "services/order-service",
+                                "status": "claimed",
+                                "owner": "code-developer-order-service",
+                                "outputs": [evidence_ref],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            approval.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.recovery-approval.v1",
+                        "task_id": "T99",
+                        "agent": "other-agent",
+                        "approved": True,
+                        "expires_at": "2099-01-01T00:00:00Z",
+                        "allowed_evidence": [evidence_ref],
+                        "evidence_hashes": {evidence_ref: hashlib.sha256(evidence.read_bytes()).hexdigest()},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, result = e2e_dev_harness.dispatch_complete(
+                SimpleNamespace(
+                    repo=repo,
+                    schedule=schedule_path,
+                    state=state_path,
+                    task_id="T03",
+                    agent="code-developer-order-service",
+                    evidence=[evidence_ref],
+                    manual_recovery=True,
+                    recovery_approval=approval,
+                    status_file=None,
+                )
+            )
+
+        self.assertEqual(2, code)
+        self.assertFalse(result["ready"])
+        joined = "\n".join(result["blocked_reasons"]).lower()
+        self.assertIn("task mismatch", joined)
+        self.assertIn("agent mismatch", joined)
+
+    def test_dispatch_complete_manual_recovery_blocks_evidence_hash_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule_path = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            evidence = repo / "docs" / "agent-runs" / "run" / "service-plans" / "order-service" / "unit-test-evidence.txt"
+            approval = repo / "docs" / "agent-runs" / "run" / "recovery-requests" / "T03-hash-mismatch.json"
+            evidence.parent.mkdir(parents=True)
+            approval.parent.mkdir(parents=True)
+            evidence.write_text("passed\n", encoding="utf-8")
+            evidence_ref = evidence.relative_to(repo).as_posix()
+            state = run_state.build_state("run", "multi", ["services/order-service"], "docs/agent-runs/run/artifact-registry.json", "IMPLEMENTED")
+            state["dispatch"] = {
+                "status": "worker_running",
+                "current_task_id": "T03",
+                "current_agent": "code-developer-order-service",
+                "worker_handle": "fresh-worker-T03",
+                "worker_session": "fresh-worker-session-T03",
+                "spawn_acknowledged_at": "2026-06-03T14:44:24Z",
+                "spawn_confirmed_by": "dispatch_ack",
+            }
+            state["dispatches"] = {"T03": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            schedule_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "tasks": [
+                            {
+                                "id": "T03",
+                                "phase": "implement",
+                                "agent": "code-developer-order-service",
+                                "service": "services/order-service",
+                                "status": "claimed",
+                                "owner": "code-developer-order-service",
+                                "outputs": [evidence_ref],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            approval.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.recovery-approval.v1",
+                        "task_id": "T03",
+                        "agent": "code-developer-order-service",
+                        "approved": True,
+                        "expires_at": "2099-01-01T00:00:00Z",
+                        "allowed_evidence": [evidence_ref],
+                        "evidence_hashes": {evidence_ref: "0" * 64},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, result = e2e_dev_harness.dispatch_complete(
+                SimpleNamespace(
+                    repo=repo,
+                    schedule=schedule_path,
+                    state=state_path,
+                    task_id="T03",
+                    agent="code-developer-order-service",
+                    evidence=[evidence_ref],
+                    manual_recovery=True,
+                    recovery_approval=approval,
+                    status_file=None,
+                )
+            )
+
+        self.assertEqual(2, code)
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("hash does not match" in reason.lower() for reason in result["blocked_reasons"]))
 
     def test_agent_task_claim_allows_service_implementation_plan_input_without_ready_marker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

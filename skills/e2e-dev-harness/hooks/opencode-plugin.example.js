@@ -33,6 +33,7 @@ function guard(tool, args) {
       "--require-session-checkpoint",
       "--checkpoint-max-age-minutes",
       "30",
+      "--compact-guidance",
       "--json",
     ],
     { input: payload, encoding: "utf-8" },

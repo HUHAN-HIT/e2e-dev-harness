@@ -2,6 +2,6 @@
   "name": "e2e-dev-harness-phase-guard",
   "event": "pre-tool-use",
   "tools": ["write_file", "replace", "edit", "multi_edit"],
-  "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --require-active-run-for-read --json",
+  "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --require-active-run-for-read --compact-guidance --json",
   "blocking": true
 }

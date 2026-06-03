@@ -43,6 +43,8 @@ For each task:
 4. Require the worker to write only scheduled outputs and to return structured evidence paths.
 5. Run `e2e_dev_harness.py dispatch-complete --evidence <scheduled-output>` after the worker is acknowledged. Use raw `agent-task --action complete --allow-local-completion` only for explicit legacy/manual recovery.
 
+Manual recovery for a dispatcher-confirmed task is an audited exception, not a shortcut. First run `dispatch-status --write-recovery-request <file> --task-id <task-id> --agent <agent> --evidence <scheduled-output>` to generate the recovery approval request with evidence hashes. After explicit user approval, rerun `dispatch-complete --manual-recovery --recovery-approval <file>`. The approval must match the task id, agent, allowed evidence, current evidence hashes, and an unexpired `expires_at` timestamp.
+
 This L0 mode is intentionally serial. It still gives the harness the main multi-agent benefits: context isolation, role separation, explicit handoffs, leases, and machine-checkable ownership. Runtime adapters may parallelize independent `parallel_group` tasks later, but only after service designs, red-test evidence, contracts, and R2 review are stable.
 
 ## L1 Beat Cadence Dispatch

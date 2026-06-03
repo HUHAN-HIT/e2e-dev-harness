@@ -458,6 +458,63 @@ class HandoffGateTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("output_hashes" in reason and "does not match" in reason for reason in result["blocked_reasons"]))
 
+    def test_handoff_gate_allows_missing_non_output_input_hash_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff_dir = repo / "docs" / "agent-runs" / "run" / "handoffs"
+            evidence = repo / "docs" / "agent-runs" / "run" / "evidence" / "requirements-summary.md"
+            handoff_dir.mkdir(parents=True)
+            evidence.parent.mkdir(parents=True)
+            evidence.write_text("requirements evidence\n", encoding="utf-8")
+            evidence_hash = hashlib.sha256(evidence.read_bytes()).hexdigest()
+            handoff = handoff_dir / "01-requirements-clarifier.md"
+            handoff.write_text(
+                textwrap.dedent(
+                    f"""
+                    ---
+                    agent: requirements-clarifier
+                    agent_id: requirements-agent-1
+                    status: ready
+                    inputs:
+                      - user request
+                    outputs:
+                      - docs/agent-runs/run/evidence/requirements-summary.md
+                    input_hashes:
+                      - docs/agent-runs/run/evidence/missing-upstream.md sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    output_hashes:
+                      - docs/agent-runs/run/evidence/requirements-summary.md sha256:{evidence_hash}
+                    consumed_by:
+                      - implementation-planner
+                    open_questions: None
+                    ---
+
+                    ## Summary
+                    Requirements are clarified.
+
+                    ## Facts Used
+                    The upstream request hash is recorded even when the source artifact is not in this repo.
+
+                    ## Decisions Made
+                    Downstream agents may proceed.
+
+                    ## Open Questions
+                    None
+
+                    ## Downstream Assumptions
+                    Workers consume output evidence files.
+
+                    ## Verification Evidence
+                    Output hashes are checked against current files.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            self.write_ready_marker(handoff, producer_agent="requirements-agent-1")
+
+            result = handoff_gate.validate(repo, [handoff_dir])
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
     def test_handoff_gate_blocks_duplicate_ready_marker_names(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

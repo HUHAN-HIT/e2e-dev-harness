@@ -178,7 +178,7 @@ CREATED_COORDINATOR_TODO_RE = re.compile(
     re.IGNORECASE,
 )
 
-import ask_user_bridge  # noqa: E402
+import lifecycle_policy  # noqa: E402
 import dispatcher  # noqa: E402
 import run_state  # noqa: E402
 import session_checkpoint  # noqa: E402
@@ -309,152 +309,15 @@ def requirements_clarifier_task_for_state(repo: Path, state_path: Path, state_da
 
 
 def required_todo_list_for_lifecycle(lifecycle: str) -> list[str]:
-    state_path = "docs/agent-runs/<run>/run-state.json"
-    schedule_path = "docs/agent-runs/<run>/agent-schedule.json"
-    lists = {
-        "CREATED": [
-            f"Run e2e_dev_harness.py dispatch-beat --max-workers 1 --schedule {schedule_path} --state {state_path} to dispatch requirements-clarifier.",
-            "Spawn or acknowledge only the dispatcher-generated requirements-clarifier worker.",
-            "Do not perform clarification, GitNexus, rg/Read, design-doc, plan, TDD, or review work in coordinator chat.",
-            "Relay unresolved Restated Intent or Open Questions from the worker to the user.",
-            "Record returned requirements handoff evidence paths, then run dispatch-complete and next.",
-        ],
-        "CLARIFIED": [
-            "Run plan --create-archive only as a control-plane schedule/archive generation step when the full schedule is missing.",
-            "Run dispatch-beat/dispatch-next to spawn the independent R1 design-review worker.",
-            "Record dispatch-ack and dispatch-complete for R1 evidence, then run next.",
-            "Do not perform design, impact analysis, R1 review, TDD, or implementation work in coordinator chat.",
-        ],
-        "SERVICE_DESIGN_REQUIRED": [
-            "Run dispatch-beat/dispatch-next to spawn service-design workers for each required slice.",
-            f"Run e2e_dev_harness.py service-design --run-state {state_path} after worker evidence is returned.",
-            "Record dispatch-complete for service-design evidence, then run next.",
-            "Do not write service-design slices or dependency/runtime-path analysis in coordinator chat.",
-        ],
-        "PLANNED": [
-            "Run dispatch-beat/dispatch-next to spawn TDD red and R2 review workers.",
-            "Use only dispatcher-generated worker prompts with Task ID and Context Pack.",
-            "Wait for dispatch-complete to record red-test and R2 evidence.",
-        ],
-        "RED_READY": [
-            f"Run e2e_dev_harness.py gate --phase implementation --run-state {state_path}.",
-            "Do not edit production files until the implementation gate opens.",
-        ],
-        "IMPLEMENTED": [
-            "Run dispatch-beat/dispatch-next to spawn code-developer workers for assigned service/module scope.",
-            "Record dispatch-complete with green-test, implementation-manifest, and coverage evidence paths.",
-            "Run ac-progress after worker evidence; dispatch R3 and coverage only after all assigned ACs pass.",
-            "Do not write production/test code, R3 review, or coverage artifacts in coordinator chat.",
-        ],
-        "REVIEWED": [
-            "Run the completion gate and strict guard.",
-            "Write run summary and requirements archive evidence.",
-            "Resolve any rework before reporting completion.",
-        ],
-        "VERIFIED": [
-            "Refresh artifact registry and requirements archive.",
-            "Report final evidence paths and residual risks.",
-        ],
-        "REWORK_REQUIRED": [
-            "Read the rework item return_phase.",
-            "Return to the earliest required phase before editing files.",
-            "Close rework with evidence before continuing.",
-        ],
-    }
-    return lists.get(
-        lifecycle,
-        [
-            "Inspect run-state.json and repair the lifecycle.",
-            f"Run e2e_dev_harness.py next --state {state_path} after repair.",
-        ],
-    )
+    return lifecycle_policy.required_todo_list_for_lifecycle(lifecycle)
 
 
 def exploration_policy_for_lifecycle(lifecycle: str) -> dict:
-    if lifecycle == "CREATED":
-        return {
-            "schema": "e2e-dev-harness.exploration-policy.v1",
-            "preferred": "dispatcher",
-            "direct_tools_allowed_for": ["design-doc requirements analysis", "Restated Intent", "Open Questions"],
-            "direct_tools_blocked_for": ["code Read/Grep/Glob", "GitNexus impact evidence", "implementation planning"],
-            "required_for": ["requirements clarification", "Restated Intent", "Open Questions"],
-            "fallback": "Run dispatch-beat --max-workers 1 for the requirements-clarifier worker; coordinator may only relay returned questions and evidence paths. The clarifier worker may continue design-doc analysis without treating code exploration as evidence.",
-            "lifecycle": lifecycle,
-        }
-    return {
-        "schema": "e2e-dev-harness.exploration-policy.v1",
-        "preferred": "gitnexus",
-        "direct_tools_allowed_for": ["seed discovery", "small quoted evidence after GitNexus points to a file"],
-        "direct_tools_blocked_for": [],
-        "required_for": ["impact analysis", "call path tracing", "cross-service dependencies", "route/topic/contract ownership"],
-        "fallback": "If GitNexus is unavailable, write degradation evidence before treating rg/Read findings as workflow evidence.",
-        "lifecycle": lifecycle or "<missing>",
-    }
+    return lifecycle_policy.exploration_policy_for_lifecycle(lifecycle)
 
 
 def clarification_interaction_for_lifecycle(lifecycle: str) -> dict:
-    all_requests = [
-        {
-            "id": "confirm_restated_intent",
-            "header": "Intent",
-            "question": "Confirm or revise the requirements-clarifier worker's Restated Intent.",
-            "options": [
-                {
-                    "label": "Confirm (Recommended)",
-                    "description": "Use when the worker's Restated Intent matches the user's goal.",
-                },
-                {
-                    "label": "Revise",
-                    "description": "Use when the user needs to correct scope, behavior, or wording.",
-                },
-                {
-                    "label": "Keep blocked",
-                    "description": "Use when the user cannot confirm intent yet.",
-                },
-            ],
-            "provenance_required": "Record confirmed-by: user @<date/session/artifact> in Restated Intent.",
-        },
-        {
-            "id": "resolve_open_questions",
-            "header": "Questions",
-            "question": "Answer, defer, or keep blocked on unresolved Open Questions returned by the worker.",
-            "options": [
-                {
-                    "label": "Answer now (Recommended)",
-                    "description": "Use when the user can close the returned Open Questions now.",
-                },
-                {
-                    "label": "Defer out of scope",
-                    "description": "Use when the user explicitly excludes the question from this implementation.",
-                },
-                {
-                    "label": "Keep blocked",
-                    "description": "Use when planning and implementation should wait.",
-                },
-            ],
-            "provenance_required": "Record confirmed-by: user @<date/session/artifact> in Open Questions.",
-        },
-    ]
-    ask_user_requests = all_requests if lifecycle == "CREATED" else []
-    return {
-        "schema": "e2e-dev-harness.clarification-interaction.v1",
-        "interaction_required": lifecycle == "CREATED",
-        "must_wait_for_user_answer": lifecycle == "CREATED",
-        "questions_to_ask_user": [
-            "Relay the requirements-clarifier worker's Restated Intent confirmation request to the user.",
-            "Relay only unresolved behavior, API, data, ownership, test, or impact questions returned by the worker.",
-            "Record the worker's returned evidence paths after answers are captured.",
-        ] if lifecycle == "CREATED" else [],
-        "ask_user_schema": "codex.request_user_input.v1",
-        "ask_user_requests": ask_user_requests,
-        "runtime_action": ask_user_bridge.request_user_input_action(ask_user_requests),
-        "blocked_until_resolved": [
-            "planning",
-            "TDD",
-            "production-code edits",
-            "review dispatch that depends on clarified behavior",
-        ] if lifecycle == "CREATED" else [],
-    }
+    return lifecycle_policy.clarification_interaction_for_lifecycle(lifecycle)
 
 
 def state_path_display(repo: Path, lock: Path | None) -> str:
@@ -1282,7 +1145,7 @@ def coordinator_write_budget(
     return details, warnings, blockers
 
 
-def validate_action(
+def _validate_action(
     repo: Path,
     tool: str,
     paths: list[Path],
@@ -1796,6 +1659,62 @@ def validate_action(
     }
 
 
+def compact_guidance_result(result: dict) -> dict:
+    compact = dict(result)
+    full_guidance_keys = {
+        "required_todo_list",
+        "exploration_policy",
+        "clarification_interaction",
+        "todo_policy",
+        "allowed_direct_exploration_tools",
+        "direct_exploration_guidance",
+        "agent_dispatch_guidance",
+        "forbidden_actions",
+        "allowed_actions",
+    }
+    for key in full_guidance_keys:
+        compact.pop(key, None)
+    next_action = str(result.get("next_valid_command") or "")
+    if not next_action:
+        actions = result.get("allowed_actions", [])
+        if isinstance(actions, list) and actions:
+            next_action = str(actions[0])
+    compact["next_single_action"] = next_action
+    ref = str(result.get("run_state") or result.get("phase_lock") or "docs/agent-runs/<run>/run-state.json")
+    compact["guidance_ref"] = f"Run e2e_dev_harness.py next . --state {ref} for full phase guidance."
+    return compact
+
+
+def validate_action(
+    repo: Path,
+    tool: str,
+    paths: list[Path],
+    lock_path: Path | None = None,
+    run_dir: Path | None = None,
+    require_active_run_for_read: bool = False,
+    command_text: str = "",
+    task_text: str = "",
+    write_payload_text: str = "",
+    require_session_checkpoint: bool = False,
+    checkpoint_max_age_minutes: int = 30,
+    compact_guidance: bool = False,
+) -> dict:
+    result = _validate_action(
+        repo,
+        tool,
+        paths,
+        lock_path,
+        run_dir,
+        require_active_run_for_read,
+        command_text=command_text,
+        task_text=task_text,
+        write_payload_text=write_payload_text,
+        require_session_checkpoint=require_session_checkpoint,
+        checkpoint_max_age_minutes=checkpoint_max_age_minutes,
+    )
+    return compact_guidance_result(result) if compact_guidance else result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", nargs="?", default=".", type=Path)
@@ -1807,6 +1726,7 @@ def main() -> int:
     parser.add_argument("--require-session-checkpoint", action="store_true")
     parser.add_argument("--checkpoint-max-age-minutes", type=int, default=30)
     parser.add_argument("--hook-input", help="JSON hook input, or '-' for stdin.")
+    parser.add_argument("--compact-guidance", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -1836,6 +1756,7 @@ def main() -> int:
         task_text=task_text,
         require_session_checkpoint=args.require_session_checkpoint,
         checkpoint_max_age_minutes=args.checkpoint_max_age_minutes,
+        compact_guidance=args.compact_guidance,
     )
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
