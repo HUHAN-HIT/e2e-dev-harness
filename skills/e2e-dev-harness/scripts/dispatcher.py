@@ -1318,6 +1318,10 @@ def dispatch_complete(
         return complete
     if reviewer_result is not None:
         complete["reviewer_gate"] = reviewer_result
+    complete["runtime_completion"] = runtime_adapters.adapter_for(str(active_dispatch.get("runtime", ""))).complete(
+        complete.get("task", task),
+        complete.get("task", {}).get("evidence", evidence or []),
+    )
     complete["warnings"] = manual_warnings + complete.get("warnings", [])
     if complete["ready"]:
         completed_schedule = read_json(schedule_file)
@@ -1442,17 +1446,23 @@ def dispatch_ack(
     blocked.extend(worker_identity_blockers(repo, dispatch, worker_handle, worker_session))
     if blocked:
         return {"ready": False, "blocked_reasons": blocked, "warnings": [], "dispatch": dispatch}
+    adapter_ack = runtime_adapters.adapter_for(str(dispatch.get("runtime", ""))).ack(
+        {"id": task_id, "agent": agent},
+        worker_handle,
+        worker_session,
+    )
     acknowledged = dict(dispatch)
     acknowledged.update(
         {
             "status": "worker_running",
-            "worker_handle": worker_handle.strip(),
-            "worker_session": worker_session.strip() or worker_handle.strip(),
+            "worker_handle": adapter_ack.get("worker_handle", worker_handle.strip()),
+            "worker_session": adapter_ack.get("worker_session", worker_session.strip() or worker_handle.strip()),
             "spawn_acknowledged_at": run_state.now_iso(),
             "spawn_confirmed_by": "dispatch_ack",
             "manual_worker_confirmed": str(dispatch.get("runtime", "")).strip() == "manual",
         }
     )
+    acknowledged.update({key: value for key, value in adapter_ack.items() if key not in {"task_id"}})
     sync_invocation_for_ack(repo, dispatch, worker_handle, worker_session)
     update = update_dispatch_state(repo, state_path, acknowledged)
     if update["ready"] and state_file:

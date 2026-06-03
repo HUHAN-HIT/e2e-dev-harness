@@ -186,6 +186,141 @@ class RuntimeAdapterContractTests(unittest.TestCase):
         self.assertFalse(codex_request["arguments"]["fork_context"])
         self.assertIsNone(manual_request)
 
+    def test_dispatch_ack_uses_runtime_adapter_ack_contract(self) -> None:
+        class RecordingAdapter:
+            def __init__(self) -> None:
+                self.ack_calls: list[tuple[str, str, str]] = []
+
+            def ack(self, task: dict, worker_handle: str, worker_session: str = "") -> dict:
+                self.ack_calls.append((task["id"], worker_handle, worker_session))
+                return {
+                    "task_id": task["id"],
+                    "worker_handle": worker_handle,
+                    "worker_session": worker_session,
+                    "runtime_adapter": "recording",
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule, state_path = write_dispatch_fixture(repo)
+            dispatch_result = dispatcher.dispatch_next(repo, schedule, state_path, runtime="codex")
+            adapter = RecordingAdapter()
+
+            with patch.object(dispatcher.runtime_adapters, "adapter_for", return_value=adapter):
+                result = dispatcher.dispatch_ack(
+                    repo,
+                    state_path,
+                    "T10",
+                    "code-developer-order-service",
+                    "worker-123",
+                    "session-123",
+                )
+
+        self.assertTrue(dispatch_result["ready"], dispatch_result["blocked_reasons"])
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual([("T10", "worker-123", "session-123")], adapter.ack_calls)
+        self.assertEqual("recording", result["dispatch"]["runtime_adapter"])
+
+    def test_dispatch_complete_uses_runtime_adapter_complete_contract(self) -> None:
+        class RecordingAdapter:
+            def __init__(self) -> None:
+                self.complete_calls: list[tuple[str, list[str]]] = []
+
+            def complete(self, task: dict, evidence: list[str] | None = None) -> dict:
+                values = evidence or []
+                self.complete_calls.append((task["id"], values))
+                return {"task_id": task["id"], "evidence": values, "runtime_adapter": "recording"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule, state_path = write_dispatch_fixture(repo)
+            dispatcher.dispatch_next(repo, schedule, state_path, runtime="codex")
+            dispatcher.dispatch_ack(
+                repo,
+                state_path,
+                "T10",
+                "code-developer-order-service",
+                "worker-123",
+                "session-123",
+            )
+            evidence = "docs/agent-runs/run/service-plans/order-service/code-agent.md"
+            evidence_path = repo / evidence
+            evidence_path.parent.mkdir(parents=True, exist_ok=True)
+            implementation_summary = repo / "docs" / "agent-runs" / "run" / "evidence" / "implementation-summary.md"
+            implementation_summary.parent.mkdir(parents=True, exist_ok=True)
+            implementation_summary.write_text("implementation evidence\n", encoding="utf-8")
+            implementation_ref = implementation_summary.relative_to(repo).as_posix()
+            implementation_hash = hashlib.sha256(implementation_summary.read_bytes()).hexdigest()
+            input_ref = "docs/agent-runs/run/handoffs/01-requirements.md"
+            input_hash = hashlib.sha256((repo / input_ref).read_bytes()).hexdigest()
+            evidence_path.write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "agent: code-developer",
+                        "agent_id: worker-123",
+                        "status: ready",
+                        "inputs:",
+                        f"  - {input_ref}",
+                        "outputs:",
+                        f"  - {implementation_ref}",
+                        "input_hashes:",
+                        f"  - {input_ref} sha256:{input_hash}",
+                        "output_hashes:",
+                        f"  - {implementation_ref} sha256:{implementation_hash}",
+                        "consumed_by:",
+                        "  - coordinator",
+                        "open_questions: None",
+                        "---",
+                        "",
+                        "## Summary",
+                        "Implementation evidence is ready.",
+                        "",
+                        "## Facts Used",
+                        "The scheduled task context pack and requirements handoff were reviewed.",
+                        "",
+                        "## Decisions Made",
+                        "The code-developer task can be marked complete with dispatcher confirmation.",
+                        "",
+                        "## Open Questions",
+                        "None",
+                        "",
+                        "## Downstream Assumptions",
+                        "The coordinator will use the listed evidence path for dispatch completion.",
+                        "",
+                        "## Verification Evidence",
+                        f"Evidence file {implementation_ref} was written and hashed.",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            evidence_path.with_suffix(".ready.json").write_text(
+                json.dumps(
+                    {
+                        "path": evidence_path.name,
+                        "sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+                        "producer_agent": "worker-123",
+                        "status": "ready",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            adapter = RecordingAdapter()
+
+            with patch.object(dispatcher.runtime_adapters, "adapter_for", return_value=adapter):
+                result = dispatcher.dispatch_complete(
+                    repo,
+                    schedule,
+                    state_path,
+                    "T10",
+                    "code-developer-order-service",
+                    [evidence],
+                )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual([("T10", [evidence])], adapter.complete_calls)
+        self.assertEqual("recording", result["runtime_completion"]["runtime_adapter"])
+
 
 class EventLogContractTests(unittest.TestCase):
     def test_event_log_appends_ordered_events_and_replays_snapshots(self) -> None:
