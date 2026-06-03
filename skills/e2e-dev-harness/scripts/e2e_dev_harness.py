@@ -967,7 +967,7 @@ def clarification_dispatch_recovery(repo: Path, run_state_path: Path | str | Non
         "clarification_dispatch": {"ready": False, "blocked_reasons": blockers},
         "interaction_required": True,
         "questions_to_ask_user": [
-            "Run dispatch-next/dispatch-ack for requirements-clarifier and relay its returned Restated Intent/Open Questions first."
+            "Run dispatch-beat --max-workers 1, dispatch-ack the requirements-clarifier worker, and relay its returned Restated Intent/Open Questions first."
         ],
         **recovery,
     }
@@ -1060,7 +1060,7 @@ def _preflight_checks() -> list[dict]:
             "code": "BLK_CLARIFY_DISPATCH",
             "return_phase": "CREATED",
             "minimal_fix": (
-                "Run dispatch-next for the requirements-clarifier worker, then relay its "
+                "Run dispatch-beat --max-workers 1 for the requirements-clarifier worker, then relay its "
                 "returned Restated Intent/Open Questions."
             ),
             "fn": clarification_dispatch_blockers,
@@ -1148,7 +1148,7 @@ def clarify(args) -> tuple[int, dict]:
             result["clarification_dispatch"] = {"ready": False, "blocked_reasons": dispatch_blockers}
             result["interaction_required"] = True
             result["questions_to_ask_user"] = [
-                "Run dispatch-next for requirements-clarifier and relay its returned Restated Intent/Open Questions first."
+                "Run dispatch-beat --max-workers 1 for requirements-clarifier and relay its returned Restated Intent/Open Questions first."
             ]
             write_status(args.status_file, result)
             return 2, result

@@ -619,7 +619,8 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertEqual(0, exit_code)
         self.assertIn("full_result_path", payload)
         self.assertEqual("CLARIFY", payload["workflow_stage"])
-        self.assertIn("dispatch-next", payload["next_action"]["dispatch_command"])
+        self.assertIn("dispatch-beat", payload["next_action"]["dispatch_command"])
+        self.assertIn("--max-workers 1", payload["next_action"]["dispatch_command"])
         self.assertNotIn("workflow_plan", payload)
         self.assertNotIn("todo_policy", payload)
         self.assertTrue(full_path_exists)
@@ -628,7 +629,8 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertIn("execution_packet", full_payload)
         self.assertIn("checkpoint", full_payload["session_checkpoint"])
         self.assertEqual("CREATED", full_payload["execution_packet"]["lifecycle"])
-        self.assertIn("dispatch-next", full_payload["execution_packet"]["primary_command"])
+        self.assertIn("dispatch-beat", full_payload["execution_packet"]["primary_command"])
+        self.assertIn("--max-workers 1", full_payload["execution_packet"]["primary_command"])
         self.assertTrue(
             any(
                 "gate --phase clarification" in action

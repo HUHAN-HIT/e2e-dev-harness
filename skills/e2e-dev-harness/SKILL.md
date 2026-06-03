@@ -99,8 +99,8 @@ Load each `references/*.md` only when its rule's phase begins, never all at star
   Use `agent-task --action claim` before any multi-service code agent writes code; phase guard blocks unclaimed service writes and cross-service edits by a single claimed task.
   Claims carry leases; renew long tasks, and reclaim stale ones before completion.
   Use `checkpoint_gate.py` or `gate --checkpoint-mode required` after clarify, R1, and TDD Red on critical or interactive work.
-  Use `dispatch-next`/`dispatch-ack`/`dispatch-complete` for runtime handoffs.
-  `dispatch-next` is single-worker compatibility; `dispatch-beat --max-workers N` emits a ready spawn wave.
+  Use `dispatch-beat`/`dispatch-ack`/`dispatch-complete` for runtime handoffs.
+  `dispatch-next` is single-worker compatibility for `dispatch-beat --max-workers 1`.
   The coordinator flow is `dispatch-beat` -> spawn returned workers -> hook/`dispatch-ack` -> `dispatch-complete` -> `dispatch-beat` again.
   Spawn requests target Claude Code `Task` or Codex `multi_agent_v1.spawn_agent`; call that tool,
   let the Task hook confirm or record the worker id with `dispatch-ack`, then accept `dispatch-complete`.
@@ -149,9 +149,9 @@ Important boundaries:
 - Multi-service work keeps each service plan and code-agent handoff under `docs/agent-runs/<run>/service-plans/<service>/`.
 - Service code agents consume `service-designs/<service>.md`, service implementation plan, and service-local test impact plan; do not reload the full global design unless the slice is incomplete.
 - Before dispatching, create `context-packs/<task>.json` from `agent-schedule.json`; never pass inherited developer chat as worker context.
-- `dispatch-next --runtime claude-code` emits a Claude Code `Task` request; invoke it with the returned prompt. The Task hook or `dispatch-ack` must confirm the worker before `dispatch-complete`.
-- `dispatch-next --runtime codex` emits a `multi_agent_v1.spawn_agent` request; call it with `fork_context=false`, then `dispatch-ack` the returned worker id before `dispatch-complete`.
 - `dispatch-beat --max-workers N` dispatches a ready wave across distinct `parallel_group` values by default; rerun after worker completion events.
+- Returned spawn requests target Claude Code `Task` or Codex `multi_agent_v1.spawn_agent`; invoke them with fresh worker context, then confirm with the Task hook or `dispatch-ack` before `dispatch-complete`.
+- `dispatch-next` remains the single-worker compatibility wrapper when a runtime cannot consume a beat wave yet.
 - Before a service code agent writes code, claim its task with `e2e_dev_harness.py agent-task --action claim --schedule docs/agent-runs/<run>/agent-schedule.json --task-id <id> --agent <agent> --state docs/agent-runs/<run>/run-state.json`.
 - Generated schedules use `completion_mode: dispatcher-confirmed`.
   Complete scheduled role tasks through `dispatch-complete` after `dispatch-ack`.

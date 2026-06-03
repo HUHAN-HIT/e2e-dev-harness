@@ -173,7 +173,7 @@ USER_INTERACTION_TODO_RE = re.compile(
     re.IGNORECASE,
 )
 CREATED_COORDINATOR_TODO_RE = re.compile(
-    r"\b(?:dispatch-next|requirements-clarifier|dispatch-complete|worker\s+handle|context\s+pack|relay)\b",
+    r"\b(?:dispatch-beat|dispatch-next|requirements-clarifier|dispatch-complete|worker\s+handle|context\s+pack|relay)\b",
     re.IGNORECASE,
 )
 
@@ -312,7 +312,7 @@ def required_todo_list_for_lifecycle(lifecycle: str) -> list[str]:
     schedule_path = "docs/agent-runs/<run>/agent-schedule.json"
     lists = {
         "CREATED": [
-            f"Run e2e_dev_harness.py dispatch-next --schedule {schedule_path} --state {state_path} to dispatch requirements-clarifier.",
+            f"Run e2e_dev_harness.py dispatch-beat --max-workers 1 --schedule {schedule_path} --state {state_path} to dispatch requirements-clarifier.",
             "Spawn or acknowledge only the dispatcher-generated requirements-clarifier worker.",
             "Do not perform clarification, GitNexus, rg/Read, design-doc, plan, TDD, or review work in coordinator chat.",
             "Relay unresolved Restated Intent or Open Questions from the worker to the user.",
@@ -377,7 +377,7 @@ def exploration_policy_for_lifecycle(lifecycle: str) -> dict:
             "direct_tools_allowed_for": ["design-doc requirements analysis", "Restated Intent", "Open Questions"],
             "direct_tools_blocked_for": ["code Read/Grep/Glob", "GitNexus impact evidence", "implementation planning"],
             "required_for": ["requirements clarification", "Restated Intent", "Open Questions"],
-            "fallback": "Run dispatch-next for the requirements-clarifier worker; coordinator may only relay returned questions and evidence paths. The clarifier worker may continue design-doc analysis without treating code exploration as evidence.",
+            "fallback": "Run dispatch-beat --max-workers 1 for the requirements-clarifier worker; coordinator may only relay returned questions and evidence paths. The clarifier worker may continue design-doc analysis without treating code exploration as evidence.",
             "lifecycle": lifecycle,
         }
     return {
@@ -501,7 +501,7 @@ def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -
         },
         "CREATED": {
             "allowed_actions": [
-                "run dispatch-next for requirements-clarifier",
+                "run dispatch-beat --max-workers 1 for requirements-clarifier",
                 "record dispatch-ack for the spawned requirements worker",
                 "run dispatch-complete with returned requirements evidence paths",
                 "run e2e_dev_harness.py next . --state " + state_path,
@@ -836,7 +836,7 @@ def todo_list_blockers(repo: Path, lock: Path | None, task_text: str) -> tuple[l
     if lifecycle != "IMPLEMENTED":
         if lifecycle == "CREATED" and not CREATED_COORDINATOR_TODO_RE.search(text):
             return [
-                "Todo list blocked: CREATED coordinator work is dispatch-only. Run dispatch-next for requirements-clarifier, relay only worker-returned Restated Intent/Open Questions, and do not perform local clarification or code exploration."
+                "Todo list blocked: CREATED coordinator work is dispatch-only. Run dispatch-beat --max-workers 1 for requirements-clarifier, relay only worker-returned Restated Intent/Open Questions, and do not perform local clarification or code exploration."
             ], lifecycle
         if has_code_todo:
             return [

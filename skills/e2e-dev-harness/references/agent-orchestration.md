@@ -118,10 +118,11 @@ The Claude Code/Superpowers adapter is exposed through the unified CLI:
 
 ```bash
 python skills/e2e-dev-harness/scripts/e2e_dev_harness.py runtime-capabilities . --runtime claude-code
-python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-next . \
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-beat . \
   --schedule docs/agent-runs/<run>/agent-schedule.json \
   --state docs/agent-runs/<run>/run-state.json \
-  --runtime claude-code
+  --runtime claude-code \
+  --max-workers 4
 python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-complete . \
   --schedule docs/agent-runs/<run>/agent-schedule.json \
   --state docs/agent-runs/<run>/run-state.json \
@@ -130,13 +131,14 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-complete . \
   --evidence <scheduled-output>
 ```
 
-`dispatch-next` scans for the first ready task and reports skipped tasks with
+`dispatch-beat` scans for the next ready wave and reports skipped tasks with
 their blockers. It validates handoff readiness, dependencies, role template, and
 context-pack budget before claiming; a blocked context pack must not leave a task
-claim behind. It then writes `context-packs/<task-id>.json`, claims the scheduled
-task, writes an invocation record, and returns a `runtime_spawn_request`. For
-Claude Code this request is a fresh `Task`; for Codex it is
-`multi_agent_v1.spawn_agent` with `fork_context=false`. The dispatch remains
+claim behind. It then writes `context-packs/<task-id>.json`, claims each scheduled
+task, writes invocation records, and returns `runtime_spawn_requests`. For Claude
+Code each request is a fresh `Task`; for Codex it is `multi_agent_v1.spawn_agent`
+with `fork_context=false`. `dispatch-next` remains the compatibility wrapper for
+`dispatch-beat --max-workers 1`. The dispatch remains
 `awaiting_runtime_spawn` until the Task hook confirms the generated Task prompt
 or `dispatch-ack` records a concrete worker handle. `dispatch-complete` rejects
 unconfirmed tasks, so the coordinator cannot mark locally executed work as a

@@ -246,7 +246,7 @@ def required_todo_list_for_lifecycle(lifecycle: str, state: dict | None = None) 
     schedule_path = "docs/agent-runs/<run>/agent-schedule.json"
     lists = {
         "CREATED": [
-            f"Run e2e_dev_harness.py dispatch-next --schedule {schedule_path} --state {state_path} to dispatch requirements-clarifier.",
+            f"Run e2e_dev_harness.py dispatch-beat --max-workers 1 --schedule {schedule_path} --state {state_path} to dispatch requirements-clarifier.",
             "Spawn or acknowledge only the dispatcher-generated requirements-clarifier worker.",
             "Do not perform clarification, GitNexus, rg/Read, design-doc, plan, TDD, or review work in coordinator chat.",
             "Relay unresolved Restated Intent or Open Questions from the worker to the user.",
@@ -311,7 +311,7 @@ def exploration_policy_for_lifecycle(lifecycle: str) -> dict:
             "preferred": "dispatcher",
             "direct_tools_allowed_for": [],
             "required_for": ["requirements clarification", "Restated Intent", "impact evidence", "design doc updates"],
-            "fallback": "Run dispatch-next for the requirements-clarifier worker; coordinator may only relay returned questions and evidence paths.",
+            "fallback": "Run dispatch-beat --max-workers 1 for the requirements-clarifier worker; coordinator may only relay returned questions and evidence paths.",
             "lifecycle": lifecycle,
         }
     return {
@@ -365,14 +365,14 @@ def coordinator_action_fields(lifecycle: str, state: dict | None = None, runtime
         "CREATED": {
             "orchestration_action": "dispatch_worker",
             "dispatch_command": (
-                "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-next . "
-                f"--schedule {schedule} --state {state_path} --runtime {dispatch_runtime}"
+                "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-beat . "
+                f"--schedule {schedule} --state {state_path} --runtime {dispatch_runtime} --max-workers 1"
             ),
             "expected_worker": "requirements-clarifier",
             "forbidden_local_actions": base["forbidden_local_actions"] + [
                 "perform clarification work locally instead of dispatching requirements-clarifier",
                 "start planning, TDD, or review before clarification worker evidence is complete",
-                "run gate --phase clarification; use dispatch-next in CREATED, then clarify after the design doc is updated",
+                "run gate --phase clarification; use dispatch-beat --max-workers 1 in CREATED, then clarify after the design doc is updated",
             ],
         },
         "CLARIFIED": {

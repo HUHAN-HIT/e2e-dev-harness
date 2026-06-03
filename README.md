@@ -100,6 +100,18 @@ python -m pip install -e .[dev,ast]
 e2eh --version
 ```
 
+After the editable CLI is installed, the shorter tool-first project bootstrap is:
+
+```powershell
+e2eh install C:\path\to\business-repo --full --yes
+```
+
+When you are already in the target repository, the repo argument can be omitted:
+
+```powershell
+e2eh install --full --yes
+```
+
 Full installer usage is documented in
 [`docs/e2e-dev-harness-installer.md`](docs/e2e-dev-harness-installer.md).
 
@@ -293,19 +305,21 @@ The bundled dispatcher provides the first Claude Code/Superpowers execution loop
 
 ```powershell
 python skills\e2e-dev-harness\scripts\e2e_dev_harness.py runtime-capabilities . --runtime claude-code
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py dispatch-next . `
+python skills\e2e-dev-harness\scripts\e2e_dev_harness.py dispatch-beat . `
   --schedule docs\agent-runs\<run>\agent-schedule.json `
   --state docs\agent-runs\<run>\run-state.json `
-  --runtime claude-code
+  --runtime claude-code `
+  --max-workers 4
 ```
 
-`dispatch-next` scans the schedule for the first truly ready task and reports
-earlier skipped tasks with their blockers. It validates dependency phases, ready
-handoff markers, role templates, and context-pack budgets before claiming a task.
-It then writes `context-packs/<task-id>.json`, claims the task, writes a dispatcher
-invocation JSON, and returns a self-contained Claude Code `Task` prompt. The
-subagent must use only that context pack and scheduled outputs. After the subagent returns evidence,
-close the task:
+`dispatch-beat` scans the schedule for the next ready wave and reports earlier
+skipped tasks with their blockers. It validates dependency phases, ready handoff
+markers, role templates, and context-pack budgets before claiming tasks. It then
+writes `context-packs/<task-id>.json`, claims each task, writes dispatcher
+invocation JSON, and returns self-contained Claude Code `Task` prompts. Each
+subagent must use only its context pack and scheduled outputs. `dispatch-next`
+remains the compatibility wrapper for `dispatch-beat --max-workers 1`. After a
+subagent returns evidence, close the task:
 
 ```powershell
 python skills\e2e-dev-harness\scripts\e2e_dev_harness.py dispatch-complete . `
@@ -316,7 +330,7 @@ python skills\e2e-dev-harness\scripts\e2e_dev_harness.py dispatch-complete . `
   --evidence docs\agent-runs\<run>\service-plans\payment\code-agent.md
 ```
 
-If the active runtime cannot spawn an independent subagent/session, `dispatch-next`
+If the active runtime cannot spawn an independent subagent/session, `dispatch-beat`
 records `WAITING_DISPATCH` with `dispatch.status=waiting_dispatch` and emits a
 manual dispatch packet. Claude Code Stop hooks allow that paused handoff state so
 the coordinator can start a fresh session, but completion gates still fail until

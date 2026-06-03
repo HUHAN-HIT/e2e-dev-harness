@@ -46,6 +46,19 @@ scope with evidence before rerunning clarify.
 
 During the `CREATED` lifecycle, `next` and `phase_guard` expose a `clarification_interaction` contract. The active TodoList must include a user-facing step to confirm Restated Intent and resolve open questions before planning, TDD, reviewer dispatch that depends on clarified behavior, or production-code edits. If `clarify` finds unresolved items, its JSON includes `interaction_required`, `questions_to_ask_user`, and `interaction_contract` so the agent can ask the user directly instead of guessing from blocked reasons.
 
+Not every clarification blocker should ask the user. The gate classifies bounded
+evidence and document-structure gaps as agent remediation:
+
+- `impact_gaps` require GitNexus/scanner evidence, bounded summary rows, or raw-evidence references.
+- `change_logic_gaps` require the agent to update current/target behavior, runtime path, and state/data effects.
+- `integration_gaps` require repository-backed call-chain and sender/producer injection evidence.
+
+These blockers still keep `ready_for_implementation: false`, but they set
+`agent_remediation_required` / `agent_remediation_actions` and do not populate
+`questions_to_ask_user` unless a separate user decision is also missing. Ask the
+user only for intent confirmation, unresolved product decisions, or explicit
+tool-degradation approval.
+
 The interaction contract keeps `questions_to_ask_user` for existing callers and also exposes `ask_user_schema: codex.request_user_input.v1` plus `ask_user_requests`. Each request has a stable `id`, short `header`, user-facing `question`, selectable `options`, and `provenance_required`. The contract also includes `runtime_action.tool: request_user_input` with sanitized `runtime_action.arguments.questions`; Codex coordinators should call that action instead of merely printing the questions. Text-only runtimes should present the same options and record the selected answer as `confirmed-by: user @<date/session/artifact>` in the design doc.
 
 When an acceptance criterion or use case declares MQ/DMQ/Kafka/JMS notification behavior, the design must also state the cross-layer call chain and sender/producer injection point. Example:
