@@ -469,6 +469,39 @@ class PluginRegistryContractTests(unittest.TestCase):
         self.assertEqual(["acme.enterprise_policy"], registry["policy_packs"])
         self.assertEqual(".e2e/templates", registry["template_override_dir"])
 
+    def test_plugin_registry_loads_local_provider_factories_without_harness_source_edits(self) -> None:
+        import plugin_registry  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            config = repo / ".e2e" / "config.yaml"
+            providers = repo / ".e2e" / "providers"
+            providers.mkdir(parents=True)
+            config.write_text(
+                "\n".join(
+                    [
+                        "custom_gates:",
+                        "  - acme_provider:security_gate",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (providers / "acme_provider.py").write_text(
+                "\n".join(
+                    [
+                        "def security_gate():",
+                        "    return {'name': 'acme-security', 'kind': 'gate'}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            registry = plugin_registry.load_registry(repo)
+            loaded = plugin_registry.load_providers(repo, "custom_gates", registry)
+
+        self.assertEqual([], loaded["warnings"])
+        self.assertEqual([{"name": "acme-security", "kind": "gate"}], loaded["providers"])
+
 
 class DoctorTimelineContractTests(unittest.TestCase):
     def test_state_doctor_includes_event_timeline_and_single_recommended_command(self) -> None:
