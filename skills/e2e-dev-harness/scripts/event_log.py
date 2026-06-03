@@ -100,3 +100,29 @@ def replay_dispatch_status(events: list[dict]) -> dict[str, dict]:
             "sequence": item.get("sequence", 0),
         }
     return dispatches
+
+
+def dispatch_snapshot_status(state: dict, task_id: str) -> str:
+    dispatches = state.get("dispatches") if isinstance(state.get("dispatches"), dict) else {}
+    dispatch = dispatches.get(task_id) if isinstance(dispatches.get(task_id), dict) else {}
+    top_dispatch = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
+    if not dispatch and str(top_dispatch.get("current_task_id", "")).strip() == task_id:
+        dispatch = top_dispatch
+    return str(dispatch.get("status", "")).strip()
+
+
+def snapshot_mismatches(events: list[dict], state: dict) -> list[str]:
+    allowed = {
+        "worker_dispatched": {"awaiting_runtime_spawn", "worker_dispatched", "dispatched", "waiting_dispatch"},
+        "worker_running": {"worker_running"},
+        "worker_completed": {"worker_completed"},
+    }
+    mismatches: list[str] = []
+    for task_id, replay in replay_dispatch_status(events).items():
+        replay_status = str(replay.get("status", "")).strip()
+        snapshot_status = dispatch_snapshot_status(state, task_id)
+        if snapshot_status not in allowed.get(replay_status, {replay_status}):
+            mismatches.append(
+                f"Task {task_id} event replay status {replay_status} does not match run-state dispatch status {snapshot_status or '<missing>'}."
+            )
+    return mismatches

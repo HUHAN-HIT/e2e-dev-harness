@@ -1383,6 +1383,19 @@ def dispatch_complete(
                         gate_status="passed",
                         evidence=event_path,
                     )
+                    if transition.get("ready"):
+                        event_log.append_event(
+                            run_dir_for_paths(repo, state_path, schedule_path),
+                            "gate_passed",
+                            {
+                                "gate": "tdd_red",
+                                "from_lifecycle": transition_source_lifecycle,
+                                "to_lifecycle": "RED_READY",
+                                "task_id": task_id,
+                                "agent": agent,
+                                "evidence": rel(repo, event_path),
+                            },
+                        )
         complete["dispatch_event"] = rel(repo, event_path)
         complete["run_state_update"] = update
         complete["next_required"] = next_required_for_task(

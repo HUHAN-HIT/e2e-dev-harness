@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -218,6 +219,76 @@ class EventLogContractTests(unittest.TestCase):
         self.assertTrue(legacy_event_exists)
         self.assertTrue(any(item["event"] == "worker_dispatched" and item["task_id"] == "T10" for item in events))
 
+    def test_dispatch_complete_writes_gate_passed_event_for_red_ready_transition(self) -> None:
+        import event_log  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            review = Path("docs/agent-runs/run/reviews/R2-test-review.md")
+            role_template = Path("docs/agent-runs/run/agent-roles/semantic-reviewer.md")
+            write_role_template(repo, role_template)
+            (repo / review).parent.mkdir(parents=True, exist_ok=True)
+            (repo / review).write_text("review evidence\n", encoding="utf-8")
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "single-review",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            state["dispatch"] = {
+                "status": "worker_running",
+                "runtime": "codex",
+                "current_task_id": "T02",
+                "current_agent": "test-reviewer",
+                "worker_handle": "review-worker",
+                "worker_session": "review-worker-session",
+                "spawn_acknowledged_at": "2026-05-31T00:00:00Z",
+            }
+            state["dispatches"] = {"T02": state["dispatch"]}
+            run_state.write_state(repo, state_path, state)
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {"id": "T01", "agent": "test-case-developer", "phase": "tdd-red", "status": "completed"},
+                            {
+                                "id": "T02",
+                                "agent": "test-reviewer",
+                                "phase": "r2-review",
+                                "role_group": "review",
+                                "inputs": ["docs/agent-runs/run/review-requests/R2-test-review-request.md"],
+                                "outputs": [review.as_posix()],
+                                "role_template": role_template.as_posix(),
+                                "status": "claimed",
+                                "owner": "test-reviewer",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            event_dir = run_dir / "dispatch-events"
+            event_dir.mkdir(parents=True, exist_ok=True)
+            (event_dir / "T01-completed.json").write_text(
+                json.dumps({"event": "worker_completed", "task_id": "T01", "agent": "test-case-developer"}),
+                encoding="utf-8",
+            )
+
+            with patch.object(dispatcher.reviewer_gate, "validate", return_value={"ready": True, "blocked_reasons": [], "warnings": [], "covered_phases": ["test"]}):
+                result = dispatcher.dispatch_complete(repo, schedule, state_path, "T02", "test-reviewer", [review.as_posix()])
+            events = event_log.read_events(run_dir)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertTrue(any(item["event"] == "gate_passed" and item["gate"] == "tdd_red" for item in events))
+
 
 class PluginRegistryContractTests(unittest.TestCase):
     def test_empty_plugin_config_is_equivalent_to_builtin_defaults(self) -> None:
@@ -280,6 +351,24 @@ class DoctorTimelineContractTests(unittest.TestCase):
         self.assertEqual("worker_dispatched", timeline[0]["event"])
         self.assertEqual("dispatch-complete", result["failure_taxonomy"][0]["code"])
         self.assertIn("dispatch-complete", result["recommended_command"])
+
+    def test_state_doctor_blocks_event_log_snapshot_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule, state_path = write_dispatch_fixture(repo)
+            dispatcher.dispatch_next(repo, schedule, state_path, runtime="codex")
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["dispatch"]["status"] = "worker_completed"
+            state["dispatches"]["T10"]["status"] = "worker_completed"
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+
+            result = harness_doctor.evaluate(repo, state=state_path)
+
+        checks = {item["id"]: item for item in result["checks"]}
+        self.assertFalse(result["ready"])
+        self.assertEqual("fail", checks["state-event-log"]["status"])
+        self.assertIn("T10", checks["state-event-log"]["message"])
+        self.assertIn("event replay", checks["state-event-log"]["message"])
 
 
 if __name__ == "__main__":

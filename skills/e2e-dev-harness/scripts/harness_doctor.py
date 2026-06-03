@@ -419,6 +419,18 @@ def state_consistency_checks(repo: Path, state: Path) -> list[dict]:
         "Run next or rebuild coordinator summary from run-state; this is a derived view.",
     )
 
+    enterprise_events = event_log.read_events(run_dir)
+    event_mismatches = event_log.snapshot_mismatches(enterprise_events, state_data)
+    event_check = check(
+        "state-event-log",
+        "pass" if not event_mismatches else "fail",
+        "info" if not event_mismatches else "error",
+        "Enterprise event log is consistent with run-state dispatch snapshots."
+        if not event_mismatches
+        else " ".join(event_mismatches),
+        "Inspect docs/agent-runs/<run>/events in sequence order; repair the first mismatched event or rebuild derived snapshots from the event log.",
+    )
+
     return [
         check("state-run-state", "pass", "info", f"Run-state loaded: {state_path}"),
         lifecycle_check,
@@ -426,6 +438,7 @@ def state_consistency_checks(repo: Path, state: Path) -> list[dict]:
         view_check,
         lock_check,
         summary_check,
+        event_check,
     ]
 
 
