@@ -45,7 +45,11 @@ import task_tier  # noqa: E402
 import test_impact_plan  # noqa: E402
 import workflow_guard  # noqa: E402
 from e2e_harness.engine import dispatch_engine, doctor as doctor_engine, recovery as recovery_engine, state_store  # noqa: E402
+from e2e_harness.cli.commands import agent_task as agent_task_command  # noqa: E402
+from e2e_harness.cli.commands import clarify as clarify_command  # noqa: E402
+from e2e_harness.cli.commands import dispatch as dispatch_command  # noqa: E402
 from e2e_harness.cli.commands import doctor as doctor_command  # noqa: E402
+from e2e_harness.cli.commands import gate as gate_command  # noqa: E402
 from e2e_harness.cli.commands import recover as recover_command  # noqa: E402
 from e2e_harness.cli.commands import runtime_capabilities as runtime_capabilities_command  # noqa: E402
 from e2e_harness.cli.commands import timeline as timeline_command  # noqa: E402
@@ -989,51 +993,7 @@ def preflight(args) -> tuple[int, dict]:
 
 
 def clarify(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    design_path = resolve_repo_path(repo, args.design_doc)
-    if not design_path or not design_path.exists():
-        return 2, {"ready_for_implementation": False, "error": f"Design doc not found: {design_path}"}
-    run_state_path = getattr(args, "run_state", None)
-    if run_state_path:
-        dispatch_blockers = clarification_dispatch_blockers(repo, run_state_path)
-        if dispatch_blockers:
-            result = clarification_dispatch_recovery(repo, run_state_path, dispatch_blockers)
-            write_status(args.status_file, result)
-            return 2, result
-    result = clarification_gate.validate(
-        design_path,
-        require_intent=getattr(args, "require_intent", True),
-        require_user_confirmation=getattr(args, "require_user_confirmation", True),
-    )
-    if run_state_path and result.get("ready_for_implementation"):
-        dispatch_blockers = clarification_dispatch_blockers(repo, run_state_path)
-        if dispatch_blockers:
-            result["ready_for_implementation"] = False
-            result.setdefault("blocked_reasons", []).extend(dispatch_blockers)
-            result["clarification_dispatch"] = {"ready": False, "blocked_reasons": dispatch_blockers}
-            result["interaction_required"] = True
-            result["questions_to_ask_user"] = [
-                "Run dispatch-beat --max-workers 1 for requirements-clarifier and relay its returned Restated Intent/Open Questions first."
-            ]
-            write_status(args.status_file, result)
-            return 2, result
-    if run_state_path and result.get("ready_for_implementation"):
-        result["run_state_transition"] = run_state.transition_state(
-            repo,
-            run_state_path,
-            "CLARIFIED",
-            gate="clarification",
-            gate_status="passed",
-            evidence=design_path,
-        )
-        result["blocked_next_without_plan"] = True
-        result["next_required"] = {
-            "phase": "plan",
-            "command": "Run e2e_dev_harness.py next, then e2e_dev_harness.py plan --create-archive before any code write.",
-            "code_writes_allowed": False,
-        }
-    write_status(args.status_file, result)
-    return (0 if result["ready_for_implementation"] else 2), result
+    return clarify_command.run_from_args(args)
 
 
 def exec_plan_text(repo: Path, design_doc: Path | None, plan: dict) -> str:
@@ -2045,85 +2005,7 @@ def plan(args) -> tuple[int, dict]:
 
 
 def gate(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    result = implementation_gate.validate_gate_request(
-        implementation_gate.GateRequest(
-            repo=repo,
-            design_doc=args.design_doc,
-            kg_status_file=args.kg_status_file,
-            phase=args.phase,
-            red_test_evidence=args.red_test_evidence,
-            coverage_matrix=args.coverage_matrix,
-            unit_test_evidence=args.unit_test_evidence,
-            business_review=args.business_review,
-            memory_updates=args.memory_updates,
-            skip_spring_static_check=getattr(args, "skip_spring_static_check", False),
-            rework_dirs=getattr(args, "rework_dir", None),
-            dependency_report=getattr(args, "dependency_report", None),
-            implementation_manifest=getattr(args, "implementation_manifest", None),
-            review_dirs=getattr(args, "review_dir", None),
-            handoff_dirs=getattr(args, "handoff_dir", None),
-            contract_dirs=getattr(args, "contract_dir", None),
-            require_contracts=getattr(args, "require_contracts", False),
-            require_handoffs=getattr(args, "require_handoffs", False),
-            require_semantic_reviews=getattr(args, "require_semantic_reviews", False),
-            review_profile=getattr(args, "review_profile", None) or Path(DEFAULT_REVIEW_PROFILE),
-            requirements_archive=getattr(args, "requirements_archive", None),
-            require_requirements_archive=(
-                getattr(args, "require_requirements_archive", False)
-                or (getattr(args, "strict_workflow", False) and args.phase == "completion")
-            ),
-            changed_files=getattr(args, "changed_files", None),
-            test_impact_plan=getattr(args, "test_impact_plan", None),
-            base_ref=getattr(args, "base_ref", None),
-            checkpoint_mode=getattr(args, "checkpoint_mode", "off"),
-            confirmation_dirs=getattr(args, "confirmation_dir", None),
-            require_intent=getattr(args, "require_intent", False),
-            tdd_mode=getattr(args, "tdd_mode", "auto"),
-            workflow_tier=getattr(args, "workflow_tier", "auto"),
-            run_state=getattr(args, "run_state", None) or getattr(args, "state", None),
-            no_harness_state=getattr(args, "no_harness_state", False),
-            harness_state_approval=getattr(args, "harness_state_approval", None),
-            require_gitnexus_evidence=getattr(args, "require_gitnexus_evidence", "auto"),
-            gitnexus_degradation=getattr(args, "gitnexus_degradation", None),
-        )
-    )
-    if result.get("ready"):
-        transition_target = {
-            "implementation": "IMPLEMENTED",
-            "completion": "VERIFIED",
-        }.get(args.phase)
-        run_state_path = getattr(args, "run_state", None) or getattr(args, "state", None)
-        if transition_target and run_state_path:
-            state_file = require_repo_path(repo, run_state_path, "run state")
-            status_evidence = state_file.parent / "evidence" / f"{args.phase}-gate.json"
-            status_evidence.parent.mkdir(parents=True, exist_ok=True)
-            status_payload = dict(result)
-            status_payload.setdefault("phase", args.phase)
-            status_payload["ready"] = True
-            for attr in ("red_test_evidence", "unit_test_evidence", "implementation_manifest"):
-                value = getattr(args, attr, None)
-                if value:
-                    try:
-                        status_payload[attr] = str(resolve_repo_path(repo, value).relative_to(repo))
-                    except ValueError:
-                        status_payload[attr] = str(value)
-            status_evidence.write_text(json.dumps(status_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-            evidence = status_evidence
-            transition = run_state.transition_state(
-                repo,
-                run_state_path,
-                transition_target,
-                gate=args.phase,
-                gate_status="passed",
-                evidence=resolve_repo_path(repo, evidence),
-            )
-            result["run_state_transition"] = transition
-            if not transition["ready"]:
-                result["ready"] = False
-                result["blocked_reasons"].extend("Run state transition: " + reason for reason in transition["blocked_reasons"])
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return gate_command.run_from_args(args)
 
 
 def verify(args) -> tuple[int, dict]:
@@ -2505,39 +2387,7 @@ def service_design(args) -> tuple[int, dict]:
 
 
 def agent_task(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    lease_seconds = getattr(args, "lease_seconds", agent_scheduler.DEFAULT_LEASE_SECONDS)
-    if args.action == "claim":
-        result = state_store.claim_task(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state, lease_seconds)
-    elif args.action == "renew":
-        result = state_store.renew_task(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state, lease_seconds)
-    elif args.action == "reclaim":
-        result = state_store.reclaim_task(
-            repo, args.schedule, args.task_id or "", args.agent or "agent", args.state,
-            getattr(args, "force", False), lease_seconds,
-        )
-    elif args.action == "complete":
-        result = state_store.complete_task(
-            repo,
-            args.schedule,
-            args.task_id or "",
-            args.agent or "agent",
-            args.state,
-            args.evidence or [],
-            allow_local_completion=getattr(args, "allow_local_completion", False),
-        )
-    else:
-        schedule_path = args.schedule if args.schedule.is_absolute() else repo / args.schedule
-        schedule = json.loads(schedule_path.read_text(encoding="utf-8")) if schedule_path.exists() else {}
-        result = agent_scheduler.validate_schedule(
-            schedule,
-            args.service or [],
-            args.require_claims,
-            args.require_completed,
-        )
-        result["schedule"] = str(schedule_path)
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return agent_task_command.run_from_args(args)
 
 
 def runtime_capabilities(args) -> tuple[int, dict]:
@@ -2547,56 +2397,23 @@ def runtime_capabilities(args) -> tuple[int, dict]:
 
 
 def dispatch_next(args) -> tuple[int, dict]:
-    return coordinator_flow.dispatch_next(args)
+    return dispatch_command.run_next_from_args(args)
 
 
 def dispatch_beat(args) -> tuple[int, dict]:
-    return coordinator_flow.dispatch_beat(args)
+    return dispatch_command.run_beat_from_args(args)
 
 
 def dispatch_complete(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    result = dispatch_engine.complete(
-        repo,
-        args.schedule,
-        args.state,
-        args.task_id,
-        args.agent or "agent",
-        args.evidence or [],
-        manual_recovery=getattr(args, "manual_recovery", False),
-        recovery_approval=getattr(args, "recovery_approval", None),
-    )
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return dispatch_command.run_complete_from_args(args)
 
 
 def dispatch_ack(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    result = dispatch_engine.ack(
-        repo,
-        args.state,
-        args.task_id,
-        args.agent,
-        args.worker_handle,
-        args.worker_session or "",
-    )
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return dispatch_command.run_ack_from_args(args)
 
 
 def dispatch_status(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    result = dispatch_engine.status(
-        repo,
-        args.schedule,
-        args.state,
-        write_recovery_request_path=getattr(args, "write_recovery_request", None),
-        recovery_task_id=getattr(args, "task_id", "") or "",
-        recovery_agent=getattr(args, "agent", "") or "",
-        recovery_evidence=getattr(args, "evidence", None) or [],
-    )
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return dispatch_command.run_status_from_args(args)
 
 
 def ac_progress(args) -> tuple[int, dict]:

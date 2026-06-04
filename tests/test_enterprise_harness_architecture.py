@@ -259,6 +259,159 @@ def write_service_design_fixture(repo: Path) -> tuple[Path, Path, Path]:
     return design, state_path, service_design
 
 
+def write_clarify_fixture(repo: Path) -> tuple[Path, Path]:
+    run_dir = repo / "docs" / "agent-runs" / "run"
+    state_path = run_dir / "run-state.json"
+    schedule_path = run_dir / "agent-schedule.json"
+    design = repo / "docs" / "design" / "feature.md"
+    handoff_ref = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+    role_template = Path("docs/agent-runs/run/agent-roles/requirements-clarifier.md")
+    summary = run_dir / "evidence" / "requirements-summary.md"
+    handoff = repo / handoff_ref
+    design.parent.mkdir(parents=True, exist_ok=True)
+    summary.parent.mkdir(parents=True, exist_ok=True)
+    handoff.parent.mkdir(parents=True, exist_ok=True)
+    write_role_template(repo, role_template)
+    design.write_text(
+        "\n".join(
+            [
+                "# Feature",
+                "",
+                "## Restated Intent",
+                "- The user wants a quote returned.",
+                "- User confirmation: confirmed-by: user @2026-06-04",
+                "",
+                "## Goal",
+                "- Return checkout quotes.",
+                "",
+                "## Scope",
+                "- services/order-service",
+                "",
+                "## Use Cases",
+                "- Customer requests a checkout quote.",
+                "",
+                "## Acceptance Criteria",
+                "- AC-1 Checkout quote is returned.",
+                "",
+                "## Test Design",
+                "- QuoteServiceTest covers quote creation.",
+                "",
+                "## Open Questions",
+                "None. confirmed-by: user @2026-06-04",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    summary.write_text("Requirements clarification evidence.\n", encoding="utf-8")
+    summary_ref = summary.relative_to(repo).as_posix()
+    summary_hash = hashlib.sha256(summary.read_bytes()).hexdigest()
+    handoff.write_text(
+        "\n".join(
+            [
+                "---",
+                "agent: requirements-clarifier",
+                "agent_id: requirements-clarifier",
+                "status: ready",
+                "inputs:",
+                "  - user request",
+                "outputs:",
+                f"  - {summary_ref}",
+                "input_hashes:",
+                "  - user-request sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "output_hashes:",
+                f"  - {summary_ref} sha256:{summary_hash}",
+                "consumed_by:",
+                "  - coordinator",
+                "open_questions: None",
+                "---",
+                "",
+                "## Summary",
+                "Requirements are clarified.",
+                "",
+                "## Facts Used",
+                "The user request and design scope were reviewed.",
+                "",
+                "## Decisions Made",
+                "The clarified design may advance to planning.",
+                "",
+                "## Open Questions",
+                "None",
+                "",
+                "## Downstream Assumptions",
+                "The coordinator will run the planning gate next.",
+                "",
+                "## Verification Evidence",
+                f"Evidence file {summary_ref} was written and hashed.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    handoff.with_suffix(".ready.json").write_text(
+        json.dumps(
+            {
+                "path": handoff.name,
+                "sha256": hashlib.sha256(handoff.read_bytes()).hexdigest(),
+                "producer_agent": "requirements-clarifier",
+                "status": "ready",
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = run_state.build_state(
+        "docs/agent-runs/run",
+        "single",
+        [],
+        "docs/agent-runs/run/artifact-registry.json",
+        "CREATED",
+    )
+    state["dispatch"] = {
+        "status": "worker_running",
+        "runtime": "codex",
+        "current_task_id": "T01",
+        "current_agent": "requirements-clarifier",
+        "worker_handle": "worker-T01",
+        "worker_session": "worker-session-T01",
+    }
+    state["dispatches"] = {"T01": state["dispatch"]}
+    run_state.write_state(repo, state_path, state)
+    schedule_path.parent.mkdir(parents=True, exist_ok=True)
+    schedule_path.write_text(
+        json.dumps(
+            {
+                "schema": "e2e-dev-harness.agent-schedule.v1",
+                "completion_mode": "dispatcher-confirmed",
+                "require_role_templates": True,
+                "tasks": [
+                    {
+                        "id": "T01",
+                        "agent": "requirements-clarifier",
+                        "phase": "clarify",
+                        "role_group": "design",
+                        "inputs": [],
+                        "outputs": [handoff_ref.as_posix()],
+                        "role_template": role_template.as_posix(),
+                        "status": "claimed",
+                        "owner": "requirements-clarifier",
+                    }
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    complete = dispatcher.dispatch_complete(
+        repo,
+        schedule_path,
+        state_path,
+        "T01",
+        "requirements-clarifier",
+        [handoff_ref.as_posix()],
+    )
+    if not complete["ready"]:
+        raise AssertionError(complete["blocked_reasons"])
+    return design, state_path
+
+
 class TargetPackageStructureTests(unittest.TestCase):
     def test_target_package_wrappers_preserve_existing_script_contracts(self) -> None:
         from e2e_harness.domain import execution_packet  # noqa: PLC0415
@@ -539,6 +692,122 @@ class StateStoreContractTests(unittest.TestCase):
         self.assertEqual("service_design", events[-1]["gate"])
         self.assertEqual("PLANNED", projected["lifecycle"])
         self.assertEqual("passed", projected["gates"]["service_design"])
+
+    def test_clarify_transition_writes_event_and_projection(self) -> None:
+        import e2e_dev_harness  # noqa: PLC0415
+        import event_log  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design, state_path = write_clarify_fixture(repo)
+            code, result = e2e_dev_harness.clarify(
+                type(
+                    "Args",
+                    (),
+                    {
+                        "repo": repo,
+                        "design_doc": design.relative_to(repo),
+                        "run_state": state_path.relative_to(repo),
+                        "require_intent": True,
+                        "require_user_confirmation": True,
+                        "status_file": None,
+                    },
+                )()
+            )
+            events = event_log.read_events(state_path.parent)
+            projected = json.loads((state_path.parent / "snapshots" / "run-state.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code, result)
+        self.assertTrue(result["run_state_transition"]["ready"], result["run_state_transition"]["blocked_reasons"])
+        self.assertIn("lifecycle_transition", [item["event"] for item in events])
+        self.assertEqual("CLARIFIED", events[-1]["to"])
+        self.assertEqual("clarification", events[-1]["gate"])
+        self.assertEqual("CLARIFIED", projected["lifecycle"])
+        self.assertEqual("passed", projected["gates"]["clarification"])
+
+    def test_gate_transition_writes_event_and_projection(self) -> None:
+        import e2e_dev_harness  # noqa: PLC0415
+        import event_log  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            red = state_path.parent / "evidence" / "red-test.txt"
+            red.parent.mkdir(parents=True, exist_ok=True)
+            red.write_text("expected failure\n", encoding="utf-8")
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            run_state.write_state(repo, state_path, state)
+            args = type(
+                "Args",
+                (),
+                {
+                    "repo": repo,
+                    "design_doc": None,
+                    "kg_status_file": None,
+                    "phase": "implementation",
+                    "red_test_evidence": red,
+                    "coverage_matrix": None,
+                    "unit_test_evidence": None,
+                    "business_review": None,
+                    "memory_updates": None,
+                    "skip_spring_static_check": False,
+                    "rework_dir": None,
+                    "dependency_report": None,
+                    "implementation_manifest": None,
+                    "review_dir": None,
+                    "contract_dir": None,
+                    "require_contracts": False,
+                    "require_handoffs": False,
+                    "require_semantic_reviews": False,
+                    "review_profile": None,
+                    "handoff_dir": None,
+                    "requirements_archive": None,
+                    "require_requirements_archive": False,
+                    "strict_workflow": False,
+                    "changed_files": None,
+                    "test_impact_plan": None,
+                    "base_ref": None,
+                    "checkpoint_mode": "off",
+                    "confirmation_dir": None,
+                    "require_intent": False,
+                    "tdd_mode": "auto",
+                    "workflow_tier": "auto",
+                    "run_state": state_path.relative_to(repo),
+                    "state": None,
+                    "no_harness_state": False,
+                    "harness_state_approval": None,
+                    "require_gitnexus_evidence": "auto",
+                    "gitnexus_degradation": None,
+                    "status_file": None,
+                },
+            )()
+            gate_payload = {
+                "phase": "implementation",
+                "ready": True,
+                "blocked_reasons": [],
+                "warnings": [],
+                "knowledge_graph_status_loaded": True,
+                "tdd": {"ready": True, "red_evidence": red.relative_to(repo).as_posix()},
+                "semantic_reviews": {"ready": True, "covered_phases": ["design", "test"]},
+            }
+            with patch.object(e2e_dev_harness.implementation_gate, "validate_gate_request", return_value=gate_payload):
+                code, result = e2e_dev_harness.gate(args)
+            events = event_log.read_events(state_path.parent)
+            projected = json.loads((state_path.parent / "snapshots" / "run-state.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code, result)
+        self.assertTrue(result["run_state_transition"]["ready"], result["run_state_transition"]["blocked_reasons"])
+        self.assertIn("lifecycle_transition", [item["event"] for item in events])
+        self.assertEqual("IMPLEMENTED", events[-1]["to"])
+        self.assertEqual("implementation", events[-1]["gate"])
+        self.assertEqual("IMPLEMENTED", projected["lifecycle"])
+        self.assertEqual("passed", projected["gates"]["implementation"])
 
 
 class RuntimeAdapterContractTests(unittest.TestCase):
@@ -1376,6 +1645,63 @@ class DoctorTimelineContractTests(unittest.TestCase):
 
 
 class CliCommandFacadeContractTests(unittest.TestCase):
+    def test_cli_command_modules_preserve_clarify_and_gate_contracts(self) -> None:
+        from e2e_harness.cli.commands import clarify as clarify_command  # noqa: PLC0415
+        from e2e_harness.cli.commands import gate as gate_command  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design, state_path = write_clarify_fixture(repo)
+            clarify_code, clarify_result = clarify_command.run(
+                repo,
+                design_doc=design.relative_to(repo),
+                run_state=state_path.relative_to(repo),
+                require_intent=True,
+                require_user_confirmation=True,
+            )
+
+            gate_state_path = repo / "docs" / "agent-runs" / "gate-run" / "run-state.json"
+            red = gate_state_path.parent / "evidence" / "red-test.txt"
+            red.parent.mkdir(parents=True, exist_ok=True)
+            red.write_text("expected failure\n", encoding="utf-8")
+            state = run_state.build_state(
+                "docs/agent-runs/gate-run",
+                "single",
+                [],
+                "docs/agent-runs/gate-run/artifact-registry.json",
+                "PLANNED",
+            )
+            run_state.write_state(repo, gate_state_path, state)
+            gate_payload = {
+                "phase": "implementation",
+                "ready": True,
+                "blocked_reasons": [],
+                "warnings": [],
+                "knowledge_graph_status_loaded": True,
+                "tdd": {"ready": True, "red_evidence": red.relative_to(repo).as_posix()},
+                "semantic_reviews": {"ready": True, "covered_phases": ["design", "test"]},
+            }
+            with patch.object(gate_command.implementation_gate, "validate_gate_request", return_value=gate_payload):
+                gate_code, gate_result = gate_command.run(
+                    repo,
+                    phase="implementation",
+                    run_state=gate_state_path.relative_to(repo),
+                    red_test_evidence=red,
+                )
+            clarify_projected = json.loads(
+                (state_path.parent / "snapshots" / "run-state.json").read_text(encoding="utf-8")
+            )
+            gate_projected = json.loads(
+                (gate_state_path.parent / "snapshots" / "run-state.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(0, clarify_code, clarify_result)
+        self.assertEqual("CLARIFIED", clarify_projected["lifecycle"])
+        self.assertTrue(clarify_result["blocked_next_without_plan"])
+        self.assertEqual(0, gate_code, gate_result)
+        self.assertEqual("IMPLEMENTED", gate_projected["lifecycle"])
+        self.assertTrue(gate_result["run_state_transition"]["ready"])
+
     def test_cli_command_modules_preserve_doctor_recover_and_runtime_capability_contracts(self) -> None:
         from e2e_harness.cli.commands import doctor as doctor_command  # noqa: PLC0415
         from e2e_harness.cli.commands import recover as recover_command  # noqa: PLC0415
@@ -1404,6 +1730,155 @@ class CliCommandFacadeContractTests(unittest.TestCase):
         self.assertEqual("e2e-dev-harness.recovery-plan.v1", recover_result["schema"])
         self.assertEqual("codex", capabilities["runtime"])
         self.assertTrue(capabilities["ready"])
+
+    def test_dispatch_cli_command_facade_preserves_dispatch_contracts(self) -> None:
+        from e2e_harness.cli.commands import dispatch as dispatch_command  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule, state_path = write_dispatch_fixture(repo)
+            next_code, next_result = dispatch_command.run_next(
+                repo,
+                schedule=schedule.relative_to(repo),
+                state=state_path.relative_to(repo),
+                runtime="codex",
+            )
+            status_result = dispatch_command.run_status(
+                repo,
+                schedule=schedule.relative_to(repo),
+                state=state_path.relative_to(repo),
+            )
+            ack_result = dispatch_command.run_ack(
+                repo,
+                state=state_path.relative_to(repo),
+                task_id="T10",
+                agent="code-developer-order-service",
+                worker_handle="worker-T10",
+                worker_session="session-T10",
+            )
+            evidence = repo / "docs" / "agent-runs" / "run" / "service-plans" / "order-service" / "code-agent.md"
+            output = repo / "docs" / "agent-runs" / "run" / "evidence" / "code-agent-output.md"
+            evidence.parent.mkdir(parents=True, exist_ok=True)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text("worker evidence\n", encoding="utf-8")
+            output_ref = output.relative_to(repo).as_posix()
+            output_hash = hashlib.sha256(output.read_bytes()).hexdigest()
+            input_ref = "docs/agent-runs/run/handoffs/01-requirements.md"
+            input_hash = hashlib.sha256((repo / input_ref).read_bytes()).hexdigest()
+            evidence.write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "agent: code-developer-order-service",
+                        "agent_id: worker-T10",
+                        "status: ready",
+                        "inputs:",
+                        "  - docs/agent-runs/run/handoffs/01-requirements.md",
+                        "outputs:",
+                        f"  - {output_ref}",
+                        "input_hashes:",
+                        f"  - {input_ref} sha256:{input_hash}",
+                        "output_hashes:",
+                        f"  - {output_ref} sha256:{output_hash}",
+                        "consumed_by:",
+                        "  - coordinator",
+                        "open_questions: None",
+                        "---",
+                        "",
+                        "## Summary",
+                        "Code-agent evidence is ready.",
+                        "",
+                        "## Facts Used",
+                        "The scheduled context pack and input handoff were reviewed.",
+                        "",
+                        "## Decisions Made",
+                        "The worker returned the scheduled output reference.",
+                        "",
+                        "## Open Questions",
+                        "None",
+                        "",
+                        "## Downstream Assumptions",
+                        "The coordinator will validate the returned handoff.",
+                        "",
+                        "## Verification Evidence",
+                        f"Evidence file {output_ref} was written and hashed.",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            evidence.with_suffix(".ready.json").write_text(
+                json.dumps(
+                    {
+                        "path": evidence.name,
+                        "sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+                        "producer_agent": "worker-T10",
+                        "status": "ready",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            complete_result = dispatch_command.run_complete(
+                repo,
+                schedule=schedule.relative_to(repo),
+                state=state_path.relative_to(repo),
+                task_id="T10",
+                agent="code-developer-order-service",
+                evidence=[evidence.relative_to(repo).as_posix()],
+            )
+            beat_code, beat_result = dispatch_command.run_beat(
+                repo,
+                schedule=schedule.relative_to(repo),
+                state=state_path.relative_to(repo),
+                runtime="codex",
+                max_workers=1,
+            )
+
+        self.assertIn(next_code, {0, 2})
+        self.assertIn("dispatch", next_result)
+        self.assertEqual("e2e-dev-harness.dispatch-status.v1", status_result["schema"])
+        self.assertTrue(ack_result["ready"], ack_result)
+        self.assertTrue(complete_result["ready"], complete_result)
+        self.assertIn(beat_code, {0, 2})
+        self.assertIn("ready", beat_result)
+
+    def test_agent_task_cli_command_facade_preserves_claim_and_validate_contracts(self) -> None:
+        from e2e_harness.cli.commands import agent_task as agent_task_command  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule, state_path = write_dispatch_fixture(repo)
+            validate_before = agent_task_command.run_validate(
+                repo,
+                schedule=schedule.relative_to(repo),
+                services=["services/order-service"],
+            )
+            claim_result = agent_task_command.run_claim(
+                repo,
+                schedule=schedule.relative_to(repo),
+                task_id="T10",
+                agent="code-developer-order-service",
+                state=state_path.relative_to(repo),
+            )
+            renew_result = agent_task_command.run_renew(
+                repo,
+                schedule=schedule.relative_to(repo),
+                task_id="T10",
+                agent="code-developer-order-service",
+                state=state_path.relative_to(repo),
+            )
+            validate_after = agent_task_command.run_validate(
+                repo,
+                schedule=schedule.relative_to(repo),
+                services=["services/order-service"],
+                require_claims=True,
+            )
+
+        self.assertTrue(validate_before["ready"], validate_before)
+        self.assertTrue(claim_result["ready"], claim_result)
+        self.assertEqual("claimed", claim_result["task"]["status"])
+        self.assertTrue(renew_result["ready"], renew_result)
+        self.assertTrue(validate_after["ready"], validate_after)
+        self.assertEqual("e2e-dev-harness.agent-task.v1", claim_result["schema"])
 
     def test_runtime_capabilities_cli_emits_legacy_compact_shape(self) -> None:
         import e2e_dev_harness  # noqa: PLC0415

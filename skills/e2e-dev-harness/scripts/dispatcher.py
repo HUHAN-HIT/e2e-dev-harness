@@ -1503,6 +1503,7 @@ def dispatch_status(
     open_tasks = [task for task in tasks if not task_done(task)]
     selected_tasks, blocked_tasks = ready_tasks(repo, schedule, max_workers=1, state=state)
     result = {
+        "schema": "e2e-dev-harness.dispatch-status.v1",
         "ready": True,
         "blocked_reasons": [],
         "warnings": [],
