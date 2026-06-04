@@ -16,33 +16,32 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-import agent_instructions  # noqa: E402
-import ac_progress_gate  # noqa: E402
+import ac_progress_gate  # noqa: E402, F401  # re-export: tests patch e2e_dev_harness.ac_progress_gate
+import agent_instructions  # noqa: E402, F401  # re-export: prepare command uses legacy.agent_instructions
 import agent_scheduler  # noqa: E402
-import artifact_registry  # noqa: E402
 import clarification_gate  # noqa: E402
 from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, atomic_write_json, configure_utf8_stdio, posix, read_json_object  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import coordinator_flow  # noqa: E402
 import event_log  # noqa: E402
 import execution_trace  # noqa: E402
-import install_hooks  # noqa: E402
-import harness_doctor  # noqa: E402
+import install_hooks  # noqa: E402, F401  # re-export: install command uses legacy.install_hooks
+import harness_doctor  # noqa: E402, F401  # re-export: install command uses legacy.harness_doctor
 # Re-exported so tests can patch e2e_dev_harness.implementation_gate (shared module object).
 import implementation_gate  # noqa: E402, F401
 import kg_refresh  # noqa: E402
-import harness_verify  # noqa: E402
+import harness_verify  # noqa: E402, F401  # re-export: verify command uses legacy.harness_verify
 import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
 import output_contract  # noqa: E402
-import phase_guard  # noqa: E402
+import phase_guard  # noqa: E402, F401  # re-export: tests patch e2e_dev_harness.phase_guard
 import preflight as preflight_checks  # noqa: E402
-import run_state  # noqa: E402
+import run_state  # noqa: E402, F401  # re-export: tests use e2e_dev_harness.run_state
 import session_checkpoint  # noqa: E402
 import superpowers_probe  # noqa: E402
 import task_tier  # noqa: E402
-import test_impact_plan  # noqa: E402
-import workflow_guard  # noqa: E402
+import test_impact_plan  # noqa: E402, F401  # re-export: tests patch e2e_dev_harness.test_impact_plan
+import workflow_guard  # noqa: E402, F401  # re-export: tests patch e2e_dev_harness.workflow_guard
 from e2e_harness.cli.commands import agent_task as agent_task_command  # noqa: E402
 from e2e_harness.cli.commands import ac_progress as ac_progress_command  # noqa: E402
 from e2e_harness.cli.commands import clarify as clarify_command  # noqa: E402

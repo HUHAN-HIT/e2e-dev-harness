@@ -83,3 +83,16 @@ py-modules = [
   "test_impact_plan",
   "workflow_guard",
 ]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+# Keep ruff's default rule set (E4/E7/E9 + Pyflakes "F"). This repo depends on:
+#   * F401 (unused-import) to catch the recurring dead imports left behind by
+#     CLI-thinning refactors. Genuine re-export / monkeypatch targets are kept
+#     with an explicit `# noqa: F401`, never auto-deleted (do NOT run
+#     `ruff check --fix` blindly on e2e_dev_harness.py — it would strip them).
+#   * E402 (module-import-not-at-top), suppressed deliberately with `# noqa: E402`
+#     where imports follow runtime sys.path setup. Do not remove those noqas.
+select = ["E4", "E7", "E9", "F"]

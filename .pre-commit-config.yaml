@@ -1,0 +1,19 @@
+# Pre-commit lint gate for the e2e-dev-harness repo.
+#
+# Activate once per clone:
+#     pip install pre-commit        # if not already installed
+#     pre-commit install            # installs the git hook
+#
+# Run manually across the whole tree:
+#     pre-commit run --all-files
+#
+# The ruff hook below is lint-only (it does NOT auto-fix). This is intentional:
+# `ruff check --fix` would delete intentional re-export / monkeypatch imports
+# that tests patch via `e2e_dev_harness.<name>` and that F401 cannot see. Fix
+# F401 findings by hand, adding `# noqa: F401` to genuine re-export targets.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
+    hooks:
+      - id: ruff
+        name: ruff (lint gate — blocks dead imports / F401)
