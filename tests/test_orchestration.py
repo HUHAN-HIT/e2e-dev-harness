@@ -4130,6 +4130,167 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertIn(" clarify ", result["next_required"]["command"])
         self.assertIn("--run-state", result["next_required"]["command"])
 
+    def test_dispatch_complete_explains_ready_handoff_body_requirements(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            evidence = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            role_template = Path("docs/agent-runs/run/agent-roles/requirements-clarifier.md")
+            write_role_template(repo, role_template)
+            handoff = repo / evidence
+            handoff.parent.mkdir(parents=True, exist_ok=True)
+            handoff.write_text(
+                textwrap.dedent(
+                    """
+                    ---
+                    agent: requirements-clarifier
+                    agent_id: requirements-agent-1
+                    status: ready
+                    inputs:
+                      - user request
+                    outputs:
+                      - docs/agent-runs/run/evidence/requirements-summary.md
+                    input_hashes:
+                      - user-request sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    output_hashes:
+                      - docs/agent-runs/run/evidence/requirements-summary.md sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                    consumed_by:
+                      - implementation-planner
+                    open_questions: None
+                    ---
+
+                    # Agent Handoff
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            state = run_state.build_state("run", "bootstrap", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            state["dispatch"] = {
+                "status": "worker_running",
+                "runtime": "codex",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "worker_handle": "requirements-worker",
+                "worker_session": "requirements-worker-session",
+            }
+            state["dispatches"] = {"T01": state["dispatch"]}
+            run_state.write_state(repo, state_path, state)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "phase": "clarify",
+                                "agent": "requirements-clarifier",
+                                "role_group": "design",
+                                "role_template": role_template.as_posix(),
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                                "outputs": [evidence.as_posix()],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_complete(repo, schedule, state_path, "T01", "requirements-clarifier", [evidence.as_posix()])
+
+        self.assertFalse(result["ready"])
+        self.assertEqual("ready_handoff_contract", result["missing_evidence_type"])
+        self.assertIn("handoff_completion_requirements", result)
+        self.assertIn("Summary", result["handoff_completion_requirements"]["required_body_sections"])
+        self.assertTrue(any(".ready.json" in item for item in result["handoff_completion_requirements"]["required_steps"]))
+        self.assertTrue(any("ready body section" in reason for reason in result["blocked_reasons"]))
+
+    def test_task_prompt_includes_ready_handoff_contract_for_handoff_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            invocation = run_dir / "dispatch-invocations" / "T01-requirements-clarifier.json"
+            invocation.parent.mkdir(parents=True, exist_ok=True)
+            pack = {
+                "context_pack_path": "docs/agent-runs/run/context-packs/T01.json",
+                "allowed_inputs": ["user request"],
+                "allowed_outputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+            }
+
+            prompt = dispatcher.task_prompt(
+                {"id": "T01", "agent": "requirements-clarifier", "phase": "clarify"},
+                pack,
+                invocation,
+                repo,
+            )
+
+        self.assertIn("Ready handoff contract", prompt)
+        self.assertIn(".ready.json", prompt)
+        self.assertIn("Summary, Facts Used, Decisions Made, Open Questions, Downstream Assumptions, Verification Evidence", prompt)
+
+    def test_manual_worker_packet_includes_ready_handoff_contract_for_handoff_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            task = {
+                "id": "T01",
+                "agent": "requirements-clarifier",
+                "outputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+            }
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(json.dumps({"tasks": [task]}), encoding="utf-8")
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state("run", "bootstrap", [], "docs/agent-runs/run/artifact-registry.json", "CREATED"),
+            )
+
+            packet = dispatcher.manual_worker_packet(repo, schedule, state_path, task)
+
+        self.assertIn("handoff_completion_requirements", packet)
+        self.assertIn("Summary", packet["handoff_completion_requirements"]["required_body_sections"])
+        # The packet must steer the worker to the `handoff` finalize command (which
+        # re-runs the handoff gate) before dispatch-complete, with the concrete path.
+        self.assertTrue(
+            any(
+                "handoff" in command and "--path" in command and "--agent" in command
+                for command in packet["next_commands"]
+            )
+        )
+        self.assertTrue(
+            any("01-requirements-clarifier.md" in command for command in packet["next_commands"])
+        )
+
+    def test_dispatch_complete_summary_surfaces_clarify_next_required(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state("run", "bootstrap", [], "docs/agent-runs/run/artifact-registry.json", "CREATED"),
+            )
+            args = SimpleNamespace(repo=repo, state=state_path, full_json=False)
+            result = {
+                "ready": True,
+                "next_required": {
+                    "phase": "clarification",
+                    "command": "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py clarify . --run-state docs/agent-runs/run/run-state.json",
+                },
+            }
+
+            summary = e2e_dev_harness.summarize_stdout_result("dispatch-complete", args, result)
+
+        self.assertEqual("clarification", summary["next_action"]["phase"])
+        self.assertIn(" clarify ", summary["next_action"]["command"])
+        self.assertIn(" clarify ", summary["next_command"])
+
     def test_dispatch_complete_service_design_returns_service_design_next_required(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

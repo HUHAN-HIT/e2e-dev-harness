@@ -48,6 +48,7 @@ from e2e_harness.cli.commands import clarify as clarify_command  # noqa: E402
 from e2e_harness.cli.commands import dispatch as dispatch_command  # noqa: E402
 from e2e_harness.cli.commands import doctor as doctor_command  # noqa: E402
 from e2e_harness.cli.commands import gate as gate_command  # noqa: E402
+from e2e_harness.cli.commands import handoff as handoff_command  # noqa: E402
 from e2e_harness.cli.commands import guard as guard_command  # noqa: E402
 from e2e_harness.cli.commands import install as install_command  # noqa: E402
 from e2e_harness.cli.commands import next as next_command  # noqa: E402
@@ -207,6 +208,11 @@ def next_command_from_result(result: dict) -> str:
             value = str(next_action.get(key, "")).strip()
             if value:
                 return value
+    next_required = result.get("next_required")
+    if isinstance(next_required, dict):
+        value = str(next_required.get("command", "")).strip()
+        if value:
+            return value
     execution_packet = result.get("execution_packet")
     if isinstance(execution_packet, dict):
         value = str(execution_packet.get("primary_command", "")).strip()
@@ -308,6 +314,8 @@ def summarize_stdout_result(command: str, args: argparse.Namespace, result: dict
     repo = as_repo(getattr(args, "repo", Path(".")))
     full_result_path = write_cli_response_artifact(repo, command, args, result)
     next_action = result.get("next") if isinstance(result.get("next"), dict) else {}
+    if not next_action and isinstance(result.get("next_required"), dict):
+        next_action = result["next_required"]
     session = result.get("session_checkpoint") if isinstance(result.get("session_checkpoint"), dict) else {}
     coordinator_budget = result.get("coordinator_context_budget")
     if not isinstance(coordinator_budget, dict):
@@ -1603,6 +1611,10 @@ def dispatch_status(args) -> tuple[int, dict]:
     return dispatch_command.run_status_from_args(args)
 
 
+def handoff_finalize(args) -> tuple[int, dict]:
+    return handoff_command.run_from_args(args)
+
+
 def ac_progress(args) -> tuple[int, dict]:
     return ac_progress_command.run_from_args(args)
 
@@ -1907,6 +1919,12 @@ def main() -> int:
     dispatch_status_parser.add_argument("--evidence", action="append")
     dispatch_status_parser.add_argument("--status-file", type=Path)
 
+    handoff_parser = subparsers.add_parser("handoff", help="Finalize a handoff: normalize frontmatter, write the ready marker atomically, and re-run the handoff gate.")
+    handoff_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    handoff_parser.add_argument("--path", required=True, type=Path, help="Path to the handoff <name>.md file the worker has written.")
+    handoff_parser.add_argument("--agent", required=True, help="Producer agent id; written to agent_id and the ready marker producer_agent.")
+    handoff_parser.add_argument("--status-file", type=Path)
+
     recover_parser = subparsers.add_parser("recover", help="Create an auditable recovery plan for a stuck run.")
     recover_parser.add_argument("repo", nargs="?", default=".", type=Path)
     recover_parser.add_argument("--state", required=True, type=Path)
@@ -2020,6 +2038,8 @@ def main() -> int:
             exit_code, result = dispatch_ack(args)
         elif args.command == "dispatch-status":
             exit_code, result = dispatch_status(args)
+        elif args.command == "handoff":
+            exit_code, result = handoff_finalize(args)
         elif args.command == "ac-progress":
             exit_code, result = ac_progress(args)
         elif args.command == "next":
@@ -2076,6 +2096,8 @@ def main() -> int:
             compact["summary"]["workflow_stage"] = "TIMELINE"
         for key in ("run_id", "event_count", "timeline_count", "latest_event"):
             compact[key] = result.get(key, {} if key == "latest_event" else 0)
+    if args.command == "dispatch-status" and result.get("task_state_views"):
+        compact["task_state_views"] = result["task_state_views"]
     print(output_contract.render_json(compact))
     return exit_code
 

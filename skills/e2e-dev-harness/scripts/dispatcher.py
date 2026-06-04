@@ -333,6 +333,76 @@ def task_parallel_group(task: dict) -> str:
 
 
 ACTIVE_DISPATCH_STATUSES = {"awaiting_runtime_spawn", "waiting_dispatch", "worker_running", "worker_dispatched", "dispatched"}
+READY_HANDOFF_BODY_SECTIONS = [
+    "Summary",
+    "Facts Used",
+    "Decisions Made",
+    "Open Questions",
+    "Downstream Assumptions",
+    "Verification Evidence",
+]
+
+
+def requires_ready_handoff_contract(values: list | None) -> bool:
+    for value in values or []:
+        text = str(value).replace("\\", "/").strip().lower()
+        if "/handoffs/" in text or text.endswith("/code-agent.md") or text.endswith("/implementation-plan.md"):
+            return True
+    return False
+
+
+def ready_handoff_completion_requirements(task: dict | None = None) -> dict:
+    outputs = [str(item) for item in (task or {}).get("outputs", []) or []]
+    return {
+        "schema": "e2e-dev-harness.ready-handoff-contract.v1",
+        "required_outputs": outputs,
+        "required_frontmatter_fields": [
+            "agent",
+            "agent_id",
+            "status: ready",
+            "inputs",
+            "outputs",
+            "input_hashes",
+            "output_hashes",
+            "consumed_by",
+            "open_questions: None",
+        ],
+        "required_body_sections": READY_HANDOFF_BODY_SECTIONS,
+        "ready_marker": {
+            "path": "<handoff>.ready.json",
+            "fields": ["path", "sha256", "producer_agent", "status: ready"],
+            "sha256_scope": "current final handoff markdown content",
+        },
+        "required_steps": [
+            "Write the final scheduled handoff markdown, not only formatter/frontmatter metadata.",
+            "Use a separate evidence artifact in outputs/output_hashes; do not list the handoff file itself there.",
+            "Fill every ready body section with non-template content, including Open Questions as None when closed.",
+            "Compute SHA-256 hashes for declared output artifacts and for the final handoff file.",
+            "Write the canonical <handoff>.ready.json marker after the final handoff content is stable.",
+            "Return the scheduled handoff path as dispatch-complete evidence only after handoff_gate is ready.",
+        ],
+    }
+
+
+def ready_handoff_prompt_lines(task: dict | None = None) -> list[str]:
+    requirements = ready_handoff_completion_requirements(task)
+    return [
+        "",
+        "Ready handoff contract:",
+        "- Scheduled handoff outputs must be complete Markdown handoffs, not metadata-only formatter patches.",
+        "- Frontmatter must include: " + ", ".join(requirements["required_frontmatter_fields"]) + ".",
+        "- Body must include: " + ", ".join(requirements["required_body_sections"]) + ".",
+        "- Write the canonical .ready.json marker with path, sha256, producer_agent, and status: ready after finalizing the handoff.",
+        "- output_hashes must hash separate produced evidence artifacts; the handoff file hash belongs only in .ready.json.",
+    ]
+
+
+def ready_handoff_contract_blocked(reasons: list | None) -> bool:
+    for reason in reasons or []:
+        text = str(reason).lower()
+        if "handoff evidence is not ready" in text or "ready body section" in text or "ready marker" in text:
+            return True
+    return False
 
 
 def active_dispatches(state: dict) -> dict[str, dict]:
@@ -522,6 +592,8 @@ def task_prompt(task: dict, pack: dict, invocation_path: Path, repo: Path) -> st
     lines.append("")
     lines.append("Required outputs:")
     lines.extend(f"- {item}" for item in pack.get("allowed_outputs", []) or [])
+    if requires_ready_handoff_contract(pack.get("allowed_outputs", [])):
+        lines.extend(ready_handoff_prompt_lines(task))
     return "\n".join(lines)
 
 
@@ -632,7 +704,7 @@ def manual_worker_packet(repo: Path, schedule_path: Path, state_path: Path | Non
     state_rel = rel(repo, resolve(repo, state_path) or state_path) if state_path else ""
     outputs = [str(item) for item in task.get("outputs", []) or []]
     worker_handle = f"<fresh-{agent or 'worker'}-handle>"
-    return {
+    packet = {
         "schema": "e2e-dev-harness.manual-worker-packet.v1",
         "task_id": task_id,
         "agent": agent,
@@ -657,6 +729,19 @@ def manual_worker_packet(repo: Path, schedule_path: Path, state_path: Path | Non
         ],
         "completion_evidence_required": outputs,
     }
+    if requires_ready_handoff_contract(outputs):
+        packet["handoff_completion_requirements"] = ready_handoff_completion_requirements(task)
+        handoff_md = next(
+            (str(item) for item in outputs if "/handoffs/" in str(item) and str(item).endswith(".md")),
+            "<handoff>.md",
+        )
+        packet["next_commands"].insert(
+            -1,
+            "After writing the handoff body, run "
+            f"python skills/e2e-dev-harness/scripts/e2e_dev_harness.py handoff . --path {handoff_md} --agent {agent} "
+            "to normalize frontmatter, write the .ready.json marker atomically, and re-run the handoff gate before dispatch-complete.",
+        )
+    return packet
 
 
 def dispatch_recovery_packet(repo: Path, schedule_path: Path, state_path: Path | None, task: dict | None, dispatch: dict | None = None) -> dict:
@@ -1308,13 +1393,16 @@ def dispatch_complete(
     )
     if not complete["ready"]:
         recovery = dispatch_recovery_packet(repo, schedule_path, state_path, task, active_dispatch)
+        missing_type = "ready_handoff_contract" if ready_handoff_contract_blocked(complete.get("blocked_reasons")) else "task_output_reference"
         complete.update(
             {
-                "missing_evidence_type": "task_output_reference",
+                "missing_evidence_type": missing_type,
                 "required_outputs": [str(item) for item in task.get("outputs", []) or []],
                 **recovery,
             }
         )
+        if missing_type == "ready_handoff_contract":
+            complete["handoff_completion_requirements"] = ready_handoff_completion_requirements(task)
         return complete
     if reviewer_result is not None:
         complete["reviewer_gate"] = reviewer_result
@@ -1486,6 +1574,90 @@ def dispatch_ack(
     }
 
 
+def _handoff_output(task: dict) -> str:
+    """Return the first handoff .md path a task is expected to produce, if any."""
+    for out in task.get("outputs", []) or []:
+        text = str(out)
+        if "/handoffs/" in text and text.endswith(".md"):
+            return text
+    return ""
+
+
+def build_task_state_views(
+    repo: Path,
+    state_path: Path | None,
+    state: dict,
+    open_tasks: list[dict],
+    blocked_tasks: list[dict],
+    selected_tasks: list[dict],
+) -> list[dict]:
+    """Derive a single human-readable view that merges the three status namespaces.
+
+    Read-only: this collapses lifecycle (run-state), task status (schedule), and
+    dispatch status (run-state dispatches) into one row per open task plus a
+    concrete next command. It intentionally writes no new file so it cannot become
+    a fourth source of truth.
+    """
+    lifecycle = lifecycle_value(state)
+    dispatches = state.get("dispatches") if isinstance(state.get("dispatches"), dict) else {}
+    top = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
+    blocked_map: dict[str, list[str]] = {}
+    for item in blocked_tasks or []:
+        tid = str(item.get("task_id", "")).strip()
+        if tid:
+            blocked_map[tid] = [str(r) for r in (item.get("blocked_reasons", []) or [])]
+    ready_ids = {str(task.get("id", "")).strip() for task in selected_tasks or []}
+    views: list[dict] = []
+    for task in open_tasks:
+        tid = str(task.get("id", "")).strip()
+        agent = str(task.get("agent", "")).strip() or "agent"
+        dispatch = dispatches.get(tid) if isinstance(dispatches.get(tid), dict) else {}
+        if not dispatch and str(top.get("current_task_id", "")).strip() == tid:
+            dispatch = top
+        dstatus = str(dispatch.get("status", "")).strip()
+        reason = ""
+        next_command = ""
+        if dstatus in ACTIVE_DISPATCH_STATUSES:
+            dispatch_agent = str(dispatch.get("current_agent", "")).strip() or agent
+            completion_blockers, _ = dispatch_completion_blockers(repo, state_path, tid, dispatch_agent)
+            if completion_blockers:
+                reason = completion_blockers[0]
+            handoff = _handoff_output(task)
+            if dstatus == "worker_running" and handoff:
+                next_command = (
+                    f"e2e_dev_harness.py handoff --path {handoff} --agent {agent}"
+                    f"  (then dispatch-complete --task-id {tid} --agent {agent})"
+                )
+            elif dstatus == "worker_running":
+                next_command = (
+                    f"e2e_dev_harness.py dispatch-complete --task-id {tid} --agent {agent} --evidence <output>"
+                )
+            else:
+                next_command = (
+                    f"spawn the worker, then dispatch-ack --task-id {tid} --agent {agent}"
+                )
+        elif tid in blocked_map:
+            reasons = blocked_map[tid]
+            reason = reasons[0] if reasons else ""
+            next_command = "resolve the blocker above (often clarify user-confirmation or an upstream ready handoff)"
+        elif tid in ready_ids:
+            next_command = f"e2e_dev_harness.py dispatch-beat  (claims {tid})"
+        views.append(
+            {
+                "id": tid,
+                "agent": agent,
+                "phase": task.get("phase", ""),
+                "service": task.get("service", ""),
+                "lifecycle": lifecycle or "none",
+                "task_status": task.get("status", "planned"),
+                "dispatch_status": dstatus or "none",
+                "blocked_reason": reason,
+                "next_command": next_command,
+            }
+        )
+    return views
+
+
 def dispatch_status(
     repo: Path,
     schedule_path: Path,
@@ -1536,6 +1708,9 @@ def dispatch_status(
         "blocked_tasks": blocked_tasks,
         "skipped_tasks": blocked_tasks,
         "next_task": (selected_tasks[0].get("id", "") if selected_tasks else ""),
+        "task_state_views": build_task_state_views(
+            repo, state_file, state, open_tasks, blocked_tasks, selected_tasks
+        ),
     }
     if write_recovery_request_path:
         recovery = write_recovery_request(
@@ -1620,6 +1795,17 @@ def main() -> int:
             print(f"- {reason}")
         for warning in result.get("warnings", []):
             print(f"warning: {warning}")
+        for view in result.get("task_state_views", []):
+            line = (
+                f"{view.get('id', '?')}: lifecycle={view.get('lifecycle', '?')}"
+                f" | task={view.get('task_status', '?')}"
+                f" | dispatch={view.get('dispatch_status', '?')}"
+            )
+            if view.get("blocked_reason"):
+                line += f" | blocked: {view['blocked_reason']}"
+            if view.get("next_command"):
+                line += f"\n    -> next: {view['next_command']}"
+            print(line)
         prompt = result.get("task_prompt")
         if prompt:
             print(prompt)
