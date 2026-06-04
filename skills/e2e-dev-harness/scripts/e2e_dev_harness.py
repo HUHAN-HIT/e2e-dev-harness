@@ -63,6 +63,7 @@ from e2e_harness.cli.commands import start as start_command  # noqa: E402
 from e2e_harness.cli.commands import timeline as timeline_command  # noqa: E402
 from e2e_harness.cli.commands import test_impact as test_impact_command  # noqa: E402
 from e2e_harness.cli.commands import verify as verify_command  # noqa: E402
+from e2e_harness.cli.parser import add_output_args  # noqa: E402, F401
 from e2e_harness.cli.status import write_status  # noqa: E402, F401
 
 
@@ -1634,17 +1635,6 @@ def add_prepare_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-write-dependency-report", dest="write_dependency_report", action="store_false")
     parser.set_defaults(write_dependency_report=True)
     parser.add_argument("--status-file", type=Path)
-
-
-def add_output_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--json-full",
-        "--full-json",
-        dest="json_full",
-        action="store_true",
-        help="Print the complete JSON result to stdout.",
-    )
-    parser.add_argument("--compact-output", action="store_true", help="Print compact coordinator-safe stdout; this is the default.")
 
 
 def add_full_json_arg(parser: argparse.ArgumentParser) -> None:
