@@ -15,6 +15,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import agent_roles  # noqa: E402
 from kg_refresh import detect  # noqa: E402
 
 
@@ -710,21 +711,7 @@ def artifacts(slug: str, agent_run_dir: str | None = None, run_date: str | None 
 
 
 def role_template_key(agent_name: str) -> str:
-    if "requirements" in agent_name or "clarifier" in agent_name:
-        return "requirements-clarifier"
-    if "use-case" in agent_name or "designer" in agent_name:
-        return "use-case-designer"
-    if "planner" in agent_name:
-        return "implementation-planner"
-    if "test" in agent_name and "review" not in agent_name:
-        return "test-case-developer"
-    if "code-developer" in agent_name:
-        return "code-developer"
-    if "coverage" in agent_name:
-        return "coverage-reviewer"
-    if "reviewer" in agent_name or "review" in agent_name:
-        return "semantic-reviewer"
-    return ""
+    return agent_roles.resolve_role_key(agent_name)
 
 
 def with_role_template(agent: dict, artifact_paths: dict) -> dict:
@@ -769,7 +756,7 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
             {
                 "name": "test-case-developer",
                 "owns": ["test strategy", "first red test", "contract tests", "Maven test scope"],
-                "inputs": [artifact_paths["requirements"], artifact_paths["use_cases"], "superpowers:test-driven-development"],
+                "inputs": [artifact_paths["requirements"], artifact_paths["use_cases"], *agent_roles.role_skills("test-case-developer")],
                 "outputs": [artifact_paths["test_plan"]],
                 "gate": "First red test must be written and observed failing for the expected reason.",
             }
@@ -1009,18 +996,7 @@ def depends_on_for_phase(phase: str) -> list[str]:
 
 
 def role_group_for_phase(phase: str) -> str:
-    groups = {
-        "clarify": "design",
-        "design": "design",
-        "plan": "planning",
-        "tdd-red": "test",
-        "implement": "code",
-        "r1-review": "review",
-        "r2-review": "review",
-        "r3-review": "review",
-        "completion": "coverage",
-    }
-    return groups.get(phase, "coordination")
+    return agent_roles.PHASE_ROLE_GROUPS.get(phase, "coordination")
 
 
 REVIEWER_SUBAGENT_TYPE_ENV = "E2E_HARNESS_REVIEWER_SUBAGENT_TYPE"

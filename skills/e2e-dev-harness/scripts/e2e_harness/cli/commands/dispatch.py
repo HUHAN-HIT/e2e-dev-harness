@@ -138,6 +138,33 @@ def run_ack(
     return result
 
 
+def run_finish(
+    repo: Path,
+    schedule: Path,
+    state: Path | None,
+    task_id: str,
+    agent: str,
+    worker_handle: str,
+    worker_session: str = "",
+    evidence: list[str] | None = None,
+    handoff: Path | None = None,
+    status_file: Path | None = None,
+) -> dict:
+    result = dispatch_engine.finish(
+        _as_repo(repo),
+        schedule,
+        state,
+        task_id,
+        agent,
+        worker_handle,
+        worker_session or "",
+        evidence or [],
+        handoff=handoff,
+    )
+    write_status(status_file, result)
+    return result
+
+
 def run_status(
     repo: Path,
     schedule: Path,
@@ -213,6 +240,22 @@ def run_ack_from_args(args) -> tuple[int, dict]:
         getattr(args, "agent"),
         getattr(args, "worker_handle"),
         getattr(args, "worker_session", "") or "",
+        status_file=getattr(args, "status_file", None),
+    )
+    return (0 if result["ready"] else 2), result
+
+
+def run_finish_from_args(args) -> tuple[int, dict]:
+    result = run_finish(
+        getattr(args, "repo"),
+        getattr(args, "schedule"),
+        getattr(args, "state", None),
+        getattr(args, "task_id"),
+        getattr(args, "agent"),
+        getattr(args, "worker_handle"),
+        getattr(args, "worker_session", "") or "",
+        evidence=getattr(args, "evidence", None) or [],
+        handoff=getattr(args, "handoff", None),
         status_file=getattr(args, "status_file", None),
     )
     return (0 if result["ready"] else 2), result

@@ -9055,6 +9055,20 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertNotIn("contracts", result["required_gates"])
         self.assertNotIn("strict-guard", result["required_gates"])
 
+    def test_workflow_tier_explicit_basic_cannot_downgrade_critical_auto_minimum(self) -> None:
+        design_text = "Publish a DMQ refund callback with topic, tag, group, and payload contract."
+        facts = {"service_candidates": ["services/refund-service", "services/ledger-service"], "multi_service": True}
+        dependency_report = {"dependencies": [{"kind": "dmq"}], "unresolved_questions": []}
+
+        result = task_tier.evaluate("basic", design_text, facts, dependency_report)
+
+        self.assertEqual("basic", result["user_requested"])
+        self.assertEqual("critical", result["auto_minimum"]["tier"])
+        self.assertEqual("critical", result["effective"]["tier"])
+        self.assertEqual("critical", result["tier"])
+        self.assertTrue(result["downgrade_blocked"])
+        self.assertIn("contracts", result["required_gates"])
+
     def test_workflow_tier_auto_marks_cross_service_http_api_as_critical(self) -> None:
         design_text = "Add a REST API client from order-service to payment-service."
         facts = {"service_candidates": ["services/order-service", "services/payment-service"], "multi_service": True}

@@ -704,6 +704,11 @@ def manual_worker_packet(repo: Path, schedule_path: Path, state_path: Path | Non
     state_rel = rel(repo, resolve(repo, state_path) or state_path) if state_path else ""
     outputs = [str(item) for item in task.get("outputs", []) or []]
     worker_handle = f"<fresh-{agent or 'worker'}-handle>"
+    finish_command = (
+        f"python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-finish . --schedule {schedule_rel} "
+        f"--state {state_rel} --task-id {task_id} --agent {agent} --worker-handle {worker_handle} "
+        "--evidence <returned-output-path>"
+    )
     packet = {
         "schema": "e2e-dev-harness.manual-worker-packet.v1",
         "task_id": task_id,
@@ -723,9 +728,9 @@ def manual_worker_packet(repo: Path, schedule_path: Path, state_path: Path | Non
             "run clarify, plan, TDD, review, or implementation work from the coordinator while this dispatch is waiting",
         ],
         "next_commands": [
-            f"python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-ack . --schedule {schedule_rel} --state {state_rel} --task-id {task_id} --agent {agent} --worker-handle {worker_handle}",
+            f"python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-ack . --state {state_rel} --task-id {task_id} --agent {agent} --worker-handle {worker_handle}",
             "Fresh worker writes only the scheduled outputs: " + (", ".join(outputs) if outputs else "<task outputs>"),
-            f"python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-complete . --schedule {schedule_rel} --state {state_rel} --task-id {task_id} --agent {agent} --evidence <returned-output-path>",
+            finish_command,
         ],
         "completion_evidence_required": outputs,
     }
@@ -735,12 +740,7 @@ def manual_worker_packet(repo: Path, schedule_path: Path, state_path: Path | Non
             (str(item) for item in outputs if "/handoffs/" in str(item) and str(item).endswith(".md")),
             "<handoff>.md",
         )
-        packet["next_commands"].insert(
-            -1,
-            "After writing the handoff body, run "
-            f"python skills/e2e-dev-harness/scripts/e2e_dev_harness.py handoff . --path {handoff_md} --agent {agent} "
-            "to normalize frontmatter, write the .ready.json marker atomically, and re-run the handoff gate before dispatch-complete.",
-        )
+        packet["next_commands"][-1] = finish_command + f" --handoff {handoff_md}"
     return packet
 
 

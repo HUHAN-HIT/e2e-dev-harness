@@ -731,7 +731,7 @@ def worker_output_write_blockers(repo: Path, lock: Path | None, output_paths: li
         touched = sorted(requested & owned_outputs)
         if not touched:
             continue
-        if str(dispatch.get("status", "")).strip() != "worker_running" or str(dispatch.get("spawn_confirmed_by", "")).strip() != "phase_guard":
+        if not worker_output_write_confirmed(dispatch):
             blocked.append(
                 "Worker output write blocked: scheduled output is owned by active dispatch "
                 + task_id
@@ -740,6 +740,21 @@ def worker_output_write_blockers(repo: Path, lock: Path | None, output_paths: li
                 + "."
             )
     return blocked
+
+
+def worker_output_write_confirmed(dispatch: dict) -> bool:
+    if str(dispatch.get("status", "")).strip() != "worker_running":
+        return False
+    confirmed_by = str(dispatch.get("spawn_confirmed_by", "")).strip()
+    if confirmed_by == "phase_guard":
+        return True
+    if confirmed_by == "dispatch_ack":
+        return bool(
+            dispatch.get("manual_worker_confirmed") is True
+            and str(dispatch.get("worker_handle", "")).strip()
+            and str(dispatch.get("spawn_acknowledged_at", "")).strip()
+        )
+    return False
 
 
 def todo_list_blockers(repo: Path, lock: Path | None, task_text: str) -> tuple[list[str], str]:

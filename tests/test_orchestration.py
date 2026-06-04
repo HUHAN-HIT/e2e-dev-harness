@@ -3592,7 +3592,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("test-case-developer", packet["agent"])
         self.assertEqual(["docs/agent-runs/run/evidence/red-test.txt"], packet["outputs"])
         self.assertIn("dispatch-ack", packet["next_commands"][0])
-        self.assertIn("dispatch-complete", packet["next_commands"][-1])
+        self.assertIn("dispatch-finish", packet["next_commands"][-1])
         self.assertTrue(any("coordinator context" in item for item in packet["forbidden_actions"]))
         self.assertIn("next_commands", result)
         self.assertIn("forbidden_artifact_writes", result)
@@ -4290,11 +4290,11 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertIn("handoff_completion_requirements", packet)
         self.assertIn("Summary", packet["handoff_completion_requirements"]["required_body_sections"])
-        # The packet must steer the worker to the `handoff` finalize command (which
-        # re-runs the handoff gate) before dispatch-complete, with the concrete path.
+        # The packet must steer the worker to dispatch-finish, which runs handoff
+        # finalize before dispatch-complete, with the concrete path.
         self.assertTrue(
             any(
-                "handoff" in command and "--path" in command and "--agent" in command
+                "dispatch-finish" in command and "--handoff" in command and "--agent" in command
                 for command in packet["next_commands"]
             )
         )

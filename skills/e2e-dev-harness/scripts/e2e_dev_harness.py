@@ -1607,6 +1607,10 @@ def dispatch_ack(args) -> tuple[int, dict]:
     return dispatch_command.run_ack_from_args(args)
 
 
+def dispatch_finish(args) -> tuple[int, dict]:
+    return dispatch_command.run_finish_from_args(args)
+
+
 def dispatch_status(args) -> tuple[int, dict]:
     return dispatch_command.run_status_from_args(args)
 
@@ -1909,6 +1913,22 @@ def main() -> int:
     dispatch_ack_parser.add_argument("--status-file", type=Path)
     add_full_json_arg(dispatch_ack_parser)
 
+    dispatch_finish_parser = subparsers.add_parser(
+        "dispatch-finish",
+        help="Atomically finalize a worker handoff when needed and complete a dispatched task.",
+    )
+    dispatch_finish_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    dispatch_finish_parser.add_argument("--schedule", required=True, type=Path)
+    dispatch_finish_parser.add_argument("--state", type=Path)
+    dispatch_finish_parser.add_argument("--task-id", required=True)
+    dispatch_finish_parser.add_argument("--agent", required=True)
+    dispatch_finish_parser.add_argument("--worker-handle", required=True)
+    dispatch_finish_parser.add_argument("--worker-session", default="")
+    dispatch_finish_parser.add_argument("--evidence", action="append")
+    dispatch_finish_parser.add_argument("--handoff", type=Path)
+    dispatch_finish_parser.add_argument("--status-file", type=Path)
+    add_full_json_arg(dispatch_finish_parser)
+
     dispatch_status_parser = subparsers.add_parser("dispatch-status", help="Summarize dispatch state and open scheduled tasks.")
     dispatch_status_parser.add_argument("repo", nargs="?", default=".", type=Path)
     dispatch_status_parser.add_argument("--schedule", required=True, type=Path)
@@ -1982,6 +2002,7 @@ def main() -> int:
         dispatch_beat_parser,
         dispatch_complete_parser,
         dispatch_ack_parser,
+        dispatch_finish_parser,
         dispatch_status_parser,
         recover_parser,
         timeline_parser,
@@ -2036,6 +2057,8 @@ def main() -> int:
             exit_code, result = dispatch_complete(args)
         elif args.command == "dispatch-ack":
             exit_code, result = dispatch_ack(args)
+        elif args.command == "dispatch-finish":
+            exit_code, result = dispatch_finish(args)
         elif args.command == "dispatch-status":
             exit_code, result = dispatch_status(args)
         elif args.command == "handoff":

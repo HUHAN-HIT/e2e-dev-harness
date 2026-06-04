@@ -15,6 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import run_state  # noqa: E402
 import handoff_gate  # noqa: E402
+import agent_roles  # noqa: E402
 from common import atomic_write_json, now_iso  # noqa: E402
 
 
@@ -25,17 +26,9 @@ DEFAULT_LEASE_SECONDS = 1800
 DISPATCHER_CONFIRMED_COMPLETION = "dispatcher-confirmed"
 EXCLUSIVE_ROLE_GROUPS = {"design", "planning", "test", "code", "review", "coverage"}
 ROLE_TEMPLATE_MARKERS = ("## Role Boundary", "## Allowed Inputs", "## Forbidden", "## Required Outputs", "## Done When")
-PHASE_ROLE_GROUPS = {
-    "clarify": "design",
-    "design": "design",
-    "plan": "planning",
-    "tdd-red": "test",
-    "implement": "code",
-    "r1-review": "review",
-    "r2-review": "review",
-    "r3-review": "review",
-    "completion": "coverage",
-}
+# Single source of truth in agent_roles; re-bound here for in-module use and
+# the `from agent_scheduler import *` re-export in domain/schedule.py.
+PHASE_ROLE_GROUPS = agent_roles.PHASE_ROLE_GROUPS
 LIFECYCLE_SATISFIED_PHASES = {
     "CLARIFIED": {"clarify"},
     "SERVICE_DESIGN_REQUIRED": {"clarify", "design"},

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import agent_roles
 import artifact_registry
 import coordinator_flow
 import orchestration_plan
@@ -12,56 +13,10 @@ import run_state
 from e2e_harness.cli.status import write_status
 
 
+# Single source of truth lives in `agent_roles.ROLE_REGISTRY`. Kept as a
+# module-level name for backward compatibility with existing importers.
 ROLE_TEMPLATE_DETAILS = {
-    "requirements-clarifier": {
-        "boundary": "Clarify user intent, scope, ACs, unresolved questions, and bounded impact summary. Do not design tests or write code.",
-        "inputs": "User request, project instructions, dependency/impact summaries, prior approved requirement facts.",
-        "forbidden": "Production/test code edits, implementation planning, review approval, and speculative scope expansion.",
-        "outputs": "Ready requirements handoff, impact summary rows, resolved/open question status, proposed memory updates.",
-        "done": "All behavior/API/data/test-impacting questions are resolved or explicitly blocked, and downstream assumptions are stated.",
-    },
-    "use-case-designer": {
-        "boundary": "Map ACs to use cases, failure paths, contracts, data effects, and service/module slices. Do not write tests or code.",
-        "inputs": "Ready requirements handoff, impact summary, dependency report, project patterns.",
-        "forbidden": "Changing accepted scope, production/test code edits, and approving own design.",
-        "outputs": "Ready use-case handoff, service/use-case mapping, contract candidates, downstream assumptions.",
-        "done": "Every AC maps to at least one use case or a documented deferral with owner and approval need.",
-    },
-    "implementation-planner": {
-        "boundary": "Refine the implementation plan and dispatch sequence after R1 approval. Do not write tests or production code.",
-        "inputs": "Ready requirements/use-case handoffs, R1 design review, impact summary, dependency report, project patterns.",
-        "forbidden": "Approving own design, writing R1/R2/R3 reports, changing accepted scope, test edits, and production code edits.",
-        "outputs": "Dispatch-ready exec plan evidence, open rework routing, service/code handoff assumptions.",
-        "done": "TDD and implementation tasks have bounded inputs, ordered dependencies, and unresolved R1 findings are routed to rework.",
-    },
-    "test-case-developer": {
-        "boundary": "Create test strategy, first red tests, contract tests, and test-impact commands. Do not modify production code.",
-        "inputs": "Ready requirements and use-case handoffs, service design slices, TDD references.",
-        "forbidden": "Production code edits, green implementation, semantic review approval, and changing AC scope.",
-        "outputs": "Ready test handoff, red-test evidence path, test-impact plan, test command matrix.",
-        "done": "A meaningful red test exists, fails for the expected reason, and R2 has enough evidence to review.",
-    },
-    "code-developer": {
-        "boundary": "Implement only assigned ACs and service/module scope using red-green-refactor. Do not alter requirements or review outputs.",
-        "inputs": "Ready design/test handoffs, approved R2, service plan, service design slice, failing test evidence.",
-        "forbidden": "Writing R1/R2/R3 reports, expanding scope, editing unclaimed services, or skipping AC progress.",
-        "outputs": "Implementation handoff, implementation manifest, unit-test command JSON, coverage matrix, business review notes.",
-        "done": "All assigned ACs have concrete code refs and passing tests; no undeclared file or behavior drift remains.",
-    },
-    "semantic-reviewer": {
-        "boundary": "Review one phase from request-scoped inputs only. Do not write code or patch artifacts under review.",
-        "inputs": "Review request, context pack, role handoffs, design/test/code evidence allowed by the request.",
-        "forbidden": "Inherited developer chat context, self-review, production/test code edits, and consolidated after-the-fact review.",
-        "outputs": "R1/R2/R3 review report, reviewer invocation JSON, blocking findings or rework items.",
-        "done": "Review report has request hash, concrete session isolation proof, checked profile items, and status.",
-    },
-    "coverage-reviewer": {
-        "boundary": "Verify end-to-end AC coverage and archive outcomes. Do not patch implementation directly.",
-        "inputs": "All ready role handoffs, semantic reviews, manifests, coverage matrix, command evidence, rework items.",
-        "forbidden": "Closing gaps by editing code, ignoring failed commands, or archiving unresolved rework as complete.",
-        "outputs": "Final coverage/business review, requirements archive, run summary, residual risk list.",
-        "done": "Every AC maps to use case, tests, code refs, business review, accepted review status, and closed rework.",
-    },
+    role: dict(entry["template"]) for role, entry in agent_roles.ROLE_REGISTRY.items()
 }
 
 
@@ -231,29 +186,7 @@ def workflow_plan_for_start(
 
 
 def role_template_text(role: str) -> str:
-    detail = ROLE_TEMPLATE_DETAILS.get(role, ROLE_TEMPLATE_DETAILS["code-developer"])
-    return f"""# Agent Role Template: {role}
-
-## Role Boundary
-
-{detail["boundary"]}
-
-## Allowed Inputs
-
-{detail["inputs"]}
-
-## Forbidden
-
-{detail["forbidden"]}
-
-## Required Outputs
-
-{detail["outputs"]}
-
-## Done When
-
-{detail["done"]}
-"""
+    return agent_roles.template_text(role)
 
 
 def create_role_template_files(repo: Path, artifacts: dict) -> list[str]:
