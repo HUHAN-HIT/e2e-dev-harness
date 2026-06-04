@@ -1830,6 +1830,24 @@ class CliCommandFacadeContractTests(unittest.TestCase):
         self.assertIn("copy-skill", [action["id"] for action in result["actions"]])
         self.assertEqual(result, status)
 
+    def test_cli_command_modules_preserve_next_contracts(self) -> None:
+        import e2e_dev_harness  # noqa: PLC0415
+        from e2e_harness.cli.commands import next as next_command  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            payload = {
+                "ready": True,
+                "workflow_stage": "CLARIFY",
+                "next": {"phase": "clarify"},
+                "blocked_reasons": [],
+            }
+            with patch.object(e2e_dev_harness.coordinator_flow, "next_step", return_value=(0, payload)):
+                code, result = next_command.run(repo, state=Path("docs/agent-runs/run/run-state.json"))
+
+        self.assertEqual(0, code)
+        self.assertEqual(payload, result)
+
     def test_cli_command_modules_preserve_guard_pre_code_test_impact_and_ac_progress_contracts(self) -> None:
         import e2e_dev_harness  # noqa: PLC0415
         from e2e_harness.cli.commands import ac_progress as ac_progress_command  # noqa: PLC0415

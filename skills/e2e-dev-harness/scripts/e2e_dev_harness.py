@@ -51,8 +51,10 @@ from e2e_harness.cli.commands import doctor as doctor_command  # noqa: E402
 from e2e_harness.cli.commands import gate as gate_command  # noqa: E402
 from e2e_harness.cli.commands import guard as guard_command  # noqa: E402
 from e2e_harness.cli.commands import install as install_command  # noqa: E402
+from e2e_harness.cli.commands import next as next_command  # noqa: E402
 from e2e_harness.cli.commands import plan as plan_command  # noqa: E402
 from e2e_harness.cli.commands import prepare as prepare_command  # noqa: E402
+from e2e_harness.cli.commands import preflight as preflight_command  # noqa: E402
 from e2e_harness.cli.commands import pre_code as pre_code_command  # noqa: E402
 from e2e_harness.cli.commands import recover as recover_command  # noqa: E402
 from e2e_harness.cli.commands import runtime_capabilities as runtime_capabilities_command  # noqa: E402
@@ -709,10 +711,7 @@ def aggregate_preflight_blockers(repo: Path, run_state_path: Path | str | None) 
 
 
 def preflight(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    result = aggregate_preflight_blockers(repo, getattr(args, "state", None))
-    write_status(getattr(args, "status_file", None), result)
-    return (0 if result["ready"] else 2), result
+    return preflight_command.run_from_args(args)
 
 
 def clarify(args) -> tuple[int, dict]:
@@ -1633,7 +1632,7 @@ def ac_progress(args) -> tuple[int, dict]:
 
 
 def next_step(args) -> tuple[int, dict]:
-    return coordinator_flow.next_step(args)
+    return next_command.run_from_args(args)
 
 
 def add_prepare_args(parser: argparse.ArgumentParser) -> None:

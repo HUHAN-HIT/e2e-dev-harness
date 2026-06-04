@@ -159,6 +159,22 @@ class PreflightAggregatorTests(unittest.TestCase):
             self.assertFalse(result["ready"])
             self.assertGreaterEqual(len(result["blockers"]), 1)
 
+    def test_preflight_command_facade_preserves_status_file_contract(self) -> None:
+        from e2e_harness.cli.commands import preflight as preflight_command  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state = _write_state(repo, "CREATED")
+            status_file = repo / "preflight-status.json"
+
+            exit_code, result = preflight_command.run(repo, state=state, status_file=status_file)
+            status = json.loads(status_file.read_text(encoding="utf-8"))
+
+            self.assertEqual(2, exit_code)
+            self.assertFalse(result["ready"])
+            self.assertEqual(result, status)
+            self.assertGreaterEqual(len(result["blockers"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
