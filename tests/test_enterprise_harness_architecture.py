@@ -2005,12 +2005,18 @@ class CliCommandFacadeContractTests(unittest.TestCase):
         self.assertTrue(gate_result["run_state_transition"]["ready"])
 
     def test_cli_command_modules_preserve_doctor_recover_and_runtime_capability_contracts(self) -> None:
+        import argparse  # noqa: PLC0415
         from e2e_harness.cli.commands import doctor as doctor_command  # noqa: PLC0415
         from e2e_harness.cli.commands import recover as recover_command  # noqa: PLC0415
         from e2e_harness.cli.commands import runtime_capabilities  # noqa: PLC0415
+        from e2e_harness.cli.commands import timeline as timeline_command  # noqa: PLC0415
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
+            doctor_status = repo / "doctor-status.json"
+            recover_status = repo / "recover-status.json"
+            timeline_status = repo / "timeline-status.json"
+            capabilities_status = repo / "runtime-capabilities-status.json"
             schedule, state_path = write_dispatch_fixture(repo)
             dispatcher.dispatch_next(repo, schedule, state_path, runtime="codex")
             evidence = repo / "docs" / "agent-runs" / "run" / "service-plans" / "order-service" / "code-agent.md"
@@ -2018,6 +2024,9 @@ class CliCommandFacadeContractTests(unittest.TestCase):
             evidence.write_text("worker evidence\n", encoding="utf-8")
 
             doctor_result = doctor_command.run(repo, strict=False, state=state_path)
+            doctor_code, doctor_from_args = doctor_command.run_from_args(
+                argparse.Namespace(repo=repo, strict=False, state=state_path, status_file=doctor_status)
+            )
             recover_result = recover_command.run(
                 repo,
                 state=state_path,
@@ -2026,12 +2035,41 @@ class CliCommandFacadeContractTests(unittest.TestCase):
                 agent="code-developer-order-service",
                 evidence=[evidence.relative_to(repo).as_posix()],
             )
+            recover_code, recover_from_args = recover_command.run_from_args(
+                argparse.Namespace(
+                    repo=repo,
+                    state=state_path,
+                    schedule=schedule,
+                    task_id="T10",
+                    agent="code-developer-order-service",
+                    evidence=[evidence.relative_to(repo).as_posix()],
+                    status_file=recover_status,
+                )
+            )
+            timeline_code, timeline_from_args = timeline_command.run_from_args(
+                argparse.Namespace(repo=repo, state=state_path, status_file=timeline_status)
+            )
             capabilities = runtime_capabilities.run("codex")
+            capabilities_code, capabilities_from_args = runtime_capabilities.run_from_args(
+                argparse.Namespace(repo=repo, runtime="codex", status_file=capabilities_status)
+            )
+            doctor_status_payload = json.loads(doctor_status.read_text(encoding="utf-8"))
+            recover_status_payload = json.loads(recover_status.read_text(encoding="utf-8"))
+            timeline_status_payload = json.loads(timeline_status.read_text(encoding="utf-8"))
+            capabilities_status_payload = json.loads(capabilities_status.read_text(encoding="utf-8"))
 
         self.assertEqual("e2e-dev-harness.doctor.v1", doctor_result["schema"])
+        self.assertEqual(0 if doctor_from_args["ready"] else 2, doctor_code)
+        self.assertEqual(doctor_from_args, doctor_status_payload)
         self.assertEqual("e2e-dev-harness.recovery-plan.v1", recover_result["schema"])
+        self.assertEqual(2, recover_code)
+        self.assertEqual(recover_from_args, recover_status_payload)
+        self.assertEqual(0, timeline_code)
+        self.assertEqual(timeline_from_args, timeline_status_payload)
         self.assertEqual("codex", capabilities["runtime"])
         self.assertTrue(capabilities["ready"])
+        self.assertEqual(0, capabilities_code)
+        self.assertEqual(capabilities_from_args, capabilities_status_payload)
 
     def test_dispatch_cli_command_facade_preserves_dispatch_contracts(self) -> None:
         from e2e_harness.cli.commands import dispatch as dispatch_command  # noqa: PLC0415

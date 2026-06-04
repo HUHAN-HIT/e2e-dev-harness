@@ -1554,31 +1554,15 @@ def guard(args) -> tuple[int, dict]:
 
 
 def doctor(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    result = doctor_command.run(repo, getattr(args, "strict", False), getattr(args, "state", None))
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return doctor_command.run_from_args(args)
 
 
 def recover(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    result = recover_command.run(
-        repo,
-        state=args.state,
-        schedule=getattr(args, "schedule", None),
-        task_id=getattr(args, "task_id", "") or "",
-        agent=getattr(args, "agent", "") or "",
-        evidence=getattr(args, "evidence", None) or [],
-    )
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return recover_command.run_from_args(args)
 
 
 def timeline(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    result = timeline_command.run(repo, args.state)
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return timeline_command.run_from_args(args)
 
 
 def install_project(args) -> tuple[int, dict]:
@@ -1602,9 +1586,7 @@ def agent_task(args) -> tuple[int, dict]:
 
 
 def runtime_capabilities(args) -> tuple[int, dict]:
-    result = runtime_capabilities_command.run(args.runtime)
-    write_status(args.status_file, result)
-    return 0, result
+    return runtime_capabilities_command.run_from_args(args)
 
 
 def dispatch_next(args) -> tuple[int, dict]:
