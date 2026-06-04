@@ -24,12 +24,12 @@ import clarification_gate  # noqa: E402
 from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, atomic_write_json, configure_utf8_stdio, posix, read_json_object  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import coordinator_flow  # noqa: E402
-import dispatcher  # noqa: E402
 import event_log  # noqa: E402
 import execution_trace  # noqa: E402
-import implementation_gate  # noqa: E402
 import install_hooks  # noqa: E402
 import harness_doctor  # noqa: E402
+# Re-exported so tests can patch e2e_dev_harness.implementation_gate (shared module object).
+import implementation_gate  # noqa: E402, F401
 import kg_refresh  # noqa: E402
 import harness_verify  # noqa: E402
 import memory_capture  # noqa: E402
@@ -39,12 +39,10 @@ import phase_guard  # noqa: E402
 import preflight as preflight_checks  # noqa: E402
 import run_state  # noqa: E402
 import session_checkpoint  # noqa: E402
-import service_design_gate  # noqa: E402
 import superpowers_probe  # noqa: E402
 import task_tier  # noqa: E402
 import test_impact_plan  # noqa: E402
 import workflow_guard  # noqa: E402
-from e2e_harness.engine import dispatch_engine, doctor as doctor_engine, recovery as recovery_engine, state_store  # noqa: E402
 from e2e_harness.cli.commands import agent_task as agent_task_command  # noqa: E402
 from e2e_harness.cli.commands import clarify as clarify_command  # noqa: E402
 from e2e_harness.cli.commands import dispatch as dispatch_command  # noqa: E402
@@ -52,6 +50,7 @@ from e2e_harness.cli.commands import doctor as doctor_command  # noqa: E402
 from e2e_harness.cli.commands import gate as gate_command  # noqa: E402
 from e2e_harness.cli.commands import recover as recover_command  # noqa: E402
 from e2e_harness.cli.commands import runtime_capabilities as runtime_capabilities_command  # noqa: E402
+from e2e_harness.cli.commands import service_design as service_design_command  # noqa: E402
 from e2e_harness.cli.commands import timeline as timeline_command  # noqa: E402
 
 
@@ -1544,84 +1543,12 @@ def service_design_template(
     global_design_text: str = "",
     merged_members: list[str] | None = None,
 ) -> str:
-    ac_rows = service_acceptance_rows(service, global_design_text)
-    test_class = service_test_class_name(service)
-    intent = one_line_section(global_design_text, "restated_intent") or one_line_section(global_design_text, "goal")
-    service_scope = service_scope_excerpt(service, global_design_text)
-    # A merged slice owns several real modules; enumerate each so the code agent gets one allowed
-    # edit scope and one Maven command per member module instead of the synthetic merged id.
-    members = merged_members or [service]
-    module_label = ", ".join(members) if merged_members else service
-    allowed_scope = "\n".join(f"  - {member}/" for member in members)
-    maven_block = "\n".join(f"- Required Maven command: mvn -pl {member} -am test" for member in members)
-    test_impact_block = "\n".join(
-        f"- Service-local test impact plan: mvn -pl {member} -am test" for member in members
+    return service_design_command.service_design_template(
+        service,
+        global_design,
+        global_design_text=global_design_text,
+        merged_members=merged_members,
     )
-    return f"""# Service Design Slice: {service}
-
-Global design: {global_design}
-
-Primary development contract: this service design is the primary input for the service code agent. Keep global context bounded; copy only the ACs, constraints, and dependency facts this service needs.
-
-## Service Scope
-- Service/module: {module_label}
-- Allowed edit scope:
-{allowed_scope}
-- Explicitly out of scope: other services unless listed in Dependency Boundary
-
-## Global Intent Summary
-- Restated user intent: {intent or 'See global design and requirements handoff.'}
-- This service's responsibility: {service_scope}
-
-## Mapped Acceptance Criteria
-| AC | global requirement | service responsibility | local tests |
-| --- | --- | --- | --- |
-{ac_rows.rstrip()}
-
-## Runtime Path
-- Entry point: GitNexus-confirmed entry point -> {service_test_class_name(service).removesuffix('Test')}#method
-- Service/domain path: {service_test_class_name(service).removesuffix('Test')}#method -> domain/service collaborator
-- Repository/client/sender path: repository/client/sender decided by service-design gate
-- Output or side effect: service-local state, API response, or event named in mapped ACs
-
-## Local Sequence
-```mermaid
-sequenceDiagram
-    participant Test as {test_class}
-    participant Entry as {service} entry point
-    participant Domain as service/domain logic
-    participant Edge as repository/client/sender
-    Test->>Entry: Exercise mapped AC rows
-    Entry->>Domain: Execute service-local behavior
-    Domain->>Edge: Persist, call, or publish declared side effect
-    Edge-->>Domain: Result or acknowledgement
-    Domain-->>Entry: Service-local outcome
-    Entry-->>Test: Assertion target
-```
-
-## Service-local TDD Plan
-- First red test: {test_class} should fail before implementation
-- Expected failure: missing mapped service-local behavior
-- Minimal green implementation: implement only the mapped AC rows above
-- Refactor checks: keep edits inside allowed scope and declared dependency boundary
-{maven_block}
-
-## Dependency Boundary
-- Independent service change: generated starter requires service owner confirmation before code dispatch
-- HTTP/API dependencies: use dependency report and GitNexus impact evidence, or state None
-- MQ/DMQ/Kafka dependencies: use dependency report and GitNexus impact evidence, or state None
-- Shared DB/schema/config/security dependencies: list shared edit scope or state None
-- Required contracts or explicit non-applicability: record before implementation
-
-## Test Impact
-{test_impact_block}
-- Broadened verification: run impacted upstream/downstream modules from test-impact plan
-
-## Reviewer Focus
-- Service-local R2 review: mapped ACs, red test, dependency boundary
-- Service-local R3 review: concrete code path, tests, and side effects for mapped ACs
-- Known risks: generated starter must be verified against GitNexus evidence and project instructions
-"""
 
 
 def coverage_matrix_template(service: str) -> str:
@@ -2339,51 +2266,7 @@ def test_impact(args) -> tuple[int, dict]:
 
 
 def service_design(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    templates_written: list[str] = []
-    service_design_dir = getattr(args, "service_design_dir", None)
-    emit_templates = getattr(args, "emit_template", None) or []
-    if emit_templates:
-        target_dir = require_repo_path(repo, service_design_dir or Path("docs/agent-runs/service-designs"), "service design directory")
-        target_dir.mkdir(parents=True, exist_ok=True)
-        global_design_text = posix(getattr(args, "global_design", ""))
-        for service in emit_templates:
-            slug = orchestration_plan.service_slug(str(service))
-            target = target_dir / f"{slug}.md"
-            if not target.exists():
-                global_design_path = resolve_repo_path(repo, getattr(args, "global_design", None))
-                target.write_text(
-                    service_design_template(str(service), global_design_text, optional_text(global_design_path)),
-                    encoding="utf-8",
-                )
-            templates_written.append(posix(target.relative_to(repo)))
-        args.service_design_dir = target_dir
-    result = service_design_gate.validate(repo, args.global_design, args.service_design_dir, args.service_design)
-    if templates_written:
-        result["templates_written"] = templates_written
-    run_state_path = getattr(args, "run_state", None)
-    if run_state_path and result["ready"]:
-        dispatch_blockers = service_design_dispatch_blockers(repo, run_state_path)
-        if dispatch_blockers:
-            result["ready"] = False
-            result.setdefault("blocked_reasons", []).extend(dispatch_blockers)
-            result["service_design_dispatch"] = {"ready": False, "blocked_reasons": dispatch_blockers}
-            write_status(args.status_file, result)
-            return 2, result
-        transition = state_store.transition_lifecycle(
-            repo,
-            run_state_path,
-            "PLANNED",
-            gate="service_design",
-            gate_status="passed",
-            evidence=args.service_design_dir or (args.service_design[0] if args.service_design else None),
-        )
-        result["run_state_transition"] = transition
-        if not transition["ready"]:
-            result["ready"] = False
-            result["blocked_reasons"].extend("Run state transition: " + reason for reason in transition["blocked_reasons"])
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return service_design_command.run_from_args(args)
 
 
 def agent_task(args) -> tuple[int, dict]:

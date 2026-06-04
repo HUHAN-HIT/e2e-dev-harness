@@ -16,7 +16,6 @@ SCRIPTS = ROOT / "skills" / "e2e-dev-harness" / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-import agent_scheduler  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import coordinator_flow  # noqa: E402
 import dispatcher  # noqa: E402
@@ -1512,7 +1511,6 @@ class PluginRegistryContractTests(unittest.TestCase):
 
 class DoctorTimelineContractTests(unittest.TestCase):
     def test_state_doctor_includes_event_timeline_and_single_recommended_command(self) -> None:
-        import event_log  # noqa: PLC0415
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -1645,6 +1643,37 @@ class DoctorTimelineContractTests(unittest.TestCase):
 
 
 class CliCommandFacadeContractTests(unittest.TestCase):
+    def test_cli_command_modules_preserve_service_design_contracts(self) -> None:
+        from e2e_harness.cli.commands import service_design as service_design_command  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design, state_path, service_design = write_service_design_fixture(repo)
+            code, result = service_design_command.run(
+                repo,
+                global_design=design.relative_to(repo),
+                service_designs=[service_design.relative_to(repo)],
+                run_state=state_path.relative_to(repo),
+            )
+            projected = json.loads((state_path.parent / "snapshots" / "run-state.json").read_text(encoding="utf-8"))
+
+            generated_dir = Path("docs/agent-runs/run/generated-service-designs")
+            template_code, template_result = service_design_command.run(
+                repo,
+                global_design=design.relative_to(repo),
+                service_design_dir=generated_dir,
+                emit_templates=["services/payment-service"],
+            )
+            generated = repo / generated_dir / "payment-service.md"
+            generated_text = generated.read_text(encoding="utf-8")
+
+        self.assertEqual(0, code, result)
+        self.assertEqual("PLANNED", projected["lifecycle"])
+        self.assertTrue(result["run_state_transition"]["ready"], result["run_state_transition"]["blocked_reasons"])
+        self.assertEqual(0, template_code, template_result)
+        self.assertIn("docs/agent-runs/run/generated-service-designs/payment-service.md", template_result["templates_written"])
+        self.assertIn("Primary development contract", generated_text)
+
     def test_cli_command_modules_preserve_clarify_and_gate_contracts(self) -> None:
         from e2e_harness.cli.commands import clarify as clarify_command  # noqa: PLC0415
         from e2e_harness.cli.commands import gate as gate_command  # noqa: PLC0415
