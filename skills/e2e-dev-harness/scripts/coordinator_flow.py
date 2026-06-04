@@ -9,6 +9,7 @@ from pathlib import Path
 import dispatcher
 import install_hooks
 import lifecycle_policy
+import plugin_registry
 import preflight
 import run_state
 import session_checkpoint
@@ -350,6 +351,7 @@ def execution_packet_for_lifecycle(
     state: dict | None = None,
     runtime: str = "claude-code",
     action: dict | None = None,
+    repo: Path | None = None,
 ) -> dict:
     state = state or {}
     action = action or next_action_for_lifecycle(lifecycle, state, runtime)
@@ -562,7 +564,7 @@ def execution_packet_for_lifecycle(
         list(action.get("forbidden_local_actions", []))
         + [f"write {item}" for item in action.get("blocked_writes", [])]
     )
-    return {
+    packet = {
         "schema": "e2e-dev-harness.execution-packet.v1",
         "lifecycle": lifecycle or "<missing>",
         "phase": action.get("phase", ""),
@@ -582,6 +584,24 @@ def execution_packet_for_lifecycle(
         "completion_checks": details["completion_checks"],
         "next_gate": details["next_gate"],
     }
+    if repo:
+        policy_result = plugin_registry.apply_policy_packs(
+            repo,
+            {
+                "allowed_writes": packet["allowed_writes"],
+                "forbidden_actions": packet["forbidden_actions"],
+                "required_evidence": packet["required_evidence"],
+            },
+        )
+        adjusted = policy_result.get("request", {})
+        packet["allowed_writes"] = list(adjusted.get("allowed_writes", packet["allowed_writes"]) or [])
+        packet["allowed_now"] = list(packet["allowed_writes"])
+        packet["forbidden_actions"] = list(adjusted.get("forbidden_actions", packet["forbidden_actions"]) or [])
+        packet["forbidden_writes"] = list(packet["forbidden_actions"])
+        packet["forbidden_now"] = list(packet["forbidden_actions"])
+        packet["required_evidence"] = list(adjusted.get("required_evidence", packet["required_evidence"]) or [])
+        packet["policy_packs"] = policy_result
+    return packet
 
 
 def next_action_for_lifecycle(lifecycle: str, state: dict | None = None, runtime: str = "claude-code") -> dict:
@@ -792,7 +812,7 @@ def next_step(args) -> tuple[int, dict]:
     preflight_result = preflight.aggregate_preflight_blockers(repo, state_path)
     if preflight_result.get("next_single_action"):
         action["next_single_action"] = preflight_result["next_single_action"]
-    execution_packet = execution_packet_for_lifecycle(lifecycle, state, runtime, action)
+    execution_packet = execution_packet_for_lifecycle(lifecycle, state, runtime, action, repo)
     workflow_plan = load_workflow_plan(repo, state)
     hooks = runtime_hook_status(repo)
     blocked = [] if hooks["ready"] else [

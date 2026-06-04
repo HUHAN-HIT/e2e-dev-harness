@@ -32,6 +32,7 @@ import task_tier  # noqa: E402
 import tdd_evidence  # noqa: E402
 import test_impact_plan as test_impact_plan_gate  # noqa: E402
 import kg_refresh  # noqa: E402
+import plugin_registry  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -612,6 +613,11 @@ def validate_gate_request(request: GateRequest) -> dict:
             if not spring_result["ready"]:
                 blocked_reasons.extend(spring_result["blocked_reasons"])
 
+    custom_gate_result = plugin_registry.run_custom_gates(repo, request)
+    if not custom_gate_result["ready"]:
+        blocked_reasons.extend(custom_gate_result["blocked_reasons"])
+    warnings.extend(custom_gate_result["warnings"])
+
     return {
         "repo": str(repo),
         "phase": phase,
@@ -639,6 +645,7 @@ def validate_gate_request(request: GateRequest) -> dict:
         "handoffs": handoff_result,
         "contracts": contract_result,
         "spring_static_check": spring_result,
+        "custom_gates": custom_gate_result,
     }
 
 

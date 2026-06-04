@@ -9,6 +9,69 @@ from pathlib import Path
 from common import posix
 
 
+RUNTIME_STATUS_SEQUENCE = [
+    "planned",
+    "dispatch_requested",
+    "worker_spawned",
+    "worker_acknowledged",
+    "worker_running",
+    "worker_completed",
+    "evidence_validated",
+    "task_closed",
+]
+
+
+@dataclass(frozen=True)
+class RuntimeCapabilities:
+    runtime: str
+    supports_subagent: bool
+    supports_task_hook: bool
+    supports_isolated_review: bool
+    supports_blocking_stop: bool
+    dispatch_mode: str
+    spawn_tool: str = ""
+    spawn_requires_tool_call: bool = False
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "RuntimeCapabilities":
+        return cls(
+            runtime=str(data.get("runtime", "")),
+            supports_subagent=bool(data.get("supports_subagent", False)),
+            supports_task_hook=bool(data.get("supports_task_hook", False)),
+            supports_isolated_review=bool(data.get("supports_isolated_review", False)),
+            supports_blocking_stop=bool(data.get("supports_blocking_stop", False)),
+            dispatch_mode=str(data.get("dispatch_mode", "")),
+            spawn_tool=str(data.get("spawn_tool", "")),
+            spawn_requires_tool_call=bool(data.get("spawn_requires_tool_call", False)),
+        )
+
+
+@dataclass(frozen=True)
+class SpawnResult:
+    runtime: str
+    task_id: str
+    agent: str
+    status: str
+    request: dict | None
+
+
+@dataclass(frozen=True)
+class RuntimeActionResult:
+    runtime: str
+    task_id: str
+    agent: str
+    status: str
+    payload: dict
+
+    def to_legacy(self) -> dict:
+        data = dict(self.payload)
+        data.setdefault("task_id", self.task_id)
+        if self.agent:
+            data.setdefault("agent", self.agent)
+        data.setdefault("runtime", self.runtime)
+        return data
+
+
 CLAUDE_CAPABILITIES = {
     "runtime": "claude-code",
     "supports_subagent": True,
@@ -96,6 +159,9 @@ class RuntimeAdapter:
     def capabilities(self) -> dict:
         return dict(self._capabilities)
 
+    def capability_contract(self) -> RuntimeCapabilities:
+        return RuntimeCapabilities.from_dict(self.capabilities())
+
     def spawn(
         self,
         task: dict,
@@ -143,18 +209,66 @@ class RuntimeAdapter:
             }
         return None
 
+    def spawn_contract(
+        self,
+        task: dict,
+        prompt: str,
+        schedule_path: Path,
+        state_path: Path | None,
+        repo: Path,
+    ) -> SpawnResult:
+        request = self.spawn(task, prompt, schedule_path, state_path, repo)
+        status = "dispatch_requested" if request else "planned"
+        return SpawnResult(
+            runtime=str(self.capabilities().get("runtime", "")),
+            task_id=str(task.get("id", "")),
+            agent=str(task.get("agent", "")) or "agent",
+            status=status,
+            request=request,
+        )
+
     def ack(self, task: dict, worker_handle: str, worker_session: str = "") -> dict:
-        return {
+        return self.ack_contract(task, worker_handle, worker_session).to_legacy()
+
+    def ack_contract(self, task: dict, worker_handle: str, worker_session: str = "") -> RuntimeActionResult:
+        payload = {
             "task_id": str(task.get("id", "")),
             "worker_handle": worker_handle.strip(),
             "worker_session": worker_session.strip() or worker_handle.strip(),
         }
+        return RuntimeActionResult(
+            runtime=str(self.capabilities().get("runtime", "")),
+            task_id=str(task.get("id", "")),
+            agent=str(task.get("agent", "")) or "agent",
+            status="worker_acknowledged",
+            payload=payload,
+        )
 
     def complete(self, task: dict, evidence: list[str] | None = None) -> dict:
-        return {"task_id": str(task.get("id", "")), "evidence": evidence or []}
+        return self.complete_contract(task, evidence).to_legacy()
+
+    def complete_contract(self, task: dict, evidence: list[str] | None = None) -> RuntimeActionResult:
+        payload = {"task_id": str(task.get("id", "")), "evidence": evidence or []}
+        return RuntimeActionResult(
+            runtime=str(self.capabilities().get("runtime", "")),
+            task_id=str(task.get("id", "")),
+            agent=str(task.get("agent", "")) or "agent",
+            status="worker_completed",
+            payload=payload,
+        )
 
     def recover(self, task: dict, reason: str) -> dict:
-        return {"task_id": str(task.get("id", "")), "reason": reason}
+        return self.recover_contract(task, reason).to_legacy()
+
+    def recover_contract(self, task: dict, reason: str) -> RuntimeActionResult:
+        payload = {"task_id": str(task.get("id", "")), "reason": reason}
+        return RuntimeActionResult(
+            runtime=str(self.capabilities().get("runtime", "")),
+            task_id=str(task.get("id", "")),
+            agent=str(task.get("agent", "")) or "agent",
+            status="recovery_requested",
+            payload=payload,
+        )
 
 
 def adapter_for(runtime: str | None = "claude-code") -> RuntimeAdapter:

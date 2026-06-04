@@ -267,6 +267,7 @@ def compact_payload(
         "claimed_tasks": _limited_list(result.get("claimed_tasks", []), 5),
         "blocked_tasks": _limited_list(result.get("blocked_tasks", result.get("skipped_tasks", [])), 5),
         "recent_events": _limited_list(result.get("recent_events", []), 5),
+        "command_event_path": result.get("command_event_path", ""),
         "full_result_path": str(full_result_path),
         "coordinator_summary_path": str(coordinator_summary_path) if coordinator_summary_path else "",
         "stdout_mode": "compact",
@@ -322,6 +323,7 @@ def compact_payload(
                 if key in next_action
             },
             "full_result_path": _stdout_path(repo, full_result_path),
+            "command_event_path": _stdout_path(repo, result.get("command_event_path", "")) if result.get("command_event_path") else "",
             "coordinator_summary_path": _stdout_path(repo, coordinator_summary_path) if coordinator_summary_path else "",
             "stdout_mode": "compact",
             "truncated": True,

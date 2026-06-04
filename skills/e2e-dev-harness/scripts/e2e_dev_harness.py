@@ -44,6 +44,11 @@ import superpowers_probe  # noqa: E402
 import task_tier  # noqa: E402
 import test_impact_plan  # noqa: E402
 import workflow_guard  # noqa: E402
+from e2e_harness.engine import dispatch_engine, doctor as doctor_engine, recovery as recovery_engine, state_store  # noqa: E402
+from e2e_harness.cli.commands import doctor as doctor_command  # noqa: E402
+from e2e_harness.cli.commands import recover as recover_command  # noqa: E402
+from e2e_harness.cli.commands import runtime_capabilities as runtime_capabilities_command  # noqa: E402
+from e2e_harness.cli.commands import timeline as timeline_command  # noqa: E402
 
 
 DEFAULT_REVIEW_PROFILE = "skills/e2e-dev-harness/review-profiles/default.json"
@@ -208,10 +213,8 @@ def next_command_from_result(result: dict) -> str:
 
 def emit_command_event(repo: Path, command: str, args: argparse.Namespace, result: dict, exit_code: int) -> str:
     state_path = run_state_path_from_args(repo, args, result)
-    if not state_path:
-        return ""
-    run_dir = state_path.parent
-    lifecycle = lifecycle_from_state(repo, args, result)
+    run_dir = state_path.parent if state_path else repo / ".e2e"
+    lifecycle = lifecycle_from_state(repo, args, result) if state_path else str(result.get("lifecycle", "") or "UNKNOWN")
     trace_id = f"{command}-{time.time_ns()}"
     path = event_log.append_command_event(
         run_dir,
@@ -2292,7 +2295,28 @@ def guard(args) -> tuple[int, dict]:
 
 def doctor(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
-    result = harness_doctor.evaluate(repo, getattr(args, "strict", False), getattr(args, "state", None))
+    result = doctor_command.run(repo, getattr(args, "strict", False), getattr(args, "state", None))
+    write_status(args.status_file, result)
+    return (0 if result["ready"] else 2), result
+
+
+def recover(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    result = recover_command.run(
+        repo,
+        state=args.state,
+        schedule=getattr(args, "schedule", None),
+        task_id=getattr(args, "task_id", "") or "",
+        agent=getattr(args, "agent", "") or "",
+        evidence=getattr(args, "evidence", None) or [],
+    )
+    write_status(args.status_file, result)
+    return (0 if result["ready"] else 2), result
+
+
+def timeline(args) -> tuple[int, dict]:
+    repo = as_repo(args.repo)
+    result = timeline_command.run(repo, args.state)
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
 
@@ -2464,7 +2488,7 @@ def service_design(args) -> tuple[int, dict]:
             result["service_design_dispatch"] = {"ready": False, "blocked_reasons": dispatch_blockers}
             write_status(args.status_file, result)
             return 2, result
-        transition = run_state.transition_state(
+        transition = state_store.transition_lifecycle(
             repo,
             run_state_path,
             "PLANNED",
@@ -2484,16 +2508,16 @@ def agent_task(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
     lease_seconds = getattr(args, "lease_seconds", agent_scheduler.DEFAULT_LEASE_SECONDS)
     if args.action == "claim":
-        result = agent_scheduler.claim(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state, lease_seconds)
+        result = state_store.claim_task(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state, lease_seconds)
     elif args.action == "renew":
-        result = agent_scheduler.renew(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state, lease_seconds)
+        result = state_store.renew_task(repo, args.schedule, args.task_id or "", args.agent or "agent", args.state, lease_seconds)
     elif args.action == "reclaim":
-        result = agent_scheduler.reclaim(
+        result = state_store.reclaim_task(
             repo, args.schedule, args.task_id or "", args.agent or "agent", args.state,
             getattr(args, "force", False), lease_seconds,
         )
     elif args.action == "complete":
-        result = agent_scheduler.complete(
+        result = state_store.complete_task(
             repo,
             args.schedule,
             args.task_id or "",
@@ -2517,8 +2541,7 @@ def agent_task(args) -> tuple[int, dict]:
 
 
 def runtime_capabilities(args) -> tuple[int, dict]:
-    result = dispatcher.runtime_capabilities(args.runtime)
-    result.update({"ready": True, "blocked_reasons": [], "warnings": []})
+    result = runtime_capabilities_command.run(args.runtime)
     write_status(args.status_file, result)
     return 0, result
 
@@ -2533,7 +2556,7 @@ def dispatch_beat(args) -> tuple[int, dict]:
 
 def dispatch_complete(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
-    result = dispatcher.dispatch_complete(
+    result = dispatch_engine.complete(
         repo,
         args.schedule,
         args.state,
@@ -2549,7 +2572,7 @@ def dispatch_complete(args) -> tuple[int, dict]:
 
 def dispatch_ack(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
-    result = dispatcher.dispatch_ack(
+    result = dispatch_engine.ack(
         repo,
         args.state,
         args.task_id,
@@ -2563,7 +2586,7 @@ def dispatch_ack(args) -> tuple[int, dict]:
 
 def dispatch_status(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
-    result = dispatcher.dispatch_status(
+    result = dispatch_engine.status(
         repo,
         args.schedule,
         args.state,
@@ -2926,6 +2949,20 @@ def main() -> int:
     dispatch_status_parser.add_argument("--evidence", action="append")
     dispatch_status_parser.add_argument("--status-file", type=Path)
 
+    recover_parser = subparsers.add_parser("recover", help="Create an auditable recovery plan for a stuck run.")
+    recover_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    recover_parser.add_argument("--state", required=True, type=Path)
+    recover_parser.add_argument("--schedule", type=Path)
+    recover_parser.add_argument("--task-id")
+    recover_parser.add_argument("--agent", default="")
+    recover_parser.add_argument("--evidence", action="append")
+    recover_parser.add_argument("--status-file", type=Path)
+
+    timeline_parser = subparsers.add_parser("timeline", help="Write a product-grade run timeline report from enterprise events.")
+    timeline_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    timeline_parser.add_argument("--state", required=True, type=Path)
+    timeline_parser.add_argument("--status-file", type=Path)
+
     ac_progress_parser = subparsers.add_parser("ac-progress", help="Block R3 review until all assigned ACs have implementation and test evidence.")
     ac_progress_parser.add_argument("repo", nargs="?", default=".", type=Path)
     ac_progress_parser.add_argument("--design-doc", type=Path)
@@ -2970,6 +3007,8 @@ def main() -> int:
         dispatch_complete_parser,
         dispatch_ack_parser,
         dispatch_status_parser,
+        recover_parser,
+        timeline_parser,
         ac_progress_parser,
         next_parser,
         preflight_parser,
@@ -2997,6 +3036,10 @@ def main() -> int:
             exit_code, result = guard(args)
         elif args.command == "doctor":
             exit_code, result = doctor(args)
+        elif args.command == "recover":
+            exit_code, result = recover(args)
+        elif args.command == "timeline":
+            exit_code, result = timeline(args)
         elif args.command == "install":
             exit_code, result = install_project(args)
         elif args.command == "pre-code":
@@ -3038,6 +3081,11 @@ def main() -> int:
             result["command_event_path"] = command_event_path
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return exit_code
+    command_event_path = emit_command_event(repo, args.command or "verify", args, result, exit_code)
+    if command_event_path:
+        result["command_event_path"] = command_event_path
+    if result.get("coordinator_summary_path"):
+        result["coordinator_summary_path"] = normalize_cli_path(repo, result.get("coordinator_summary_path"))
     full_result_path = output_contract.write_full_result(repo, args.command or "verify", result, args)
     coordinator_summary_path = ""
     if args.command == "next":
@@ -3049,9 +3097,6 @@ def main() -> int:
         )
         coordinator_summary_path = summary.get("coordinator_summary", "")
         result["coordinator_summary_path"] = coordinator_summary_path
-    command_event_path = emit_command_event(repo, args.command or "verify", args, result, exit_code)
-    if command_event_path:
-        result["command_event_path"] = command_event_path
     compact = output_contract.compact_payload(
         repo,
         args.command or "verify",
@@ -3059,6 +3104,20 @@ def main() -> int:
         full_result_path,
         coordinator_summary_path,
     )
+    if args.command == "runtime-capabilities":
+        for key in ("runtime", "supports_subagent", "supports_task_hook", "supports_isolated_review", "supports_blocking_stop", "dispatch_mode", "spawn_tool"):
+            if key in result:
+                compact[key] = result[key]
+    if args.command == "recover":
+        compact["workflow_stage"] = "RECOVER"
+        if isinstance(compact.get("summary"), dict):
+            compact["summary"]["workflow_stage"] = "RECOVER"
+    if args.command == "timeline":
+        compact["workflow_stage"] = "TIMELINE"
+        if isinstance(compact.get("summary"), dict):
+            compact["summary"]["workflow_stage"] = "TIMELINE"
+        for key in ("run_id", "event_count", "timeline_count", "latest_event"):
+            compact[key] = result.get(key, {} if key == "latest_event" else 0)
     print(output_contract.render_json(compact))
     return exit_code
 

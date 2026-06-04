@@ -687,6 +687,45 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertEqual([], event["blocked_reason_codes"])
         self.assertIn("dispatch-beat", event["next_command"])
 
+    def test_next_cli_full_result_links_structured_command_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _code, start_result = e2e_dev_harness.start(
+                SimpleNamespace(
+                    repo=repo,
+                    feature="Quote",
+                    request="Return a quote.",
+                    design_doc=None,
+                    agent_run_dir=None,
+                    run_id="run",
+                    run_date=None,
+                    force=False,
+                    status_file=None,
+                )
+            )
+
+            stdout = io.StringIO()
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "e2e_dev_harness.py",
+                    "next",
+                    str(repo),
+                    "--state",
+                    str(start_result["run_state"]),
+                ],
+            ), patch("sys.stdout", stdout):
+                exit_code = e2e_dev_harness.main()
+            payload = json.loads(stdout.getvalue())
+            full_payload = json.loads((repo / payload["full_result_path"]).read_text(encoding="utf-8"))
+
+        self.assertEqual(0, exit_code)
+        self.assertIn("command_event_path", payload)
+        self.assertEqual(payload["command_event_path"], full_payload["command_event_path"])
+        self.assertIn("coordinator_summary_path", payload)
+        self.assertEqual(payload["coordinator_summary_path"], full_payload["coordinator_summary_path"])
+
     def test_gate_phase_clarification_error_routes_to_clarify_or_dispatch(self) -> None:
         result = subprocess.run(
             [

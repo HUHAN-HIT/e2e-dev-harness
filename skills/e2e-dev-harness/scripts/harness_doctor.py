@@ -15,6 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import install_hooks  # noqa: E402
+import dispatcher  # noqa: E402
 import event_log  # noqa: E402
 import plugin_registry  # noqa: E402
 import run_state  # noqa: E402
@@ -259,6 +260,68 @@ def active_dispatch_recommendation(state_data: dict, state_path: Path) -> tuple[
     return taxonomy, command
 
 
+def recovery_plan(
+    repo: Path,
+    state: Path,
+    schedule: Path | None = None,
+    task_id: str = "",
+    agent: str = "",
+    evidence: list[str] | None = None,
+) -> dict:
+    repo = repo.resolve()
+    state_path = resolve_repo_path(repo, state)
+    schedule_path = resolve_repo_path(repo, schedule) if schedule else state_path.parent / "agent-schedule.json"
+    evidence = evidence or []
+    state_data, _state_error = read_json_file(state_path)
+    dispatch = state_data.get("dispatch") if isinstance(state_data, dict) and isinstance(state_data.get("dispatch"), dict) else {}
+    resolved_task_id = task_id or str(dispatch.get("current_task_id", "")).strip()
+    resolved_agent = agent or str(dispatch.get("current_agent", "")).strip()
+    request_path = state_path.parent / "recovery-requests" / f"{resolved_task_id or 'dispatch'}-recovery.json"
+    request_result = dispatcher.write_recovery_request(
+        repo,
+        request_path,
+        resolved_task_id,
+        resolved_agent,
+        evidence,
+        reason="Manual recovery requested from harness doctor recovery plan.",
+    )
+    command = (
+        "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-status . "
+        f"--schedule {schedule_path.as_posix()} --state {state_path.as_posix()} "
+        f"--write-recovery-request {request_path.as_posix()} --task-id {resolved_task_id} --agent {resolved_agent}"
+    )
+    for item in evidence:
+        command += f" --evidence {item}"
+    taxonomy, recommended_command = active_dispatch_recommendation(state_data or {}, state_path)
+    blockers = [] if request_result.get("ready") else list(request_result.get("blocked_reasons", []) or [])
+    if request_result.get("ready"):
+        blockers.append("Recovery request is written but still requires explicit user approval before dispatch-complete --manual-recovery can close the task.")
+    approval_status = {
+        "status": "approval_required" if request_result.get("ready") else "request_blocked",
+        "approval_schema": "e2e-dev-harness.recovery-approval.v1",
+        "request_path": request_result.get("path", str(request_path)),
+        "approved": False,
+    }
+    return {
+        "schema": "e2e-dev-harness.recovery-plan.v1",
+        "ready": False,
+        "blocked_reasons": blockers,
+        "warnings": list(request_result.get("warnings", []) or []),
+        "repo": str(repo),
+        "state": str(state_path),
+        "schedule": str(schedule_path),
+        "task_id": resolved_task_id,
+        "agent": resolved_agent,
+        "run_timeline": run_timeline(state_path.parent),
+        "failure_taxonomy": taxonomy,
+        "recommended_command": recommended_command,
+        "recovery_request_command": command,
+        "recovery_request_path": request_result.get("path", str(request_path)),
+        "recovery_request": request_result.get("request", {}),
+        "recovery_approval_status": approval_status,
+    }
+
+
 def state_consistency_checks(repo: Path, state: Path) -> list[dict]:
     state_path = resolve_repo_path(repo, state)
     state_data, state_error = read_json_file(state_path)
@@ -459,11 +522,39 @@ def evaluate(repo: Path, strict: bool = False, state: Path | None = None) -> dic
     state_path = resolve_repo_path(repo, state) if state else None
     state_data, _state_error = read_json_file(state_path) if state_path else ({}, "")
     timeline = run_timeline(state_path.parent) if state_path and state_path.exists() else []
+    enterprise_events = event_log.read_events(state_path.parent) if state_path and state_path.exists() else []
+    first_inconsistent_event = None
+    if state_path and state_path.exists() and isinstance(state_data, dict):
+        schedule_data, _schedule_error = read_json_file(state_path.parent / "agent-schedule.json")
+        first_inconsistent_event = event_log.first_snapshot_mismatch(
+            enterprise_events,
+            state_data,
+            schedule_data or {},
+        )
     taxonomy, recommended_command = active_dispatch_recommendation(state_data or {}, state_path) if state_path else ([], "")
+    extension_registry = plugin_registry.load_registry(repo)
+    extension_provider_health = plugin_registry.provider_health(repo, extension_registry)
     blockers = [
         item for item in checks
         if item["status"] == "fail" or (strict and item["status"] == "warn")
     ]
+    check_statuses = {item["id"]: item["status"] for item in checks}
+    mismatch_count = 1 if first_inconsistent_event else 0
+    metrics_summary = {
+        "event_count": len(enterprise_events),
+        "timeline_count": len(timeline),
+        "mismatch_count": mismatch_count,
+        "failed_check_count": len([item for item in checks if item["status"] == "fail"]),
+        "warning_check_count": len([item for item in checks if item["status"] == "warn"]),
+        "active_failure_count": len(taxonomy),
+    }
+    replay_report = {
+        "schema": "e2e-dev-harness.replay-report.v1",
+        "checks": check_statuses,
+        "event_count": len(enterprise_events),
+        "first_inconsistent_event": first_inconsistent_event,
+        "recommended_command": recommended_command,
+    }
     return {
         "schema": "e2e-dev-harness.doctor.v1",
         "repo": str(repo),
@@ -472,10 +563,14 @@ def evaluate(repo: Path, strict: bool = False, state: Path | None = None) -> dic
         "checks": checks,
         "blocked_reasons": [item["message"] for item in blockers],
         "warnings": [item["message"] for item in checks if item["status"] == "warn"],
-        "extension_registry": plugin_registry.load_registry(repo),
+        "extension_registry": extension_registry,
+        "extension_provider_health": extension_provider_health,
         "run_timeline": timeline,
+        "first_inconsistent_event": first_inconsistent_event,
         "failure_taxonomy": taxonomy,
         "recommended_command": recommended_command,
+        "metrics_summary": metrics_summary,
+        "replay_report": replay_report,
     }
 
 

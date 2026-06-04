@@ -18,6 +18,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, SKIP_DIRS, posix  # noqa: E402
+import plugin_registry  # noqa: E402
 
 HTTP_MAPPING_RE = re.compile(r"@(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)\s*(?:\((.*?)\))?", re.S)
 VALUE_FIELD_RE = re.compile(r"@Value\s*\(\s*\"\$\{([^}:]+)(?::[^}]*)?}\"\s*\)\s*(?:private|protected|public)?\s*(?:final\s+)?(?:String|URI|URL)\s+(\w+)", re.S)
@@ -883,6 +884,15 @@ def scan(
         affected_services=affected_services,
     )
     warnings = list(gitnexus_warnings)
+    scanner_provider_result = plugin_registry.run_scanners(
+        repo,
+        {
+            "gitnexus_mode": gitnexus_mode,
+            "graphify_mode": graphify_mode,
+            "affected_services": affected_services or [],
+        },
+    )
+    warnings.extend(scanner_provider_result.get("warnings", []) or [])
     if parser_backend.get("warning"):
         warnings.append(str(parser_backend["warning"]))
     parser_blockers: list[str] = []
@@ -890,7 +900,7 @@ def scan(
         parser_blockers.append("tree-sitter AST parsing is required but not active; scanner output cannot be used as high-risk Java impact evidence.")
     result = {
         "repo": str(repo),
-        "ready": not unresolved and not parser_blockers,
+        "ready": not unresolved and not parser_blockers and scanner_provider_result.get("ready", True),
         "services": services,
         "affected_services": affected_services or [],
         "tool_priority": ["gitnexus", "deterministic-scan", "graphify"],
@@ -903,8 +913,9 @@ def scan(
         "http": {"clients": clients, "providers": routes},
         "dmq": {"producers": producers, "consumers": consumers},
         "dependencies": dependencies,
+        "scanner_providers": scanner_provider_result,
         "unresolved_questions": unresolved,
-        "blocked_reasons": parser_blockers,
+        "blocked_reasons": parser_blockers + list(scanner_provider_result.get("blocked_reasons", []) or []),
         "warnings": warnings,
         "report_paths": {},
     }
