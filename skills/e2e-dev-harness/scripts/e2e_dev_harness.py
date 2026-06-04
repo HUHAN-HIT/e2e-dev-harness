@@ -48,9 +48,11 @@ from e2e_harness.cli.commands import clarify as clarify_command  # noqa: E402
 from e2e_harness.cli.commands import dispatch as dispatch_command  # noqa: E402
 from e2e_harness.cli.commands import doctor as doctor_command  # noqa: E402
 from e2e_harness.cli.commands import gate as gate_command  # noqa: E402
+from e2e_harness.cli.commands import plan as plan_command  # noqa: E402
 from e2e_harness.cli.commands import recover as recover_command  # noqa: E402
 from e2e_harness.cli.commands import runtime_capabilities as runtime_capabilities_command  # noqa: E402
 from e2e_harness.cli.commands import service_design as service_design_command  # noqa: E402
+from e2e_harness.cli.commands import start as start_command  # noqa: E402
 from e2e_harness.cli.commands import timeline as timeline_command  # noqa: E402
 
 
@@ -383,87 +385,11 @@ def optional_text(path: Path | None) -> str:
 
 
 def design_template(feature: str, request: str = "") -> str:
-    title = feature.strip() or "Feature"
-    original = request.strip() or "<paste the original user request here>"
-    return f"""# {title}
-
-## Restated Intent
-- Agent restatement:
-- User confirmation: pending
-
-## Goal
-- {original}
-
-## Scope
-- Affected services/modules:
-- In scope:
-- Non-goals:
-
-## Use Cases
-- UC-1:
-
-## System Sequence
-```mermaid
-sequenceDiagram
-    actor User
-    participant Entry as Entry point
-    participant Service as Service/domain logic
-    participant Data as Repository/client/sender
-    User->>Entry: Trigger UC-1
-    Entry->>Service: Execute AC-1 behavior
-    Service->>Data: Read/write/call/publish declared effects
-    Data-->>Service: Result or acknowledgement
-    Service-->>Entry: Outcome
-    Entry-->>User: Response or observable result
-```
-
-## Acceptance Criteria
-- AC-1:
-
-## Test Design
-- First red test:
-- Verification command:
-
-## Impact Summary
-- Source: manual pending GitNexus/dependency scanner evidence
-- Raw Evidence:
-
-| type | interface | affected callers/consumers | related AC | required tests/contracts | risk |
-| --- | --- | --- | --- | --- | --- |
-| N/A | No public/cross-service/interface impact identified yet | N/A | AC-1 | N/A | low |
-
-## Change Logic
-- Current behavior:
-- Target behavior:
-- Runtime path:
-- State/data/API/event effects:
-- Compatibility or migration notes:
-
-## Contracts
-- HTTP/API:
-- MQ/DMQ/Kafka:
-
-## Open Questions
-- Pending user confirmation of Restated Intent.
-"""
+    return start_command.design_template(feature, request)
 
 
 def load_phase_profile(repo: Path, path: Path | None) -> tuple[dict, list[str]]:
-    if not path:
-        return {}, []
-    try:
-        resolved = require_repo_path(repo, path, "phase profile")
-    except ValueError as error:
-        return {}, [str(error)]
-    if not resolved.exists():
-        return {}, [f"Phase profile not found: {resolved}"]
-    try:
-        data = json.loads(resolved.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as error:
-        return {}, [f"Phase profile is invalid JSON: {error}"]
-    if not isinstance(data, dict):
-        return {}, ["Phase profile must be a JSON object."]
-    return data, []
+    return start_command.load_phase_profile(repo, path)
 
 
 def workflow_plan_for_start(
@@ -472,54 +398,7 @@ def workflow_plan_for_start(
     phase_profile: dict | None = None,
     current_lifecycle: str = "CREATED",
 ) -> dict:
-    profile = phase_profile or {}
-    manual_confirm = profile.get("manual_confirm_phases")
-    if not isinstance(manual_confirm, list):
-        manual_confirm = ["clarify"] if phase_mode == "manual" else []
-    dispatch_policy = profile.get("dispatch_policy") if isinstance(profile.get("dispatch_policy"), dict) else {}
-    custom_checkpoints = profile.get("custom_checkpoints") if isinstance(profile.get("custom_checkpoints"), list) else []
-    phases = []
-    for lifecycle, phase, summary in BLUEPRINT_STEPS:
-        phases.append(
-            {
-                "lifecycle": lifecycle,
-                "phase": phase,
-                "required": True,
-                "gate_summary": summary,
-                "advance_by": {
-                    "clarify": "clarify gate",
-                    "plan": "plan archive and R1 review",
-                    "service-design": "service-design gate when multi-service",
-                    "tdd-red": "TDD red task completion and R2 review completion",
-                    "implementation-gate": "gate --phase implementation",
-                    "implement-or-complete": "code-agent completion, AC progress, and R3 review",
-                    "completion": "completion gate and strict guard",
-                    "archive": "requirements archive and final evidence",
-                }.get(phase, "harness gate or transition command"),
-                "manual_confirm": phase in manual_confirm,
-            }
-        )
-    return {
-        "schema": "e2e-dev-harness.workflow-plan.v1",
-        "phase_mode": phase_mode,
-        "selected_profile": str(profile.get("name") or workflow_profile or "standard"),
-        "current_lifecycle": current_lifecycle,
-        "phases": phases,
-        "dispatch_policy": {
-            "r1_r2_r3": dispatch_policy.get("r1_r2_r3", "subagent-required"),
-            "service_tdd": dispatch_policy.get("service_tdd", "parallel-when-services-independent"),
-            "service_code": dispatch_policy.get("service_code", "after-IMPLEMENTED"),
-            "completion": dispatch_policy.get("completion", "after-R3"),
-        },
-        "manual_confirm_phases": manual_confirm,
-        "custom_checkpoints": custom_checkpoints,
-        "forbidden": [
-            "direct run-state edit",
-            "production code before IMPLEMENTED",
-            "skipping gates without approval evidence",
-            "changing core lifecycle order from a phase profile",
-        ],
-    }
+    return start_command.workflow_plan_for_start(phase_mode, workflow_profile, phase_profile, current_lifecycle)
 
 
 def without_status_file(args):
@@ -857,107 +736,7 @@ def prepare(args) -> tuple[int, dict]:
 
 
 def start(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    feature = args.feature or "feature"
-    phase_mode = getattr(args, "phase_mode", "auto") or "auto"
-    workflow_profile = getattr(args, "workflow_profile", "standard") or "standard"
-    phase_profile, profile_blockers = load_phase_profile(repo, getattr(args, "phase_profile", None))
-    if profile_blockers:
-        result = {
-            "repo": str(repo),
-            "ready": False,
-            "blocked_reasons": profile_blockers,
-            "warnings": [],
-        }
-        write_status(args.status_file, result)
-        return 2, result
-    slug = orchestration_plan.safe_slug(feature)
-    run_id = args.run_id or orchestration_plan.default_run_id(slug, args.run_date)
-    run_dir = require_repo_path(repo, args.agent_run_dir or Path(f"docs/agent-runs/{run_id}"), "agent run directory")
-    design_path = require_repo_path(repo, args.design_doc or Path(f"docs/design/{slug}.md"), "design document")
-    artifacts = orchestration_plan.artifacts(slug, str(run_dir.relative_to(repo)).replace("\\", "/"), args.run_date, [])
-    artifacts["design_doc"] = str(design_path.relative_to(repo)).replace("\\", "/")
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "evidence").mkdir(parents=True, exist_ok=True)
-    (run_dir / "confirmations").mkdir(parents=True, exist_ok=True)
-    design_path.parent.mkdir(parents=True, exist_ok=True)
-    created: list[str] = []
-    if design_path.exists() and not args.force:
-        design_created = False
-    else:
-        design_path.write_text(design_template(feature, args.request or ""), encoding="utf-8")
-        design_created = True
-        created.append(str(design_path))
-    role_templates_created = create_role_template_files(repo, artifacts)
-    created.extend(role_templates_created)
-    workflow_plan = workflow_plan_for_start(phase_mode, workflow_profile, phase_profile, "CREATED")
-    workflow_plan_path = require_repo_path(repo, Path(artifacts["workflow_plan"]), "workflow plan")
-    workflow_plan_path.write_text(json.dumps(workflow_plan, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    created.append(str(workflow_plan_path))
-    bootstrap_agents = [
-        orchestration_plan.with_role_template(
-            {
-                "name": "requirements-clarifier",
-                "owns": ["goal", "non-goals", "constraints", "impact summary", "acceptance criteria", "open questions"],
-                "inputs": ["user request", artifacts["design_doc"], artifacts["dependency_report"]],
-                "outputs": [artifacts["requirements"], artifacts["impact_summary"], artifacts["impact_evidence"]],
-                "gate": "Behavior/API/data/test-impacting open questions and bounded impact summary gaps must be resolved.",
-            },
-            artifacts,
-        )
-    ]
-    schedule = orchestration_plan.agent_schedule("bootstrap", [], bootstrap_agents)
-    schedule_path = require_repo_path(repo, Path(artifacts["agent_schedule"]), "agent schedule")
-    schedule_path.write_text(json.dumps(schedule, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    created.append(str(schedule_path))
-    registry = artifact_registry.build_registry(repo, artifacts["agent_run_dir"], artifacts, "bootstrap", [])
-    registry_path = require_repo_path(repo, Path(artifacts["artifact_registry"]), "artifact registry")
-    artifact_registry.write_registry(repo, registry_path, registry)
-    created.append(str(registry_path))
-    state = run_state.build_state(
-        artifacts["agent_run_dir"],
-        "bootstrap",
-        [],
-        artifacts["artifact_registry"],
-        lifecycle="CREATED",
-    )
-    state["phase_mode"] = phase_mode
-    state["workflow_profile"] = workflow_plan["selected_profile"]
-    state["workflow_plan"] = artifacts["workflow_plan"]
-    state["manual_confirm_phases"] = workflow_plan["manual_confirm_phases"]
-    state["dispatch_policy"] = workflow_plan["dispatch_policy"]
-    state_path = require_repo_path(repo, Path(artifacts["run_state"]), "run state")
-    run_state.write_state(repo, state_path, state)
-    created.append(str(state_path))
-    lock_path = state_path.parent / run_state.PHASE_LOCK
-    hooks = runtime_hook_status(repo)
-    result = {
-        "repo": str(repo),
-        "ready": True,
-        "feature": feature,
-        "run_id": run_id,
-        "agent_run_dir": str(run_dir),
-        "design_doc": str(design_path),
-        "design_created": design_created,
-        "run_state": str(state_path),
-        "phase_lock": str(lock_path),
-        "artifact_registry": str(registry_path),
-        "agent_schedule": str(schedule_path),
-        "workflow_plan": str(workflow_plan_path),
-        "phase_mode": phase_mode,
-        "workflow_profile": workflow_plan["selected_profile"],
-        "workflow": workflow_plan,
-        "hook_status": hooks,
-        "created": created,
-        "next": next_action_for_lifecycle("CREATED", state),
-        "blocked_reasons": [],
-        "warnings": ([] if design_created else ["Design document already existed; use --force to rewrite the starter template."])
-        + ["Runtime hook is not ready; install hooks or use pre-code before editing code."] if not hooks["ready"] else (
-            [] if design_created else ["Design document already existed; use --force to rewrite the starter template."]
-        ) + hooks.get("warnings", []),
-    }
-    write_status(args.status_file, result)
-    return 0, result
+    return start_command.run_from_args(args)
 
 
 def clarification_dispatch_blockers(repo: Path, run_state_path: Path | str | None) -> list[str]:
@@ -1289,41 +1068,11 @@ ROLE_TEMPLATE_DETAILS = {
 
 
 def role_template_text(role: str) -> str:
-    detail = ROLE_TEMPLATE_DETAILS.get(role, ROLE_TEMPLATE_DETAILS["code-developer"])
-    return f"""# Agent Role Template: {role}
-
-## Role Boundary
-
-{detail["boundary"]}
-
-## Allowed Inputs
-
-{detail["inputs"]}
-
-## Forbidden
-
-{detail["forbidden"]}
-
-## Required Outputs
-
-{detail["outputs"]}
-
-## Done When
-
-{detail["done"]}
-"""
+    return start_command.role_template_text(role)
 
 
 def create_role_template_files(repo: Path, artifacts: dict) -> list[str]:
-    created: list[str] = []
-    for role, relative_path in (artifacts.get("role_templates") or {}).items():
-        path = require_repo_path(repo, Path(relative_path), f"{role} role template")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        text = role_template_text(role)
-        if not path.exists() or path.read_text(encoding="utf-8", errors="replace") != text:
-            path.write_text(text, encoding="utf-8")
-            created.append(str(path))
-    return created
+    return start_command.create_role_template_files(repo, artifacts)
 
 
 def normalize_artifact_path(value: str) -> str:
@@ -1845,90 +1594,7 @@ sequenceDiagram
 
 
 def plan(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    kg_facts = kg_refresh.detect(repo)
-    result = orchestration_status(
-        repo,
-        args.mode,
-        args.design_doc,
-        args.agent_run_dir,
-        args.run_date,
-        args.service_scope,
-        args.service,
-        args.path,
-        kg_facts,
-        getattr(args, "dependency_report", None),
-    )
-    if (args.create_archive or args.write_exec_plan) and not result.get("handoff_artifacts"):
-        result["blocked"] = True
-        result["blocked_reasons"] = [
-            "Discovery scope does not create ExecPlan or agent-run archives; rerun with --service-scope affected plus --service or --path."
-        ]
-        write_status(args.status_file, result)
-        return 2, result
-    if args.create_archive or args.write_exec_plan:
-        run_dir = require_repo_path(repo, Path(result["agent_run_dir"]), "agent run directory")
-        (run_dir / "handoffs").mkdir(parents=True, exist_ok=True)
-        (run_dir / "evidence").mkdir(parents=True, exist_ok=True)
-        (run_dir / "confirmations").mkdir(parents=True, exist_ok=True)
-        require_repo_path(repo, Path(result["handoff_artifacts"]["review_requests_dir"]), "review requests directory").mkdir(parents=True, exist_ok=True)
-        require_repo_path(repo, Path(result["handoff_artifacts"]["reviews_dir"]), "reviews directory").mkdir(parents=True, exist_ok=True)
-        require_repo_path(repo, Path(result["handoff_artifacts"]["rework_dir"]), "rework directory").mkdir(parents=True, exist_ok=True)
-        require_repo_path(repo, Path(result["handoff_artifacts"]["contracts_dir"]), "contracts directory").mkdir(parents=True, exist_ok=True)
-        require_repo_path(repo, Path(result["handoff_artifacts"]["service_designs_dir"]), "service designs directory").mkdir(parents=True, exist_ok=True)
-        if args.design_doc:
-            result["handoff_artifacts"]["design_doc"] = str(args.design_doc).replace("\\", "/")
-        result["handoff_files_created"] = create_handoff_files(repo, result["handoff_artifacts"], result.get("agent_schedule"))
-        proposed = require_repo_path(repo, Path(result["handoff_artifacts"]["proposed_memory_updates"]), "proposed memory updates")
-        if not proposed.exists():
-            proposed.write_text("# Proposed Memory Updates\n\n", encoding="utf-8")
-        schedule_path = require_repo_path(repo, Path(result["handoff_artifacts"]["agent_schedule"]), "agent schedule")
-        schedule_path.write_text(json.dumps(result["agent_schedule"], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        result["agent_schedule_written"] = str(schedule_path)
-        kg_artifact = write_kg_status_artifact(
-            repo,
-            Path(result["handoff_artifacts"]["knowledge_graph_status"]),
-            "auto",
-            kg_facts,
-        )
-        result["knowledge_graph_status_written"] = kg_artifact["path"]
-        result["knowledge_graph"] = kg_artifact["status"]
-        result["agent_run_archive_created"] = str(run_dir)
-    if args.write_exec_plan or args.create_archive:
-        target = require_repo_path(repo, args.write_exec_plan or Path(result["handoff_artifacts"]["exec_plan"]), "exec plan")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(exec_plan_text(repo, args.design_doc, result), encoding="utf-8")
-        result["exec_plan_written"] = str(target)
-    if args.create_archive:
-        registry_artifacts = dict(result["handoff_artifacts"])
-        registry = artifact_registry.build_registry(
-            repo,
-            result["agent_run_dir"],
-            registry_artifacts,
-            result.get("selected_mode", ""),
-            result.get("selected_services", []),
-        )
-        registry_path = require_repo_path(repo, Path(result["handoff_artifacts"]["artifact_registry"]), "artifact registry")
-        artifact_registry.write_registry(repo, registry_path, registry)
-        lifecycle = "SERVICE_DESIGN_REQUIRED" if (
-            result.get("selected_mode") == "multi" and len(result.get("selected_services", [])) > 1
-        ) else "PLANNED"
-        state = run_state.build_state(
-            result["agent_run_dir"],
-            result.get("selected_mode", ""),
-            result.get("slice_services", result.get("selected_services", [])),
-            result["handoff_artifacts"]["artifact_registry"],
-            lifecycle=lifecycle,
-            shared_edit_scopes=result.get("shared_edit_scopes", []),
-            shared_edit_scope_owners=result.get("shared_edit_scope_owners", {}),
-        )
-        state_path = require_repo_path(repo, Path(result["handoff_artifacts"]["run_state"]), "run state")
-        run_state.write_state(repo, state_path, state)
-        result["artifact_registry_written"] = str(registry_path)
-        result["run_state_written"] = str(state_path)
-        result["run_state_lifecycle"] = lifecycle
-    write_status(args.status_file, result)
-    return 0, result
+    return plan_command.run_from_args(args)
 
 
 def gate(args) -> tuple[int, dict]:

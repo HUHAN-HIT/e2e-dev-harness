@@ -1643,6 +1643,117 @@ class DoctorTimelineContractTests(unittest.TestCase):
 
 
 class CliCommandFacadeContractTests(unittest.TestCase):
+    def test_cli_command_modules_preserve_start_contracts(self) -> None:
+        from e2e_harness.cli.commands import start as start_command  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            code, result = start_command.run(
+                repo,
+                feature="Refund MQ",
+                request="Publish refund notification after success.",
+                run_id="run",
+            )
+            design = Path(result["design_doc"])
+            state_path = Path(result["run_state"])
+            lock_path = Path(result["phase_lock"])
+            schedule_path = Path(result["agent_schedule"])
+            workflow_path = Path(result["workflow_plan"])
+            registry_path = Path(result["artifact_registry"])
+            design_text = design.read_text(encoding="utf-8")
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            schedule = json.loads(schedule_path.read_text(encoding="utf-8"))
+            workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code, result)
+        self.assertTrue(result["ready"])
+        self.assertEqual("Refund MQ", result["feature"])
+        self.assertEqual("run", result["run_id"])
+        self.assertIn("## Restated Intent", design_text)
+        self.assertEqual("CREATED", state["lifecycle"])
+        self.assertEqual("bootstrap", state["selected_mode"])
+        self.assertEqual("code-write-locked", lock["state"])
+        self.assertEqual("bootstrap", schedule["selected_mode"])
+        self.assertEqual("dispatcher-confirmed", schedule["completion_mode"])
+        self.assertEqual("requirements-clarifier", schedule["tasks"][0]["agent"])
+        self.assertEqual("clarify", schedule["tasks"][0]["phase"])
+        self.assertEqual("e2e-dev-harness.workflow-plan.v1", workflow["schema"])
+        self.assertEqual("standard", workflow["selected_profile"])
+        self.assertTrue(any(item["type"] == "workflow_plan" for item in registry["artifacts"]))
+        self.assertEqual("clarify", result["next"]["phase"])
+        self.assertEqual([], result["blocked_reasons"])
+
+    def test_cli_command_modules_preserve_plan_contracts(self) -> None:
+        from e2e_harness.cli.commands import plan as plan_command  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "services" / "order-service" / "src" / "main").mkdir(parents=True)
+            (repo / "services" / "order-service" / "pom.xml").write_text("<project />\n", encoding="utf-8")
+            (repo / "pom.xml").write_text(
+                "<project><modules><module>services/order-service</module></modules></project>\n",
+                encoding="utf-8",
+            )
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                "\n".join(
+                    [
+                        "# Feature",
+                        "",
+                        "## Goal",
+                        "- Return a quote.",
+                        "",
+                        "## Scope",
+                        "- services/order-service",
+                        "",
+                        "## Use Cases",
+                        "- Create quote.",
+                        "",
+                        "## Acceptance Criteria",
+                        "- AC-1 Quote is returned.",
+                        "",
+                        "## Test Design",
+                        "- Unit test first.",
+                        "",
+                        "## Open Questions",
+                        "None",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            code, result = plan_command.run(
+                repo,
+                mode="single-review",
+                design_doc=design.relative_to(repo),
+                agent_run_dir="docs/agent-runs/run",
+                run_date="2026-05-31",
+                service_scope="affected",
+                paths_requested=["services/order-service"],
+                create_archive=True,
+            )
+            artifacts = result["handoff_artifacts"]
+            state = json.loads((repo / artifacts["run_state"]).read_text(encoding="utf-8"))
+            schedule = json.loads((repo / artifacts["agent_schedule"]).read_text(encoding="utf-8"))
+            registry = json.loads((repo / artifacts["artifact_registry"]).read_text(encoding="utf-8"))
+            requirements_exists = (repo / artifacts["requirements"]).exists()
+            exec_plan_exists = (repo / artifacts["exec_plan"]).exists()
+            kg_status_exists = (repo / artifacts["knowledge_graph_status"]).exists()
+            exec_plan_text = (repo / artifacts["exec_plan"]).read_text(encoding="utf-8")
+
+        self.assertEqual(0, code, result)
+        self.assertEqual("single-review", result["selected_mode"])
+        self.assertEqual(["services/order-service"], result["selected_services"])
+        self.assertEqual("PLANNED", state["lifecycle"])
+        self.assertEqual("e2e-dev-harness.agent-schedule.v1", schedule["schema"])
+        self.assertEqual("e2e-dev-harness.artifact-registry.v1", registry["schema"])
+        self.assertTrue(requirements_exists)
+        self.assertTrue(exec_plan_exists)
+        self.assertTrue(kg_status_exists)
+        self.assertIn("Agent Protocol", exec_plan_text)
+
     def test_cli_command_modules_preserve_service_design_contracts(self) -> None:
         from e2e_harness.cli.commands import service_design as service_design_command  # noqa: PLC0415
 
