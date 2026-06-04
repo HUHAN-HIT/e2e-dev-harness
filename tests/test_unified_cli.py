@@ -239,6 +239,35 @@ class UnifiedCliTests(unittest.TestCase):
 
         self.assertIn("e2eh = \"e2e_dev_harness:main\"", pyproject)
 
+    def test_pyproject_packages_enterprise_harness_surface(self) -> None:
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+        for module in (
+            "ask_user_bridge",
+            "coordinator_flow",
+            "coordinator_summary",
+            "event_log",
+            "lifecycle_policy",
+            "output_contract",
+            "plugin_registry",
+            "preflight",
+            "runtime_adapters",
+        ):
+            self.assertIn(f"\"{module}\"", pyproject)
+
+        self.assertIn("packages = { find = { where = [\"skills/e2e-dev-harness/scripts\"], include = [\"e2e_harness*\"] } }", pyproject)
+
+        self.assertFalse((SCRIPTS / "e2e_dev_harness.egg-info").exists())
+
+        gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn("**/__pycache__/", gitignore)
+        self.assertIn("*.egg-info/", gitignore)
+        self.assertIn(".archive/", gitignore)
+
+        setup_cfg = (ROOT / "setup.cfg").read_text(encoding="utf-8")
+        self.assertIn("[egg_info]", setup_cfg)
+        self.assertIn("egg_base = .", setup_cfg)
+
     def test_clarify_cli_emits_utf8_json_on_windows_hooks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

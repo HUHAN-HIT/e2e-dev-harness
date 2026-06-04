@@ -810,6 +810,29 @@ class StateStoreContractTests(unittest.TestCase):
 
 
 class RuntimeAdapterContractTests(unittest.TestCase):
+    def test_layered_package_exposes_policy_scanner_ci_and_engine_facades(self) -> None:
+        from e2e_harness.adapters.ci import github_actions  # noqa: PLC0415
+        from e2e_harness.adapters.scanners import generic, java_spring  # noqa: PLC0415
+        from e2e_harness.engine import gate_runner, orchestrator  # noqa: PLC0415
+        from e2e_harness.policies import (  # noqa: PLC0415
+            context_budget_policy,
+            lifecycle_policy,
+            review_policy,
+            write_policy,
+        )
+        from e2e_harness.templates import resolver  # noqa: PLC0415
+
+        self.assertTrue(callable(gate_runner.run))
+        self.assertTrue(callable(orchestrator.next_step))
+        self.assertTrue(callable(generic.discover_scope))
+        self.assertTrue(callable(java_spring.discover_scope))
+        self.assertTrue(callable(github_actions.summarize_checks))
+        self.assertTrue(callable(lifecycle_policy.guidance_for_lifecycle))
+        self.assertTrue(callable(write_policy.validate_action))
+        self.assertTrue(callable(review_policy.default_profile))
+        self.assertTrue(callable(context_budget_policy.context_budget))
+        self.assertTrue(callable(resolver.resolve_template))
+
     def test_runtime_adapter_registry_preserves_legacy_capability_shapes(self) -> None:
         import runtime_adapters  # noqa: PLC0415
 

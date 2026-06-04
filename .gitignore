@@ -10,3 +10,4 @@ test/__pycache__
 .git
 .test-tmp
 .tmp-gitnexus-hook-test
+.archive/
