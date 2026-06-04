@@ -63,6 +63,7 @@ from e2e_harness.cli.commands import start as start_command  # noqa: E402
 from e2e_harness.cli.commands import timeline as timeline_command  # noqa: E402
 from e2e_harness.cli.commands import test_impact as test_impact_command  # noqa: E402
 from e2e_harness.cli.commands import verify as verify_command  # noqa: E402
+from e2e_harness.cli.status import write_status  # noqa: E402, F401
 
 
 DEFAULT_REVIEW_PROFILE = "skills/e2e-dev-harness/review-profiles/default.json"
@@ -136,13 +137,6 @@ def require_repo_path(repo: Path, path: Path | None, label: str) -> Path:
     except ValueError as error:
         raise ValueError(f"{label} path resolves outside repository: {resolved}") from error
     return target
-
-
-def write_status(path: Path | None, result: dict) -> None:
-    if not path:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def normalize_cli_path(repo: Path, value: str | Path | None) -> str:

@@ -34,6 +34,12 @@ class CliStatusTests(unittest.TestCase):
 
         write_status(None, {"ready": True})
 
+    def test_legacy_cli_reexports_shared_status_writer(self) -> None:
+        import e2e_dev_harness  # noqa: PLC0415
+        from e2e_harness.cli.status import write_status  # noqa: PLC0415
+
+        self.assertIs(write_status, e2e_dev_harness.write_status)
+
 
 if __name__ == "__main__":
     unittest.main()
