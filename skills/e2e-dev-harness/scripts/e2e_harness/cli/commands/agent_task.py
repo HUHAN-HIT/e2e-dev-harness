@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import agent_scheduler
+from e2e_harness.cli.status import write_status
 from e2e_harness.engine import state_store
 
 
@@ -14,13 +15,6 @@ SCHEMA = "e2e-dev-harness.agent-task.v1"
 
 def _as_repo(path: Path) -> Path:
     return Path(path).resolve()
-
-
-def _write_status(path: Path | None, result: dict) -> None:
-    if path is None:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def _with_schema(result: dict) -> dict:
@@ -39,7 +33,7 @@ def run_claim(
 ) -> dict:
     result = state_store.claim_task(_as_repo(repo), schedule, task_id or "", agent or "agent", state, lease_seconds)
     _with_schema(result)
-    _write_status(status_file, result)
+    write_status(status_file, result)
     return result
 
 
@@ -54,7 +48,7 @@ def run_renew(
 ) -> dict:
     result = state_store.renew_task(_as_repo(repo), schedule, task_id or "", agent or "agent", state, lease_seconds)
     _with_schema(result)
-    _write_status(status_file, result)
+    write_status(status_file, result)
     return result
 
 
@@ -78,7 +72,7 @@ def run_reclaim(
         lease_seconds=lease_seconds,
     )
     _with_schema(result)
-    _write_status(status_file, result)
+    write_status(status_file, result)
     return result
 
 
@@ -102,7 +96,7 @@ def run_complete(
         allow_local_completion=allow_local_completion,
     )
     _with_schema(result)
-    _write_status(status_file, result)
+    write_status(status_file, result)
     return result
 
 
@@ -125,7 +119,7 @@ def run_validate(
     )
     result["schedule"] = str(schedule_path)
     _with_schema(result)
-    _write_status(status_file, result)
+    write_status(status_file, result)
     return result
 
 

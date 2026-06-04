@@ -6,6 +6,8 @@ import argparse
 import importlib
 from pathlib import Path
 
+from e2e_harness.cli.status import write_status
+
 
 def _legacy_cli():
     return importlib.import_module("e2e_dev_harness")
@@ -41,5 +43,5 @@ def run_from_args(args) -> tuple[int, dict]:
         require_completion=args.require_completion,
         approval_file=args.approval_file,
     )
-    legacy.write_status(args.status_file, result)
+    write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result

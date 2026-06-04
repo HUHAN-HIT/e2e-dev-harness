@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import clarification_gate
 import preflight as preflight_checks
+from e2e_harness.cli.status import write_status
 from e2e_harness.engine import state_store
 
 
@@ -18,13 +18,6 @@ def _resolve_repo_path(repo: Path, path: Path | None) -> Path | None:
     if path is None:
         return None
     return path if path.is_absolute() else repo / path
-
-
-def _write_status(path: Path | None, result: dict) -> None:
-    if path is None:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def run(
@@ -43,7 +36,7 @@ def run(
         dispatch_blockers = preflight_checks.clarification_dispatch_blockers(repo, run_state)
         if dispatch_blockers:
             result = preflight_checks.clarification_dispatch_recovery(repo, run_state, dispatch_blockers)
-            _write_status(status_file, result)
+            write_status(status_file, result)
             return 2, result
     result = clarification_gate.validate(
         design_path,
@@ -60,7 +53,7 @@ def run(
             result["questions_to_ask_user"] = [
                 "Run dispatch-beat --max-workers 1 for requirements-clarifier and relay its returned Restated Intent/Open Questions first."
             ]
-            _write_status(status_file, result)
+            write_status(status_file, result)
             return 2, result
     if run_state and result.get("ready_for_implementation"):
         result["run_state_transition"] = state_store.transition_lifecycle(
@@ -77,7 +70,7 @@ def run(
             "command": "Run e2e_dev_harness.py next, then e2e_dev_harness.py plan --create-archive before any code write.",
             "code_writes_allowed": False,
         }
-    _write_status(status_file, result)
+    write_status(status_file, result)
     return (0 if result["ready_for_implementation"] else 2), result
 
 

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import implementation_gate
+from e2e_harness.cli.status import write_status
 from e2e_harness.engine import state_store
 
 
@@ -27,13 +28,6 @@ def _require_repo_path(repo: Path, path: Path | None, label: str) -> Path:
     if resolved is None:
         raise ValueError(f"{label} is required")
     return resolved
-
-
-def _write_status(path: Path | None, result: dict) -> None:
-    if path is None:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def run(
@@ -153,7 +147,7 @@ def run(
             if not transition["ready"]:
                 result["ready"] = False
                 result["blocked_reasons"].extend("Run state transition: " + reason for reason in transition["blocked_reasons"])
-    _write_status(status_file, result)
+    write_status(status_file, result)
     return (0 if result["ready"] else 2), result
 
 

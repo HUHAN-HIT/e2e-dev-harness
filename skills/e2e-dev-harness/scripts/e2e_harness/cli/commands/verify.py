@@ -6,6 +6,8 @@ import argparse
 import importlib
 from pathlib import Path
 
+from e2e_harness.cli.status import write_status
+
 
 def _legacy_cli():
     return importlib.import_module("e2e_dev_harness")
@@ -231,5 +233,5 @@ def run_from_args(args) -> tuple[int, dict]:
             "warnings": [],
         }
         exit_code = max(exit_code, 2)
-    legacy.write_status(getattr(args, "status_file", None), result)
+    write_status(getattr(args, "status_file", None), result)
     return exit_code, result

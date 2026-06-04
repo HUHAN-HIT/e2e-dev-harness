@@ -2,23 +2,16 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import coordinator_flow
+from e2e_harness.cli.status import write_status
 from e2e_harness.engine import dispatch_engine
 
 
 def _as_repo(path: Path) -> Path:
     return Path(path).resolve()
-
-
-def _write_status(path: Path | None, result: dict) -> None:
-    if path is None:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def _dispatch_args(
@@ -120,7 +113,7 @@ def run_complete(
         manual_recovery=manual_recovery,
         recovery_approval=recovery_approval,
     )
-    _write_status(status_file, result)
+    write_status(status_file, result)
     return result
 
 
@@ -141,7 +134,7 @@ def run_ack(
         worker_handle,
         worker_session or "",
     )
-    _write_status(status_file, result)
+    write_status(status_file, result)
     return result
 
 
@@ -164,7 +157,7 @@ def run_status(
         recovery_agent=agent or "",
         recovery_evidence=evidence or [],
     )
-    _write_status(status_file, result)
+    write_status(status_file, result)
     return result
 
 

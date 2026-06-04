@@ -6,6 +6,8 @@ import argparse
 import importlib
 from pathlib import Path
 
+from e2e_harness.cli.status import write_status
+
 
 def _legacy_cli():
     return importlib.import_module("e2e_dev_harness")
@@ -133,5 +135,5 @@ def run_from_args(args) -> tuple[int, dict]:
     ]
     result["blocked"] = bool(blocked)
     result["blocked_components"] = blocked
-    legacy.write_status(args.status_file, result)
+    write_status(args.status_file, result)
     return (2 if blocked else 0), result

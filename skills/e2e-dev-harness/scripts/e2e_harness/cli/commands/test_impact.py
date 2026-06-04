@@ -7,6 +7,8 @@ import importlib
 import json
 from pathlib import Path
 
+from e2e_harness.cli.status import write_status
+
 
 def _legacy_cli():
     return importlib.import_module("e2e_dev_harness")
@@ -39,7 +41,7 @@ def run_from_args(args) -> tuple[int, dict]:
     repo = legacy.as_repo(args.repo)
     if args.validate_plan:
         result = legacy.test_impact_plan.validate(repo, args.validate_plan, args.unit_test_evidence)
-        legacy.write_status(args.status_file, result)
+        write_status(args.status_file, result)
         return (0 if result["ready"] else 2), result
     changed_files = legacy.test_impact_plan.parse_changed_files(legacy.resolve_repo_path(repo, args.changed_files))
     result = legacy.test_impact_plan.build_plan(
@@ -51,5 +53,5 @@ def run_from_args(args) -> tuple[int, dict]:
         output = legacy.require_repo_path(repo, args.output, "test impact output")
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    legacy.write_status(args.status_file, result)
+    write_status(args.status_file, result)
     return 0, result

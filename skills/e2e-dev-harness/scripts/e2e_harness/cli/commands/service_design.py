@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
@@ -11,6 +10,7 @@ from common import posix
 import orchestration_plan
 import preflight as preflight_checks
 import service_design_gate
+from e2e_harness.cli.status import write_status
 from e2e_harness.engine import state_store
 
 
@@ -33,14 +33,6 @@ def _require_repo_path(repo: Path, path: Path | None, label: str) -> Path:
     if resolved is None:
         raise ValueError(f"{label} is required")
     return resolved
-
-
-def _write_status(path: Path | None, result: dict) -> None:
-    if not path:
-        return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def _optional_text(path: Path | None) -> str:
@@ -252,7 +244,7 @@ def run(
             result["ready"] = False
             result.setdefault("blocked_reasons", []).extend(dispatch_blockers)
             result["service_design_dispatch"] = {"ready": False, "blocked_reasons": dispatch_blockers}
-            _write_status(status_file, result)
+            write_status(status_file, result)
             return 2, result
         evidence = active_service_design_dir or (service_designs[0] if service_designs else None)
         transition = state_store.transition_lifecycle(
@@ -268,7 +260,7 @@ def run(
             result["ready"] = False
             result["blocked_reasons"].extend("Run state transition: " + reason for reason in transition["blocked_reasons"])
 
-    _write_status(status_file, result)
+    write_status(status_file, result)
     return (0 if result["ready"] else 2), result
 
 

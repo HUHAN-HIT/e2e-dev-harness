@@ -9,6 +9,7 @@ import artifact_registry
 import coordinator_flow
 import orchestration_plan
 import run_state
+from e2e_harness.cli.status import write_status
 
 
 ROLE_TEMPLATE_DETAILS = {
@@ -83,14 +84,6 @@ def _require_repo_path(repo: Path, path: Path | None, label: str) -> Path:
     if resolved is None:
         raise ValueError(f"{label} path is required.")
     return resolved
-
-
-def _write_status(path: Path | None, result: dict) -> None:
-    if not path:
-        return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def _posix_relative(path: Path, repo: Path) -> str:
@@ -301,7 +294,7 @@ def run(
             "blocked_reasons": profile_blockers,
             "warnings": [],
         }
-        _write_status(status_file, result)
+        write_status(status_file, result)
         return 2, result
 
     slug = orchestration_plan.safe_slug(feature)
@@ -398,7 +391,7 @@ def run(
         "blocked_reasons": [],
         "warnings": warnings,
     }
-    _write_status(status_file, result)
+    write_status(status_file, result)
     return 0, result
 
 

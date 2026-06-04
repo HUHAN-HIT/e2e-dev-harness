@@ -8,6 +8,7 @@ from pathlib import Path
 
 import artifact_registry
 import run_state
+from e2e_harness.cli.status import write_status
 
 
 def _legacy_cli():
@@ -48,7 +49,7 @@ def run(
         result["blocked_reasons"] = [
             "Discovery scope does not create ExecPlan or agent-run archives; rerun with --service-scope affected plus --service or --path."
         ]
-        legacy.write_status(status_file, result)
+        write_status(status_file, result)
         return 2, result
     if create_archive or write_exec_plan:
         run_dir = legacy.require_repo_path(repo, Path(result["agent_run_dir"]), "agent run directory")
@@ -133,7 +134,7 @@ def run(
         result["artifact_registry_written"] = str(registry_path)
         result["run_state_written"] = str(state_path)
         result["run_state_lifecycle"] = lifecycle
-    legacy.write_status(status_file, result)
+    write_status(status_file, result)
     return 0, result
 
 
