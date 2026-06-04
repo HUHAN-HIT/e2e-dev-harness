@@ -44,16 +44,23 @@ import task_tier  # noqa: E402
 import test_impact_plan  # noqa: E402
 import workflow_guard  # noqa: E402
 from e2e_harness.cli.commands import agent_task as agent_task_command  # noqa: E402
+from e2e_harness.cli.commands import ac_progress as ac_progress_command  # noqa: E402
 from e2e_harness.cli.commands import clarify as clarify_command  # noqa: E402
 from e2e_harness.cli.commands import dispatch as dispatch_command  # noqa: E402
 from e2e_harness.cli.commands import doctor as doctor_command  # noqa: E402
 from e2e_harness.cli.commands import gate as gate_command  # noqa: E402
+from e2e_harness.cli.commands import guard as guard_command  # noqa: E402
+from e2e_harness.cli.commands import install as install_command  # noqa: E402
 from e2e_harness.cli.commands import plan as plan_command  # noqa: E402
+from e2e_harness.cli.commands import prepare as prepare_command  # noqa: E402
+from e2e_harness.cli.commands import pre_code as pre_code_command  # noqa: E402
 from e2e_harness.cli.commands import recover as recover_command  # noqa: E402
 from e2e_harness.cli.commands import runtime_capabilities as runtime_capabilities_command  # noqa: E402
 from e2e_harness.cli.commands import service_design as service_design_command  # noqa: E402
 from e2e_harness.cli.commands import start as start_command  # noqa: E402
 from e2e_harness.cli.commands import timeline as timeline_command  # noqa: E402
+from e2e_harness.cli.commands import test_impact as test_impact_command  # noqa: E402
+from e2e_harness.cli.commands import verify as verify_command  # noqa: E402
 
 
 DEFAULT_REVIEW_PROFILE = "skills/e2e-dev-harness/review-profiles/default.json"
@@ -670,69 +677,7 @@ def align_prepare_scopes(agent_scope: str, service_scope: str) -> tuple[str, str
 
 
 def prepare(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    effective_agent_scope, effective_service_scope, scope_notes = align_prepare_scopes(args.agent_scope, args.service_scope)
-    kg_facts = kg_refresh.detect(repo)
-    dependency_scan = dependency_scan_status(repo, args)
-    dependency_report_path = dependency_scan.get("report_paths", {}).get("json")
-    agent = (
-        {"mode": args.agent_mode, "enabled": False, "blocked": False}
-        if args.agent_mode == "off"
-        else agent_instructions.scan(
-            repo,
-            args.include_agent_content,
-            args.max_agent_chars,
-            args.path,
-            effective_agent_scope,
-            args.service,
-            args.max_discovered_services,
-        )
-    )
-    if args.agent_mode != "off":
-        missing = (
-            agent["missing"]["root"]
-            or bool(agent["missing"]["services"])
-            or bool(agent["missing"].get("requested_services"))
-        )
-        agent.update({"mode": args.agent_mode, "enabled": True, "blocked": args.agent_mode == "strict" and missing})
-
-    result = {
-        "repo": str(repo),
-        "scope_alignment": {
-            "requested_agent_scope": args.agent_scope,
-            "requested_service_scope": args.service_scope,
-            "effective_agent_scope": effective_agent_scope,
-            "effective_service_scope": effective_service_scope,
-            "notes": scope_notes,
-        },
-        "agent_instructions": agent,
-        "superpowers": superpowers_status(args.superpowers_mode, "all"),
-        "memory": memory_status(repo, args.memory_mode),
-        "orchestration": orchestration_status(
-            repo,
-            args.agent_orchestration_mode,
-            args.design_doc,
-            args.agent_run_dir,
-            args.run_date,
-            effective_service_scope,
-            args.service,
-            args.path,
-            kg_facts,
-            Path(dependency_report_path) if dependency_report_path else None,
-        ),
-        "knowledge_graph": kg_status(repo, args.kg_mode, kg_facts),
-        "cross_service_dependencies": dependency_scan,
-        "workflow_tier": workflow_tier_status(repo, args, kg_facts, dependency_scan),
-    }
-    blocked = [
-        name
-        for name in ("agent_instructions", "superpowers", "memory", "orchestration")
-        if result[name].get("blocked")
-    ]
-    result["blocked"] = bool(blocked)
-    result["blocked_components"] = blocked
-    write_status(args.status_file, result)
-    return (2 if blocked else 0), result
+    return prepare_command.run_from_args(args)
 
 
 def start(args) -> tuple[int, dict]:
@@ -1602,170 +1547,11 @@ def gate(args) -> tuple[int, dict]:
 
 
 def verify(args) -> tuple[int, dict]:
-    phase_args = without_status_file(args)
-    total_started = time.perf_counter()
-    prepare_code, prep = timed_phase(args, "prepare", prepare, phase_args)
-    clarify_code = 0
-    clarify_result = None
-    if args.design_doc:
-        clarify_code, clarify_result = timed_phase(args, "clarify", clarify, phase_args)
-    gate_result = None
-    gate_code = 0
-    if args.run_gate:
-        gate_code, gate_result = timed_phase(args, f"gate:{args.phase}", gate, phase_args)
-
-    maven_result = {"skipped": True}
-    maven_started = time.perf_counter()
-    if not args.skip_maven:
-        command = ["mvn", "test"] if not args.module else ["mvn", "-pl", args.module, "-am", "test"]
-        maven_executable = shutil.which("mvn") or shutil.which("mvn.cmd")
-        if not maven_executable:
-            maven_result = {
-                "skipped": False,
-                "command": " ".join(command),
-                "exit_code": 127,
-                "stdout_tail": "",
-                "stderr_tail": "Maven executable not found on PATH. Install Maven or pass --skip-maven only with explicit workflow approval.",
-            }
-        else:
-            command[0] = maven_executable
-            display_command = ["mvn"] + command[1:]
-            try:
-                completed = subprocess.run(
-                    command,
-                    cwd=as_repo(args.repo),
-                    text=True,
-                    capture_output=True,
-                    timeout=DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
-                )
-                maven_result = {
-                    "skipped": False,
-                    "command": " ".join(display_command),
-                    "exit_code": completed.returncode,
-                    "stdout_tail": completed.stdout[-4000:],
-                    "stderr_tail": completed.stderr[-4000:],
-                }
-            except subprocess.TimeoutExpired as error:
-                maven_result = {
-                    "skipped": False,
-                    "command": " ".join(display_command),
-                    "exit_code": 124,
-                    "stdout_tail": (error.stdout or "")[-4000:] if isinstance(error.stdout, str) else "",
-                    "stderr_tail": f"Maven command timed out after {DEFAULT_SUBPROCESS_TIMEOUT_SECONDS} seconds.",
-                }
-    trace_event(
-        args,
-        "maven",
-        "finish",
-        "skipped" if maven_result.get("skipped") else ("ready" if maven_result.get("exit_code") == 0 else "blocked"),
-        int((time.perf_counter() - maven_started) * 1000),
-    )
-    result = {
-        "workflow": {
-            "strict": getattr(args, "strict_workflow", False),
-            "tier": getattr(args, "workflow_tier", "auto"),
-            "harness": getattr(args, "harness", False),
-            "phase": args.phase,
-            "run_gate": args.run_gate,
-            "skip_maven": args.skip_maven,
-            "skip_spring_static_check": getattr(args, "skip_spring_static_check", False),
-            "dependency_scan_mode": getattr(args, "dependency_scan_mode", "auto"),
-            "write_dependency_report": getattr(args, "write_dependency_report", True),
-            "implementation_manifest": str(getattr(args, "implementation_manifest", "") or ""),
-            "state": str(getattr(args, "state", "") or getattr(args, "run_state", "") or ""),
-            "require_semantic_reviews": args.phase == "completion" or getattr(args, "require_semantic_reviews", False),
-            "require_contracts": getattr(args, "require_contracts", False),
-            "require_handoffs": getattr(args, "require_handoffs", False),
-            "require_requirements_archive": (
-                getattr(args, "require_requirements_archive", False)
-                or (getattr(args, "strict_workflow", False) and args.phase == "completion")
-            ),
-        },
-        "prepare": prep,
-        "clarification": clarify_result,
-        "implementation_gate": gate_result,
-        "maven": maven_result,
-    }
-    exit_code = max(prepare_code, clarify_code, gate_code, maven_result.get("exit_code", 0) if not args.skip_maven else 0)
-    trace_failures = getattr(args, "_trace_failures", [])
-    if trace_failures:
-        result["execution_trace"] = {
-            "ready": False,
-            "blocked_reasons": trace_failures,
-            "warnings": [],
-        }
-        exit_code = max(exit_code, 2)
-    if getattr(args, "strict_workflow", False):
-        approval_path = resolve_repo_path(as_repo(args.repo), getattr(args, "workflow_approval", None))
-        guard_result = workflow_guard.validate_verify_result(
-            result,
-            strict=True,
-            require_completion=args.phase == "completion",
-            approval_text=optional_text(approval_path),
-        )
-        result["workflow_guard"] = guard_result
-        if not guard_result["ready"]:
-            exit_code = max(exit_code, 2)
-    if getattr(args, "harness", False):
-        state_path = getattr(args, "state", None)
-        if not state_path:
-            harness_result = {
-                "ready": False,
-                "blocked_reasons": ["--harness requires --state docs/agent-runs/<run>/run-state.json."],
-                "warnings": [],
-            }
-        else:
-            repo = as_repo(args.repo)
-            harness_result = harness_verify.validate(
-                repo,
-                state_path,
-                getattr(args, "policy", None),
-                getattr(args, "strict_artifacts", False),
-                getattr(args, "run_completion_gate", False),
-            )
-            summary = harness_verify.write_summary_outputs(
-                repo,
-                state_path,
-                harness_result,
-                getattr(args, "summary_json", None),
-                getattr(args, "summary_md", None),
-            )
-            if summary:
-                harness_result["run_summary"] = summary
-        result["harness"] = harness_result
-        if not harness_result["ready"]:
-            exit_code = max(exit_code, 2)
-    trace_event(
-        args,
-        "verify",
-        "finish",
-        "ready" if exit_code == 0 else "blocked",
-        int((time.perf_counter() - total_started) * 1000),
-        [str(args.status_file)] if args.status_file else None,
-    )
-    final_trace_failures = getattr(args, "_trace_failures", [])
-    if final_trace_failures:
-        result["execution_trace"] = {
-            "ready": False,
-            "blocked_reasons": final_trace_failures,
-            "warnings": [],
-        }
-        exit_code = max(exit_code, 2)
-    write_status(args.status_file, result)
-    return exit_code, result
+    return verify_command.run_from_args(args)
 
 
 def guard(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    result = workflow_guard.validate_status_file(
-        repo,
-        args.verify_status,
-        strict=args.strict,
-        require_completion=args.require_completion,
-        approval_file=args.approval_file,
-    )
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return guard_command.run_from_args(args)
 
 
 def doctor(args) -> tuple[int, dict]:
@@ -1797,138 +1583,15 @@ def timeline(args) -> tuple[int, dict]:
 
 
 def install_project(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    full = bool(getattr(args, "full", False))
-    target = "all" if full else args.target
-    targets = install_targets(target)
-    install_root = Path(args.install_root or Path.home()).resolve()
-    source_skill = Path(args.source_skill_dir or SCRIPT_DIR.parent).resolve()
-    install_external = bool(getattr(args, "install_external", False) or (full and not getattr(args, "skip_external", False)))
-    with_hooks = bool(getattr(args, "with_hooks", False) or full)
-    run_doctor = bool(getattr(args, "doctor", False) or full)
-    runtime = getattr(args, "runtime", "claude")
-    actions: list[dict] = []
-    action_results: list[dict] = []
-    blockers: list[str] = []
-    installed_skills: list[dict] = []
-
-    if not (source_skill / "SKILL.md").exists():
-        blockers.append(f"Source skill is missing SKILL.md: {source_skill}")
-
-    skill_targets = [
-        {"target": name, "path": str(install_root.joinpath(*INSTALL_TARGETS[name]))}
-        for name in targets
-    ]
-    actions.append({"id": "copy-skill", "description": "Copy e2e-dev-harness into runtime skill directories.", "targets": skill_targets})
-
-    if install_external:
-        if not shutil.which("gitnexus"):
-            actions.append({"id": "install-gitnexus", "command": "npm install -g gitnexus", "cwd": str(repo)})
-        if not shutil.which("graphify"):
-            actions.append({"id": "install-graphify", "command": f"{sys.executable} -m pip install --user graphifyy", "cwd": str(repo)})
-
-    if with_hooks:
-        actions.append({
-            "id": "install-hooks",
-            "description": f"Install {runtime} hook configuration into the current project.",
-            "command": f"{sys.executable} {SCRIPT_DIR / 'install_hooks.py'} {repo} --runtime {runtime} --json",
-            "cwd": str(repo),
-        })
-
-    if run_doctor:
-        actions.append({
-            "id": "doctor",
-            "description": "Run e2e-dev-harness doctor against the current project.",
-            "command": f"{sys.executable} {Path(__file__).resolve()} doctor {repo} --json",
-            "cwd": str(repo),
-        })
-
-    result = {
-        "schema": "e2e-dev-harness.install.v1",
-        "project_root": str(repo),
-        "source_skill_dir": str(source_skill),
-        "install_root": str(install_root),
-        "targets": targets,
-        "full": full,
-        "runtime": runtime,
-        "executed": bool(args.yes),
-        "actions": actions,
-        "action_results": action_results,
-        "installed_skills": installed_skills,
-        "ready": not blockers,
-        "blocked_reasons": blockers,
-        "warnings": [],
-    }
-
-    if result["ready"] and args.yes:
-        for skill_target in skill_targets:
-            copied = copy_skill_tree(source_skill, Path(skill_target["path"]))
-            installed_skills.append({"target": skill_target["target"], **copied})
-        for action in actions:
-            if action["id"] == "copy-skill":
-                continue
-            if action["id"] == "install-hooks":
-                hook_result = install_hooks.install(repo, runtime)
-                action_results.append({"action": action["id"], "exit_code": 0 if hook_result["ready"] else 2, "result": hook_result})
-            elif action["id"] == "doctor":
-                doctor_result = harness_doctor.evaluate(repo)
-                action_results.append({"action": action["id"], "exit_code": 0 if doctor_result["ready"] else 2, "result": doctor_result})
-            else:
-                command = ["npm", "install", "-g", "gitnexus"] if action["id"] == "install-gitnexus" else [sys.executable, "-m", "pip", "install", "--user", "graphifyy"]
-                action_results.append({"action": action["id"], **run_install_command(command, repo)})
-            if action_results[-1]["exit_code"] != 0:
-                result["ready"] = False
-                result["blocked_reasons"].append(f"Action failed: {action['id']}")
-                break
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return install_command.run_from_args(args)
 
 
 def pre_code(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    paths = list(args.path or [])
-    if args.patch:
-        patch_path = resolve_repo_path(repo, args.patch)
-        patch_text = patch_path.read_text(encoding="utf-8", errors="replace") if patch_path and patch_path.exists() else ""
-        paths.extend(Path(path) for path in phase_guard.paths_from_patch(patch_text))
-    if args.command_text:
-        paths.extend(Path(path) for path in phase_guard.paths_from_shell_command(args.command_text))
-    result = phase_guard.validate_action(
-        repo,
-        args.tool,
-        paths,
-        args.lock,
-        args.run_dir,
-        command_text=args.command_text,
-    )
-    hook_status = runtime_hook_status(repo)
-    result["pre_code"] = True
-    result["tool"] = args.tool
-    result["paths_checked"] = [str(path) for path in paths]
-    result["hook_status"] = hook_status
-    if not hook_status["ready"]:
-        result["ready"] = False
-        result.setdefault("blocked_reasons", []).append(
-            "Runtime hook config is present but not enforcing; repair hooks with install_hooks.py or remove the broken runtime hook directory before relying on portable pre-code."
-        )
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return pre_code_command.run_from_args(args)
 
 
 def test_impact(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    if args.validate_plan:
-        result = test_impact_plan.validate(repo, args.validate_plan, args.unit_test_evidence)
-        write_status(args.status_file, result)
-        return (0 if result["ready"] else 2), result
-    changed_files = test_impact_plan.parse_changed_files(resolve_repo_path(repo, args.changed_files))
-    result = test_impact_plan.build_plan(repo, changed_files, resolve_repo_path(repo, args.dependency_report))
-    if args.output:
-        output = require_repo_path(repo, args.output, "test impact output")
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    write_status(args.status_file, result)
-    return 0, result
+    return test_impact_command.run_from_args(args)
 
 
 def service_design(args) -> tuple[int, dict]:
@@ -1966,17 +1629,7 @@ def dispatch_status(args) -> tuple[int, dict]:
 
 
 def ac_progress(args) -> tuple[int, dict]:
-    repo = as_repo(args.repo)
-    result = ac_progress_gate.validate(
-        repo,
-        args.design_doc,
-        args.service_design,
-        args.coverage_matrix,
-        args.implementation_manifest,
-        args.unit_test_evidence,
-    )
-    write_status(args.status_file, result)
-    return (0 if result["ready"] else 2), result
+    return ac_progress_command.run_from_args(args)
 
 
 def next_step(args) -> tuple[int, dict]:

@@ -1754,6 +1754,150 @@ class CliCommandFacadeContractTests(unittest.TestCase):
         self.assertTrue(kg_status_exists)
         self.assertIn("Agent Protocol", exec_plan_text)
 
+    def test_cli_command_modules_preserve_prepare_contracts(self) -> None:
+        from e2e_harness.cli.commands import prepare as prepare_command  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            status_file = repo / "prepare-status.json"
+            code, result = prepare_command.run(
+                repo,
+                agent_mode="off",
+                superpowers_mode="off",
+                memory_mode="off",
+                agent_orchestration_mode="off",
+                dependency_scan_mode="off",
+                status_file=status_file,
+            )
+            status = json.loads(status_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code, result)
+        self.assertEqual(str(repo.resolve()), result["repo"])
+        self.assertFalse(result["agent_instructions"]["enabled"])
+        self.assertFalse(result["orchestration"]["enabled"])
+        self.assertFalse(result["cross_service_dependencies"]["enabled"])
+        self.assertEqual([], result["blocked_components"])
+        self.assertEqual(result, status)
+
+    def test_cli_command_modules_preserve_verify_contracts(self) -> None:
+        import e2e_dev_harness  # noqa: PLC0415
+        from e2e_harness.cli.commands import verify as verify_command  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            status_file = repo / "verify-status.json"
+            with patch.object(e2e_dev_harness, "prepare", return_value=(0, {"blocked": False})):
+                code, result = verify_command.run(
+                    repo,
+                    phase="planning",
+                    skip_maven=True,
+                    status_file=status_file,
+                )
+            status = json.loads(status_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code, result)
+        self.assertEqual("planning", result["workflow"]["phase"])
+        self.assertTrue(result["maven"]["skipped"])
+        self.assertEqual(result, status)
+
+    def test_cli_command_modules_preserve_install_contracts(self) -> None:
+        from e2e_harness.cli.commands import install as install_command  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            status_file = repo / "install-status.json"
+            code, result = install_command.run(
+                repo,
+                target="all",
+                install_root=repo / "home",
+                source_skill_dir=ROOT / "skills" / "e2e-dev-harness",
+                runtime="claude",
+                full=True,
+                yes=False,
+                install_external=False,
+                skip_external=True,
+                with_hooks=False,
+                doctor=False,
+                status_file=status_file,
+            )
+            status = json.loads(status_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code, result)
+        self.assertEqual("e2e-dev-harness.install.v1", result["schema"])
+        self.assertEqual(str(repo.resolve()), result["project_root"])
+        self.assertFalse(result["executed"])
+        self.assertEqual(["codex", "claude", "agents"], result["targets"])
+        self.assertIn("copy-skill", [action["id"] for action in result["actions"]])
+        self.assertEqual(result, status)
+
+    def test_cli_command_modules_preserve_guard_pre_code_test_impact_and_ac_progress_contracts(self) -> None:
+        import e2e_dev_harness  # noqa: PLC0415
+        from e2e_harness.cli.commands import ac_progress as ac_progress_command  # noqa: PLC0415
+        from e2e_harness.cli.commands import guard as guard_command  # noqa: PLC0415
+        from e2e_harness.cli.commands import pre_code as pre_code_command  # noqa: PLC0415
+        from e2e_harness.cli.commands import test_impact as test_impact_command  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            guard_status = repo / "guard-status.json"
+            pre_code_status = repo / "pre-code-status.json"
+            test_impact_status = repo / "test-impact-status.json"
+            ac_progress_status = repo / "ac-progress-status.json"
+            test_impact_output = Path("docs/agent-runs/run/evidence/test-impact-plan.json")
+            guard_payload = {"ready": True, "blocked_reasons": [], "warnings": []}
+            pre_code_payload = {"ready": True, "blocked_reasons": [], "warnings": []}
+            test_impact_payload = {"schema": "e2e-dev-harness.test-impact-plan.v1", "ready": True, "commands": []}
+            ac_progress_payload = {"ready": True, "blocked_reasons": [], "warnings": []}
+
+            with patch.object(e2e_dev_harness.workflow_guard, "validate_status_file", return_value=guard_payload):
+                guard_code, guard_result = guard_command.run(
+                    repo,
+                    verify_status=Path("verify-status.json"),
+                    strict=True,
+                    require_completion=True,
+                    approval_file=Path("approval.md"),
+                    status_file=guard_status,
+                )
+            with (
+                patch.object(e2e_dev_harness.phase_guard, "validate_action", return_value=dict(pre_code_payload)),
+                patch.object(e2e_dev_harness, "runtime_hook_status", return_value={"ready": True, "warnings": []}),
+            ):
+                pre_code_code, pre_code_result = pre_code_command.run(
+                    repo,
+                    tool="Edit",
+                    paths=[Path("src/app.py")],
+                    status_file=pre_code_status,
+                )
+            with (
+                patch.object(e2e_dev_harness.test_impact_plan, "parse_changed_files", return_value=["src/app.py"]),
+                patch.object(e2e_dev_harness.test_impact_plan, "build_plan", return_value=test_impact_payload),
+            ):
+                test_impact_code, test_impact_result = test_impact_command.run(
+                    repo,
+                    changed_files=Path("changed-files.txt"),
+                    output=test_impact_output,
+                    status_file=test_impact_status,
+                )
+            with patch.object(e2e_dev_harness.ac_progress_gate, "validate", return_value=ac_progress_payload):
+                ac_progress_code, ac_progress_result = ac_progress_command.run(
+                    repo,
+                    coverage_matrix=Path("coverage.md"),
+                    implementation_manifest=Path("manifest.md"),
+                    unit_test_evidence=Path("unit-test.json"),
+                    status_file=ac_progress_status,
+                )
+
+            self.assertEqual(0, guard_code, guard_result)
+            self.assertEqual(guard_result, json.loads(guard_status.read_text(encoding="utf-8")))
+            self.assertEqual(0, pre_code_code, pre_code_result)
+            self.assertTrue(pre_code_result["pre_code"])
+            self.assertEqual([str(Path("src/app.py"))], pre_code_result["paths_checked"])
+            self.assertEqual(0, test_impact_code, test_impact_result)
+            self.assertTrue((repo / test_impact_output).exists())
+            self.assertEqual(test_impact_result, json.loads(test_impact_status.read_text(encoding="utf-8")))
+            self.assertEqual(0, ac_progress_code, ac_progress_result)
+            self.assertEqual(ac_progress_result, json.loads(ac_progress_status.read_text(encoding="utf-8")))
+
     def test_cli_command_modules_preserve_service_design_contracts(self) -> None:
         from e2e_harness.cli.commands import service_design as service_design_command  # noqa: PLC0415
 
