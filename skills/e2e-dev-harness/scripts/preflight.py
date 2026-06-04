@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import agent_scheduler
+import dir_graph
 import dispatcher
 from common import read_json_object
 
@@ -176,6 +177,13 @@ def tdd_red_dispatch_blockers(repo: Path, run_state_path: Path | str | None) -> 
 
 def preflight_checks() -> list[dict]:
     return [
+        {
+            "gate": "dir_graph_contract",
+            "code": "BLK_DIR_GRAPH_CONTRACT",
+            "return_phase": "CREATED",
+            "minimal_fix": "Update .e2e/dir-graph.yaml so directory roles, protected paths, lifecycle transitions, and pipeline match the harness.",
+            "fn": dir_graph.dir_graph_contract_blockers,
+        },
         {
             "gate": "clarification",
             "code": "BLK_CLARIFY_DISPATCH",

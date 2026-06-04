@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import install_hooks  # noqa: E402
 import dispatcher  # noqa: E402
+import dir_graph  # noqa: E402
 import event_log  # noqa: E402
 import plugin_registry  # noqa: E402
 import run_state  # noqa: E402
@@ -127,6 +128,44 @@ def gitnexus_check() -> dict:
         "warning",
         "GitNexus CLI is not on PATH.",
         "Install GitNexus or plan an approved degradation path for critical/audited Java impact evidence.",
+    )
+
+
+def dir_graph_check(repo: Path) -> dict:
+    loaded = dir_graph.load_dir_graph(repo)
+    path = str(loaded.get("path", repo / dir_graph.DIR_GRAPH_PATH))
+    if not loaded.get("exists"):
+        return check(
+            "dir-graph",
+            "warn",
+            "warning",
+            f"Dir graph contract not found: {path}.",
+            "Create .e2e/dir-graph.yaml to make directory roles, lifecycle, pipeline, and skill IO contracts visible to doctor/preflight.",
+        )
+    blocked = [str(reason) for reason in loaded.get("blocked_reasons", []) or []]
+    graph = loaded.get("graph", {})
+    if not isinstance(graph, dict):
+        blocked.append("Dir graph contract must parse to an object.")
+    else:
+        blocked.extend(dir_graph.validate_dir_graph(repo, graph))
+    if blocked:
+        return check(
+            "dir-graph",
+            "fail",
+            "error",
+            " ".join(blocked),
+            "Update .e2e/dir-graph.yaml so it matches run_state lifecycles, gate transitions, and coordinator_flow.BLUEPRINT_STEPS.",
+        )
+    roles = [
+        str(item.get("role", "")).strip()
+        for item in graph.get("skill_contracts", []) or []
+        if isinstance(item, dict) and str(item.get("role", "")).strip()
+    ]
+    return check(
+        "dir-graph",
+        "pass",
+        "info",
+        f"Dir graph contract is valid: {path}; roles={len(roles)}.",
     )
 
 
@@ -514,6 +553,7 @@ def evaluate(repo: Path, strict: bool = False, state: Path | None = None) -> dic
         pytest_check(),
         maven_check(repo),
         gitnexus_check(),
+        dir_graph_check(repo),
         claude_hook_check(repo),
         opencode_hook_check(repo),
     ]

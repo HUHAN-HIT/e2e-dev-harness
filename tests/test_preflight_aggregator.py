@@ -23,6 +23,72 @@ if str(SCRIPTS) not in sys.path:
 import e2e_dev_harness as harness  # noqa: E402
 
 
+VALID_DIR_GRAPH = """\
+schema: e2e-dev-harness.dir-graph.v1
+directories:
+  - path: docs
+    role: documentation
+    required: true
+  - path: skills/e2e-dev-harness
+    role: harness-skill
+    required: true
+protected_paths:
+  - path: skills/e2e-dev-harness/scripts
+    policy: harness-control-plane
+state_machine:
+  lifecycles: [CREATED, CLARIFIED, SERVICE_DESIGN_REQUIRED, PLANNED, RED_READY, WAITING_DISPATCH, IMPLEMENTED, REVIEWED, VERIFIED, ARCHIVED, REWORK_REQUIRED]
+  gate_transitions:
+    clarification: CLARIFIED
+    service_design: PLANNED
+    tdd_red: RED_READY
+    implementation: IMPLEMENTED
+    completion: VERIFIED
+    archive: ARCHIVED
+pipeline:
+  - lifecycle: CREATED
+    phase: clarify
+  - lifecycle: CLARIFIED
+    phase: r1-design-review
+  - lifecycle: SERVICE_DESIGN_REQUIRED
+    phase: service-design
+  - lifecycle: PLANNED
+    phase: plan-tdd-red-r2
+  - lifecycle: RED_READY
+    phase: implementation-gate
+  - lifecycle: IMPLEMENTED
+    phase: implement-or-complete
+  - lifecycle: REVIEWED
+    phase: completion
+  - lifecycle: VERIFIED
+    phase: archive
+skill_contracts:
+  - role: requirements-clarifier
+    read_scope: root-instructions
+    write_scope: clarification-handoff
+  - role: use-case-designer
+    read_scope: clarified-requirements
+    write_scope: use-case-handoff
+  - role: implementation-planner
+    read_scope: clarified-design
+    write_scope: implementation-plan
+  - role: test-case-developer
+    read_scope: implementation-plan
+    write_scope: test-evidence
+  - role: code-developer
+    read_scope: context-pack
+    write_scope: claimed-service-scope
+  - role: semantic-reviewer
+    read_scope: handoff-and-evidence
+    write_scope: semantic-review
+  - role: coverage-reviewer
+    read_scope: coverage-matrix
+    write_scope: coverage-review
+"""
+
+
+INVALID_DIR_GRAPH = VALID_DIR_GRAPH.replace("path: docs", "path: missing-required-dir", 1)
+
+
 def _write_state(repo: Path, lifecycle: str) -> Path:
     state = repo / "docs" / "agent-runs" / "run" / "run-state.json"
     state.parent.mkdir(parents=True, exist_ok=True)
@@ -57,6 +123,47 @@ def _write_schedule(state_path: Path, tasks: list) -> Path:
 
 
 class PreflightAggregatorTests(unittest.TestCase):
+    def test_missing_dir_graph_is_optional_for_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state = _write_state(repo, "CLARIFIED")
+
+            result = harness.aggregate_preflight_blockers(repo, state)
+
+            self.assertTrue(result["ready"])
+            self.assertEqual([], result["blockers"])
+
+    def test_valid_dir_graph_contract_does_not_block_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "docs").mkdir()
+            (repo / "skills" / "e2e-dev-harness" / "scripts").mkdir(parents=True)
+            (repo / ".e2e").mkdir()
+            (repo / ".e2e" / "dir-graph.yaml").write_text(VALID_DIR_GRAPH, encoding="utf-8")
+            state = _write_state(repo, "CLARIFIED")
+
+            result = harness.aggregate_preflight_blockers(repo, state)
+
+            self.assertTrue(result["ready"], result["blockers"])
+            self.assertEqual([], result["blockers"])
+
+    def test_invalid_dir_graph_contract_blocks_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "docs").mkdir()
+            (repo / "skills" / "e2e-dev-harness" / "scripts").mkdir(parents=True)
+            (repo / ".e2e").mkdir()
+            (repo / ".e2e" / "dir-graph.yaml").write_text(INVALID_DIR_GRAPH, encoding="utf-8")
+            state = _write_state(repo, "CLARIFIED")
+
+            result = harness.aggregate_preflight_blockers(repo, state)
+
+            self.assertFalse(result["ready"])
+            blocker = result["blockers"][0]
+            self.assertEqual("dir_graph_contract", blocker["gate"])
+            self.assertEqual("BLK_DIR_GRAPH_CONTRACT", blocker["code"])
+            self.assertIn("missing-required-dir", blocker["message"])
+
     def test_created_state_consolidates_clarification_blocker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

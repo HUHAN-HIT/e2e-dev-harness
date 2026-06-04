@@ -2049,6 +2049,41 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(["docs/agent-runs/run/service-designs/order-service.md"], result["primary_inputs"])
         self.assertEqual("service-design-primary", result["input_contract"])
 
+    def test_context_pack_blocks_outputs_outside_dir_graph_role_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".e2e").mkdir()
+            (repo / ".e2e" / "dir-graph.yaml").write_text(
+                "schema: e2e-dev-harness.dir-graph.v1\n"
+                "skill_contracts:\n"
+                "  - role: requirements-clarifier\n"
+                "    write_scope: docs/agent-runs/<run>/handoffs\n",
+                encoding="utf-8",
+            )
+            schedule = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            schedule.parent.mkdir(parents=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "inputs": [],
+                                "outputs": ["docs/agent-runs/run/implementation-plan.md"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = context_pack.build_pack(repo, schedule, agent="requirements-clarifier")
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("dir graph role contract" in reason for reason in result["blocked_reasons"]))
+
     def test_context_pack_blocks_budget_overflow(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -6898,6 +6933,100 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(result["run_state_transition"]["ready"])
         self.assertTrue(result["blocked_next_without_plan"])
         self.assertFalse(result["next_required"]["code_writes_allowed"])
+
+    def test_clarify_auto_completes_single_requirements_worker_when_handoff_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Restated Intent
+                    - The user wants a quote returned.
+                    - User confirmation: confirmed-by: user @2026-06-02
+
+                    ## Goal
+                    - Return a quote.
+
+                    ## Scope
+                    - services/sample-service
+
+                    ## Use Cases
+                    - Create quote.
+
+                    ## Acceptance Criteria
+                    - AC-1 Quote is returned.
+
+                    ## Test Design
+                    - Unit test first.
+
+                    ## Open Questions
+                    None. confirmed-by: user @2026-06-02
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            role_template = Path("docs/agent-runs/run/agent-roles/requirements-clarifier.md")
+            evidence = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            schedule = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, evidence)
+            state["dispatch"] = {
+                "status": "worker_running",
+                "runtime": "codex",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "worker_handle": "worker-1",
+                "worker_session": "worker-session-1",
+            }
+            state["dispatches"] = {"T01": state["dispatch"]}
+            run_state.write_state(repo, state_path, state)
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "role_group": "design",
+                                "inputs": [],
+                                "outputs": [evidence.as_posix()],
+                                "role_template": role_template.as_posix(),
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=Path("docs/design/feature.md"),
+                run_state=state_path,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.clarify(args)
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+            event = json.loads((state_path.parent / "dispatch-events" / "T01-completed.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code, result)
+        self.assertEqual("CLARIFIED", updated["lifecycle"])
+        self.assertEqual("worker_completed", updated["dispatches"]["T01"]["status"])
+        self.assertEqual("worker_completed", event["event"])
+        self.assertTrue(result["clarification_dispatch_auto_complete"]["ready"])
 
     def test_clarify_blocks_created_run_state_without_requirements_worker_completion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

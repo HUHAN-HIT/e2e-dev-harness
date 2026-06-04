@@ -12,3 +12,4 @@ test/__pycache__
 .tmp-gitnexus-hook-test
 .archive/
 .e2e/coordinator-results/
+.e2e/events/

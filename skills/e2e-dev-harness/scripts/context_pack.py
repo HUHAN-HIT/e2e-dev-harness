@@ -13,6 +13,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from common import posix  # noqa: E402
+import dir_graph  # noqa: E402
 
 
 SCHEMA = "e2e-dev-harness.context-pack.v1"
@@ -98,6 +99,7 @@ def build_pack(
         task = {}
     inputs = task.get("inputs", []) if isinstance(task.get("inputs"), list) else []
     outputs = task.get("outputs", []) if isinstance(task.get("outputs"), list) else []
+    blocked.extend(dir_graph.context_pack_role_blockers(repo, task, outputs))
     primary_inputs = primary_inputs_for_task(task, inputs)
     input_chars, input_files, input_warnings = estimate_inputs(repo, inputs)
     warnings.extend(input_warnings)

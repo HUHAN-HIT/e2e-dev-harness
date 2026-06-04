@@ -6758,6 +6758,41 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("request-scoped; no inherited developer chat context", result["context_policy"])
         self.assertEqual(1, result["budget"]["input_files"])
 
+    def test_context_pack_blocks_outputs_outside_dir_graph_role_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".e2e").mkdir()
+            (repo / ".e2e" / "dir-graph.yaml").write_text(
+                "schema: e2e-dev-harness.dir-graph.v1\n"
+                "skill_contracts:\n"
+                "  - role: requirements-clarifier\n"
+                "    write_scope: docs/agent-runs/<run>/handoffs\n",
+                encoding="utf-8",
+            )
+            schedule = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            schedule.parent.mkdir(parents=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "inputs": [],
+                                "outputs": ["docs/agent-runs/run/implementation-plan.md"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = context_pack.build_pack(repo, schedule, agent="requirements-clarifier")
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("dir graph role contract" in reason for reason in result["blocked_reasons"]))
+
     def test_context_pack_blocks_budget_overflow(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

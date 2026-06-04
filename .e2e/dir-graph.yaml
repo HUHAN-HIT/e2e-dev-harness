@@ -1,0 +1,76 @@
+schema: e2e-dev-harness.dir-graph.v1
+repositories:
+  - path: .
+    role: harness-source
+    required: true
+directories:
+  - path: docs
+    role: documentation-and-run-artifacts
+    required: true
+  - path: skills/e2e-dev-harness
+    role: harness-skill-package
+    required: true
+  - path: skills/e2e-dev-harness/scripts
+    role: harness-control-plane
+    required: true
+  - path: tests
+    role: regression-tests
+    required: true
+  - path: tools
+    role: installer-and-dev-tools
+    required: true
+protected_paths:
+  - path: skills/e2e-dev-harness/scripts
+    policy: control-plane-edits-require-tests
+  - path: docs/agent-runs
+    policy: generated-run-artifacts
+  - path: .gitnexus
+    policy: tool-index
+state_machine:
+  lifecycles: [CREATED, CLARIFIED, SERVICE_DESIGN_REQUIRED, PLANNED, RED_READY, WAITING_DISPATCH, IMPLEMENTED, REVIEWED, VERIFIED, ARCHIVED, REWORK_REQUIRED]
+  gate_transitions:
+    clarification: CLARIFIED
+    service_design: PLANNED
+    tdd_red: RED_READY
+    implementation: IMPLEMENTED
+    completion: VERIFIED
+    archive: ARCHIVED
+pipeline:
+  - lifecycle: CREATED
+    phase: clarify
+  - lifecycle: CLARIFIED
+    phase: r1-design-review
+  - lifecycle: SERVICE_DESIGN_REQUIRED
+    phase: service-design
+  - lifecycle: PLANNED
+    phase: plan-tdd-red-r2
+  - lifecycle: RED_READY
+    phase: implementation-gate
+  - lifecycle: IMPLEMENTED
+    phase: implement-or-complete
+  - lifecycle: REVIEWED
+    phase: completion
+  - lifecycle: VERIFIED
+    phase: archive
+skill_contracts:
+  - role: requirements-clarifier
+    read_scope: root-instructions-and-request
+    write_scope: docs/agent-runs/<run>/handoffs
+  - role: use-case-designer
+    read_scope: clarified-requirements-and-design-context
+    write_scope: docs/agent-runs/<run>/handoffs
+  - role: implementation-planner
+    read_scope: clarified-design-and-review
+    write_scope: docs/agent-runs/<run>/implementation-plan.md
+  - role: test-case-developer
+    read_scope: implementation-plan-and-acceptance-criteria
+    write_scope: docs/agent-runs/<run>/evidence
+  - role: code-developer
+    read_scope: context-pack-and-service-design
+    write_scope: claimed-service-scope
+  - role: semantic-reviewer
+    read_scope: handoff-and-evidence
+    write_scope: docs/agent-runs/<run>/reviews
+  - role: coverage-reviewer
+    read_scope: implementation-evidence-and-coverage-matrix
+    write_scope: docs/agent-runs/<run>/evidence

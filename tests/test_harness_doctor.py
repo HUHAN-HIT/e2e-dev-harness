@@ -101,6 +101,193 @@ def write_state_doctor_fixture(repo: Path) -> Path:
 
 
 class HarnessDoctorTests(unittest.TestCase):
+    def test_doctor_warns_when_dir_graph_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            harness_doctor.shutil,
+            "which",
+            side_effect=lambda name: f"C:/tools/{name}.exe" if name in {"pytest", "mvn", "gitnexus"} else "",
+        ):
+            repo = Path(tmp)
+            (repo / "pom.xml").write_text("<project />\n", encoding="utf-8")
+
+            result = harness_doctor.evaluate(repo)
+
+        checks = {item["id"]: item for item in result["checks"]}
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("warn", checks["dir-graph"]["status"])
+        self.assertIn(".e2e/dir-graph.yaml", checks["dir-graph"]["message"])
+
+    def test_doctor_blocks_dir_graph_pipeline_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            harness_doctor.shutil,
+            "which",
+            side_effect=lambda name: f"C:/tools/{name}.exe" if name in {"pytest", "mvn", "gitnexus"} else "",
+        ):
+            repo = Path(tmp)
+            (repo / "pom.xml").write_text("<project />\n", encoding="utf-8")
+            graph_dir = repo / ".e2e"
+            graph_dir.mkdir()
+            (graph_dir / "dir-graph.yaml").write_text(
+                "\n".join(
+                    [
+                        "schema: e2e-dev-harness.dir-graph.v1",
+                        "directories:",
+                        "  - path: docs",
+                        "protected_paths: []",
+                        "state_machine:",
+                        "  lifecycles: [CREATED, CLARIFIED, SERVICE_DESIGN_REQUIRED, PLANNED, RED_READY, WAITING_DISPATCH, IMPLEMENTED, REVIEWED, REWORK_REQUIRED, VERIFIED, ARCHIVED]",
+                        "  gate_transitions:",
+                        "    clarification: CLARIFIED",
+                        "    service_design: PLANNED",
+                        "    tdd_red: RED_READY",
+                        "    implementation: IMPLEMENTED",
+                        "    completion: VERIFIED",
+                        "    archive: ARCHIVED",
+                        "pipeline:",
+                        "  - lifecycle: CREATED",
+                        "    phase: clarify",
+                        "skill_contracts:",
+                        "  - role: requirements-clarifier",
+                        "    write_scope: docs/agent-runs/<run>/handoffs",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = harness_doctor.evaluate(repo)
+
+        checks = {item["id"]: item for item in result["checks"]}
+        self.assertFalse(result["ready"])
+        self.assertEqual("fail", checks["dir-graph"]["status"])
+        self.assertIn("pipeline does not match", checks["dir-graph"]["message"])
+
+    def test_doctor_blocks_dir_graph_missing_worker_role_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            harness_doctor.shutil,
+            "which",
+            side_effect=lambda name: f"C:/tools/{name}.exe" if name in {"pytest", "mvn", "gitnexus"} else "",
+        ):
+            repo = Path(tmp)
+            (repo / "pom.xml").write_text("<project />\n", encoding="utf-8")
+            graph_dir = repo / ".e2e"
+            graph_dir.mkdir()
+            (graph_dir / "dir-graph.yaml").write_text(
+                "\n".join(
+                    [
+                        "schema: e2e-dev-harness.dir-graph.v1",
+                        "directories:",
+                        "  - path: docs",
+                        "protected_paths: []",
+                        "state_machine:",
+                        "  lifecycles: [CREATED, CLARIFIED, SERVICE_DESIGN_REQUIRED, PLANNED, RED_READY, WAITING_DISPATCH, IMPLEMENTED, REVIEWED, REWORK_REQUIRED, VERIFIED, ARCHIVED]",
+                        "  gate_transitions:",
+                        "    clarification: CLARIFIED",
+                        "    service_design: PLANNED",
+                        "    tdd_red: RED_READY",
+                        "    implementation: IMPLEMENTED",
+                        "    completion: VERIFIED",
+                        "    archive: ARCHIVED",
+                        "pipeline:",
+                        "  - lifecycle: CREATED",
+                        "    phase: clarify",
+                        "  - lifecycle: CLARIFIED",
+                        "    phase: r1-design-review",
+                        "  - lifecycle: SERVICE_DESIGN_REQUIRED",
+                        "    phase: service-design",
+                        "  - lifecycle: PLANNED",
+                        "    phase: plan-tdd-red-r2",
+                        "  - lifecycle: RED_READY",
+                        "    phase: implementation-gate",
+                        "  - lifecycle: IMPLEMENTED",
+                        "    phase: implement-or-complete",
+                        "  - lifecycle: REVIEWED",
+                        "    phase: completion",
+                        "  - lifecycle: VERIFIED",
+                        "    phase: archive",
+                        "skill_contracts:",
+                        "  - role: requirements-clarifier",
+                        "    write_scope: docs/agent-runs/<run>/handoffs",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = harness_doctor.evaluate(repo)
+
+        checks = {item["id"]: item for item in result["checks"]}
+        self.assertFalse(result["ready"])
+        self.assertEqual("fail", checks["dir-graph"]["status"])
+        self.assertIn("missing worker role contracts", checks["dir-graph"]["message"])
+        self.assertIn("code-developer", checks["dir-graph"]["message"])
+
+    def test_doctor_blocks_dir_graph_unknown_worker_role_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            harness_doctor.shutil,
+            "which",
+            side_effect=lambda name: f"C:/tools/{name}.exe" if name in {"pytest", "mvn", "gitnexus"} else "",
+        ):
+            repo = Path(tmp)
+            (repo / "pom.xml").write_text("<project />\n", encoding="utf-8")
+            graph_dir = repo / ".e2e"
+            graph_dir.mkdir()
+            (graph_dir / "dir-graph.yaml").write_text(
+                "\n".join(
+                    [
+                        "schema: e2e-dev-harness.dir-graph.v1",
+                        "directories:",
+                        "  - path: docs",
+                        "protected_paths: []",
+                        "state_machine:",
+                        "  lifecycles: [CREATED, CLARIFIED, SERVICE_DESIGN_REQUIRED, PLANNED, RED_READY, WAITING_DISPATCH, IMPLEMENTED, REVIEWED, REWORK_REQUIRED, VERIFIED, ARCHIVED]",
+                        "  gate_transitions:",
+                        "    clarification: CLARIFIED",
+                        "    service_design: PLANNED",
+                        "    tdd_red: RED_READY",
+                        "    implementation: IMPLEMENTED",
+                        "    completion: VERIFIED",
+                        "    archive: ARCHIVED",
+                        "pipeline:",
+                        "  - lifecycle: CREATED",
+                        "    phase: clarify",
+                        "  - lifecycle: CLARIFIED",
+                        "    phase: r1-design-review",
+                        "  - lifecycle: SERVICE_DESIGN_REQUIRED",
+                        "    phase: service-design",
+                        "  - lifecycle: PLANNED",
+                        "    phase: plan-tdd-red-r2",
+                        "  - lifecycle: RED_READY",
+                        "    phase: implementation-gate",
+                        "  - lifecycle: IMPLEMENTED",
+                        "    phase: implement-or-complete",
+                        "  - lifecycle: REVIEWED",
+                        "    phase: completion",
+                        "  - lifecycle: VERIFIED",
+                        "    phase: archive",
+                        "skill_contracts:",
+                        "  - role: requirements-clarifier",
+                        "  - role: use-case-designer",
+                        "  - role: implementation-planner",
+                        "  - role: test-case-developer",
+                        "  - role: code-developer",
+                        "  - role: semantic-reviewer",
+                        "  - role: coverage-reviewer",
+                        "  - role: reviewer",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = harness_doctor.evaluate(repo)
+
+        checks = {item["id"]: item for item in result["checks"]}
+        self.assertFalse(result["ready"])
+        self.assertEqual("fail", checks["dir-graph"]["status"])
+        self.assertIn("unknown worker roles", checks["dir-graph"]["message"])
+        self.assertIn("reviewer", checks["dir-graph"]["message"])
+
     def test_doctor_reports_tooling_and_hook_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.object(
             harness_doctor.shutil,
