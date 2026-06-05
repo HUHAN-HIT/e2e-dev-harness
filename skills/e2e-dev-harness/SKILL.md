@@ -18,7 +18,7 @@ This skill is agent-neutral for Codex, Claude Code, Gemini CLI, OpenCode, and ru
 Start every non-trivial run before dependency analysis or implementation so `.phase-lock` can block production-code writes until the implementation gate passes:
 
 ```bash
-python skills/e2e-dev-harness/scripts/e2e_dev_harness.py start . \
+e2e-harness start . \
   --feature "<feature>" \
   --request "<original user request>"
 ```
@@ -26,7 +26,7 @@ python skills/e2e-dev-harness/scripts/e2e_dev_harness.py start . \
 Call `next` and do only the returned phase:
 
 ```bash
-python skills/e2e-dev-harness/scripts/e2e_dev_harness.py next . \
+e2e-harness next . \
   --state docs/agent-runs/<run>/run-state.json \
   --runtime <codex|claude-code|opencode|manual>
 ```
@@ -87,7 +87,7 @@ Load each `references/*.md` only when its rule's phase begins, never all at star
   Valid high-phase states need transition history and gate evidence.
 - Do not run `prepare` as a substitute for `start`. `prepare` is dependency discovery only; `start` creates the active run, design template, and phase lock.
 - Runtime hooks can enforce phase locks before code-writing tools run.
-  Bootstrap order: `start` -> `install_hooks.py --runtime <runtime>` -> `next` -> `dispatch-beat`; dispatch blocks with install guidance when hooks are not ready.
+  Bootstrap order: `start` -> `e2e-harness init . --runtime <runtime>` -> `next` -> `dispatch-beat`; dispatch blocks with install guidance when hooks are not ready.
   Claude Code hooks need `Read/Grep/Glob/Bash` plus `Stop`; OpenCode installs `.opencode/plugins/e2e-dev-harness.js`.
   If hooks are unavailable, run `e2e_dev_harness.py pre-code --path <planned-code-file> --run-dir docs/agent-runs/<run>` before each code edit.
   `references/execution-control.md`.
