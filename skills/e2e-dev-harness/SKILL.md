@@ -87,10 +87,9 @@ Load each `references/*.md` only when its rule's phase begins, never all at star
   Valid high-phase states need transition history and gate evidence.
 - Do not run `prepare` as a substitute for `start`. `prepare` is dependency discovery only; `start` creates the active run, design template, and phase lock.
 - Runtime hooks can enforce phase locks before code-writing tools run.
-  Use `install_hooks.py`, `phase_guard.py`, and hook examples when the agent runtime supports pre-action checks.
-  Claude Code hooks must include `Read/Grep/Glob/Bash` plus `Stop`; read hooks force `start`, stop hooks block ending before R3/completion/guard/archive.
-  OpenCode installs `.opencode/plugins/e2e-dev-harness.js` via `install_hooks.py --runtime opencode`.
-  If runtime hooks are unavailable, run `e2e_dev_harness.py pre-code --path <planned-code-file> --run-dir docs/agent-runs/<run>` before each code edit.
+  Bootstrap order: `start` -> `install_hooks.py --runtime <runtime>` -> `next` -> `dispatch-beat`; dispatch blocks with install guidance when hooks are not ready.
+  Claude Code hooks need `Read/Grep/Glob/Bash` plus `Stop`; OpenCode installs `.opencode/plugins/e2e-dev-harness.js`.
+  If hooks are unavailable, run `e2e_dev_harness.py pre-code --path <planned-code-file> --run-dir docs/agent-runs/<run>` before each code edit.
   `references/execution-control.md`.
   After red-test evidence exists, run `e2e_dev_harness.py gate --phase implementation --run-state docs/agent-runs/<run>/run-state.json`;
   a passing gate opens the `IMPLEMENTED` phase automatically.
