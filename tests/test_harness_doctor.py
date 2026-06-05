@@ -102,6 +102,24 @@ def write_state_doctor_fixture(repo: Path) -> Path:
 
 
 class HarnessDoctorTests(unittest.TestCase):
+    def test_doctor_empty_repo_includes_bootstrap_guide(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            harness_doctor.shutil,
+            "which",
+            side_effect=lambda name: f"C:/tools/{name}.exe" if name in {"pytest", "mvn", "gitnexus"} else "",
+        ):
+            repo = Path(tmp)
+
+            result = harness_doctor.evaluate(repo)
+
+        guide = result["bootstrap_guide"]
+        self.assertFalse(guide["run_state_detected"])
+        self.assertEqual("start", guide["steps"][0]["id"])
+        self.assertEqual("install_hooks", guide["steps"][1]["id"])
+        self.assertEqual("next", guide["steps"][2]["id"])
+        self.assertEqual("dispatch", guide["steps"][3]["id"])
+        self.assertIn("e2e_dev_harness.py start", guide["next_single_action"])
+
     def test_doctor_warns_when_dir_graph_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.object(
             harness_doctor.shutil,

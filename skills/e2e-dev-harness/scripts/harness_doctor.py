@@ -580,6 +580,45 @@ def state_consistency_checks(repo: Path, state: Path) -> list[dict]:
     ]
 
 
+def bootstrap_guide(repo: Path, state: Path | None = None) -> dict:
+    state_path = resolve_repo_path(repo, state) if state else None
+    detected_state = state_path if state_path and state_path.exists() else None
+    if detected_state is None:
+        candidates = sorted((repo / "docs" / "agent-runs").glob("*/run-state.json"))
+        detected_state = candidates[-1] if candidates else None
+    run_state_ref = detected_state.as_posix() if detected_state else "docs/agent-runs/<run>/run-state.json"
+    run_state_detected = detected_state is not None
+    steps = [
+        {
+            "id": "start",
+            "command": 'python skills/e2e-dev-harness/scripts/e2e_dev_harness.py start . --feature "<feature>" --request "<request>"',
+            "why": "Create docs/agent-runs/<run>/run-state.json and agent-schedule.json.",
+        },
+        {
+            "id": "install_hooks",
+            "command": "python skills/e2e-dev-harness/scripts/install_hooks.py . --runtime claude --json",
+            "why": "Install runtime hooks so dispatch can spawn isolated workers instead of falling back to manual guidance.",
+        },
+        {
+            "id": "next",
+            "command": f"python skills/e2e-dev-harness/scripts/e2e_dev_harness.py next . --state {run_state_ref}",
+            "why": "Create or refresh the session checkpoint and return the next dispatch command.",
+        },
+        {
+            "id": "dispatch",
+            "command": f"python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-beat . --state {run_state_ref} --max-workers 1",
+            "why": "Produce runtime spawn requests for scheduled workers such as requirements-clarifier.",
+        },
+    ]
+    return {
+        "schema": "e2e-dev-harness.bootstrap-guide.v1",
+        "run_state_detected": run_state_detected,
+        "run_state": str(detected_state) if detected_state else "",
+        "steps": steps,
+        "next_single_action": steps[2 if run_state_detected else 0]["command"],
+    }
+
+
 def evaluate(repo: Path, strict: bool = False, state: Path | None = None) -> dict:
     repo = repo.resolve()
     checks = [
@@ -610,6 +649,7 @@ def evaluate(repo: Path, strict: bool = False, state: Path | None = None) -> dic
     taxonomy, recommended_command = active_dispatch_recommendation(state_data or {}, state_path) if state_path else ([], "")
     extension_registry = plugin_registry.load_registry(repo)
     extension_provider_health = plugin_registry.provider_health(repo, extension_registry)
+    guide = bootstrap_guide(repo, state)
     blockers = [
         item for item in checks
         if item["status"] == "fail" or (strict and item["status"] == "warn")
@@ -641,6 +681,7 @@ def evaluate(repo: Path, strict: bool = False, state: Path | None = None) -> dic
         "warnings": [item["message"] for item in checks if item["status"] == "warn"],
         "extension_registry": extension_registry,
         "extension_provider_health": extension_provider_health,
+        "bootstrap_guide": guide,
         "run_timeline": timeline,
         "first_inconsistent_event": first_inconsistent_event,
         "failure_taxonomy": taxonomy,
