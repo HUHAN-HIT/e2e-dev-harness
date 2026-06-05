@@ -7,6 +7,26 @@
 
 ---
 
+## 0. 修复状态（2026-06-05）
+
+本文件第 1-9 节记录的是修复前根因快照。对应修复已分批落地：
+
+- `ba68de7`：hook 缺失 / generic runtime 不再静默降级为 manual，dispatch 返回显式 blocker 与 `install_hooks` 单步修复指引；显式 `--runtime manual` 仍保留手动出口。
+- `3948171`：未知 runtime fallback 暴露 `warning` / `unknown_runtime` / `fallback_runtime`，`runtime-capabilities` 输出 `warnings`。
+- `b8486d0`：`doctor` 输出 bootstrap guide：`start -> install_hooks -> next -> dispatch-beat` 与 `next_single_action`。
+- `b8e0867`：`skills/e2e-dev-harness/SKILL.md` 写明 hook bootstrap 顺序和 dispatch hook blocking 语义。
+- `42b4f53`：提交本根因分析文档和 GitNexus 索引元数据更新。
+
+修复后还发现已安装 skill 副本曾落后于仓库源码：`C:\Users\14907\.codex\skills\e2e-dev-harness`、`C:\Users\14907\.claude\skills\e2e-dev-harness`、`C:\Users\14907\.agents\skills\e2e-dev-harness` 仍含旧 `SKILL.md` / dispatch 脚本。已执行：
+
+```powershell
+node tools\install-e2e-dev-harness.mjs --sync --yes --json
+```
+
+安装器已备份旧副本，并同步三个 runtime 目标。同步后关键文件（`SKILL.md`、`coordinator_flow.py`、`preflight.py`、`runtime_adapters.py`、`harness_doctor.py`、`e2e_harness/engine/dispatch_engine.py`）与仓库版本 SHA256 一致；从安装副本实跑 `runtime-capabilities --runtime bogus --json` 可见 unknown runtime warning，实跑 `doctor --json` 可见 `bootstrap_guide.next_single_action`。
+
+---
+
 ## 1. 现象
 
 在澄清（clarify）阶段，coordinator 期望 harness 自动派发 `requirements-clarifier` 子 agent，但实际 dispatch 一直停在 `waiting_dispatch`（`coordinator_action="pause_for_manual_worker"`），不产出任何 `Task` spawn 请求。
