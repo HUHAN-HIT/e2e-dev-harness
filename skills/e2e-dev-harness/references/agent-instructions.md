@@ -41,26 +41,26 @@ Generated and tool directories such as `.git`, `target`, `build`, `node_modules`
 Load instruction content for a normal clarification session:
 
 ```bash
-python skills/e2e-dev-harness/scripts/agent_instructions.py . --mode strict --scope discovery --include-content
+e2e-harness exec agent_instructions.py . --mode strict --scope discovery --include-content
 ```
 
 After clarification identifies affected services, load only relevant instructions:
 
 ```bash
-python skills/e2e-dev-harness/scripts/agent_instructions.py . --mode strict --scope affected --include-content --service services/<service>
-python skills/e2e-dev-harness/scripts/agent_instructions.py . --mode strict --scope affected --include-content --path services/<service>/src/main/java/...
+e2e-harness exec agent_instructions.py . --mode strict --scope affected --include-content --service services/<service>
+e2e-harness exec agent_instructions.py . --mode strict --scope affected --include-content --path services/<service>/src/main/java/...
 ```
 
 Load all service instructions only when explicitly needed:
 
 ```bash
-python skills/e2e-dev-harness/scripts/agent_instructions.py . --mode strict --scope all --include-content
+e2e-harness exec agent_instructions.py . --mode strict --scope all --include-content
 ```
 
 Machine-readable scan:
 
 ```bash
-python skills/e2e-dev-harness/scripts/agent_instructions.py . --mode strict --scope discovery --json
+e2e-harness exec agent_instructions.py . --mode strict --scope discovery --json
 ```
 
 For very large repositories, discovery JSON reports `discovered_service_count` and caps `discovered_service_agent_files` to a small sample by default. Use that inventory to choose candidate services, then rerun in affected scope. Do not open files from `discovered_service_agent_files` until the design narrows the service list.

@@ -33,7 +33,7 @@ Use this skill as an agent-neutral workflow package. The stable contract is the 
 Review profiles are plain JSON and portable across runtimes:
 
 ```bash
-python skills/e2e-dev-harness/scripts/reviewer_gate.py . \
+e2e-harness exec reviewer_gate.py . \
   --review-dir docs/agent-runs/<run>/reviews \
   --review-profile skills/e2e-dev-harness/review-profiles/default.json
 ```

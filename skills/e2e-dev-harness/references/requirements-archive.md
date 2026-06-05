@@ -55,7 +55,7 @@ Use the coverage matrix as the source of truth: every completed AC needs a named
 Validate directly:
 
 ```bash
-python skills/e2e-dev-harness/scripts/requirements_archive.py . \
+e2e-harness exec requirements_archive.py . \
   --archive docs/agent-runs/<run>/requirements-archive.md \
   --json
 ```

@@ -88,11 +88,11 @@ The registry records every planned artifact with type, owner, path, completion r
 Validate them with:
 
 ```bash
-python skills/e2e-dev-harness/scripts/run_state.py . \
+e2e-harness exec run_state.py . \
   --state docs/agent-runs/<run>/run-state.json \
   --json
 
-python skills/e2e-dev-harness/scripts/artifact_registry.py . \
+e2e-harness exec artifact_registry.py . \
   --registry docs/agent-runs/<run>/artifact-registry.json \
   --strict \
   --json
@@ -103,7 +103,7 @@ Use non-strict registry validation during planning because review reports and fi
 Refresh the registry after planned artifacts are written:
 
 ```bash
-python skills/e2e-dev-harness/scripts/artifact_registry.py . \
+e2e-harness exec artifact_registry.py . \
   --registry docs/agent-runs/<run>/artifact-registry.json \
   --refresh \
   --json
@@ -112,7 +112,7 @@ python skills/e2e-dev-harness/scripts/artifact_registry.py . \
 Advance run lifecycle with evidence:
 
 ```bash
-python skills/e2e-dev-harness/scripts/run_state.py . \
+e2e-harness exec run_state.py . \
   --state docs/agent-runs/<run>/run-state.json \
   --transition REVIEWED \
   --gate r3-review \
@@ -166,7 +166,7 @@ If absent, default policy requires run-state, artifact registry, GitNexus-style 
 Validate policy directly:
 
 ```bash
-python skills/e2e-dev-harness/scripts/harness_policy.py . \
+e2e-harness exec harness_policy.py . \
   --run-state docs/agent-runs/<run>/run-state.json \
   --registry docs/agent-runs/<run>/artifact-registry.json \
   --json
@@ -175,7 +175,7 @@ python skills/e2e-dev-harness/scripts/harness_policy.py . \
 Replay a run from state and registered artifacts:
 
 ```bash
-python skills/e2e-dev-harness/scripts/harness_verify.py . \
+e2e-harness exec harness_verify.py . \
   --state docs/agent-runs/<run>/run-state.json \
   --strict-artifacts \
   --summary-json docs/agent-runs/<run>/run-summary.json \
@@ -206,7 +206,7 @@ They compress run-state, artifact registry, semantic review status, missing comp
 Generate a summary directly when replay is not needed:
 
 ```bash
-python skills/e2e-dev-harness/scripts/run_summary.py . \
+e2e-harness exec run_summary.py . \
   --state docs/agent-runs/<run>/run-state.json \
   --out-json docs/agent-runs/<run>/run-summary.json \
   --out-md docs/agent-runs/<run>/run-summary.md \
@@ -256,7 +256,7 @@ For multi-module or artifact-heavy designs, `implementation-manifest.md` must in
 Unit-test evidence must be structured JSON with `command` and integer `exit_code`. Plain text such as `PASS` is not accepted. Prefer `command_evidence.py` so Maven, GitNexus, security, or custom verification evidence includes exit code, elapsed time, output hashes, and environment metadata:
 
 ```bash
-python skills/e2e-dev-harness/scripts/command_evidence.py . \
+e2e-harness exec command_evidence.py . \
   --command "mvn test" \
   --output docs/agent-runs/<run>/evidence/maven-test.json
 ```
@@ -337,7 +337,7 @@ External commands run by the harness use a bounded timeout and report exit code 
 Use `--trace-file docs/agent-runs/<run>/execution-trace.json` with `verify` to record phase timing. Use `execution_trace.py` directly when reviewer agents, CI jobs, or external wrappers can provide token counts or decisions:
 
 ```bash
-python skills/e2e-dev-harness/scripts/execution_trace.py . \
+e2e-harness exec execution_trace.py . \
   --trace docs/agent-runs/<run>/execution-trace.json \
   --phase r3-review \
   --event finish \

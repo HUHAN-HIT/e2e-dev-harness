@@ -133,7 +133,7 @@ Use `multi` for cross-service, contract/data-risk, design-heavy, or user-request
 Large `multi` schedules are normal: `expected_handoffs` predicts sessions; never downgrade to manual coding.
 
 ```bash
-python skills/e2e-dev-harness/scripts/orchestration_plan.py . \
+e2e-harness exec orchestration_plan.py . \
   --mode auto \
   --service-scope discovery \
   --design-doc docs/design/<feature>.md
@@ -221,7 +221,7 @@ If a reviewer, test, business review, completion gate, or user review finds miss
 Before dispatching phase-specific or service-scoped agents, select only relevant memory:
 
 ```bash
-python skills/e2e-dev-harness/scripts/memory_capture.py select . \
+e2e-harness exec memory_capture.py select . \
   --phase code \
   --service services/<service>
 ```

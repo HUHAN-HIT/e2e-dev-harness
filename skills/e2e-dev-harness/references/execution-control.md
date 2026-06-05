@@ -91,9 +91,9 @@ If a runtime cannot pass hook JSON through stdin, pass `--tool`, `--path`, and `
 Use `install_hooks.py` to install or validate project-local hook configuration:
 
 ```bash
-python skills/e2e-dev-harness/scripts/install_hooks.py . --runtime claude --json
-python skills/e2e-dev-harness/scripts/install_hooks.py . --runtime claude --check --json
-python skills/e2e-dev-harness/scripts/install_hooks.py . --runtime opencode --json
+e2e-harness init . --runtime claude --json
+e2e-harness init . --runtime claude --check --json
+e2e-harness init . --runtime opencode --json
 ```
 
 Supported runtimes are `claude`, `codex`, `gemini`, and `opencode`.
@@ -107,7 +107,7 @@ Do not stack broad write-blocking hooks such as `gateguard-fact-force` on the sa
 It transitions lifecycle only when the status JSON reports `"ready": true`; it does not bypass gate validation.
 
 ```bash
-python skills/e2e-dev-harness/scripts/auto_transition.py . \
+e2e-harness exec auto_transition.py . \
   --status-file docs/agent-runs/<run>/evidence/implementation-gate.json \
   --state docs/agent-runs/<run>/run-state.json \
   --json

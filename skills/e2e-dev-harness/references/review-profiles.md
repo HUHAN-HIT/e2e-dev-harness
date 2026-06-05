@@ -9,7 +9,7 @@ Profiles are plain JSON. They guide reviewer agents and let `reviewer_gate.py` e
 Explicit CLI input wins:
 
 ```bash
-python skills/e2e-dev-harness/scripts/reviewer_gate.py . \
+e2e-harness exec reviewer_gate.py . \
   --review-dir docs/agent-runs/<run>/reviews \
   --review-profile .e2e/review-profile.json
 ```
@@ -24,9 +24,9 @@ When `--review-profile` is omitted, the gate auto-discovers the first project pr
 If none exists, no profile is enforced. Bundled profiles are never auto-enabled for a project; use them explicitly by path or name.
 
 ```bash
-python skills/e2e-dev-harness/scripts/reviewer_gate.py . --review-profile default
-python skills/e2e-dev-harness/scripts/reviewer_gate.py . --review-profile security-heavy
-python skills/e2e-dev-harness/scripts/reviewer_gate.py . --review-profile api-first
+e2e-harness exec reviewer_gate.py . --review-profile default
+e2e-harness exec reviewer_gate.py . --review-profile security-heavy
+e2e-harness exec reviewer_gate.py . --review-profile api-first
 ```
 
 Use `--review-profile off` to disable profile loading in custom harnesses.
