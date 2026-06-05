@@ -314,7 +314,7 @@ def active_dispatch_recommendation(state_data: dict, state_path: Path) -> tuple[
     task_id = str(dispatch.get("current_task_id", "")).strip()
     agent = str(dispatch.get("current_agent", "")).strip()
     status = str(dispatch.get("status", "")).strip()
-    if not task_id or status not in {"awaiting_runtime_spawn", "waiting_dispatch", "worker_running", "worker_dispatched", "dispatched"}:
+    if not task_id or status not in {"awaiting_runtime_spawn", "waiting_dispatch", "worker_running", "worker_running_unverified", "worker_dispatched", "dispatched"}:
         return [], ""
     state_arg = state_path.as_posix()
     schedule_arg = (state_path.parent / "agent-schedule.json").as_posix()
@@ -437,7 +437,15 @@ def state_consistency_checks(repo: Path, state: Path) -> list[dict]:
         status = str(dispatch.get("status", ""))
         if not status and str(top_dispatch.get("current_task_id", "")) == task_id:
             status = str(top_dispatch.get("status", ""))
-        if status in {"worker_running", "worker_dispatched", "dispatched", "waiting_dispatch", "awaiting_runtime_spawn"}:
+            dispatch = top_dispatch if isinstance(top_dispatch, dict) else dispatch
+        spawn_source = str(dispatch.get("spawn_confirmed_by", "")).strip()
+        worker_handle = str(dispatch.get("worker_handle", "")).strip()
+        worker_session = str(dispatch.get("worker_session", "")).strip()
+        if spawn_source == "phase_guard" or worker_handle.startswith("phase-guard-auto-confirm:") or worker_session.startswith("phase-guard-auto-confirm:"):
+            task_blockers.append(
+                f"Schedule task {task_id} is completed but worker proof came from phase_guard auto-confirm; completion is untrusted."
+            )
+        if status in {"worker_running", "worker_running_unverified", "worker_dispatched", "dispatched", "waiting_dispatch", "awaiting_runtime_spawn"}:
             task_blockers.append(
                 f"Schedule task {task_id} is completed but dispatch status is still {status}."
             )
@@ -449,7 +457,7 @@ def state_consistency_checks(repo: Path, state: Path) -> list[dict]:
         "Run-state dispatch tasks are consistent with schedule and completion events."
         if not task_blockers
         else " ".join(task_blockers),
-        "Run dispatch-complete or manual recovery dispatch-complete for the completed task so schedule, dispatches, and dispatch-events close together.",
+        "Run dispatch-ack with a fresh worker handle/session, then dispatch-complete with validated evidence; use manual recovery only with explicit approval.",
     )
 
     view_blockers: list[str] = []

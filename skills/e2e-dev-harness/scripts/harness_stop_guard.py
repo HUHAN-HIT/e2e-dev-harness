@@ -291,6 +291,7 @@ def is_waiting_dispatch(lifecycle: str, data: dict) -> bool:
         "waiting_dispatch",
         "awaiting_runtime_spawn",
         "worker_running",
+        "worker_running_unverified",
     }
     if any(str(item.get("status", "")).lower() in waiting_statuses for item in dispatches.values() if isinstance(item, dict)):
         return True

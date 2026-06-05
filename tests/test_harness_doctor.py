@@ -556,6 +556,37 @@ class HarnessDoctorTests(unittest.TestCase):
         self.assertIn("run-state.json", checks["state-lifecycle"]["remediation"])
         self.assertTrue(any("lifecycle is missing" in reason for reason in result["blocked_reasons"]))
 
+    def test_state_doctor_blocks_phase_guard_auto_confirm_completed_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            harness_doctor.shutil,
+            "which",
+            return_value="C:/tools/tool.exe",
+        ):
+            repo = Path(tmp)
+            state_path = write_state_doctor_fixture(repo)
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["dispatch"] = {
+                "status": "worker_completed",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "worker_handle": "phase-guard-auto-confirm:T01",
+                "worker_session": "phase-guard-auto-confirm:T01",
+                "spawn_confirmed_by": "phase_guard",
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+
+            code, result = e2e_dev_harness.doctor(
+                SimpleNamespace(repo=repo, strict=False, status_file=None, state=state_path)
+            )
+
+        checks = {item["id"]: item for item in result["checks"]}
+        self.assertEqual(2, code)
+        self.assertFalse(result["ready"])
+        self.assertEqual("fail", checks["state-dispatch-tasks"]["status"])
+        self.assertIn("phase_guard", checks["state-dispatch-tasks"]["message"])
+        self.assertIn("dispatch-ack", checks["state-dispatch-tasks"]["remediation"])
+
     def test_state_doctor_passes_consistent_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.object(
             harness_doctor.shutil,

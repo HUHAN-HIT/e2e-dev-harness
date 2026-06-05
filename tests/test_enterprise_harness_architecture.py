@@ -890,6 +890,7 @@ class RuntimeAdapterContractTests(unittest.TestCase):
                 "worker_spawned",
                 "worker_acknowledged",
                 "worker_running",
+                "worker_running_unverified",
                 "worker_completed",
                 "evidence_validated",
                 "task_closed",

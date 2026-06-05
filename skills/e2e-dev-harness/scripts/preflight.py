@@ -71,6 +71,17 @@ def runtime_hook_planned_blockers(repo: Path, run_state_path: Path | str | None)
     return _runtime_hook_blockers_for_lifecycle(repo, run_state_path, "PLANNED")
 
 
+def _is_clarification_task(task: dict) -> bool:
+    return (
+        str(task.get("agent", "")).strip() == "requirements-clarifier"
+        or str(task.get("phase", "")).strip().lower() == "clarify"
+    )
+
+
+def _is_mechanical_repair_task(task: dict) -> bool:
+    return str(task.get("kind", "")).strip() == "artifact_repair" and _is_clarification_task(task)
+
+
 def clarification_dispatch_blockers(repo: Path, run_state_path: Path | str | None) -> list[str]:
     state_file = require_repo_path(repo, Path(str(run_state_path)), "run state") if run_state_path else None
     if not state_file or not state_file.exists():
@@ -92,23 +103,28 @@ def clarification_dispatch_blockers(repo: Path, run_state_path: Path | str | Non
         return [f"Clarification gate blocked: agent schedule is unreadable: {schedule_path}"]
 
     tasks = [task for task in schedule.get("tasks", []) or [] if isinstance(task, dict)]
-    clarifier_tasks = [
-        task
-        for task in tasks
-        if str(task.get("agent", "")).strip() == "requirements-clarifier"
-        or str(task.get("phase", "")).strip().lower() == "clarify"
-    ]
+    clarifier_tasks = [task for task in tasks if _is_clarification_task(task) and not _is_mechanical_repair_task(task)]
+    repair_tasks = [task for task in tasks if _is_mechanical_repair_task(task)]
     if not clarifier_tasks:
         return [
             "Clarification gate blocked: CREATED run-state requires a scheduled requirements-clarifier task."
         ]
 
-    return agent_scheduler.dispatch_completion_blockers_for_tasks(
+    clarifier_blockers = agent_scheduler.dispatch_completion_blockers_for_tasks(
         repo,
         schedule_path,
         state_file,
         clarifier_tasks,
         "Clarification gate blocked",
+    ) or []
+    if clarifier_blockers:
+        return clarifier_blockers
+    return agent_scheduler.dispatch_completion_blockers_for_tasks(
+        repo,
+        schedule_path,
+        state_file,
+        repair_tasks,
+        "Clarification mechanical repair blocked",
     ) or []
 
 
@@ -117,13 +133,26 @@ def clarification_dispatch_recovery(repo: Path, run_state_path: Path | str | Non
     schedule_path = state_file.parent / "agent-schedule.json" if state_file else repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
     schedule = read_json_object(schedule_path) if schedule_path.exists() else {}
     tasks = [task for task in schedule.get("tasks", []) or [] if isinstance(task, dict)]
-    task = next(
+    clarifier_tasks = [task for task in tasks if _is_clarification_task(task) and not _is_mechanical_repair_task(task)]
+    repair_tasks = [task for task in tasks if _is_mechanical_repair_task(task)]
+    primary_incomplete = next(
         (
             item
-            for item in tasks
-            if str(item.get("agent", "")).strip() == "requirements-clarifier"
-            or str(item.get("phase", "")).strip().lower() == "clarify"
+            for item in clarifier_tasks
+            if not agent_scheduler.task_has_dispatch_completion(repo, schedule_path, state_file, item)
         ),
+        None,
+    )
+    repair_incomplete = next(
+        (
+            item
+            for item in repair_tasks
+            if not agent_scheduler.task_has_dispatch_completion(repo, schedule_path, state_file, item)
+        ),
+        None,
+    )
+    task = primary_incomplete or repair_incomplete or next(
+        iter(clarifier_tasks),
         {
             "id": "T01",
             "agent": "requirements-clarifier",
@@ -133,6 +162,23 @@ def clarification_dispatch_recovery(repo: Path, run_state_path: Path | str | Non
     state = read_json_object(state_file) if state_file and state_file.exists() else {}
     dispatch = dispatcher.dispatch_for_task(state, str(task.get("id", "")).strip()) if state else {}
     recovery = dispatcher.dispatch_recovery_packet(repo, schedule_path, state_file, task, dispatch)
+    if repair_incomplete and task is repair_incomplete:
+        return {
+            "ready": False,
+            "ready_for_implementation": False,
+            "code": "clarification_mechanical_repair_incomplete",
+            "blocked_reasons": blockers,
+            "clarification_dispatch": {"ready": False, "blocked_reasons": blockers},
+            "interaction_required": False,
+            "questions_to_ask_user": [],
+            "ask_user_requests": [],
+            "agent_remediation_required": True,
+            "agent_remediation_actions": [
+                f"Dispatch mechanical clarification repair task {task.get('id', 'T01b')} before rerunning clarify."
+            ],
+            "next_agent_action": "dispatch_mechanical_repair",
+            **recovery,
+        }
     return {
         "ready": False,
         "ready_for_implementation": False,

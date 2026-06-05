@@ -266,6 +266,50 @@ def service_design_primary_task(task: dict) -> bool:
     )
 
 
+def artifact_repair_task(task: dict) -> bool:
+    return str(task.get("kind", "")).strip().lower() == "artifact_repair"
+
+
+def repair_target_refs(repo: Path, task: dict) -> set[str]:
+    targets = task.get("repair_targets", []) or task.get("repair_target", []) or []
+    if isinstance(targets, str):
+        targets = [targets]
+    refs: set[str] = set()
+    for target in targets:
+        text = str(target).strip()
+        if not text:
+            continue
+        path = Path(text)
+        full = path if path.is_absolute() else repo / path
+        try:
+            refs.add(full.resolve().relative_to(repo.resolve()).as_posix().lower())
+        except (OSError, ValueError):
+            refs.add(text.replace("\\", "/").strip("/").lower())
+    return refs
+
+
+def task_without_repair_target_inputs(repo: Path, task: dict) -> dict:
+    if not artifact_repair_task(task):
+        return task
+    targets = repair_target_refs(repo, task)
+    if not targets:
+        return task
+    filtered = dict(task)
+    inputs: list[str] = []
+    for item in task.get("inputs", []) or []:
+        text = str(item)
+        path = Path(text)
+        full = path if path.is_absolute() else repo / path
+        try:
+            normalized = full.resolve().relative_to(repo.resolve()).as_posix().lower()
+        except (OSError, ValueError):
+            normalized = text.replace("\\", "/").strip("/").lower()
+        if normalized not in targets:
+            inputs.append(text)
+    filtered["inputs"] = inputs
+    return filtered
+
+
 def task_ready_blockers(repo: Path, schedule: dict, task: dict, agent: str, state: dict | None = None) -> list[str]:
     blocked: list[str] = []
     phase_blocker = phase_dispatch_blocker(task, state)
@@ -280,7 +324,7 @@ def task_ready_blockers(repo: Path, schedule: dict, task: dict, agent: str, stat
     if missing_deps:
         blocked.append("Dependency phases are incomplete: " + ", ".join(missing_deps))
     if not (lifecycle_value(state) in {"PLANNED", "RED_READY", "IMPLEMENTED", "REVIEWED", "VERIFIED"} and service_design_primary_task(task)):
-        blocked.extend(agent_scheduler.task_input_handoff_blockers(repo, task))
+        blocked.extend(agent_scheduler.task_input_handoff_blockers(repo, task_without_repair_target_inputs(repo, task)))
     status = str(task.get("status", "planned")).lower()
     owner = str(task.get("owner", "")).strip()
     if owner and owner != agent and status in agent_scheduler.CLAIMED_STATUSES and not agent_scheduler.is_stale(task):
@@ -317,7 +361,14 @@ def task_parallel_group(task: dict) -> str:
     return f"service:{service}" if service and phase == "implement" else phase or str(task.get("id", ""))
 
 
-ACTIVE_DISPATCH_STATUSES = {"awaiting_runtime_spawn", "waiting_dispatch", "worker_running", "worker_dispatched", "dispatched"}
+ACTIVE_DISPATCH_STATUSES = {
+    "awaiting_runtime_spawn",
+    "waiting_dispatch",
+    "worker_running",
+    "worker_running_unverified",
+    "worker_dispatched",
+    "dispatched",
+}
 READY_HANDOFF_BODY_SECTIONS = [
     "Summary",
     "Facts Used",
@@ -667,6 +718,11 @@ def dispatch_completion_blockers(repo: Path, state_path: Path | None, task_id: s
         blocked.append(
             "Dispatched task has not been confirmed by a fresh worker; call the runtime spawn tool and let the Task hook confirm, "
             "or run dispatch-ack with the worker handle before dispatch-complete."
+        )
+    elif status == "worker_running_unverified" or str(dispatch.get("spawn_confirmed_by", "")).strip() == "phase_guard":
+        blocked.append(
+            "Dispatch completion blocked: phase_guard auto-confirm only records that the dispatcher-generated task prompt was observed. "
+            "Run dispatch-ack with a fresh worker handle/session before dispatch-complete."
         )
     elif status != "worker_running":
         blocked.append(f"Dispatch status must be worker_running before dispatch-complete; got {status or '<missing>'}.")

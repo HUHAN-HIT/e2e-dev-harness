@@ -72,7 +72,14 @@ DISPATCH_GATED_READ_LIFECYCLES = {"CLARIFIED", "SERVICE_DESIGN_REQUIRED", "PLANN
 TEST_CODE_MARKERS = ("/src/test/", "/test/", "/tests/")
 REVIEW_DISPATCH_PHASES = {"r1-review", "r2-review", "r3-review"}
 REVIEW_REPORT_NAME_RE = re.compile(r"^R[123](?:[-_].*)?\.md$", re.IGNORECASE)
-ACTIVE_DISPATCH_STATUSES = {"awaiting_runtime_spawn", "waiting_dispatch", "worker_dispatched", "dispatched", "worker_running"}
+ACTIVE_DISPATCH_STATUSES = {
+    "awaiting_runtime_spawn",
+    "waiting_dispatch",
+    "worker_dispatched",
+    "dispatched",
+    "worker_running",
+    "worker_running_unverified",
+}
 PENDING_DISPATCH_ACK_STATUSES = {"awaiting_runtime_spawn", "waiting_dispatch", "worker_dispatched", "dispatched"}
 DEFAULT_ALLOWED_RUNTIME_LIFECYCLES = {"IMPLEMENTED"}
 DEFAULT_ALLOWED_TEST_LIFECYCLES = {"PLANNED", "RED_READY", "IMPLEMENTED"}
@@ -822,7 +829,7 @@ def worker_output_write_confirmed(dispatch: dict) -> bool:
         return False
     confirmed_by = str(dispatch.get("spawn_confirmed_by", "")).strip()
     if confirmed_by == "phase_guard":
-        return True
+        return False
     if confirmed_by == "dispatch_ack":
         return bool(
             dispatch.get("manual_worker_confirmed") is True
@@ -936,7 +943,7 @@ def auto_confirm_dispatcher_task(repo: Path, lock: Path, state_data: dict, task_
     confirmed = dict(dispatch)
     confirmed.update(
         {
-            "status": "worker_running",
+            "status": "worker_running_unverified",
             "worker_handle": str(dispatch.get("worker_handle") or f"phase-guard-auto-confirm:{task_id}"),
             "worker_session": str(dispatch.get("worker_session") or f"phase-guard-auto-confirm:{task_id}"),
             "spawn_confirmed_by": "phase_guard",
@@ -947,7 +954,7 @@ def auto_confirm_dispatcher_task(repo: Path, lock: Path, state_data: dict, task_
     current_state.setdefault("dispatches", {})[task_id] = confirmed
     current_state["updated_at"] = run_state.now_iso()
     run_state.write_state(repo, state_path, current_state)
-    return f"Dispatcher task {task_id} auto-confirmed by phase_guard."
+    return f"Dispatcher task {task_id} spawn observed by phase_guard; dispatch-ack is still required for trusted completion."
 
 
 def _evaluate_dispatch_task(

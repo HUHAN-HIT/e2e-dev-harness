@@ -331,6 +331,7 @@ ACTIVE_DISPATCH_STATUSES = {
     "worker_dispatched",
     "dispatched",
     "worker_running",
+    "worker_running_unverified",
 }
 
 

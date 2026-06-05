@@ -323,6 +323,54 @@ def agent_remediation_actions(result: dict) -> list[str]:
     return actions
 
 
+def mechanical_remediation_tasks(path: Path, result: dict) -> list[dict]:
+    tasks: list[dict] = []
+    for gap in result.get("impact_gaps", []):
+        lowered = str(gap).lower()
+        if "stay bounded" in lowered:
+            tasks.append(
+                {
+                    "code": "impact_summary_too_long",
+                    "kind": "artifact_repair",
+                    "section": "Impact Summary",
+                    "target": str(path),
+                    "max_chars": IMPACT_MAX_CHARS,
+                    "max_rows": IMPACT_MAX_ROWS,
+                    "objective": (
+                        f"Compress Impact Summary to <= {IMPACT_MAX_CHARS} characters while preserving "
+                        "confirmed scope, AC mappings, Source, and Raw Evidence references."
+                    ),
+                    "constraints": [
+                        "Do not add new product facts or reopen user-confirmed Open Questions.",
+                        "Move raw GitNexus/scanner detail to the existing Raw Evidence file reference.",
+                        "Keep the affected interfaces table bounded and mapped to AC ids.",
+                    ],
+                    "gap": gap,
+                }
+            )
+        elif "at most 12" in lowered:
+            tasks.append(
+                {
+                    "code": "impact_summary_table_too_large",
+                    "kind": "artifact_repair",
+                    "section": "Impact Summary",
+                    "target": str(path),
+                    "max_chars": IMPACT_MAX_CHARS,
+                    "max_rows": IMPACT_MAX_ROWS,
+                    "objective": (
+                        f"Reduce Impact Summary to at most {IMPACT_MAX_ROWS} high-signal affected interface rows "
+                        "without changing confirmed requirements."
+                    ),
+                    "constraints": [
+                        "Preserve all AC ids by grouping related low-level interfaces when needed.",
+                        "Keep Source and Raw Evidence references instead of pasting raw output.",
+                    ],
+                    "gap": gap,
+                }
+            )
+    return tasks
+
+
 def ask_user_options_for_question(question: str) -> list[dict[str, str]]:
     lowered = question.lower()
     if "restated intent" in lowered or "confirmation provenance" in lowered:
@@ -411,6 +459,7 @@ def interaction_contract(result: dict) -> dict:
         "runtime_action": ask_user_bridge.request_user_input_action(requests),
         "agent_remediation_required": bool(remediation_actions),
         "agent_remediation_actions": remediation_actions,
+        "mechanical_remediation_tasks": result.get("mechanical_remediation_tasks", []),
         "next_agent_action": "continue_clarification_remediation" if remediation_actions and not questions else "",
         "allowed_before_user_answer": [
             "bounded GitNexus or scanner discovery for evidence",
@@ -584,11 +633,18 @@ def validate(path: Path, require_intent: bool = False, require_user_confirmation
         "unresolved_open_questions": unresolved,
         "integration_gaps": gaps,
         "impact_gaps": impact_gaps,
+        "impact_summary_policy": {
+            "max_chars": IMPACT_MAX_CHARS,
+            "max_rows": IMPACT_MAX_ROWS,
+            "raw_evidence_required": True,
+            "source_required": True,
+        },
         "change_logic_gaps": logic_gaps,
         "intent_required": require_intent,
         "user_confirmation_required": require_user_confirmation,
         "user_confirmation_gaps": confirmation_gaps,
     }
+    result["mechanical_remediation_tasks"] = mechanical_remediation_tasks(path, result)
     result["interaction_contract"] = interaction_contract(result)
     result["interaction_required"] = result["interaction_contract"]["interaction_required"]
     result["questions_to_ask_user"] = result["interaction_contract"]["questions_to_ask_user"]

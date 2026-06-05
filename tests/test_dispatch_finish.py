@@ -132,6 +132,61 @@ class DispatchFinishOrchestrationTest(unittest.TestCase):
 
 
 class DispatchAckPhaseGuardTest(unittest.TestCase):
+    def test_phase_guard_auto_confirm_does_not_allow_worker_owned_handoff_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            evidence = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            state["dispatch"] = {
+                "status": "worker_running",
+                "runtime": "codex",
+                "previous_lifecycle": "CREATED",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "worker_handle": "phase-guard-auto-confirm:T01",
+                "worker_session": "phase-guard-auto-confirm:T01",
+                "spawn_confirmed_by": "phase_guard",
+                "spawn_acknowledged_at": "2026-06-04T00:00:00Z",
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            (run_dir / "agent-schedule.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": [evidence.as_posix()],
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = phase_guard.validate_action(
+                repo,
+                "Write",
+                [evidence],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Worker output write blocked" in reason for reason in result["blocked_reasons"]))
+
     def test_manual_dispatch_ack_proof_allows_worker_owned_handoff_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
