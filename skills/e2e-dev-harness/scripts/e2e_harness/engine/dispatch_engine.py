@@ -10,7 +10,10 @@ from e2e_harness.cli.commands import handoff as handoff_command
 
 def runtime_capabilities(runtime: str | None = "claude-code") -> dict:
     result = dispatcher.runtime_capabilities(runtime)
-    result.update({"ready": True, "blocked_reasons": [], "warnings": []})
+    warnings = []
+    if result.get("warning"):
+        warnings.append(str(result["warning"]))
+    result.update({"ready": True, "blocked_reasons": [], "warnings": warnings})
     return result
 
 

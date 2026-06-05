@@ -845,6 +845,27 @@ class RuntimeAdapterContractTests(unittest.TestCase):
         self.assertFalse(manual.capabilities()["supports_subagent"])
         self.assertEqual("gemini", manual.capabilities()["runtime"])
 
+    def test_unknown_runtime_adapter_fallback_is_visible_in_capabilities(self) -> None:
+        import runtime_adapters  # noqa: PLC0415
+
+        capabilities = runtime_adapters.adapter_for("gemini").capabilities()
+
+        self.assertEqual("gemini", capabilities["runtime"])
+        self.assertEqual("manual", capabilities["fallback_runtime"])
+        self.assertTrue(capabilities["unknown_runtime"])
+        self.assertIn("Unknown runtime", capabilities["warning"])
+
+    def test_runtime_capabilities_facade_surfaces_unknown_runtime_warning(self) -> None:
+        from e2e_harness.engine import dispatch_engine  # noqa: PLC0415
+
+        result = dispatch_engine.runtime_capabilities("gemini")
+
+        self.assertTrue(result["ready"])
+        self.assertEqual("gemini", result["runtime"])
+        self.assertEqual("manual", result["fallback_runtime"])
+        self.assertTrue(result["unknown_runtime"])
+        self.assertTrue(any("Unknown runtime" in warning for warning in result["warnings"]))
+
     def test_runtime_adapter_exposes_typed_contract_without_breaking_dict_api(self) -> None:
         import runtime_adapters  # noqa: PLC0415
 

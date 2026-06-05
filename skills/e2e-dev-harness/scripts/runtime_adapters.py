@@ -281,4 +281,7 @@ def adapter_for(runtime: str | None = "claude-code") -> RuntimeAdapter:
         return RuntimeAdapter("manual", MANUAL_CAPABILITIES)
     data = dict(MANUAL_CAPABILITIES)
     data["runtime"] = normalized
+    data["fallback_runtime"] = "manual"
+    data["unknown_runtime"] = True
+    data["warning"] = f"Unknown runtime {normalized}; falling back to manual-dispatch capabilities."
     return RuntimeAdapter(normalized, data)
