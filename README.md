@@ -50,10 +50,18 @@ tests/
 
 The recommended way to install and drive the harness is the **`e2e-harness` Node CLI** (`bin/e2e-harness.js`). It always resolves the canonical skill copy at `~/.claude/skills/e2e-dev-harness`, so the hooks it writes never depend on your current directory or which checkout you ran it from.
 
+> **Make the command global first.** This package ships *inside this repo* and is **not published to npm**, so `npx e2e-harness …` will 404. Register it once with `npm link`, then call it bare from anywhere — no path, no `npx`:
+>
+> ```bash
+> npm link              # run from the repo root
+> # equivalently, after `e2e-harness install`: e2e-harness link
+> e2e-harness unlink    # remove the global command later
+> ```
+
 ### 1. Install to this machine
 
 ```bash
-npx e2e-harness install
+e2e-harness install
 ```
 
 Copies the bundled skill into `~/.claude/skills/e2e-dev-harness`, records the Python interpreter in `.harness-env.json`, and backs up any previous install to `~/.claude/skill-backups/` (outside the skills directory, so the backup is never re-discovered as a duplicate skill).
@@ -61,7 +69,7 @@ Copies the bundled skill into `~/.claude/skills/e2e-dev-harness`, records the Py
 ### 2. Wire a business repository's hooks
 
 ```bash
-npx e2e-harness init <business-repo> --runtime claude
+e2e-harness init <business-repo> --runtime claude
 ```
 
 Runs the canonical `install_hooks.py`, so the generated `.claude/settings.json` PreToolUse/Stop hooks reference `~/.claude/skills/...` absolute paths — never your checkout. Omit the path to target the current directory.
@@ -69,13 +77,26 @@ Runs the canonical `install_hooks.py`, so the generated `.claude/settings.json` 
 ### 3. Day-to-day commands
 
 ```bash
-npx e2e-harness status   <repo>           # doctor: hooks / index / run-state readiness
-npx e2e-harness next     <repo>           # next allowed harness action
-npx e2e-harness dispatch <repo>           # dispatch state + open scheduled tasks
-npx e2e-harness exec <script.py> <args>   # run any bundled scripts/<script>.py
+e2e-harness status   <repo>           # doctor: hooks / index / run-state readiness
+e2e-harness next     <repo>           # next allowed harness action
+e2e-harness dispatch <repo>           # dispatch state + open scheduled tasks
+e2e-harness exec <script.py> <args>   # run any bundled scripts/<script>.py
 ```
 
 `exec` forwards to `~/.claude/skills/e2e-dev-harness/scripts/<script.py>`; any other subcommand is passed through to `e2e_dev_harness.py`. Override the skill location with `E2E_HARNESS_HOME` and the interpreter with `E2E_HARNESS_PYTHON`.
+
+### 4. Tool maintenance (this machine)
+
+```bash
+e2e-harness update      # re-copy the bundled skill (backs up the previous one)
+e2e-harness uninstall   # remove ~/.claude/skills/e2e-dev-harness
+e2e-harness env         # JSON diagnostics: node / python / install / link state
+e2e-harness version     # print name and version
+e2e-harness link        # (re)register the global command
+e2e-harness unlink      # remove the global command
+```
+
+`env` exits non-zero when the skill is not installed or no Python is found, so it doubles as a CI readiness probe.
 
 ### Legacy installer (deprecated for hook install)
 

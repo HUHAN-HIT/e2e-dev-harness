@@ -73,6 +73,7 @@ TEST_CODE_MARKERS = ("/src/test/", "/test/", "/tests/")
 REVIEW_DISPATCH_PHASES = {"r1-review", "r2-review", "r3-review"}
 REVIEW_REPORT_NAME_RE = re.compile(r"^R[123](?:[-_].*)?\.md$", re.IGNORECASE)
 ACTIVE_DISPATCH_STATUSES = {"awaiting_runtime_spawn", "waiting_dispatch", "worker_dispatched", "dispatched", "worker_running"}
+PENDING_DISPATCH_ACK_STATUSES = {"awaiting_runtime_spawn", "waiting_dispatch", "worker_dispatched", "dispatched"}
 DEFAULT_ALLOWED_RUNTIME_LIFECYCLES = {"IMPLEMENTED"}
 DEFAULT_ALLOWED_TEST_LIFECYCLES = {"PLANNED", "RED_READY", "IMPLEMENTED"}
 COORDINATOR_INLINE_WRITE_WARN_CHARS = 8_000
@@ -326,7 +327,7 @@ def state_path_display(repo: Path, lock: Path | None) -> str:
     return posix_relative(repo, run_state_path_for_lock(repo, lock))
 
 
-def pending_spawn_guidance(repo: Path, lock: Path | None) -> dict:
+def pending_dispatch_ack_guidance(repo: Path, lock: Path | None) -> dict:
     if not lock:
         return {}
     state_path = run_state_path_for_lock(repo, lock)
@@ -342,7 +343,8 @@ def pending_spawn_guidance(repo: Path, lock: Path | None) -> dict:
         if isinstance(value, dict) and value not in dispatches:
             dispatches.append(value)
     for item in dispatches:
-        if str(item.get("status", "")).strip() != "awaiting_runtime_spawn":
+        status = str(item.get("status", "")).strip()
+        if status not in PENDING_DISPATCH_ACK_STATUSES:
             continue
         task_id = str(item.get("current_task_id", "")).strip()
         agent = str(item.get("current_agent", "")).strip()
@@ -359,14 +361,14 @@ def pending_spawn_guidance(repo: Path, lock: Path | None) -> dict:
             ack_command += f" --agent {agent}"
         ack_command += " --worker-handle <runtime-worker-id>"
         next_valid = (
-            f"Spawn Task from {spawn_request} (Task ID: {task_id}; Context Pack: {context_pack}), "
+            f"Spawn or acknowledge Task from {spawn_request} (Task ID: {task_id}; Context Pack: {context_pack}), "
             f"then run {ack_command}"
         )
         return {
             "next_valid_command": next_valid,
             "pending_dispatch": {
                 "schema": "e2e-dev-harness.pending-dispatch-guidance.v1",
-                "status": "awaiting_runtime_spawn",
+                "status": status,
                 "task_id": task_id,
                 "agent": agent,
                 "context_pack": context_pack,
@@ -468,7 +470,7 @@ def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -
         },
     }
     selected = actions.get(lifecycle, actions[""])
-    dispatch_guidance = pending_spawn_guidance(repo, lock)
+    dispatch_guidance = pending_dispatch_ack_guidance(repo, lock)
     if dispatch_guidance:
         selected = {
             **selected,
@@ -477,7 +479,7 @@ def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -
                 + (lifecycle or "<missing>")
                 + " and dispatcher task "
                 + dispatch_guidance["pending_dispatch"]["task_id"]
-                + " is awaiting runtime spawn. Spawn the generated Task, then record dispatch-ack."
+                + " is awaiting worker acknowledgement. Spawn or acknowledge the generated Task, then record dispatch-ack."
             ),
         }
     if dispatch_guidance and lifecycle == "CREATED":

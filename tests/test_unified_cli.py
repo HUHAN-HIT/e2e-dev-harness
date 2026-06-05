@@ -9,6 +9,7 @@ import os
 import subprocess
 import tempfile
 import textwrap
+import tomllib
 import unittest
 
 from types import SimpleNamespace
@@ -235,9 +236,13 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertTrue(any("differ" in note for note in notes))
 
     def test_pyproject_exposes_short_cli_alias(self) -> None:
-        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        scripts = pyproject["project"]["scripts"]
 
-        self.assertIn("e2eh = \"e2e_dev_harness:main\"", pyproject)
+        self.assertEqual("e2e_dev_harness:main", scripts["e2eh"])
+        self.assertEqual("e2e_dev_harness:main", scripts["e2e-dev-harness"])
+        self.assertEqual("e2e_dev_harness:main", scripts["e2e_dev_harness"])
+        self.assertNotIn("e2e-harness", scripts)
 
     def test_pyproject_packages_enterprise_harness_surface(self) -> None:
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")

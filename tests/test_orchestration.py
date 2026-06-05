@@ -713,7 +713,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertIn("dispatch-spawn-requests/T01-spawn-request.json", guidance["next_valid_command"])
         self.assertIn("Task ID: T01", guidance["next_valid_command"])
         self.assertIn("Context Pack: docs/agent-runs/run/context-packs/T01.json", guidance["next_valid_command"])
-        self.assertIn("awaiting runtime spawn", guidance["phase_guidance"])
+        self.assertIn("awaiting worker acknowledgement", guidance["phase_guidance"])
         self.assertIn("T01", guidance["phase_guidance"])
         self.assertEqual("T01", guidance["pending_dispatch"]["task_id"])
         self.assertEqual("spawn_worker", guidance["pending_dispatch"]["next_gate"])
@@ -722,35 +722,103 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
     def test_phase_guard_pending_dispatch_guidance_overrides_any_lifecycle_footer(self) -> None:
         for lifecycle in ("CLARIFIED", "PLANNED", "IMPLEMENTED"):
-            with self.subTest(lifecycle=lifecycle):
-                with tempfile.TemporaryDirectory() as tmp:
-                    repo = Path(tmp)
-                    run_dir = repo / "docs" / "agent-runs" / "run"
-                    state_path = run_dir / "run-state.json"
-                    lock = run_dir / ".phase-lock"
-                    lock.parent.mkdir(parents=True, exist_ok=True)
-                    lock.write_text(json.dumps({"lifecycle": lifecycle}), encoding="utf-8")
-                    state = run_state.build_state(
-                        "docs/agent-runs/run",
-                        "single-review",
-                        [],
-                        "docs/agent-runs/run/artifact-registry.json",
-                        lifecycle,
-                    )
-                    state["dispatch"] = {
-                        "status": "awaiting_runtime_spawn",
-                        "runtime": "claude-code",
-                        "current_task_id": "T02",
-                        "current_agent": "semantic-reviewer",
-                        "context_pack": "docs/agent-runs/run/context-packs/T02.json",
-                    }
-                    run_state.write_state(repo, state_path, state)
+            for status in ("awaiting_runtime_spawn", "worker_dispatched", "dispatched", "waiting_dispatch"):
+                with self.subTest(lifecycle=lifecycle, status=status):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        repo = Path(tmp)
+                        run_dir = repo / "docs" / "agent-runs" / "run"
+                        state_path = run_dir / "run-state.json"
+                        lock = run_dir / ".phase-lock"
+                        lock.parent.mkdir(parents=True, exist_ok=True)
+                        lock.write_text(json.dumps({"lifecycle": lifecycle}), encoding="utf-8")
+                        state = run_state.build_state(
+                            "docs/agent-runs/run",
+                            "single-review",
+                            [],
+                            "docs/agent-runs/run/artifact-registry.json",
+                            lifecycle,
+                        )
+                        state["dispatch"] = {
+                            "status": status,
+                            "runtime": "claude-code",
+                            "current_task_id": "T02",
+                            "current_agent": "semantic-reviewer",
+                            "context_pack": "docs/agent-runs/run/context-packs/T02.json",
+                        }
+                        run_state.write_state(repo, state_path, state)
 
-                    guidance = phase_guard.guidance_for_lifecycle(repo, lock, lifecycle)
+                        guidance = phase_guard.guidance_for_lifecycle(repo, lock, lifecycle)
 
-                self.assertIn("Task ID: T02", guidance["next_valid_command"])
-                self.assertIn("awaiting runtime spawn", guidance["phase_guidance"])
-                self.assertIn("T02", guidance["phase_guidance"])
+                    self.assertIn("Task ID: T02", guidance["next_valid_command"])
+                    self.assertIn(status, guidance["pending_dispatch"]["status"])
+                    self.assertIn("awaiting worker acknowledgement", guidance["phase_guidance"])
+                    self.assertIn("T02", guidance["phase_guidance"])
+
+    def test_phase_guard_worker_running_dispatch_does_not_request_spawn_ack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            lock = run_dir / ".phase-lock"
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            lock.write_text(json.dumps({"lifecycle": "PLANNED"}), encoding="utf-8")
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "single-review",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            state["dispatch"] = {
+                "status": "worker_running",
+                "runtime": "claude-code",
+                "current_task_id": "T02",
+                "current_agent": "semantic-reviewer",
+                "context_pack": "docs/agent-runs/run/context-packs/T02.json",
+            }
+            run_state.write_state(repo, state_path, state)
+
+            guidance = phase_guard.guidance_for_lifecycle(repo, lock, "PLANNED")
+
+        self.assertNotIn("pending_dispatch", guidance)
+        self.assertNotIn("dispatch-spawn-requests", guidance["next_valid_command"])
+
+    def test_phase_guard_pending_dispatch_prefers_dispatches_map_when_primary_is_running(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            lock = run_dir / ".phase-lock"
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            lock.write_text(json.dumps({"lifecycle": "PLANNED"}), encoding="utf-8")
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "single-review",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            state["dispatch"] = {
+                "status": "worker_running",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "context_pack": "docs/agent-runs/run/context-packs/T01.json",
+            }
+            state["dispatches"] = {
+                "T01": state["dispatch"],
+                "T02": {
+                    "status": "waiting_dispatch",
+                    "current_task_id": "T02",
+                    "current_agent": "semantic-reviewer",
+                    "context_pack": "docs/agent-runs/run/context-packs/T02.json",
+                },
+            }
+            run_state.write_state(repo, state_path, state)
+
+            guidance = phase_guard.guidance_for_lifecycle(repo, lock, "PLANNED")
+
+        self.assertEqual("T02", guidance["pending_dispatch"]["task_id"])
+        self.assertIn("T02-spawn-request.json", guidance["next_valid_command"])
 
     def test_phase_guard_guidance_lifecycle_todos_keep_coordinator_on_dispatch_and_gates(self) -> None:
         for lifecycle in ("CLARIFIED", "SERVICE_DESIGN_REQUIRED", "PLANNED", "IMPLEMENTED"):
