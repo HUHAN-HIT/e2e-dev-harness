@@ -746,7 +746,29 @@ def _dispatch_with_hook_guard(args, beat: bool) -> tuple[int, dict]:
         return 2, result
     hooks = runtime_hook_status(repo)
     runtime = args.runtime
+    explicit_manual = str(runtime or "").strip().lower().replace("_", "-") == "manual"
     forced_waiting = hooks.get("runtime") == "generic" or not hooks.get("ready", False)
+    if forced_waiting and not explicit_manual:
+        result = {
+            "repo": str(repo),
+            "ready": False,
+            "blocked_reasons": [
+                "Runtime hook is not ready for automatic dispatch; run install_hooks.py for the selected runtime before dispatching workers."
+            ],
+            "warnings": hooks.get("warnings", []),
+            "hook_status": hooks,
+            "coordinator_context_budget": budget_gate["coordinator_context_budget"],
+            "session_checkpoint": budget_gate["session_checkpoint"],
+            "next_required": {
+                "command": "python skills/e2e-dev-harness/scripts/install_hooks.py --runtime claude",
+                "reason": "install runtime hooks before automatic worker dispatch",
+            },
+            "next_single_action": "Run install_hooks.py --runtime claude before dispatch-beat/dispatch-next.",
+        }
+        summary = session_checkpoint.create_coordinator_summary(repo, args.state, result)
+        result["coordinator_summary_path"] = summary.get("coordinator_summary", "")
+        write_status(args.status_file, result)
+        return 2, result
     if forced_waiting:
         runtime = "manual"
     if beat:

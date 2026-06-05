@@ -21,6 +21,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import e2e_dev_harness as harness  # noqa: E402
+import install_hooks  # noqa: E402
 
 
 VALID_DIR_GRAPH = """\
@@ -171,16 +172,32 @@ class PreflightAggregatorTests(unittest.TestCase):
 
             result = harness.aggregate_preflight_blockers(repo, state)
 
-            self.assertFalse(result["ready"])
-            self.assertEqual(1, len(result["blockers"]))
-            blocker = result["blockers"][0]
-            self.assertEqual("clarification", blocker["gate"])
-            self.assertEqual("CREATED", blocker["return_phase"])
-            self.assertEqual(1, blocker["order"])
-            self.assertIn("agent-schedule.json", blocker["message"])
-            self.assertTrue(blocker["code"].startswith("BLK_"))
-            self.assertTrue(blocker["minimal_fix"])
-            self.assertEqual(blocker["minimal_fix"], result["next_single_action"])
+        self.assertFalse(result["ready"])
+        self.assertEqual(2, len(result["blockers"]))
+        blocker = result["blockers"][0]
+        self.assertEqual("runtime_hook", blocker["gate"])
+        self.assertEqual("BLK_RUNTIME_HOOK", blocker["code"])
+        self.assertEqual("CREATED", blocker["return_phase"])
+        self.assertEqual(1, blocker["order"])
+        self.assertIn("install_hooks", blocker["minimal_fix"])
+        self.assertEqual(blocker["minimal_fix"], result["next_single_action"])
+        self.assertEqual("clarification", result["blockers"][1]["gate"])
+
+    def test_missing_runtime_hook_blocks_dispatch_preflight_with_install_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state = _write_state(repo, "PLANNED")
+
+            result = harness.aggregate_preflight_blockers(repo, state)
+
+        self.assertFalse(result["ready"])
+        blocker = result["blockers"][0]
+        self.assertEqual("runtime_hook", blocker["gate"])
+        self.assertEqual("BLK_RUNTIME_HOOK", blocker["code"])
+        self.assertEqual("PLANNED", blocker["return_phase"])
+        self.assertIn("install_hooks", blocker["message"])
+        self.assertIn("install_hooks", blocker["minimal_fix"])
+        self.assertEqual(blocker["minimal_fix"], result["next_single_action"])
 
     def test_state_without_applicable_gate_is_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -230,6 +247,7 @@ class PreflightAggregatorTests(unittest.TestCase):
     def test_single_service_planned_skips_tdd_red_dispatch_check(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
+            install_hooks.install(repo, "claude")
             state = _write_state(repo, "PLANNED")
             _write_schedule(
                 state,

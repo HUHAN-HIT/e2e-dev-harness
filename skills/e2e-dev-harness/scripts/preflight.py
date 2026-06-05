@@ -7,6 +7,7 @@ from pathlib import Path
 import agent_scheduler
 import dir_graph
 import dispatcher
+import install_hooks
 from common import read_json_object
 
 
@@ -27,6 +28,47 @@ def require_repo_path(repo: Path, path: Path | None, label: str) -> Path:
     except ValueError as error:
         raise ValueError(f"{label} path resolves outside repository: {resolved}") from error
     return target
+
+
+def _runtime_hook_blockers_for_lifecycle(repo: Path, run_state_path: Path | str | None, expected_lifecycle: str) -> list[str]:
+    state_file = require_repo_path(repo, Path(str(run_state_path)), "run state") if run_state_path else None
+    state_data = read_json_object(state_file) if state_file and state_file.exists() else {}
+    lifecycle = str(state_data.get("lifecycle", "")).upper()
+    if lifecycle != expected_lifecycle:
+        return []
+
+    checked: list[dict] = []
+    claude_dir = repo / ".claude"
+    if claude_dir.exists():
+        checked.append(install_hooks.validate_config(claude_dir / "settings.json", repo))
+    opencode_dir = repo / ".opencode"
+    if opencode_dir.exists():
+        checked.append(install_hooks.validate_config(opencode_dir / "plugins" / "e2e-dev-harness.js", repo))
+    if any(item.get("ready") for item in checked):
+        return []
+    if checked:
+        reasons = [
+            reason
+            for item in checked
+            for reason in item.get("blocked_reasons", [])
+        ]
+        detail = "; ".join(reasons) if reasons else "hook config is present but not ready"
+        return [f"Runtime hook config is not ready; run install_hooks.py before dispatching workers. {detail}"]
+    return [
+        "Runtime hook config is missing; run install_hooks.py before dispatching workers so automatic dispatch can spawn isolated workers."
+    ]
+
+
+def runtime_hook_created_blockers(repo: Path, run_state_path: Path | str | None) -> list[str]:
+    return _runtime_hook_blockers_for_lifecycle(repo, run_state_path, "CREATED")
+
+
+def runtime_hook_service_design_blockers(repo: Path, run_state_path: Path | str | None) -> list[str]:
+    return _runtime_hook_blockers_for_lifecycle(repo, run_state_path, "SERVICE_DESIGN_REQUIRED")
+
+
+def runtime_hook_planned_blockers(repo: Path, run_state_path: Path | str | None) -> list[str]:
+    return _runtime_hook_blockers_for_lifecycle(repo, run_state_path, "PLANNED")
 
 
 def clarification_dispatch_blockers(repo: Path, run_state_path: Path | str | None) -> list[str]:
@@ -185,6 +227,13 @@ def preflight_checks() -> list[dict]:
             "fn": dir_graph.dir_graph_contract_blockers,
         },
         {
+            "gate": "runtime_hook",
+            "code": "BLK_RUNTIME_HOOK",
+            "return_phase": "CREATED",
+            "minimal_fix": "Run install_hooks.py --runtime claude before dispatch-beat/dispatch-next.",
+            "fn": runtime_hook_created_blockers,
+        },
+        {
             "gate": "clarification",
             "code": "BLK_CLARIFY_DISPATCH",
             "return_phase": "CREATED",
@@ -195,6 +244,13 @@ def preflight_checks() -> list[dict]:
             "fn": clarification_dispatch_blockers,
         },
         {
+            "gate": "runtime_hook",
+            "code": "BLK_RUNTIME_HOOK",
+            "return_phase": "SERVICE_DESIGN_REQUIRED",
+            "minimal_fix": "Run install_hooks.py --runtime claude before dispatch-beat/dispatch-next.",
+            "fn": runtime_hook_service_design_blockers,
+        },
+        {
             "gate": "service_design",
             "code": "BLK_SVC_DESIGN_DISPATCH",
             "return_phase": "SERVICE_DESIGN_REQUIRED",
@@ -203,6 +259,13 @@ def preflight_checks() -> list[dict]:
                 "service-designs/<service>.md, then validate the returned slices."
             ),
             "fn": service_design_dispatch_blockers,
+        },
+        {
+            "gate": "runtime_hook",
+            "code": "BLK_RUNTIME_HOOK",
+            "return_phase": "PLANNED",
+            "minimal_fix": "Run install_hooks.py --runtime claude before dispatch-beat/dispatch-next.",
+            "fn": runtime_hook_planned_blockers,
         },
         {
             "gate": "tdd_red",

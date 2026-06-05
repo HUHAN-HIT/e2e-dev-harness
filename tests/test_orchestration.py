@@ -740,7 +740,8 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertIn("preflight", result)
         self.assertFalse(result["preflight"]["ready"])
-        self.assertEqual("clarification", result["preflight"]["blockers"][0]["gate"])
+        self.assertEqual("runtime_hook", result["preflight"]["blockers"][0]["gate"])
+        self.assertEqual("clarification", result["preflight"]["blockers"][1]["gate"])
         self.assertEqual(result["preflight"]["next_single_action"], result["next"]["next_single_action"])
 
     def test_phase_guard_compact_guidance_keeps_full_policy_out_of_hook_result(self) -> None:
@@ -2513,7 +2514,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(result["coordinator_context_budget"]["handoff_recommended"])
         self.assertEqual("T10", result["task"]["id"])
 
-    def test_cli_dispatch_next_forces_waiting_dispatch_when_hooks_are_missing(self) -> None:
+    def test_cli_dispatch_next_blocks_with_install_hook_guidance_when_hooks_are_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             run_dir = repo / "docs" / "agent-runs" / "run"
@@ -2575,9 +2576,14 @@ class OrchestrationArtifactTests(unittest.TestCase):
             summary = json.loads((state_path.parent / "coordinator-summary.json").read_text(encoding="utf-8"))
 
         self.assertEqual(2, code)
-        self.assertEqual("waiting_dispatch", result["dispatch"]["status"])
+        self.assertFalse(result["ready"])
+        self.assertIn("hook_status", result)
+        self.assertEqual("generic", result["hook_status"]["runtime"])
+        self.assertTrue(any("install_hooks" in reason for reason in result["blocked_reasons"]))
         self.assertEqual("PLANNED", updated["lifecycle"])
-        self.assertEqual("PLANNED", summary["lifecycle"])
+        self.assertFalse(summary["ready"])
+        self.assertIn("install_hooks", result["next_single_action"])
+        self.assertNotIn("dispatch", result)
         self.assertNotIn("runtime_spawn_request", result)
         self.assertTrue(any("hook" in warning.lower() for warning in result["warnings"]))
 

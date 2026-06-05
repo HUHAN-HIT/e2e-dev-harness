@@ -2096,10 +2096,12 @@ class CliCommandFacadeContractTests(unittest.TestCase):
 
     def test_dispatch_cli_command_facade_preserves_dispatch_contracts(self) -> None:
         from e2e_harness.cli.commands import dispatch as dispatch_command  # noqa: PLC0415
+        import install_hooks  # noqa: PLC0415
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             schedule, state_path = write_dispatch_fixture(repo)
+            install_hooks.install(repo, "claude")
             next_code, next_result = dispatch_command.run_next(
                 repo,
                 schedule=schedule.relative_to(repo),
