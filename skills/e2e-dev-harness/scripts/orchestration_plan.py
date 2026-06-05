@@ -633,15 +633,9 @@ def service_artifacts(base: str, services: list[str] | None, merged_members: lis
     return result
 
 
-ROLE_TEMPLATE_FILES = {
-    "requirements-clarifier": "requirements-clarifier.md",
-    "use-case-designer": "use-case-designer.md",
-    "implementation-planner": "implementation-planner.md",
-    "test-case-developer": "test-case-developer.md",
-    "code-developer": "code-developer.md",
-    "semantic-reviewer": "semantic-reviewer.md",
-    "coverage-reviewer": "coverage-reviewer.md",
-}
+# Derived from the role registry so the template file set tracks the canonical
+# roles automatically (insertion order follows ROLE_REGISTRY, unchanged).
+ROLE_TEMPLATE_FILES = {role: f"{role}.md" for role in agent_roles.ROLE_REGISTRY}
 DEFAULT_COMPLETION_MODE = "dispatcher-confirmed"
 DEFAULT_EXECUTION_MODEL = "coordinator-only-dispatch"
 
@@ -959,6 +953,16 @@ def agent_plan(selected_mode: str, artifact_paths: dict, services: list[str] | N
 
 
 def phase_for_agent(name: str) -> str:
+    # Intentionally NOT a thin wrapper over agent_roles.resolve_role_key: a
+    # semantic-reviewer name must disambiguate to r1/r2/r3 by its
+    # design/test/implementation keyword, but
+    # `role_to_phase(resolve_role_key(name))` collapses every reviewer onto the
+    # single canonical `r1-review` phase. The explicit role-prefix precedence
+    # below (code-developer / coverage over an incidental service-slug keyword,
+    # so e.g. "code-developer-payment-test" -> `implement`) now matches
+    # resolve_role_key's ordering, so the only remaining divergence is reviewer
+    # disambiguation. See tests.PhaseFunctionTests and
+    # harness-role-phase-convergence-plan Step 3.
     if "requirements" in name or "clarifier" in name:
         return "clarify"
     if "use-case" in name or "designer" in name:
@@ -981,18 +985,9 @@ def phase_for_agent(name: str) -> str:
 
 
 def depends_on_for_phase(phase: str) -> list[str]:
-    dependencies = {
-        "clarify": [],
-        "design": ["clarify"],
-        "r1-review": ["design"],
-        "plan": ["r1-review"],
-        "tdd-red": ["design", "r1-review", "plan"],
-        "r2-review": ["tdd-red"],
-        "implement": ["tdd-red", "r2-review"],
-        "r3-review": ["implement"],
-        "completion": ["r3-review"],
-    }
-    return dependencies.get(phase, ["plan"])
+    # Single source of truth: agent_roles.PHASE_REGISTRY. The ["plan"] default
+    # for unknown phases is preserved by agent_roles.depends_on_for_phase.
+    return agent_roles.depends_on_for_phase(phase)
 
 
 def role_group_for_phase(phase: str) -> str:
@@ -1014,7 +1009,9 @@ def reviewer_subagent_type() -> str:
 
 
 def runtime_subagent_type_for_phase(phase: str) -> str:
-    if role_group_for_phase(phase) in {"review", "coverage"}:
+    # Route from the canonical role's declared subagent_kind so declaration and
+    # routing stay in one place (see agent_roles.phase_subagent_kind).
+    if agent_roles.phase_subagent_kind(phase) == "reviewer":
         return reviewer_subagent_type()
     return "general-purpose"
 

@@ -27,17 +27,11 @@ DISPATCHER_CONFIRMED_COMPLETION = "dispatcher-confirmed"
 EXCLUSIVE_ROLE_GROUPS = {"design", "planning", "test", "code", "review", "coverage"}
 ROLE_TEMPLATE_MARKERS = ("## Role Boundary", "## Allowed Inputs", "## Forbidden", "## Required Outputs", "## Done When")
 # Single source of truth in agent_roles; re-bound here for in-module use and
-# the `from agent_scheduler import *` re-export in domain/schedule.py.
+# the `from agent_scheduler import *` re-export in domain/schedule.py. The
+# satisfied table previously diverged from dispatcher's at SERVICE_DESIGN_REQUIRED
+# (missing r1-review); referencing the registry eliminates that bug.
 PHASE_ROLE_GROUPS = agent_roles.PHASE_ROLE_GROUPS
-LIFECYCLE_SATISFIED_PHASES = {
-    "CLARIFIED": {"clarify"},
-    "SERVICE_DESIGN_REQUIRED": {"clarify", "design"},
-    "PLANNED": {"clarify", "design"},
-    "RED_READY": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review"},
-    "IMPLEMENTED": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review"},
-    "REVIEWED": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review", "implement", "r3-review"},
-    "VERIFIED": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review", "implement", "r3-review", "completion"},
-}
+LIFECYCLE_SATISFIED_PHASES = agent_roles.LIFECYCLE_SATISFIED_PHASES
 
 
 def now_dt(now: datetime | None = None) -> datetime:

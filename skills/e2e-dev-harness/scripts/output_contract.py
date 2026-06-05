@@ -211,6 +211,23 @@ def _minimal_execution_packet(packet: Any) -> dict:
     }
 
 
+def _compact_review_policy(policy: Any) -> dict:
+    if not isinstance(policy, dict):
+        return {}
+    auto_minimum = policy.get("auto_minimum") if isinstance(policy.get("auto_minimum"), dict) else {}
+    effective = policy.get("effective") if isinstance(policy.get("effective"), dict) else {}
+    compact: dict[str, Any] = {}
+    if policy.get("user_requested"):
+        compact["user_requested"] = policy["user_requested"]
+    if auto_minimum.get("tier"):
+        compact["auto_minimum"] = auto_minimum["tier"]
+    if effective.get("tier"):
+        compact["effective"] = effective["tier"]
+    if "downgrade_blocked" in policy:
+        compact["downgrade_blocked"] = bool(policy["downgrade_blocked"])
+    return compact
+
+
 def compact_payload(
     repo: Path,
     command: str,
@@ -225,6 +242,7 @@ def compact_payload(
     dispatch_packets = result.get("dispatch_packets") if isinstance(result.get("dispatch_packets"), list) else []
     lifecycle = result.get("lifecycle", "")
     workflow_stage = workflow_stage_for_lifecycle(lifecycle)
+    review_policy = _compact_review_policy(result.get("review_policy"))
     payload = {
         "ready": bool(result.get("ready", False)),
         "workflow_stage": workflow_stage,
@@ -273,6 +291,8 @@ def compact_payload(
         "stdout_mode": "compact",
         "truncated": False,
     }
+    if review_policy:
+        payload["review_policy"] = review_policy
     text = json.dumps(payload, ensure_ascii=False)
     if len(text) <= MAX_COMPACT_CHARS:
         return payload
@@ -335,6 +355,8 @@ def compact_payload(
         }
         if budget_signal:
             payload["coordinator_context_budget"] = budget_signal
+        if review_policy:
+            payload["review_policy"] = review_policy
     return payload
 
 

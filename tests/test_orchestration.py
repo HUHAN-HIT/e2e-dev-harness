@@ -22,6 +22,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import orchestration_plan  # noqa: E402
+import agent_roles  # noqa: E402
 import auto_transition  # noqa: E402
 import phase_guard  # noqa: E402
 import run_state  # noqa: E402
@@ -43,6 +44,108 @@ import implementation_gate  # noqa: E402
 import reviewer_gate  # noqa: E402
 import service_design_gate  # noqa: E402
 import task_tier  # noqa: E402
+
+
+class PhaseFunctionTests(unittest.TestCase):
+    """Pin `phase_for_agent` / `depends_on_for_phase` behavior at the registry seam."""
+
+    # Golden phase resolution for the agent names `agent_plan` actually emits,
+    # including adversarial service slugs. `code-developer-*-test` MUST stay
+    # `implement`: the explicit `code-developer` role prefix outranks an
+    # incidental `test` in the service slug. This guards against a future naive
+    # "dedup" onto `resolve_role_key` (whose order would wrongly pick tdd-red).
+    PHASE_GOLDEN = {
+        "requirements-clarifier": "clarify",
+        "use-case-designer": "design",
+        "service-designer-order-service": "design",
+        "service-designer-test": "design",
+        "implementation-planner": "plan",
+        "test-case-developer": "tdd-red",
+        "test-case-developer-order-service": "tdd-red",
+        "test-case-developer-code-svc": "tdd-red",
+        "code-developer": "implement",
+        "code-developer-order-service": "implement",
+        "code-developer-notification-test": "implement",
+        "code-developer-integration-test": "implement",
+        "coverage-reviewer": "completion",
+        "design-reviewer": "r1-review",
+        "single-reviewer-r1-design": "r1-review",
+        "single-reviewer-r2-test": "r2-review",
+        "test-reviewer": "r2-review",
+        "single-reviewer-r3-implementation": "r3-review",
+        "implementation-reviewer": "r3-review",
+        "implementation-reviewer-order-service": "r3-review",
+        "totally-unknown": "plan",
+    }
+
+    def test_phase_for_agent_golden(self) -> None:
+        for name, phase in self.PHASE_GOLDEN.items():
+            self.assertEqual(phase, orchestration_plan.phase_for_agent(name), name)
+
+    def test_phase_for_agent_keeps_role_prefix_precedence_over_service_slug(self) -> None:
+        # The explicit `code-developer` role prefix outranks an incidental
+        # `test` in the service slug. `resolve_role_key` now orders
+        # `code-developer` before `test` too, so the registry-derived path and
+        # `phase_for_agent` agree (both -> "implement") for this adversarial
+        # name; the historical divergence (registry -> "tdd-red") is fixed.
+        name = "code-developer-notification-test"
+        self.assertEqual("implement", orchestration_plan.phase_for_agent(name))
+        registry_derived = agent_roles.role_to_phase(agent_roles.resolve_role_key(name))
+        self.assertEqual("implement", registry_derived)
+        self.assertEqual(registry_derived, orchestration_plan.phase_for_agent(name))
+
+    def test_depends_on_for_phase_delegates_to_registry(self) -> None:
+        for phase in list(agent_roles.PHASE_REGISTRY) + ["nonexistent-phase"]:
+            self.assertEqual(
+                agent_roles.depends_on_for_phase(phase),
+                orchestration_plan.depends_on_for_phase(phase),
+                phase,
+            )
+
+    def test_depends_on_for_phase_unknown_defaults_to_plan(self) -> None:
+        self.assertEqual(["plan"], orchestration_plan.depends_on_for_phase("mystery"))
+
+    REVIEWER_PHASES = ("r1-review", "r2-review", "r3-review", "completion")
+    GENERAL_PHASES = ("clarify", "design", "plan", "tdd-red", "implement", "unknown-phase")
+
+    def test_runtime_subagent_type_defaults_to_general_when_env_unset(self) -> None:
+        env = {k: v for k, v in os.environ.items() if k != orchestration_plan.REVIEWER_SUBAGENT_TYPE_ENV}
+        with patch.dict(os.environ, env, clear=True):
+            for phase in self.REVIEWER_PHASES + self.GENERAL_PHASES:
+                self.assertEqual("general-purpose", orchestration_plan.runtime_subagent_type_for_phase(phase), phase)
+
+    def test_runtime_subagent_type_routes_reviewer_phases_when_env_set(self) -> None:
+        with patch.dict(os.environ, {orchestration_plan.REVIEWER_SUBAGENT_TYPE_ENV: "code-reviewer"}):
+            for phase in self.REVIEWER_PHASES:
+                self.assertEqual("code-reviewer", orchestration_plan.runtime_subagent_type_for_phase(phase), phase)
+            for phase in self.GENERAL_PHASES:
+                self.assertEqual("general-purpose", orchestration_plan.runtime_subagent_type_for_phase(phase), phase)
+
+
+class RoleTemplateFilesTest(unittest.TestCase):
+    """`ROLE_TEMPLATE_FILES` derives from the role registry, preserving order."""
+
+    GOLDEN = {
+        "requirements-clarifier": "requirements-clarifier.md",
+        "use-case-designer": "use-case-designer.md",
+        "implementation-planner": "implementation-planner.md",
+        "test-case-developer": "test-case-developer.md",
+        "code-developer": "code-developer.md",
+        "semantic-reviewer": "semantic-reviewer.md",
+        "coverage-reviewer": "coverage-reviewer.md",
+    }
+
+    def test_role_template_files_match_golden_literal(self) -> None:
+        self.assertEqual(self.GOLDEN, dict(orchestration_plan.ROLE_TEMPLATE_FILES))
+        self.assertEqual(
+            list(self.GOLDEN), list(orchestration_plan.ROLE_TEMPLATE_FILES)
+        )
+
+    def test_role_template_files_are_derived_from_registry(self) -> None:
+        self.assertEqual(
+            {role: f"{role}.md" for role in agent_roles.ROLE_REGISTRY},
+            dict(orchestration_plan.ROLE_TEMPLATE_FILES),
+        )
 
 
 def implementation_gate_payload(red_path: Path) -> dict:

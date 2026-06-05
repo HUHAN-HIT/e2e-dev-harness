@@ -10,6 +10,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from contextlib import redirect_stdout
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
@@ -6125,6 +6126,120 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("CREATED", state["lifecycle"])
         self.assertEqual("code-write-locked", lock["state"])
         self.assertFalse(guard["ready"])
+
+    def test_start_records_review_policy_request_minimum_and_effective_tier(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            args = SimpleNamespace(
+                repo=repo,
+                feature="Admin Lookup",
+                request="Add one REST API endpoint in order-service for an admin lookup screen.",
+                design_doc=None,
+                agent_run_dir=None,
+                run_id="run",
+                run_date=None,
+                workflow_profile="basic",
+                force=False,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.start(args)
+            workflow = json.loads(Path(result["workflow_plan"]).read_text(encoding="utf-8"))
+            state = json.loads(Path(result["run_state"]).read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code)
+        self.assertEqual("basic", workflow["review_policy"]["user_requested"])
+        self.assertEqual("standard", workflow["review_policy"]["auto_minimum"]["tier"])
+        self.assertEqual("standard", workflow["review_policy"]["effective"]["tier"])
+        self.assertTrue(workflow["review_policy"]["downgrade_blocked"])
+        self.assertEqual(workflow["review_policy"], state["review_policy"])
+
+    def test_start_cli_accepts_review_tier_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            argv = [
+                "e2e_dev_harness.py",
+                "start",
+                str(repo),
+                "--feature",
+                "Admin Lookup",
+                "--request",
+                "Add one REST API endpoint in order-service for an admin lookup screen.",
+                "--run-id",
+                "run",
+                "--review-tier",
+                "basic",
+                "--json-full",
+            ]
+
+            with patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()):
+                code = e2e_dev_harness.main()
+            workflow = json.loads((repo / "docs" / "agent-runs" / "run" / "workflow-plan.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code)
+        self.assertEqual("basic", workflow["review_policy"]["user_requested"])
+        self.assertEqual("standard", workflow["review_policy"]["effective"]["tier"])
+        self.assertTrue(workflow["review_policy"]["downgrade_blocked"])
+
+    def test_start_cli_compact_output_reports_review_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            argv = [
+                "e2e_dev_harness.py",
+                "start",
+                str(repo),
+                "--feature",
+                "Admin Lookup",
+                "--request",
+                "Add one REST API endpoint in order-service for an admin lookup screen.",
+                "--run-id",
+                "run",
+                "--review-tier",
+                "basic",
+            ]
+            stdout = io.StringIO()
+
+            with patch.object(sys, "argv", argv), redirect_stdout(stdout):
+                code = e2e_dev_harness.main()
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(0, code)
+        self.assertEqual("compact", payload["stdout_mode"])
+        self.assertEqual("basic", payload["review_policy"]["user_requested"])
+        self.assertEqual("standard", payload["review_policy"]["auto_minimum"])
+        self.assertEqual("standard", payload["review_policy"]["effective"])
+        self.assertTrue(payload["review_policy"]["downgrade_blocked"])
+
+    def test_start_cli_review_tier_overrides_phase_profile_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            profile = repo / "phase-profile.json"
+            profile.write_text(json.dumps({"review_policy": {"tier": "audited"}}), encoding="utf-8")
+            argv = [
+                "e2e_dev_harness.py",
+                "start",
+                str(repo),
+                "--feature",
+                "Label",
+                "--request",
+                "Update a settings label.",
+                "--run-id",
+                "run",
+                "--phase-profile",
+                str(profile),
+                "--review-tier",
+                "basic",
+                "--json-full",
+            ]
+
+            with patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()):
+                code = e2e_dev_harness.main()
+            workflow = json.loads((repo / "docs" / "agent-runs" / "run" / "workflow-plan.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code)
+        self.assertEqual("basic", workflow["review_policy"]["user_requested"])
+        self.assertEqual("basic", workflow["review_policy"]["effective"]["tier"])
+        self.assertFalse(workflow["review_policy"]["downgrade_blocked"])
 
     def test_next_reports_clarify_after_start(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

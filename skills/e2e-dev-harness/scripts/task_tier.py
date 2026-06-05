@@ -10,6 +10,8 @@ from pathlib import Path
 
 
 TIERS = ("auto", "basic", "standard", "critical", "audited")
+ENFORCED_TIERS = ("basic", "standard", "critical", "audited")
+TIER_RANK = {tier: index for index, tier in enumerate(ENFORCED_TIERS)}
 BASE_GATES = [
     "clarification",
     "impact-summary",
@@ -125,6 +127,12 @@ def gates_for(tier: str) -> list[str]:
     return BASE_GATES
 
 
+def automatic_minimum(tier: str, reasons: list[str]) -> tuple[str, list[str]]:
+    if tier == "standard" and reasons == ["design-backed requirement detected"]:
+        return "basic", ["no risk keyword or dependency evidence requires review escalation"]
+    return tier, reasons
+
+
 def keyword_reasons(text: str, keywords: set[str], label: str) -> list[str]:
     lowered = text.lower()
     reasons: list[str] = []
@@ -178,12 +186,38 @@ def evaluate(requested: str, design_text: str = "", facts: dict | None = None, d
         raise ValueError(f"Unsupported workflow tier: {requested}")
     facts = facts or {}
     dependency_report = dependency_report or {}
+    auto_tier, auto_reasons = classify_auto(design_text, facts, dependency_report)
+    minimum_tier, minimum_reasons = automatic_minimum(auto_tier, auto_reasons)
     if requested == "auto":
-        tier, reasons = classify_auto(design_text, facts, dependency_report)
+        tier = auto_tier
+        reasons = auto_reasons
+        downgrade_blocked = False
     else:
-        tier, reasons = requested, [f"workflow tier explicitly set to {requested}"]
+        downgrade_blocked = TIER_RANK[requested] < TIER_RANK[minimum_tier]
+        tier = minimum_tier if downgrade_blocked else requested
+        reasons = [f"workflow tier explicitly set to {requested}"]
+        if downgrade_blocked:
+            reasons.append(f"requested tier below automatic safety minimum {minimum_tier}; using {tier}")
+            reasons.extend(minimum_reasons)
     return {
         "requested": requested,
+        "user_requested": requested,
+        "auto_recommended": {
+            "tier": auto_tier,
+            "reasons": auto_reasons,
+            "required_gates": gates_for(auto_tier),
+        },
+        "auto_minimum": {
+            "tier": minimum_tier,
+            "reasons": minimum_reasons,
+            "required_gates": gates_for(minimum_tier),
+        },
+        "effective": {
+            "tier": tier,
+            "reasons": reasons,
+            "required_gates": gates_for(tier),
+        },
+        "downgrade_blocked": downgrade_blocked,
         "tier": tier,
         "reasons": reasons,
         "required_gates": gates_for(tier),

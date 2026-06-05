@@ -14,6 +14,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import agent_roles  # noqa: E402
 import agent_scheduler  # noqa: E402
 import context_pack  # noqa: E402
 import event_log  # noqa: E402
@@ -215,26 +216,10 @@ def lifecycle_value(state: dict | None) -> str:
     return str((state or {}).get("lifecycle", "")).strip().upper()
 
 
-LIFECYCLE_ALLOWED_PHASES = {
-    "CREATED": {"clarify"},
-    "CLARIFIED": {"design", "r1-review"},
-    "SERVICE_DESIGN_REQUIRED": {"design", "r1-review"},
-    "PLANNED": {"r1-review", "plan", "tdd-red", "r2-review"},
-    "RED_READY": set(),
-    "IMPLEMENTED": {"implement", "r3-review", "completion"},
-    "REVIEWED": {"completion"},
-    "REWORK_REQUIRED": {"clarify", "design", "r1-review", "tdd-red", "r2-review", "implement", "r3-review", "completion"},
-}
-
-LIFECYCLE_SATISFIED_PHASES = {
-    "CLARIFIED": {"clarify"},
-    "SERVICE_DESIGN_REQUIRED": {"clarify", "design", "r1-review"},
-    "PLANNED": {"clarify", "design"},
-    "RED_READY": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review"},
-    "IMPLEMENTED": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review"},
-    "REVIEWED": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review", "implement", "r3-review"},
-    "VERIFIED": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review", "implement", "r3-review", "completion"},
-}
+# Single source of truth in agent_roles; re-bound here as module-level names so
+# the dispatch gating functions below and any `import` of these stay stable.
+LIFECYCLE_ALLOWED_PHASES = agent_roles.LIFECYCLE_ALLOWED_PHASES
+LIFECYCLE_SATISFIED_PHASES = agent_roles.LIFECYCLE_SATISFIED_PHASES
 
 
 def phase_dispatch_blocker(task: dict, state: dict | None) -> str:

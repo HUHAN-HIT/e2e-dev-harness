@@ -103,20 +103,141 @@ ROLE_REGISTRY: dict[str, dict] = {
 }
 
 
-# Single source of truth for phase -> role group. Both `agent_scheduler` and
-# `orchestration_plan` import this; each keeps its own `.get()` default
-# ("" for the scheduler's exclusivity check, "coordination" for planning) so
-# behavior is preserved exactly.
+# Single source of truth for workflow-phase ordering knowledge. Each phase
+# declares its execution `order`, its `role_group`, the canonical role that owns
+# it, and the phases it `depends_on`. Insertion order is kept identical to the
+# legacy `PHASE_ROLE_GROUPS` literal so the derived table below preserves order;
+# the numeric `order` field encodes the real (dependency-respecting) execution
+# sequence, which differs from insertion order for the review phases.
+PHASE_REGISTRY: dict[str, dict] = {
+    "clarify": {"order": 1, "role_group": "design", "canonical_role": "requirements-clarifier", "depends_on": []},
+    "design": {"order": 2, "role_group": "design", "canonical_role": "use-case-designer", "depends_on": ["clarify"]},
+    "plan": {"order": 4, "role_group": "planning", "canonical_role": "implementation-planner", "depends_on": ["r1-review"]},
+    "tdd-red": {"order": 5, "role_group": "test", "canonical_role": "test-case-developer", "depends_on": ["design", "r1-review", "plan"]},
+    "implement": {"order": 7, "role_group": "code", "canonical_role": "code-developer", "depends_on": ["tdd-red", "r2-review"]},
+    "r1-review": {"order": 3, "role_group": "review", "canonical_role": "semantic-reviewer", "depends_on": ["design"]},
+    "r2-review": {"order": 6, "role_group": "review", "canonical_role": "semantic-reviewer", "depends_on": ["tdd-red"]},
+    "r3-review": {"order": 8, "role_group": "review", "canonical_role": "semantic-reviewer", "depends_on": ["implement"]},
+    "completion": {"order": 9, "role_group": "coverage", "canonical_role": "coverage-reviewer", "depends_on": ["r3-review"]},
+}
+
+
+# Derived: phase -> role group. Both `agent_scheduler` and `orchestration_plan`
+# import this; each keeps its own `.get()` default ("" for the scheduler's
+# exclusivity check, "coordination" for planning) so behavior is preserved
+# exactly. Derived from PHASE_REGISTRY so the grouping cannot drift.
 PHASE_ROLE_GROUPS: dict[str, str] = {
-    "clarify": "design",
-    "design": "design",
-    "plan": "planning",
-    "tdd-red": "test",
-    "implement": "code",
-    "r1-review": "review",
-    "r2-review": "review",
-    "r3-review": "review",
-    "completion": "coverage",
+    phase: meta["role_group"] for phase, meta in PHASE_REGISTRY.items()
+}
+
+
+def depends_on_for_phase(phase: str) -> list[str]:
+    """Phases that must complete before `phase` (fresh copy per call).
+
+    Unknown phases fall back to ``["plan"]`` to match the legacy
+    `orchestration_plan.depends_on_for_phase` default.
+    """
+    meta = PHASE_REGISTRY.get(phase)
+    if meta is None:
+        return ["plan"]
+    return list(meta["depends_on"])
+
+
+def phase_role_group(phase: str) -> str:
+    """Role group for a phase, or "" when the phase is unknown.
+
+    Callers that need a non-empty default read `PHASE_ROLE_GROUPS.get(phase, ...)`
+    directly so each keeps its own historical default.
+    """
+    meta = PHASE_REGISTRY.get(phase)
+    return meta["role_group"] if meta is not None else ""
+
+
+def role_to_phase(role_key: str) -> str:
+    """Canonical phase a role owns (lowest `order` it owns), or "" if unknown.
+
+    Reviewer roles own several phases (r1/r2/r3); the canonical one is the
+    earliest in execution order. Phase disambiguation that needs the agent name
+    (e.g. r1 vs r2 vs r3) stays in `orchestration_plan.phase_for_agent`.
+    """
+    key = str(role_key or "")
+    if not key:
+        return ""
+    owned = [
+        (meta["order"], phase)
+        for phase, meta in PHASE_REGISTRY.items()
+        if meta["canonical_role"] == key
+    ]
+    if not owned:
+        return ""
+    return min(owned)[1]
+
+
+def phase_subagent_kind(phase: str) -> str:
+    """Declared subagent kind of the phase's canonical role ("" if unknown).
+
+    "reviewer" means the phase should route to the project's reviewer subagent;
+    "general" keeps it on general-purpose. Routing reads this declaration so the
+    `subagent_kind` field is live data, not documentation that a parallel
+    hardcoded role-group check could silently contradict.
+    """
+    meta = PHASE_REGISTRY.get(phase)
+    if meta is None:
+        return ""
+    return str(ROLE_REGISTRY.get(meta["canonical_role"], {}).get("subagent_kind", ""))
+
+
+# Single source of truth for lifecycle -> phase gating. `allowed` is the set of
+# phases dispatchable at that lifecycle; `satisfied` is the set treated as
+# already-complete (suppressing missing-dependency blockers and re-dispatch of
+# satisfied phases). Both `agent_scheduler` and `dispatcher` re-bind the derived
+# tables below to their module-level names. Not every lifecycle participates in
+# both tables, mirroring the legacy literals exactly.
+#
+# `SERVICE_DESIGN_REQUIRED.satisfied` includes `r1-review` on purpose: it defers
+# the R1 design review until service design completes, then `PLANNED` drops it so
+# the review runs there. (See harness-role-phase-convergence-plan Step 2.)
+LIFECYCLE_REGISTRY: dict[str, dict] = {
+    "CREATED": {"allowed": {"clarify"}},
+    "CLARIFIED": {"allowed": {"design", "r1-review"}, "satisfied": {"clarify"}},
+    "SERVICE_DESIGN_REQUIRED": {
+        "allowed": {"design", "r1-review"},
+        "satisfied": {"clarify", "design", "r1-review"},
+    },
+    "PLANNED": {
+        "allowed": {"r1-review", "plan", "tdd-red", "r2-review"},
+        "satisfied": {"clarify", "design"},
+    },
+    "RED_READY": {
+        "allowed": set(),
+        "satisfied": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review"},
+    },
+    "IMPLEMENTED": {
+        "allowed": {"implement", "r3-review", "completion"},
+        "satisfied": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review"},
+    },
+    "REVIEWED": {
+        "allowed": {"completion"},
+        "satisfied": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review", "implement", "r3-review"},
+    },
+    "VERIFIED": {
+        "satisfied": {"clarify", "design", "r1-review", "plan", "tdd-red", "r2-review", "implement", "r3-review", "completion"},
+    },
+    "REWORK_REQUIRED": {
+        "allowed": {"clarify", "design", "r1-review", "tdd-red", "r2-review", "implement", "r3-review", "completion"},
+    },
+}
+
+
+LIFECYCLE_ALLOWED_PHASES: dict[str, set[str]] = {
+    lifecycle: meta["allowed"]
+    for lifecycle, meta in LIFECYCLE_REGISTRY.items()
+    if "allowed" in meta
+}
+LIFECYCLE_SATISFIED_PHASES: dict[str, set[str]] = {
+    lifecycle: meta["satisfied"]
+    for lifecycle, meta in LIFECYCLE_REGISTRY.items()
+    if "satisfied" in meta
 }
 
 
@@ -124,12 +245,23 @@ PHASE_ROLE_GROUPS: dict[str, str] = {
 # substring matcher. Each rule: (role_key, include_any, exclude_any). The first
 # rule whose include keyword is present (and no exclude keyword is present)
 # wins; order is significant.
+#
+# `code-developer` is matched BEFORE the broad `test` rule so a code-developer
+# agent for a service whose slug contains "test" (e.g.
+# "code-developer-notification-test") resolves to `code-developer`, not
+# `test-case-developer`. The explicit `code-developer` token is unambiguous,
+# whereas `test` is an incidental keyword that can appear in a service slug.
+# This mirrors the precedence already encoded in
+# `orchestration_plan.phase_for_agent` (which checks `code-developer` before
+# `test`). `test-case-developer` names contain no `code-developer` token, so
+# they still fall through to the `test` rule. See
+# tests.LegacyParityTest / tests.ResolveRoleKeyTest.
 ROLE_KEY_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ("requirements-clarifier", ("requirements", "clarifier"), ()),
     ("use-case-designer", ("use-case", "designer"), ()),
     ("implementation-planner", ("planner",), ()),
-    ("test-case-developer", ("test",), ("review",)),
     ("code-developer", ("code-developer",), ()),
+    ("test-case-developer", ("test",), ("review",)),
     ("coverage-reviewer", ("coverage",), ()),
     ("semantic-reviewer", ("reviewer", "review"), ()),
 )

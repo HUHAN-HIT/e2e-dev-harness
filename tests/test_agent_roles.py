@@ -74,6 +74,9 @@ class ResolveRoleKeyTest(unittest.TestCase):
         "test-case-developer-order-service": "test-case-developer",
         "code-developer": "code-developer",
         "code-developer-order-service": "code-developer",
+        # Regression: a code-developer agent for a service whose slug contains
+        # "test" must still resolve to code-developer, not test-case-developer.
+        "code-developer-notification-test": "code-developer",
         "coverage-reviewer": "coverage-reviewer",
         "design-reviewer": "semantic-reviewer",
         "single-reviewer-r1-design": "semantic-reviewer",
@@ -104,6 +107,127 @@ class PhaseRoleGroupTest(unittest.TestCase):
         self.assertEqual(self.EXPECTED, dict(agent_roles.PHASE_ROLE_GROUPS))
 
 
+class PhaseRegistryTest(unittest.TestCase):
+    """`PHASE_REGISTRY` is the single source of phase ordering knowledge."""
+
+    EXPECTED_DEPENDS = {
+        "clarify": [],
+        "design": ["clarify"],
+        "r1-review": ["design"],
+        "plan": ["r1-review"],
+        "tdd-red": ["design", "r1-review", "plan"],
+        "r2-review": ["tdd-red"],
+        "implement": ["tdd-red", "r2-review"],
+        "r3-review": ["implement"],
+        "completion": ["r3-review"],
+    }
+    EXPECTED_CANONICAL_ROLE = {
+        "clarify": "requirements-clarifier",
+        "design": "use-case-designer",
+        "r1-review": "semantic-reviewer",
+        "plan": "implementation-planner",
+        "tdd-red": "test-case-developer",
+        "r2-review": "semantic-reviewer",
+        "implement": "code-developer",
+        "r3-review": "semantic-reviewer",
+        "completion": "coverage-reviewer",
+    }
+
+    def test_registry_covers_nine_phases(self) -> None:
+        self.assertEqual(set(self.EXPECTED_DEPENDS), set(agent_roles.PHASE_REGISTRY))
+
+    def test_each_phase_has_order_role_group_depends_on(self) -> None:
+        for phase, meta in agent_roles.PHASE_REGISTRY.items():
+            self.assertIsInstance(meta.get("order"), int, phase)
+            self.assertTrue(str(meta.get("role_group", "")).strip(), phase)
+            self.assertIsInstance(meta.get("depends_on"), list, phase)
+
+    def test_depends_on_for_phase_matches_legacy(self) -> None:
+        for phase, deps in self.EXPECTED_DEPENDS.items():
+            self.assertEqual(deps, agent_roles.depends_on_for_phase(phase), phase)
+
+    def test_depends_on_for_phase_unknown_defaults_to_plan(self) -> None:
+        self.assertEqual(["plan"], agent_roles.depends_on_for_phase("nonexistent"))
+
+    def test_depends_on_for_phase_returns_fresh_copies(self) -> None:
+        first = agent_roles.depends_on_for_phase("tdd-red")
+        first.append("mutated")
+        self.assertEqual(
+            ["design", "r1-review", "plan"], agent_roles.depends_on_for_phase("tdd-red")
+        )
+
+    def test_phase_role_group_matches_shared_table(self) -> None:
+        for phase, group in PhaseRoleGroupTest.EXPECTED.items():
+            self.assertEqual(group, agent_roles.phase_role_group(phase), phase)
+
+    def test_phase_role_groups_table_is_derived_from_registry(self) -> None:
+        self.assertEqual(
+            {phase: meta["role_group"] for phase, meta in agent_roles.PHASE_REGISTRY.items()},
+            dict(agent_roles.PHASE_ROLE_GROUPS),
+        )
+
+    def test_canonical_role_per_phase(self) -> None:
+        for phase, role in self.EXPECTED_CANONICAL_ROLE.items():
+            self.assertEqual(role, agent_roles.PHASE_REGISTRY[phase]["canonical_role"], phase)
+            self.assertIn(role, agent_roles.ROLE_REGISTRY)
+
+    def test_order_is_a_topological_linearization(self) -> None:
+        order = {phase: meta["order"] for phase, meta in agent_roles.PHASE_REGISTRY.items()}
+        for phase, deps in self.EXPECTED_DEPENDS.items():
+            for dep in deps:
+                self.assertLess(order[dep], order[phase], f"{dep} must order before {phase}")
+
+
+class PhaseSubagentKindTest(unittest.TestCase):
+    """Declared `subagent_kind` is the single source of runtime review routing."""
+
+    EXPECTED = {
+        "clarify": "general",
+        "design": "general",
+        "plan": "general",
+        "tdd-red": "general",
+        "implement": "general",
+        "r1-review": "reviewer",
+        "r2-review": "reviewer",
+        "r3-review": "reviewer",
+        "completion": "reviewer",
+    }
+
+    def test_phase_subagent_kind_matches_expected(self) -> None:
+        for phase, kind in self.EXPECTED.items():
+            self.assertEqual(kind, agent_roles.phase_subagent_kind(phase), phase)
+
+    def test_phase_subagent_kind_unknown_is_empty(self) -> None:
+        self.assertEqual("", agent_roles.phase_subagent_kind("nonexistent"))
+
+    def test_reviewer_kind_is_self_consistent_with_role_group(self) -> None:
+        # Declaration (subagent_kind) and routing (role_group) must agree:
+        # a phase routes to a reviewer iff its group is review/coverage.
+        for phase in agent_roles.PHASE_REGISTRY:
+            is_reviewer = agent_roles.phase_subagent_kind(phase) == "reviewer"
+            in_review_group = agent_roles.PHASE_ROLE_GROUPS[phase] in {"review", "coverage"}
+            self.assertEqual(in_review_group, is_reviewer, phase)
+
+
+class RoleToPhaseTest(unittest.TestCase):
+    EXPECTED = {
+        "requirements-clarifier": "clarify",
+        "use-case-designer": "design",
+        "implementation-planner": "plan",
+        "test-case-developer": "tdd-red",
+        "code-developer": "implement",
+        "coverage-reviewer": "completion",
+        # semantic-reviewer owns r1/r2/r3; canonical = lowest-order phase it owns.
+        "semantic-reviewer": "r1-review",
+        "": "",
+        "totally-unknown": "",
+    }
+
+    def test_role_to_phase(self) -> None:
+        for role, phase in self.EXPECTED.items():
+            self.assertEqual(phase, agent_roles.role_to_phase(role), role)
+
+
 class RoleMetadataTest(unittest.TestCase):
     def test_test_case_developer_declares_tdd_skill(self) -> None:
         self.assertIn(
@@ -130,6 +254,7 @@ class LegacyParityTest(unittest.TestCase):
         "test-case-developer-order-service",
         "code-developer",
         "code-developer-order-service",
+        "code-developer-notification-test",
         "coverage-reviewer",
         "design-reviewer",
         "single-reviewer-r1-design",

@@ -45,6 +45,23 @@ def read_json(path: Path) -> dict:
         return {}
 
 
+def current_git_head(repo: Path) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo,
+            shell=False,
+            text=True,
+            capture_output=True,
+            timeout=DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return ""
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout.strip()
+
+
 def detect_gitnexus_index(repo: Path) -> dict:
     meta_path = repo / ".gitnexus" / "meta.json"
     meta = read_json(meta_path) if meta_path.exists() else {}
@@ -52,6 +69,9 @@ def detect_gitnexus_index(repo: Path) -> dict:
     stats = meta.get("stats") if isinstance(meta.get("stats"), dict) else {}
     capabilities = meta.get("capabilities") if isinstance(meta.get("capabilities"), dict) else {}
     graph = capabilities.get("graph") if isinstance(capabilities.get("graph"), dict) else {}
+    fts = capabilities.get("fts") if isinstance(capabilities.get("fts"), dict) else {}
+    last_commit = str(meta.get("lastCommit") or "")
+    head = current_git_head(repo)
     repo_path_matches = False
     if repo_path:
         try:
@@ -64,10 +84,16 @@ def detect_gitnexus_index(repo: Path) -> dict:
         "repo_path": repo_path,
         "repo_path_matches": repo_path_matches,
         "indexed_at": meta.get("indexedAt"),
+        "last_commit": last_commit,
+        "current_head": head,
+        "is_stale": bool(last_commit and head and last_commit != head),
+        "files": stats.get("files"),
         "nodes": stats.get("nodes"),
         "edges": stats.get("edges"),
         "processes": stats.get("processes"),
         "graph_status": graph.get("status"),
+        "fts_status": fts.get("status"),
+        "recommended_refresh_command": "gitnexus analyze .",
     }
 
 

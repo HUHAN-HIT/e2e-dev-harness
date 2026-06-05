@@ -18,6 +18,7 @@ import install_hooks  # noqa: E402
 import dispatcher  # noqa: E402
 import dir_graph  # noqa: E402
 import event_log  # noqa: E402
+import kg_refresh  # noqa: E402
 import plugin_registry  # noqa: E402
 import run_state  # noqa: E402
 
@@ -118,10 +119,45 @@ def maven_check(repo: Path) -> dict:
     return check("maven", "warn", "warning", "No Maven executable found; no pom.xml was detected.")
 
 
-def gitnexus_check() -> dict:
+def gitnexus_check(repo: Path) -> dict:
     gitnexus = executable("gitnexus")
     if gitnexus:
-        return check("gitnexus", "pass", "info", f"GitNexus CLI is available: {gitnexus}")
+        index = kg_refresh.detect_gitnexus_index(repo)
+        if not index.get("exists"):
+            return check(
+                "gitnexus",
+                "pass",
+                "info",
+                f"GitNexus CLI is available: {gitnexus}; index metadata not found at {index.get('meta_path')}.",
+                index.get("recommended_refresh_command") or "gitnexus analyze .",
+            )
+        summary = (
+            f"GitNexus CLI is available: {gitnexus}; "
+            f"lastCommit={index.get('last_commit') or 'unknown'}; "
+            f"HEAD={index.get('current_head') or 'unknown'}; "
+            f"indexedAt={index.get('indexed_at') or 'unknown'}; "
+            f"graph={index.get('graph_status') or 'unknown'}; "
+            f"FTS={index.get('fts_status') or 'unknown'}; "
+            f"nodes={index.get('nodes') or 'unknown'}; "
+            f"edges={index.get('edges') or 'unknown'}."
+        )
+        if index.get("is_stale"):
+            return check(
+                "gitnexus",
+                "warn",
+                "warning",
+                "GitNexus index is stale; " + summary,
+                index.get("recommended_refresh_command") or "gitnexus analyze .",
+            )
+        if index.get("repo_path") and not index.get("repo_path_matches"):
+            return check(
+                "gitnexus",
+                "warn",
+                "warning",
+                "GitNexus index repoPath does not match this repository; " + summary,
+                index.get("recommended_refresh_command") or "gitnexus analyze .",
+            )
+        return check("gitnexus", "pass", "info", summary)
     return check(
         "gitnexus",
         "warn",
@@ -552,7 +588,7 @@ def evaluate(repo: Path, strict: bool = False, state: Path | None = None) -> dic
         repo_shape_check(repo),
         pytest_check(),
         maven_check(repo),
-        gitnexus_check(),
+        gitnexus_check(repo),
         dir_graph_check(repo),
         claude_hook_check(repo),
         opencode_hook_check(repo),

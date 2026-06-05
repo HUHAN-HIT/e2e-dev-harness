@@ -1668,6 +1668,7 @@ def main() -> int:
     start_parser.add_argument("--run-date")
     start_parser.add_argument("--phase-mode", choices=["auto", "manual"], default="auto")
     start_parser.add_argument("--workflow-profile", default="standard")
+    start_parser.add_argument("--review-tier", choices=task_tier.TIERS)
     start_parser.add_argument("--phase-profile", type=Path)
     start_parser.add_argument("--force", action="store_true")
     start_parser.add_argument("--status-file", type=Path)

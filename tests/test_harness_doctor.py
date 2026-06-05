@@ -17,6 +17,7 @@ if str(SCRIPTS) not in sys.path:
 
 import e2e_dev_harness  # noqa: E402
 import harness_doctor  # noqa: E402
+import kg_refresh  # noqa: E402
 import run_state  # noqa: E402
 
 
@@ -116,6 +117,47 @@ class HarnessDoctorTests(unittest.TestCase):
         self.assertTrue(result["ready"], result["blocked_reasons"])
         self.assertEqual("warn", checks["dir-graph"]["status"])
         self.assertIn(".e2e/dir-graph.yaml", checks["dir-graph"]["message"])
+
+    def test_doctor_warns_when_gitnexus_index_is_stale_and_reports_fts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            harness_doctor.shutil,
+            "which",
+            side_effect=lambda name: f"C:/tools/{name}.exe" if name in {"pytest", "mvn", "gitnexus"} else "",
+        ), patch.object(
+            kg_refresh,
+            "current_git_head",
+            return_value="def456",
+            create=True,
+        ):
+            repo = Path(tmp)
+            (repo / "pom.xml").write_text("<project />\n", encoding="utf-8")
+            meta = repo / ".gitnexus" / "meta.json"
+            meta.parent.mkdir(parents=True)
+            meta.write_text(
+                json.dumps(
+                    {
+                        "repoPath": str(repo),
+                        "lastCommit": "abc123",
+                        "indexedAt": "2026-06-04T17:17:52.858Z",
+                        "stats": {"files": 9, "nodes": 12, "edges": 34, "processes": 5},
+                        "capabilities": {
+                            "graph": {"status": "available"},
+                            "fts": {"status": "available"},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = harness_doctor.evaluate(repo)
+
+        checks = {item["id"]: item for item in result["checks"]}
+        self.assertEqual("warn", checks["gitnexus"]["status"])
+        self.assertIn("stale", checks["gitnexus"]["message"])
+        self.assertIn("lastCommit=abc123", checks["gitnexus"]["message"])
+        self.assertIn("HEAD=def456", checks["gitnexus"]["message"])
+        self.assertIn("FTS=available", checks["gitnexus"]["message"])
+        self.assertIn("gitnexus analyze .", checks["gitnexus"]["remediation"])
 
     def test_doctor_blocks_dir_graph_pipeline_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.object(

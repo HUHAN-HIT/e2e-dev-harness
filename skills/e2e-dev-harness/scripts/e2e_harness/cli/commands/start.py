@@ -10,6 +10,7 @@ import artifact_registry
 import coordinator_flow
 import orchestration_plan
 import run_state
+import task_tier
 from e2e_harness.cli.status import write_status
 
 
@@ -134,6 +135,7 @@ def workflow_plan_for_start(
     workflow_profile: str,
     phase_profile: dict | None = None,
     current_lifecycle: str = "CREATED",
+    review_policy: dict | None = None,
 ) -> dict:
     profile = phase_profile or {}
     manual_confirm = profile.get("manual_confirm_phases")
@@ -174,6 +176,7 @@ def workflow_plan_for_start(
             "service_code": dispatch_policy.get("service_code", "after-IMPLEMENTED"),
             "completion": dispatch_policy.get("completion", "after-R3"),
         },
+        "review_policy": review_policy or {},
         "manual_confirm_phases": manual_confirm,
         "custom_checkpoints": custom_checkpoints,
         "forbidden": [
@@ -183,6 +186,20 @@ def workflow_plan_for_start(
             "changing core lifecycle order from a phase profile",
         ],
     }
+
+
+def review_policy_for_start(
+    workflow_profile: str,
+    request: str,
+    phase_profile: dict | None = None,
+    review_tier: str | None = None,
+) -> dict:
+    profile = phase_profile or {}
+    policy = profile.get("review_policy") if isinstance(profile.get("review_policy"), dict) else {}
+    requested = str(review_tier or policy.get("tier") or policy.get("user_requested") or "").strip()
+    if not requested:
+        requested = workflow_profile if workflow_profile in task_tier.TIERS else "standard"
+    return task_tier.evaluate(requested, request)
 
 
 def role_template_text(role: str) -> str:
@@ -211,6 +228,7 @@ def run(
     run_date: str | None = None,
     phase_mode: str = "auto",
     workflow_profile: str = "standard",
+    review_tier: str | None = None,
     phase_profile: Path | None = None,
     force: bool = False,
     status_file: Path | None = None,
@@ -252,7 +270,8 @@ def run(
 
     created.extend(create_role_template_files(repo, artifacts))
 
-    workflow_plan = workflow_plan_for_start(phase_mode, workflow_profile, loaded_phase_profile, "CREATED")
+    review_policy = review_policy_for_start(workflow_profile, request or "", loaded_phase_profile, review_tier)
+    workflow_plan = workflow_plan_for_start(phase_mode, workflow_profile, loaded_phase_profile, "CREATED", review_policy)
     workflow_plan_path = _require_repo_path(repo, Path(artifacts["workflow_plan"]), "workflow plan")
     workflow_plan_path.write_text(json.dumps(workflow_plan, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     created.append(str(workflow_plan_path))
@@ -289,6 +308,7 @@ def run(
     state["phase_mode"] = phase_mode
     state["workflow_profile"] = workflow_plan["selected_profile"]
     state["workflow_plan"] = artifacts["workflow_plan"]
+    state["review_policy"] = workflow_plan["review_policy"]
     state["manual_confirm_phases"] = workflow_plan["manual_confirm_phases"]
     state["dispatch_policy"] = workflow_plan["dispatch_policy"]
     state_path = _require_repo_path(repo, Path(artifacts["run_state"]), "run state")
@@ -317,6 +337,7 @@ def run(
         "workflow_plan": str(workflow_plan_path),
         "phase_mode": phase_mode,
         "workflow_profile": workflow_plan["selected_profile"],
+        "review_policy": review_policy,
         "workflow": workflow_plan,
         "hook_status": hooks,
         "created": created,
@@ -339,6 +360,7 @@ def run_from_args(args) -> tuple[int, dict]:
         run_date=getattr(args, "run_date", None),
         phase_mode=getattr(args, "phase_mode", "auto"),
         workflow_profile=getattr(args, "workflow_profile", "standard"),
+        review_tier=getattr(args, "review_tier", None),
         phase_profile=getattr(args, "phase_profile", None),
         force=getattr(args, "force", False),
         status_file=getattr(args, "status_file", None),
