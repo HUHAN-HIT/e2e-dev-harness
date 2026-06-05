@@ -48,50 +48,42 @@ tests/
 
 ## Quick Start
 
-For day-to-day harness development, sync the latest skill copy into all local
-agent runtimes with one command:
+The recommended way to install and drive the harness is the **`e2e-harness` Node CLI** (`bin/e2e-harness.js`). It always resolves the canonical skill copy at `~/.claude/skills/e2e-dev-harness`, so the hooks it writes never depend on your current directory or which checkout you ran it from.
+
+### 1. Install to this machine
+
+```bash
+npx e2e-harness install
+```
+
+Copies the bundled skill into `~/.claude/skills/e2e-dev-harness`, records the Python interpreter in `.harness-env.json`, and backs up any previous install to `~/.claude/skill-backups/` (outside the skills directory, so the backup is never re-discovered as a duplicate skill).
+
+### 2. Wire a business repository's hooks
+
+```bash
+npx e2e-harness init <business-repo> --runtime claude
+```
+
+Runs the canonical `install_hooks.py`, so the generated `.claude/settings.json` PreToolUse/Stop hooks reference `~/.claude/skills/...` absolute paths — never your checkout. Omit the path to target the current directory.
+
+### 3. Day-to-day commands
+
+```bash
+npx e2e-harness status   <repo>           # doctor: hooks / index / run-state readiness
+npx e2e-harness next     <repo>           # next allowed harness action
+npx e2e-harness dispatch <repo>           # dispatch state + open scheduled tasks
+npx e2e-harness exec <script.py> <args>   # run any bundled scripts/<script>.py
+```
+
+`exec` forwards to `~/.claude/skills/e2e-dev-harness/scripts/<script.py>`; any other subcommand is passed through to `e2e_dev_harness.py`. Override the skill location with `E2E_HARNESS_HOME` and the interpreter with `E2E_HARNESS_PYTHON`.
+
+### Legacy installer (deprecated for hook install)
+
+`tools/install-e2e-dev-harness.mjs` predates the `e2e-harness` CLI. **Do not use it to install hooks:** it runs `install_hooks.py` from `<repo>/skills/e2e-dev-harness`, which bakes your checkout path into the target project's hooks and breaks them if the checkout moves or is renamed. Use `e2e-harness init` instead. Its multi-runtime skill-sync presets (`--sync`, `--target` for Codex/Gemini/OpenCode) remain usable until folded into the CLI:
 
 ```powershell
 node tools\install-e2e-dev-harness.mjs --sync --yes
 ```
-
-`--sync` expands to `--target all --skip-python-cli --skip-external`, so it
-copies the skill into Codex, Claude, and Agents without reinstalling the Python
-CLI, external tools, or project hooks.
-
-For a business repository that should enforce harness hooks, use the project
-preset from the harness source repository:
-
-```powershell
-node tools\install-e2e-dev-harness.mjs --project C:\path\to\business-repo --yes
-```
-
-`--project` syncs all runtime skill copies, installs project-local hooks, and
-runs `doctor` against the business repository. Preview either installer command
-by omitting `--yes`:
-
-```powershell
-node tools\install-e2e-dev-harness.mjs --project C:\path\to\business-repo
-```
-
-Use targeted maintenance presets when needed:
-
-```powershell
-node tools\install-e2e-dev-harness.mjs --hooks-only --project-root C:\path\to\business-repo --yes
-node tools\install-e2e-dev-harness.mjs --doctor-only --project-root C:\path\to\business-repo
-```
-
-Use `--full` only for full bootstrap, including editable Python CLI and
-optional external dependency installation:
-
-```powershell
-node tools\install-e2e-dev-harness.mjs --project C:\path\to\business-repo --full --yes
-```
-
-External tools are conservative by default. GitNexus and Graphify are detected
-but not installed unless `--install-external` is provided. Superpowers is
-probed as a skill/plugin capability; use `--strict-superpowers` to fail the
-installer when required Superpowers skills are missing.
 
 The editable Python CLI remains available when you want global command aliases:
 
