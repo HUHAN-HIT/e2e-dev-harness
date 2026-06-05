@@ -242,6 +242,34 @@ class RoleMetadataTest(unittest.TestCase):
             self.assertEqual("general", agent_roles.ROLE_REGISTRY[key]["subagent_kind"], key)
 
 
+class RoleAssetLoadingTest(unittest.TestCase):
+    """Default role/team declarations live in files, with Python as facade."""
+
+    def test_default_role_assets_back_registry(self) -> None:
+        assets = agent_roles.role_asset_paths()
+        self.assertEqual(CANONICAL_KEYS, set(assets))
+        for key, path in assets.items():
+            self.assertTrue(path.exists(), key)
+
+        loaded = agent_roles.load_role_registry()
+
+        self.assertEqual(CANONICAL_KEYS, set(loaded))
+        self.assertEqual(agent_roles.ROLE_REGISTRY, loaded)
+
+    def test_team_registry_defines_bootstrap_and_multi_service_presets(self) -> None:
+        self.assertIn("bootstrap", agent_roles.TEAM_REGISTRY)
+        self.assertIn("multi-service", agent_roles.TEAM_REGISTRY)
+
+        bootstrap = agent_roles.TEAM_REGISTRY["bootstrap"]
+        self.assertEqual(["requirements-clarifier"], bootstrap["roles"])
+        self.assertEqual("dispatcher-confirmed", bootstrap["completion_mode"])
+
+        multi = agent_roles.TEAM_REGISTRY["multi-service"]
+        self.assertEqual("multi", multi["agent_mode"])
+        self.assertEqual(CANONICAL_KEYS, set(multi["roles"]))
+        self.assertEqual("dispatcher-confirmed", multi["completion_mode"])
+
+
 class LegacyParityTest(unittest.TestCase):
     """The registry must remain behavior-identical to the legacy consumers."""
 

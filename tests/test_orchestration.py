@@ -682,6 +682,76 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertNotIn("Fill docs/design", joined)
         self.assertNotIn("clarify --design-doc", joined)
 
+    def test_phase_guard_created_guidance_points_to_pending_dispatch_spawn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            lock = run_dir / ".phase-lock"
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            lock.write_text(json.dumps({"lifecycle": "CREATED"}), encoding="utf-8")
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "bootstrap",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            state["dispatch"] = {
+                "status": "awaiting_runtime_spawn",
+                "runtime": "claude-code",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "context_pack": "docs/agent-runs/run/context-packs/T01.json",
+                "invocation_path": "docs/agent-runs/run/dispatch-invocations/T01-requirements-clarifier.json",
+            }
+            run_state.write_state(repo, state_path, state)
+
+            guidance = phase_guard.guidance_for_lifecycle(repo, lock, "CREATED")
+            compact = phase_guard.compact_guidance_result(guidance)
+
+        self.assertIn("dispatch-spawn-requests/T01-spawn-request.json", guidance["next_valid_command"])
+        self.assertIn("Task ID: T01", guidance["next_valid_command"])
+        self.assertIn("Context Pack: docs/agent-runs/run/context-packs/T01.json", guidance["next_valid_command"])
+        self.assertIn("awaiting runtime spawn", guidance["phase_guidance"])
+        self.assertIn("T01", guidance["phase_guidance"])
+        self.assertEqual("T01", guidance["pending_dispatch"]["task_id"])
+        self.assertEqual("spawn_worker", guidance["pending_dispatch"]["next_gate"])
+        self.assertIn("pending_dispatch.spawn_request", compact["guidance_ref"])
+        self.assertNotIn("Run e2e_dev_harness.py next", compact["guidance_ref"])
+
+    def test_phase_guard_pending_dispatch_guidance_overrides_any_lifecycle_footer(self) -> None:
+        for lifecycle in ("CLARIFIED", "PLANNED", "IMPLEMENTED"):
+            with self.subTest(lifecycle=lifecycle):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    run_dir = repo / "docs" / "agent-runs" / "run"
+                    state_path = run_dir / "run-state.json"
+                    lock = run_dir / ".phase-lock"
+                    lock.parent.mkdir(parents=True, exist_ok=True)
+                    lock.write_text(json.dumps({"lifecycle": lifecycle}), encoding="utf-8")
+                    state = run_state.build_state(
+                        "docs/agent-runs/run",
+                        "single-review",
+                        [],
+                        "docs/agent-runs/run/artifact-registry.json",
+                        lifecycle,
+                    )
+                    state["dispatch"] = {
+                        "status": "awaiting_runtime_spawn",
+                        "runtime": "claude-code",
+                        "current_task_id": "T02",
+                        "current_agent": "semantic-reviewer",
+                        "context_pack": "docs/agent-runs/run/context-packs/T02.json",
+                    }
+                    run_state.write_state(repo, state_path, state)
+
+                    guidance = phase_guard.guidance_for_lifecycle(repo, lock, lifecycle)
+
+                self.assertIn("Task ID: T02", guidance["next_valid_command"])
+                self.assertIn("awaiting runtime spawn", guidance["phase_guidance"])
+                self.assertIn("T02", guidance["phase_guidance"])
+
     def test_phase_guard_guidance_lifecycle_todos_keep_coordinator_on_dispatch_and_gates(self) -> None:
         for lifecycle in ("CLARIFIED", "SERVICE_DESIGN_REQUIRED", "PLANNED", "IMPLEMENTED"):
             with self.subTest(lifecycle=lifecycle):
@@ -9902,6 +9972,24 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
                 self.assertEqual("dispatcher-confirmed", schedule["completion_mode"])
                 self.assertEqual("coordinator-only-dispatch", schedule["execution_model"])
+
+    def test_agent_schedule_uses_declared_team_presets_for_capacity_metadata(self) -> None:
+        bootstrap = orchestration_plan.agent_schedule(
+            "bootstrap",
+            [],
+            [{"name": "requirements-clarifier", "inputs": [], "outputs": []}],
+        )
+        self.assertEqual("bootstrap", bootstrap["team_preset"])
+        self.assertEqual(1, bootstrap["max_workers"])
+
+        artifacts = orchestration_plan.artifacts("checkout", None, None, ["services/order-service"])
+        agents = orchestration_plan.agent_plan("multi", artifacts, ["services/order-service"])
+        multi = orchestration_plan.agent_schedule("multi", ["services/order-service"], agents)
+
+        self.assertEqual("multi-service", multi["team_preset"])
+        self.assertEqual(4, multi["max_workers"])
+        self.assertEqual("dispatcher-confirmed", multi["completion_mode"])
+        self.assertEqual("coordinator-only-dispatch", multi["execution_model"])
 
     def test_plan_archive_writes_concrete_review_request_agent_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

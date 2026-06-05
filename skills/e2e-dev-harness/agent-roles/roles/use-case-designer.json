@@ -1,0 +1,11 @@
+{
+  "template": {
+    "boundary": "Map ACs to use cases, failure paths, contracts, data effects, and service/module slices. Do not write tests or code.",
+    "inputs": "Ready requirements handoff, impact summary, dependency report, project patterns.",
+    "forbidden": "Changing accepted scope, production/test code edits, and approving own design.",
+    "outputs": "Ready use-case handoff, service/use-case mapping, contract candidates, downstream assumptions.",
+    "done": "Every AC maps to at least one use case or a documented deferral with owner and approval need."
+  },
+  "skills": [],
+  "subagent_kind": "general"
+}

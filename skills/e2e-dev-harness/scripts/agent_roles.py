@@ -17,12 +17,19 @@ The seven keys below are the canonical roles. Agent names produced by
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+SKILL_ROOT = Path(__file__).resolve().parent.parent
+ROLE_ASSET_DIR = SKILL_ROOT / "agent-roles" / "roles"
+TEAM_ASSET_DIR = SKILL_ROOT / "agent-roles" / "teams"
+
 # Canonical role definitions. `template` fields are migrated verbatim from the
 # legacy `ROLE_TEMPLATE_DETAILS` so `template_text()` renders byte-identical
 # role-template files. `skills` is consumed by `agent_plan()` to declare which
 # skills a role loads. `subagent_kind` ("reviewer"|"general") documents runtime
 # routing intent.
-ROLE_REGISTRY: dict[str, dict] = {
+_FALLBACK_ROLE_REGISTRY: dict[str, dict] = {
     "requirements-clarifier": {
         "template": {
             "boundary": "Clarify user intent, scope, ACs, unresolved questions, and bounded impact summary. Do not design tests or write code.",
@@ -101,6 +108,92 @@ ROLE_REGISTRY: dict[str, dict] = {
         "subagent_kind": "reviewer",
     },
 }
+
+
+def role_asset_paths(directory: Path | None = None) -> dict[str, Path]:
+    """Canonical role key -> declaration file path."""
+    root = directory or ROLE_ASSET_DIR
+    discovered = {path.stem: path for path in root.glob("*.json")}
+    ordered = {
+        key: discovered[key]
+        for key in _FALLBACK_ROLE_REGISTRY
+        if key in discovered
+    }
+    for key in sorted(set(discovered) - set(ordered)):
+        ordered[key] = discovered[key]
+    return ordered
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _valid_role_entry(data: dict) -> bool:
+    template = data.get("template")
+    if not isinstance(template, dict):
+        return False
+    required = ("boundary", "inputs", "forbidden", "outputs", "done")
+    return all(str(template.get(key, "")).strip() for key in required)
+
+
+def load_role_registry(directory: Path | None = None) -> dict[str, dict]:
+    """Load role declarations from assets, falling back to bundled defaults."""
+    loaded: dict[str, dict] = {}
+    for key, path in role_asset_paths(directory).items():
+        entry = _read_json(path)
+        if _valid_role_entry(entry):
+            loaded[key] = {
+                "template": dict(entry["template"]),
+                "skills": list(entry.get("skills", []) or []),
+                "subagent_kind": str(entry.get("subagent_kind", "general") or "general"),
+            }
+    if set(loaded) != set(_FALLBACK_ROLE_REGISTRY):
+        return {key: dict(value) for key, value in _FALLBACK_ROLE_REGISTRY.items()}
+    return loaded
+
+
+def team_asset_paths(directory: Path | None = None) -> dict[str, Path]:
+    """Team preset key -> declaration file path."""
+    root = directory or TEAM_ASSET_DIR
+    return {path.stem: path for path in sorted(root.glob("*.json"))}
+
+
+def load_team_registry(directory: Path | None = None) -> dict[str, dict]:
+    """Load declarative team presets for schedule construction."""
+    loaded: dict[str, dict] = {}
+    for key, path in team_asset_paths(directory).items():
+        entry = _read_json(path)
+        roles = entry.get("roles", [])
+        if isinstance(roles, list) and roles:
+            loaded[key] = dict(entry)
+    return loaded
+
+
+ROLE_REGISTRY: dict[str, dict] = load_role_registry()
+TEAM_REGISTRY: dict[str, dict] = load_team_registry()
+
+
+def team_preset_key(selected_mode: str) -> str:
+    """Team preset key for an orchestration mode, or "" when mode has none."""
+    mode = str(selected_mode or "").strip()
+    if mode == "bootstrap":
+        return "bootstrap"
+    if mode == "multi":
+        return "multi-service"
+    return ""
+
+
+def team_preset_for_mode(selected_mode: str) -> dict:
+    """Declarative team preset for `selected_mode` (fresh copy)."""
+    key = team_preset_key(selected_mode)
+    if not key:
+        return {}
+    preset = TEAM_REGISTRY.get(key, {})
+    return dict(preset)
 
 
 # Single source of truth for workflow-phase ordering knowledge. Each phase

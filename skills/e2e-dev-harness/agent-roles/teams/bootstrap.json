@@ -1,0 +1,9 @@
+{
+  "agent_mode": "bootstrap",
+  "roles": [
+    "requirements-clarifier"
+  ],
+  "completion_mode": "dispatcher-confirmed",
+  "execution_model": "coordinator-only-dispatch",
+  "max_workers": 1
+}

@@ -1,0 +1,11 @@
+{
+  "template": {
+    "boundary": "Verify end-to-end AC coverage and archive outcomes. Do not patch implementation directly.",
+    "inputs": "All ready role handoffs, semantic reviews, manifests, coverage matrix, command evidence, rework items.",
+    "forbidden": "Closing gaps by editing code, ignoring failed commands, or archiving unresolved rework as complete.",
+    "outputs": "Final coverage/business review, requirements archive, run summary, residual risk list.",
+    "done": "Every AC maps to use case, tests, code refs, business review, accepted review status, and closed rework."
+  },
+  "skills": [],
+  "subagent_kind": "reviewer"
+}

@@ -326,6 +326,58 @@ def state_path_display(repo: Path, lock: Path | None) -> str:
     return posix_relative(repo, run_state_path_for_lock(repo, lock))
 
 
+def pending_spawn_guidance(repo: Path, lock: Path | None) -> dict:
+    if not lock:
+        return {}
+    state_path = run_state_path_for_lock(repo, lock)
+    state = load_json(state_path)
+    if not state:
+        return {}
+    dispatches: list[dict] = []
+    dispatch = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
+    if dispatch:
+        dispatches.append(dispatch)
+    all_dispatches = state.get("dispatches") if isinstance(state.get("dispatches"), dict) else {}
+    for value in all_dispatches.values():
+        if isinstance(value, dict) and value not in dispatches:
+            dispatches.append(value)
+    for item in dispatches:
+        if str(item.get("status", "")).strip() != "awaiting_runtime_spawn":
+            continue
+        task_id = str(item.get("current_task_id", "")).strip()
+        agent = str(item.get("current_agent", "")).strip()
+        context_pack = str(item.get("context_pack", "")).strip()
+        if not task_id or not context_pack:
+            continue
+        run_id = str(state.get("run_id", "")).strip() or posix_relative(repo, state_path.parent)
+        spawn_request = f"{run_id.rstrip('/')}/dispatch-spawn-requests/{task_id}-spawn-request.json"
+        ack_command = (
+            "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-ack . "
+            f"--state {posix_relative(repo, state_path)} --task-id {task_id}"
+        )
+        if agent:
+            ack_command += f" --agent {agent}"
+        ack_command += " --worker-handle <runtime-worker-id>"
+        next_valid = (
+            f"Spawn Task from {spawn_request} (Task ID: {task_id}; Context Pack: {context_pack}), "
+            f"then run {ack_command}"
+        )
+        return {
+            "next_valid_command": next_valid,
+            "pending_dispatch": {
+                "schema": "e2e-dev-harness.pending-dispatch-guidance.v1",
+                "status": "awaiting_runtime_spawn",
+                "task_id": task_id,
+                "agent": agent,
+                "context_pack": context_pack,
+                "spawn_request": spawn_request,
+                "ack_command": ack_command,
+                "next_gate": "spawn_worker",
+            },
+        }
+    return {}
+
+
 def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -> dict:
     state_path = state_path_display(repo, lock)
     todo_list = required_todo_list_for_lifecycle(lifecycle)
@@ -416,7 +468,28 @@ def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -
         },
     }
     selected = actions.get(lifecycle, actions[""])
-    return {**base, **selected, "lifecycle": lifecycle or "<missing>"}
+    dispatch_guidance = pending_spawn_guidance(repo, lock)
+    if dispatch_guidance:
+        selected = {
+            **selected,
+            "phase_guidance": (
+                "Current lifecycle is "
+                + (lifecycle or "<missing>")
+                + " and dispatcher task "
+                + dispatch_guidance["pending_dispatch"]["task_id"]
+                + " is awaiting runtime spawn. Spawn the generated Task, then record dispatch-ack."
+            ),
+        }
+    if dispatch_guidance and lifecycle == "CREATED":
+        selected = {
+            **selected,
+            "allowed_actions": [
+                "spawn the dispatcher-generated Task from " + dispatch_guidance["pending_dispatch"]["spawn_request"],
+                "record dispatch-ack for the spawned requirements worker",
+                *selected.get("allowed_actions", []),
+            ],
+        }
+    return {**base, **selected, **dispatch_guidance, "lifecycle": lifecycle or "<missing>"}
 
 
 def guidance_from_lock(repo: Path, lock: Path | None) -> dict:
@@ -1695,8 +1768,11 @@ def compact_guidance_result(result: dict) -> dict:
         if isinstance(actions, list) and actions:
             next_action = str(actions[0])
     compact["next_single_action"] = next_action
-    ref = str(result.get("run_state") or result.get("phase_lock") or "docs/agent-runs/<run>/run-state.json")
-    compact["guidance_ref"] = f"Run e2e_dev_harness.py next . --state {ref} for full phase guidance."
+    if isinstance(result.get("pending_dispatch"), dict):
+        compact["guidance_ref"] = "Use pending_dispatch.spawn_request, pending_dispatch.task_id, and pending_dispatch.ack_command."
+    else:
+        ref = str(result.get("run_state") or result.get("phase_lock") or "docs/agent-runs/<run>/run-state.json")
+        compact["guidance_ref"] = f"Run e2e_dev_harness.py next . --state {ref} for full phase guidance."
     return compact
 
 

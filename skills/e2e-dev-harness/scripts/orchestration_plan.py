@@ -1018,6 +1018,8 @@ def runtime_subagent_type_for_phase(phase: str) -> str:
 
 def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) -> dict:
     tasks: list[dict] = []
+    team_preset_key = agent_roles.team_preset_key(selected_mode)
+    team_preset = agent_roles.team_preset_for_mode(selected_mode)
     for index, agent in enumerate(agents, start=1):
         name = str(agent.get("name", f"agent-{index}"))
         phase = phase_for_agent(name)
@@ -1048,8 +1050,10 @@ def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) 
     return {
         "schema": "e2e-dev-harness.agent-schedule.v1",
         "selected_mode": selected_mode,
-        "completion_mode": DEFAULT_COMPLETION_MODE,
-        "execution_model": DEFAULT_EXECUTION_MODEL,
+        "team_preset": team_preset_key,
+        "completion_mode": team_preset.get("completion_mode", DEFAULT_COMPLETION_MODE),
+        "execution_model": team_preset.get("execution_model", DEFAULT_EXECUTION_MODEL),
+        "max_workers": team_preset.get("max_workers", 1),
         "require_role_templates": True,
         "services": services,
         "coordination": "machine-readable task board; agents update task status and artifact hashes instead of exchanging long free-form chat.",
