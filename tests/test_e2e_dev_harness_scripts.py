@@ -8918,6 +8918,95 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("Shell write blocked" in reason for reason in result["blocked_reasons"]))
 
+    def test_phase_guard_extracts_indirect_python_write_target(self) -> None:
+        target = (
+            r"C:\Users\14907\Documents\Codex\2026-05-23\petalpay\docs\design\DESIGN-2026-002-"
+            "\u667a\u80fd\u4ea4\u6613\u98ce\u63a7\u5f15\u64ce\u4e0e\u591a\u7ea7\u8d44\u91d1\u6e05\u7ed3\u7b97\u7cfb\u7edf.md"
+        )
+        hook_text = json.dumps(
+            {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "python -c \""
+                        f"p = r'{target}'\n"
+                        "with open(p, 'w', encoding='utf-8') as f:\n"
+                        "    f.write('x')"
+                        "\""
+                    )
+                },
+            }
+        )
+
+        tool, paths = phase_guard.parse_hook_input(hook_text)
+
+        self.assertEqual("Bash", tool)
+        self.assertIn(target, paths)
+
+    def test_phase_guard_blocks_indirect_python_write_to_worker_owned_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            target = repo / "docs" / "agent-runs" / "run" / "handoffs" / "01-requirements-clarifier.md"
+            relative_target = target.relative_to(repo).as_posix()
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            state["dispatch"] = {
+                "status": "awaiting_runtime_spawn",
+                "runtime": "codex",
+                "previous_lifecycle": "CREATED",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            (run_dir / "agent-schedule.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": [relative_target],
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            hook_text = json.dumps(
+                {
+                    "tool_name": "Bash",
+                    "tool_input": {
+                        "command": (
+                            "python -c \""
+                            f"p = r'{target}'\n"
+                            "with open(p, 'w', encoding='utf-8') as f:\n"
+                            "    f.write('x')"
+                            "\""
+                        )
+                    },
+                }
+            )
+            tool, paths = phase_guard.parse_hook_input(hook_text)
+            command_text = phase_guard.extract_hook_command_text(hook_text)
+
+            result = phase_guard.validate_action(
+                repo,
+                tool,
+                [Path(path) for path in paths],
+                run_dir=Path("docs/agent-runs/run"),
+                command_text=command_text,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertIn(relative_target, " ".join(result["blocked_reasons"]))
+        self.assertTrue(any("Worker output write blocked" in reason for reason in result["blocked_reasons"]))
+
     def test_phase_guard_allows_readonly_bash_without_active_run(self) -> None:
         hook_text = json.dumps({"tool_name": "Bash", "tool_input": {"command": "python --version"}})
         tool, paths = phase_guard.parse_hook_input(hook_text)

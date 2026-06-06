@@ -109,7 +109,11 @@ SHELL_WRITE_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 PYTHON_PATH_LITERAL_RE = re.compile(
-    r"(?:open|Path)\s*\(\s*['\"](?P<path>[A-Za-z0-9_./\\:-]+\.[A-Za-z0-9.-]+)['\"]",
+    r"(?:open|Path)\s*\(\s*(?:[rubf]{0,4})?['\"](?P<path>(?:[A-Za-z]:)?[^'\"\r\n]*[\\/][^'\"\r\n]*\.[A-Za-z0-9][A-Za-z0-9.-]*)['\"]",
+    re.IGNORECASE,
+)
+PYTHON_PATH_ASSIGNMENT_RE = re.compile(
+    r"\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*(?:[rubf]{0,4})?['\"](?P<path>(?:[A-Za-z]:)?[^'\"\r\n]*[\\/][^'\"\r\n]*\.[A-Za-z0-9][A-Za-z0-9.-]*)['\"]",
     re.IGNORECASE,
 )
 CONTROL_PATH_LITERAL_RE = re.compile(
@@ -1230,7 +1234,7 @@ def paths_from_shell_command(command: str) -> list[str]:
         value = match.group("cmdlet") or match.group("redir") or match.group("tee") or ""
         if value:
             paths.append(value)
-    for pattern in (PYTHON_PATH_LITERAL_RE, CONTROL_PATH_LITERAL_RE):
+    for pattern in (PYTHON_PATH_LITERAL_RE, PYTHON_PATH_ASSIGNMENT_RE, CONTROL_PATH_LITERAL_RE):
         for match in pattern.finditer(command or ""):
             value = match.group("path")
             if value and value not in paths:
