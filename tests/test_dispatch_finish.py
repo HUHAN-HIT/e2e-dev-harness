@@ -242,6 +242,61 @@ class DispatchAckPhaseGuardTest(unittest.TestCase):
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
 
+    def test_runtime_dispatch_ack_proof_allows_worker_owned_handoff_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            evidence = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            state["dispatch"] = {
+                "status": "worker_running",
+                "runtime": "claude-code",
+                "previous_lifecycle": "CREATED",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "worker_handle": "requirements-clarifier-worker",
+                "worker_session": "requirements-clarifier-session",
+                "spawn_confirmed_by": "dispatch_ack",
+                "spawn_acknowledged_at": "2026-06-06T01:31:07Z",
+                "manual_worker_confirmed": False,
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            (run_dir / "agent-schedule.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": [evidence.as_posix()],
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = phase_guard.validate_action(
+                repo,
+                "Write",
+                [evidence],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
     def test_dispatch_ack_recovers_phase_guard_unverified_state(self) -> None:
         """phase_guard auto-confirm leaves the dispatch in worker_running_unverified.
 

@@ -80,6 +80,7 @@ ACTIVE_DISPATCH_STATUSES = {
     "worker_running",
     "worker_running_unverified",
 }
+RUNTIME_ACK_WORKER_OUTPUT_RUNTIMES = {"claude-code", "codex"}
 PENDING_DISPATCH_ACK_STATUSES = {"awaiting_runtime_spawn", "waiting_dispatch", "worker_dispatched", "dispatched"}
 DEFAULT_ALLOWED_RUNTIME_LIFECYCLES = {"IMPLEMENTED"}
 DEFAULT_ALLOWED_TEST_LIFECYCLES = {"PLANNED", "RED_READY", "IMPLEMENTED"}
@@ -831,11 +832,14 @@ def worker_output_write_confirmed(dispatch: dict) -> bool:
     if confirmed_by == "phase_guard":
         return False
     if confirmed_by == "dispatch_ack":
-        return bool(
-            dispatch.get("manual_worker_confirmed") is True
-            and str(dispatch.get("worker_handle", "")).strip()
+        runtime = str(dispatch.get("runtime", "")).strip()
+        has_worker_proof = bool(
+            str(dispatch.get("worker_handle", "")).strip()
             and str(dispatch.get("spawn_acknowledged_at", "")).strip()
         )
+        if runtime == "manual":
+            return has_worker_proof and dispatch.get("manual_worker_confirmed") is True
+        return runtime in RUNTIME_ACK_WORKER_OUTPUT_RUNTIMES and has_worker_proof
     return False
 
 
