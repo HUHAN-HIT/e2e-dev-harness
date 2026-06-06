@@ -79,6 +79,7 @@ Runs the canonical `install_hooks.py`, so the generated `.claude/settings.json` 
 ```bash
 e2e-harness status   <repo>           # doctor: hooks / index / run-state readiness
 e2e-harness next     <repo>           # next allowed harness action
+e2e-harness map      <repo>           # compact "you are here" navigation map
 e2e-harness dispatch <repo>           # dispatch state + open scheduled tasks
 e2e-harness gc       <repo>           # report artifact-retention cleanup candidates
 e2e-harness cleanup  <repo> --execute # apply artifact-retention cleanup
@@ -157,6 +158,21 @@ Ask the harness what is allowed next:
 e2e-dev-harness next . `
   --state docs\agent-runs\<run>\run-state.json
 ```
+
+### Development Navigation Map
+
+Use `e2e-harness map <repo> --state <run-state.json>` for the shortest "you are here" view. The map is a read-only projection of the current `next` result and does not advance lifecycle state.
+
+The map reports:
+
+- current lifecycle, workflow stage, and phase
+- ready/blocked status
+- one next safe action
+- active dispatch work
+- allowed and forbidden writes now
+- required evidence and key artifact paths
+
+Use `next --json-full` or the `full_result_path` when you need the complete workflow plan, execution packet, todo policy, or checkpoint details. Use `doctor --state` when environment health or state consistency looks abnormal.
 
 Then fill the generated design doc and run clarification/discovery:
 

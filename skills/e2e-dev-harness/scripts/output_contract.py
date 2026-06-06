@@ -153,7 +153,15 @@ def _compact_next(next_action: Any) -> dict:
         "dispatch_command",
         "expected_worker",
     ]
-    return {key: next_action[key] for key in keys if key in next_action}
+    compact = {key: next_action[key] for key in keys if key in next_action}
+    single = next_action.get("next_single_action")
+    if isinstance(single, dict):
+        single = single.get("command", "")
+    single_text = str(single or "").strip()
+    if single_text:
+        compact["command"] = single_text
+        compact["next_single_action"] = single_text
+    return compact
 
 
 def _compact_execution_packet(packet: Any) -> dict:
@@ -247,6 +255,74 @@ def _compact_review_policy(policy: Any) -> dict:
     return compact
 
 
+def _compact_navigation_map(value: Any) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    if not any(
+        key in value
+        for key in ("schema", "you_are_here", "status", "next_single_action", "active_work", "artifacts")
+    ):
+        return {}
+    you_are_here = value.get("you_are_here") if isinstance(value.get("you_are_here"), dict) else {}
+    status = value.get("status") if isinstance(value.get("status"), dict) else {}
+    next_action = value.get("next_single_action") if isinstance(value.get("next_single_action"), dict) else {}
+    artifacts = value.get("artifacts") if isinstance(value.get("artifacts"), dict) else {}
+    result = {
+        "you_are_here": {
+            key: you_are_here[key]
+            for key in ("lifecycle", "workflow_stage", "phase")
+            if you_are_here.get(key)
+        },
+        "status": {
+            "ready": bool(status.get("ready", False)),
+            "health": status.get("health", "blocked"),
+            "blocked_by": _limited_strings(status.get("blocked_by", []), 3),
+        },
+        "next_single_action": {
+            key: next_action[key]
+            for key in ("command", "source")
+            if next_action.get(key)
+        },
+        "active_work": _limited_list(value.get("active_work", []), 3),
+        "artifacts": {
+            key: artifacts[key]
+            for key in ("run_state", "coordinator_summary")
+            if artifacts.get(key)
+        },
+    }
+    return {key: item for key, item in result.items() if item not in ({}, [])}
+
+
+def _minimal_navigation_map(value: Any) -> dict:
+    compact = _compact_navigation_map(value)
+    if not compact:
+        return {}
+    return {
+        key: compact[key]
+        for key in ("you_are_here", "status", "next_single_action")
+        if compact.get(key)
+    }
+
+
+def _tiny_navigation_map(value: Any) -> dict:
+    compact = _compact_navigation_map(value)
+    if not compact:
+        return {}
+    return {
+        key: compact[key]
+        for key in ("you_are_here", "next_single_action")
+        if compact.get(key)
+    }
+
+
+def _navigation_map_source(result: dict) -> Any:
+    if isinstance(result.get("navigation_map"), dict):
+        return result["navigation_map"]
+    if result.get("schema") == "e2e-dev-harness.navigation-map.v1":
+        return result
+    return {}
+
+
 def compact_payload(
     repo: Path,
     command: str,
@@ -259,11 +335,15 @@ def compact_payload(
     if not isinstance(coordinator_budget, dict):
         coordinator_budget = session.get("context_budget") if isinstance(session.get("context_budget"), dict) else {}
     dispatch_packets = result.get("dispatch_packets") if isinstance(result.get("dispatch_packets"), list) else []
-    lifecycle = result.get("lifecycle", "")
-    workflow_stage = workflow_stage_for_lifecycle(lifecycle)
     review_policy = _compact_review_policy(result.get("review_policy"))
+    navigation_source = _navigation_map_source(result)
+    navigation_here = navigation_source.get("you_are_here") if isinstance(navigation_source.get("you_are_here"), dict) else {}
+    navigation_status = navigation_source.get("status") if isinstance(navigation_source.get("status"), dict) else {}
+    lifecycle = result.get("lifecycle", "") or navigation_here.get("lifecycle", "")
+    workflow_stage = navigation_here.get("workflow_stage") or workflow_stage_for_lifecycle(lifecycle)
+    ready = bool(result.get("ready", navigation_status.get("ready", False)))
     payload = {
-        "ready": bool(result.get("ready", False)),
+        "ready": ready,
         "workflow_stage": workflow_stage,
         "blocked_reasons": _limited_strings(result.get("blocked_reasons", [])),
         "warnings": _limited_strings(result.get("warnings", [])),
@@ -279,6 +359,7 @@ def compact_payload(
         "artifact_paths": _artifact_paths(repo, result, full_result_path, coordinator_summary_path),
         "next_action": _compact_next(result.get("next")),
         "execution_packet": _compact_execution_packet(result.get("execution_packet")),
+        "navigation_map": _compact_navigation_map(navigation_source),
         "checkpoint": session.get("checkpoint", ""),
         "coordinator_context_budget": coordinator_budget,
         "resume_instruction": (
@@ -312,10 +393,13 @@ def compact_payload(
     }
     if review_policy:
         payload["review_policy"] = review_policy
+    if not payload["navigation_map"]:
+        payload.pop("navigation_map")
     text = json.dumps(payload, ensure_ascii=False)
     if len(text) <= MAX_COMPACT_CHARS:
         return payload
     payload["truncated"] = True
+    payload["navigation_map"] = _minimal_navigation_map(navigation_source)
     payload["warnings"] = _limited_strings(payload["warnings"], 3)
     payload["blocked_reasons"] = _limited_strings(payload["blocked_reasons"], 5)
     payload["summary"] = {
@@ -338,6 +422,7 @@ def compact_payload(
     if len(json.dumps(payload, ensure_ascii=False)) > MAX_COMPACT_CHARS:
         payload["next_action"] = {}
         payload["execution_packet"] = _minimal_execution_packet(result.get("execution_packet"))
+        payload["navigation_map"] = _minimal_navigation_map(navigation_source)
         payload["coordinator_context_budget"] = {
             key: coordinator_budget[key]
             for key in ("exceeded_limits", "handoff_recommended")
@@ -346,7 +431,7 @@ def compact_payload(
     if len(json.dumps(payload, ensure_ascii=False)) > MAX_COMPACT_CHARS:
         next_action = _compact_next(result.get("next"))
         payload = {
-            "ready": bool(result.get("ready", False)),
+            "ready": ready,
             "workflow_stage": workflow_stage,
             "blocked_reasons": _limited_strings(result.get("blocked_reasons", []), 3),
             "warnings": _limited_strings(result.get("warnings", []), 2),
@@ -358,9 +443,10 @@ def compact_payload(
             },
             "next_action": {
                 key: next_action[key]
-                for key in ("workflow_stage", "phase", "orchestration_action", "dispatch_command")
+                for key in ("workflow_stage", "phase", "command", "orchestration_action", "dispatch_command")
                 if key in next_action
             },
+            "navigation_map": _minimal_navigation_map(navigation_source),
             "full_result_path": _stdout_path(repo, full_result_path),
             "command_event_path": _stdout_path(repo, result.get("command_event_path", "")) if result.get("command_event_path") else "",
             "coordinator_summary_path": _stdout_path(repo, coordinator_summary_path) if coordinator_summary_path else "",
@@ -376,6 +462,18 @@ def compact_payload(
             payload["coordinator_context_budget"] = budget_signal
         if review_policy:
             payload["review_policy"] = review_policy
+        if payload.get("navigation_map") and len(json.dumps(payload, ensure_ascii=False)) > MAX_COMPACT_CHARS:
+            payload["navigation_map"] = _tiny_navigation_map(navigation_source)
+        map_action = payload.get("navigation_map", {}).get("next_single_action", {})
+        if (
+            isinstance(map_action, dict)
+            and map_action.get("source") == "preflight"
+            and workflow_stage != "CLARIFY"
+            and len(json.dumps(payload, ensure_ascii=False)) > MAX_COMPACT_CHARS
+        ):
+            payload["next_action"] = {}
+            payload["warnings"] = []
+            payload["blocked_reasons"] = []
     return payload
 
 

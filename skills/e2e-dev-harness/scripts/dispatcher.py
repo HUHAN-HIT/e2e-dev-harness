@@ -422,6 +422,18 @@ def ready_handoff_completion_requirements(task: dict | None = None) -> dict:
             "Run handoff --path ... --agent ... or dispatch-finish --handoff ... before completion so the marker is generated after content is stable.",
             "Return the scheduled handoff path as dispatch-complete evidence only after handoff_gate is ready.",
         ],
+        "worker_self_check": {
+            "required": True,
+            "required_commands": [
+                "Run clarify against any scheduled design-doc output after final worker edits and save the JSON/status evidence.",
+                "Run handoff --path ... --agent ... or dispatch-finish --handoff ... for scheduled handoff outputs before dispatch-complete.",
+            ],
+            "required_evidence": [
+                "clarify status/evidence path for scheduled design-doc outputs",
+                "handoff finalize or dispatch-finish result proving handoff_gate is ready",
+            ],
+            "authority": "Worker self-check evidence is required for completion, but the control-plane revalidates before lifecycle transition.",
+        },
     }
 
 
@@ -433,9 +445,11 @@ def ready_handoff_prompt_lines(task: dict | None = None) -> list[str]:
         "- Scheduled handoff outputs must be complete Markdown handoffs, not metadata-only formatter patches.",
         "- Frontmatter must include: " + ", ".join(requirements["required_frontmatter_fields"]) + ".",
         "- Body must include: " + ", ".join(requirements["required_body_sections"]) + ".",
-        "- Under ## Open Questions, write only None/NONE_VALUES when closed; resolved-question explanations belong in Facts Used or Verification Evidence.",
+        "- Under ## Open Questions, write exactly None and no other text until the next ## heading when closed; resolved-question explanations belong in Facts Used or Verification Evidence.",
         "- Write the canonical .ready.json marker with path, sha256, producer_agent, and status: ready after finalizing the handoff.",
         "- output_hashes must hash separate produced evidence artifacts; the handoff file hash belongs only in .ready.json.",
+        "- Worker must self-check: run clarify for scheduled design-doc outputs and handoff/dispatch-finish for scheduled handoff outputs; save the JSON/status evidence.",
+        "- Self-check evidence does not advance lifecycle by itself; the control-plane revalidates before transition.",
         "- Before completion, run handoff --path ... --agent ... or dispatch-finish --handoff ... so finalize writes the marker.",
     ]
 
@@ -758,6 +772,25 @@ def task_prompt(task: dict, pack: dict, invocation_path: Path, repo: Path) -> st
     lines.append("Allowed inputs:")
     lines.extend(f"- {item}" for item in pack.get("allowed_inputs", []) or [])
     lines.append("")
+    resolved_inputs = pack.get("resolved_input_files", []) if isinstance(pack.get("resolved_input_files"), list) else []
+    missing_inputs = pack.get("missing_input_files", []) if isinstance(pack.get("missing_input_files"), list) else []
+    if resolved_inputs:
+        lines.append("Resolved input files for input_hashes:")
+        for item in resolved_inputs:
+            if isinstance(item, dict):
+                lines.append(f"- {item.get('path', '')}")
+            else:
+                lines.append(f"- {item}")
+        lines.append("")
+    if missing_inputs:
+        lines.append("Missing allowed inputs:")
+        for item in missing_inputs:
+            if isinstance(item, dict):
+                lines.append(f"- {item.get('path', '')} ({item.get('reason', 'missing')})")
+            else:
+                lines.append(f"- {item}")
+        lines.append("- Never write sha256:missing in input_hashes; omit missing files from input_hashes and document them in Facts Used or Verification Evidence.")
+        lines.append("")
     lines.append("Required outputs:")
     lines.extend(f"- {item}" for item in pack.get("allowed_outputs", []) or [])
     if requires_ready_handoff_contract(pack.get("allowed_outputs", [])):

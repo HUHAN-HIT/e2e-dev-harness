@@ -47,9 +47,17 @@ def select_task(schedule: dict, agent: str | None = None, service: str | None = 
     return None
 
 
-def estimate_inputs(repo: Path, inputs: list) -> tuple[int, list[dict], list[str]]:
+def looks_like_file_input(value: str) -> bool:
+    text = value.replace("\\", "/").strip()
+    if not text or text in {"user request", "knowledge graph summary"}:
+        return False
+    return "/" in text or bool(Path(text).suffix)
+
+
+def estimate_inputs(repo: Path, inputs: list) -> tuple[int, list[dict], list[dict], list[str]]:
     total_chars = 0
     files: list[dict] = []
+    missing_files: list[dict] = []
     warnings: list[str] = []
     for value in inputs:
         if not isinstance(value, str):
@@ -59,13 +67,18 @@ def estimate_inputs(repo: Path, inputs: list) -> tuple[int, list[dict], list[str
         except (ValueError, RuntimeError):
             continue
         if not path.exists() or not path.is_file():
+            if looks_like_file_input(value):
+                try:
+                    missing_files.append({"path": posix(path.relative_to(repo.resolve())), "reason": "missing"})
+                except ValueError:
+                    pass
             continue
         size = path.stat().st_size
         total_chars += size
         files.append({"path": posix(path.relative_to(repo.resolve())), "bytes": size})
         if size > 200_000:
             warnings.append(f"Large context input should be summarized before dispatch: {posix(path.relative_to(repo.resolve()))}")
-    return total_chars, files, warnings
+    return total_chars, files, missing_files, warnings
 
 
 def primary_inputs_for_task(task: dict, inputs: list[str]) -> list[str]:
@@ -101,7 +114,7 @@ def build_pack(
     outputs = task.get("outputs", []) if isinstance(task.get("outputs"), list) else []
     blocked.extend(dir_graph.context_pack_role_blockers(repo, task, outputs))
     primary_inputs = primary_inputs_for_task(task, inputs)
-    input_chars, input_files, input_warnings = estimate_inputs(repo, inputs)
+    input_chars, input_files, missing_input_files, input_warnings = estimate_inputs(repo, inputs)
     warnings.extend(input_warnings)
     if len(input_files) > max_files:
         blocked.append(f"Context pack has {len(input_files)} file inputs, above max_files={max_files}.")
@@ -128,6 +141,7 @@ def build_pack(
         "allowed_inputs": inputs,
         "allowed_outputs": outputs,
         "resolved_input_files": input_files,
+        "missing_input_files": missing_input_files,
     }
 
 

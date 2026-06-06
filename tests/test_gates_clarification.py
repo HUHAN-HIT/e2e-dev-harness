@@ -767,6 +767,60 @@ class ClarificationGateTests(unittest.TestCase):
         self.assertEqual(2400, repairs[0]["max_chars"])
         self.assertIn("compress", repairs[0]["objective"].lower())
 
+    def test_impact_summary_incomplete_table_exposes_mechanical_repair(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Add a refund callback API.
+
+            ## Scope
+            - services/payment-service
+
+            ## Use Cases
+            - Merchant calls HTTP refund callback endpoint.
+
+            ## Acceptance Criteria
+            - AC-1 POST /api/refunds/callback returns accepted status.
+
+            ## Change Logic
+            - Current behavior: no public refund callback endpoint exists.
+            - Target behavior: POST /api/refunds/callback accepts merchant refund callback requests.
+            - Runtime path: RefundCallbackController -> RefundCallbackService -> RefundRepository.
+            - State/data effect: persists refund status field and response body.
+
+            ## Impact Summary
+            - Source: GitNexus impact + dependency scanner
+            - Raw Evidence: docs/agent-runs/run/evidence/impact-analysis.json
+
+            | type | interface | related AC | risk |
+            | --- | --- | --- | --- |
+            | HTTP | POST /api/refunds/callback | AC-1 | medium |
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path)
+
+        self.assertFalse(result["ready_for_implementation"])
+        self.assertFalse(result["interaction_required"])
+        self.assertTrue(result["agent_remediation_required"])
+        repairs = result["mechanical_remediation_tasks"]
+        self.assertEqual("impact_summary_table_incomplete", repairs[0]["code"])
+        self.assertEqual("artifact_repair", repairs[0]["kind"])
+        self.assertEqual("Impact Summary", repairs[0]["section"])
+        self.assertIn("affected_callers_consumers", repairs[0]["gap"])
+        self.assertIn("required_tests_contracts", repairs[0]["gap"])
+
 
 
 

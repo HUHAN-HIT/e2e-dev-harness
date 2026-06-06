@@ -615,6 +615,33 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertEqual(["codex", "claude", "agents"], result["targets"])
         self.assertIn("copy-skill", [action["id"] for action in result["actions"]])
 
+    def test_compact_next_prefers_next_single_action_command(self) -> None:
+        payload = output_contract.compact_payload(
+            Path("C:/repo"),
+            "next",
+            {
+                "ready": True,
+                "lifecycle": "CREATED",
+                "workflow_stage": "CLARIFY",
+                "next": {
+                    "phase": "clarify",
+                    "command": "Dispatch the bootstrap requirements-clarifier worker.",
+                    "next_single_action": "Run dispatch-beat --max-workers 1 for mechanical clarification repair task T01b.",
+                },
+                "navigation_map": {
+                    "you_are_here": {"lifecycle": "CREATED", "workflow_stage": "CLARIFY"},
+                    "next_single_action": {
+                        "command": "Run dispatch-beat --max-workers 1 for mechanical clarification repair task T01b.",
+                    },
+                },
+                "blocked_reasons": [],
+                "warnings": [],
+            },
+            Path("C:/repo/docs/agent-runs/run/coordinator-results/next.json"),
+        )
+
+        self.assertIn("T01b", payload["next_action"]["command"])
+
     def test_next_cli_quiet_default_writes_full_result_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -659,6 +686,11 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertEqual(0, exit_code)
         self.assertIn("full_result_path", payload)
         self.assertEqual("CLARIFY", payload["workflow_stage"])
+        self.assertIn("navigation_map", payload)
+        self.assertEqual("CREATED", payload["navigation_map"]["you_are_here"]["lifecycle"])
+        self.assertEqual("CLARIFY", payload["navigation_map"]["you_are_here"]["workflow_stage"])
+        self.assertIn("dispatch-beat", payload["navigation_map"]["next_single_action"]["command"])
+        self.assertNotIn("required_evidence", payload["navigation_map"])
         self.assertIn("dispatch-beat", payload["next_action"]["dispatch_command"])
         self.assertIn("--max-workers 1", payload["next_action"]["dispatch_command"])
         self.assertNotIn("workflow_plan", payload)
@@ -671,6 +703,12 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertIn("workflow_plan", full_payload)
         self.assertIn("todo_policy", full_payload)
         self.assertIn("execution_packet", full_payload)
+        self.assertIn("navigation_map", full_payload)
+        self.assertEqual("e2e-dev-harness.navigation-map.v1", full_payload["navigation_map"]["schema"])
+        self.assertEqual("CREATED", full_payload["navigation_map"]["you_are_here"]["lifecycle"])
+        self.assertEqual("CLARIFY", full_payload["navigation_map"]["you_are_here"]["workflow_stage"])
+        self.assertIn("dispatch-beat", full_payload["navigation_map"]["next_single_action"]["command"])
+        self.assertEqual("docs/agent-runs/run/run-state.json", full_payload["navigation_map"]["artifacts"]["run_state"])
         self.assertIn("checkpoint", full_payload["session_checkpoint"])
         self.assertEqual("CREATED", full_payload["execution_packet"]["lifecycle"])
         self.assertIn("dispatch-beat", full_payload["execution_packet"]["primary_command"])
@@ -681,6 +719,78 @@ class UnifiedCliTests(unittest.TestCase):
                 for action in full_payload["execution_packet"]["forbidden_actions"]
             )
         )
+
+    def test_compact_payload_preserves_minimal_navigation_map_when_truncated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            full_result_path = repo / "full.json"
+            result = {
+                "ready": False,
+                "lifecycle": "PLANNED",
+                "blocked_reasons": [f"blocker-{index}" for index in range(80)],
+                "warnings": [f"warning-{index}" for index in range(80)],
+                "navigation_map": {
+                    "schema": "e2e-dev-harness.navigation-map.v1",
+                    "you_are_here": {
+                        "lifecycle": "PLANNED",
+                        "workflow_stage": "TEST_READY",
+                        "phase": "tdd-red",
+                    },
+                    "status": {
+                        "ready": False,
+                        "health": "blocked",
+                        "blocked_by": ["dispatch ack missing"],
+                        "warnings": ["checkpoint stale"],
+                    },
+                    "next_single_action": {
+                        "command": "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-ack . --task-id T02",
+                        "source": "preflight",
+                        "reason": "Preflight selected the next single safe action.",
+                    },
+                    "active_work": [{"task_id": "T02", "status": "awaiting_runtime_spawn"}],
+                    "allowed_now": ["docs/agent-runs/run/evidence/red-test.txt"],
+                    "forbidden_now": ["src/**"],
+                    "required_evidence": ["red test evidence"],
+                    "completion_checks": ["run-state lifecycle becomes RED_READY"],
+                    "artifacts": {"run_state": "docs/agent-runs/run/run-state.json"},
+                },
+            }
+
+            payload = output_contract.compact_payload(repo, "next", result, full_result_path)
+
+        self.assertTrue(payload["truncated"])
+        self.assertIn("navigation_map", payload)
+        self.assertEqual("PLANNED", payload["navigation_map"]["you_are_here"]["lifecycle"])
+        self.assertEqual("TEST_READY", payload["navigation_map"]["you_are_here"]["workflow_stage"])
+        self.assertIn("dispatch-ack", payload["navigation_map"]["next_single_action"]["command"])
+
+    def test_compact_payload_uses_navigation_map_stage_for_map_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            payload = output_contract.compact_payload(
+                repo,
+                "map",
+                {
+                    "schema": "e2e-dev-harness.navigation-map.v1",
+                    "you_are_here": {
+                        "lifecycle": "CREATED",
+                        "workflow_stage": "CLARIFY",
+                        "phase": "clarify",
+                    },
+                    "status": {"ready": True, "health": "ready", "blocked_by": []},
+                    "next_single_action": {
+                        "command": "Run install_hooks.py --runtime claude before dispatch-beat/dispatch-next.",
+                        "source": "preflight",
+                    },
+                },
+                repo / "full.json",
+            )
+
+        self.assertTrue(payload["ready"])
+        self.assertEqual("CLARIFY", payload["workflow_stage"])
+        self.assertEqual("CLARIFY", payload["summary"]["workflow_stage"])
+        self.assertEqual("CREATED", payload["summary"]["lifecycle"])
+        self.assertEqual("CLARIFY", payload["navigation_map"]["you_are_here"]["workflow_stage"])
 
     def test_next_cli_quiet_default_writes_structured_command_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

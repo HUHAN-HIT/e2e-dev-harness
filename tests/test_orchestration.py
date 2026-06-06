@@ -5118,6 +5118,38 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertIn(".ready.json", prompt)
         self.assertIn("Summary, Facts Used, Decisions Made, Open Questions, Downstream Assumptions, Verification Evidence", prompt)
 
+    def test_task_prompt_routes_missing_inputs_out_of_input_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            invocation = run_dir / "dispatch-invocations" / "T01-requirements-clarifier.json"
+            invocation.parent.mkdir(parents=True, exist_ok=True)
+            pack = {
+                "context_pack_path": "docs/agent-runs/run/context-packs/T01.json",
+                "allowed_inputs": [
+                    "user request",
+                    "docs/design/feature.md",
+                    "docs/agent-runs/run/evidence/cross-service-dependencies.json",
+                ],
+                "resolved_input_files": [{"path": "docs/design/feature.md", "bytes": 10}],
+                "missing_input_files": [
+                    {"path": "docs/agent-runs/run/evidence/cross-service-dependencies.json", "reason": "missing"}
+                ],
+                "allowed_outputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+            }
+
+            prompt = dispatcher.task_prompt(
+                {"id": "T01", "agent": "requirements-clarifier", "phase": "clarify"},
+                pack,
+                invocation,
+                repo,
+            )
+
+        self.assertIn("Resolved input files for input_hashes:", prompt)
+        self.assertIn("Missing allowed inputs:", prompt)
+        self.assertIn("Never write sha256:missing", prompt)
+        self.assertIn("Under ## Open Questions, write exactly None and no other text", prompt)
+
     def test_manual_worker_packet_includes_ready_handoff_contract_for_handoff_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

@@ -9,6 +9,7 @@ from pathlib import Path
 import dispatcher
 import install_hooks
 import lifecycle_policy
+import navigation_map
 import plugin_registry
 import preflight
 import run_state
@@ -876,8 +877,24 @@ def next_step(args) -> tuple[int, dict]:
     if not checkpoint["ready"]:
         result["ready"] = False
         result["blocked_reasons"].extend("Session checkpoint: " + reason for reason in checkpoint["blocked_reasons"])
+    result["navigation_map"] = navigation_map.build(
+        repo=repo,
+        state_path=state_path,
+        state=state,
+        lifecycle=lifecycle,
+        workflow_stage=result["workflow_stage"],
+        ready=result["ready"],
+        blocked_reasons=list(result.get("blocked_reasons", [])),
+        warnings=list(result.get("warnings", [])),
+        action=action,
+        preflight=result["preflight"],
+        execution_packet=execution_packet,
+        checkpoint=checkpoint,
+    )
     summary = session_checkpoint.create_coordinator_summary(repo, state_path, result)
     result["coordinator_summary_path"] = summary.get("coordinator_summary", "")
+    if isinstance(result.get("navigation_map"), dict):
+        result["navigation_map"].setdefault("artifacts", {})["coordinator_summary"] = summary.get("coordinator_summary", "")
     result["coordinator_summary"] = summary
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result

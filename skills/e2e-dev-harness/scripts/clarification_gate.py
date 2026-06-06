@@ -325,6 +325,7 @@ def agent_remediation_actions(result: dict) -> list[str]:
 
 def mechanical_remediation_tasks(path: Path, result: dict) -> list[dict]:
     tasks: list[dict] = []
+    impact_incomplete_gaps: list[str] = []
     for gap in result.get("impact_gaps", []):
         lowered = str(gap).lower()
         if "stay bounded" in lowered:
@@ -368,6 +369,56 @@ def mechanical_remediation_tasks(path: Path, result: dict) -> list[dict]:
                     "gap": gap,
                 }
             )
+        else:
+            impact_incomplete_gaps.append(str(gap))
+    if impact_incomplete_gaps:
+        gap_summary = "; ".join(impact_incomplete_gaps[:8])
+        if len(impact_incomplete_gaps) > 8:
+            gap_summary += f"; plus {len(impact_incomplete_gaps) - 8} more Impact Summary gaps"
+        tasks.append(
+            {
+                "code": "impact_summary_table_incomplete",
+                "kind": "artifact_repair",
+                "section": "Impact Summary",
+                "target": str(path),
+                "max_chars": IMPACT_MAX_CHARS,
+                "max_rows": IMPACT_MAX_ROWS,
+                "objective": (
+                    "Complete the bounded Impact Summary using evidence-backed Source, Raw Evidence, "
+                    "affected interface rows, AC mappings, caller/consumer impact, required tests/contracts, and risk."
+                ),
+                "constraints": [
+                    "Do not add new product facts or reopen user-confirmed Open Questions.",
+                    "Use repo evidence, GitNexus impact, dependency scanner output, or explicit manual non-applicability evidence.",
+                    "Keep raw output in evidence files and keep the design summary bounded.",
+                    "Keep the affected interfaces table mapped to AC ids.",
+                ],
+                "gap": gap_summary,
+            }
+        )
+    change_logic_gaps = [str(gap) for gap in result.get("change_logic_gaps", [])]
+    if change_logic_gaps:
+        gap_summary = "; ".join(change_logic_gaps[:8])
+        if len(change_logic_gaps) > 8:
+            gap_summary += f"; plus {len(change_logic_gaps) - 8} more Change Logic gaps"
+        tasks.append(
+            {
+                "code": "change_logic_incomplete",
+                "kind": "artifact_repair",
+                "section": "Change Logic",
+                "target": str(path),
+                "objective": (
+                    "Complete Change Logic with current behavior, target behavior, runtime path, "
+                    "and state/data/config/request-response effects."
+                ),
+                "constraints": [
+                    "Do not add new product facts or reopen user-confirmed Open Questions.",
+                    "Use existing design scope, acceptance criteria, and repository evidence.",
+                    "Trace only the runtime path needed for the confirmed requirement.",
+                ],
+                "gap": gap_summary,
+            }
+        )
     return tasks
 
 

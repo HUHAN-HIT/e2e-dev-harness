@@ -183,6 +183,47 @@ class PreflightAggregatorTests(unittest.TestCase):
         self.assertEqual(blocker["minimal_fix"], result["next_single_action"])
         self.assertEqual("clarification", result["blockers"][1]["gate"])
 
+    def test_created_state_routes_pending_clarification_repair_as_next_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            install_hooks.install(repo, "claude")
+            state = _write_state(repo, "CREATED")
+            _write_schedule(
+                state,
+                [
+                    {
+                        "id": "T01",
+                        "agent": "requirements-clarifier",
+                        "phase": "clarify",
+                        "status": "completed",
+                    },
+                    {
+                        "id": "T01b",
+                        "agent": "requirements-clarifier",
+                        "phase": "clarify",
+                        "kind": "artifact_repair",
+                        "status": "planned",
+                        "repair_targets": ["docs/design/feature.md"],
+                    },
+                ],
+            )
+            events = state.parent / "dispatch-events"
+            events.mkdir()
+            (events / "T01-completed.json").write_text(
+                json.dumps({"event": "worker_completed", "task_id": "T01", "agent": "requirements-clarifier"}),
+                encoding="utf-8",
+            )
+
+            result = harness.aggregate_preflight_blockers(repo, state)
+
+        self.assertFalse(result["ready"])
+        blocker = result["blockers"][0]
+        self.assertEqual("clarification", blocker["gate"])
+        self.assertIn("mechanical repair", blocker["message"])
+        self.assertIn("mechanical clarification repair task", blocker["minimal_fix"])
+        self.assertIn("dispatch-beat", result["next_single_action"])
+        self.assertIn("T01b", result["next_single_action"])
+
     def test_missing_runtime_hook_blocks_dispatch_preflight_with_install_guidance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

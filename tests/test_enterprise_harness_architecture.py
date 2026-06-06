@@ -1717,6 +1717,102 @@ class DoctorTimelineContractTests(unittest.TestCase):
 
 
 class CliCommandFacadeContractTests(unittest.TestCase):
+    def test_navigation_map_projection_reports_you_are_here_and_single_action(self) -> None:
+        import navigation_map  # noqa: PLC0415
+
+        state = {
+            "run_id": "run",
+            "lifecycle": "CREATED",
+            "dispatches": {
+                "T01": {
+                    "status": "awaiting_runtime_spawn",
+                    "runtime": "codex",
+                    "current_agent": "requirements-clarifier",
+                    "context_pack": "docs/agent-runs/run/context-packs/T01.json",
+                    "invocation_path": "docs/agent-runs/run/dispatch-invocations/T01.json",
+                }
+            },
+        }
+        action = {
+            "workflow_stage": "CLARIFY",
+            "phase": "clarify",
+            "dispatch_command": "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-beat . --max-workers 1",
+            "allowed_writes": ["docs/agent-runs/run/design.md"],
+            "blocked_writes": ["src/**"],
+            "forbidden_local_actions": ["do not edit production code"],
+        }
+        execution_packet = {
+            "schema": "e2e-dev-harness.execution-packet.v1",
+            "lifecycle": "CREATED",
+            "phase": "clarify",
+            "objective": "Clarify intent and scope through the bootstrap requirements worker before planning.",
+            "primary_command": action["dispatch_command"],
+            "required_actions": ["Dispatch the requirements-clarifier worker."],
+            "required_evidence": ["confirmed Restated Intent and closed Open Questions in the design doc"],
+            "forbidden_actions": ["do not edit production code"],
+            "completion_checks": ["run-state lifecycle becomes CLARIFIED"],
+            "next_gate": "clarification",
+        }
+
+        result = navigation_map.build(
+            repo=Path("C:/repo"),
+            state_path=Path("C:/repo/docs/agent-runs/run/run-state.json"),
+            state=state,
+            lifecycle="CREATED",
+            workflow_stage="CLARIFY",
+            ready=False,
+            blocked_reasons=["Runtime hook is not ready"],
+            warnings=["Session checkpoint is stale"],
+            action=action,
+            preflight={"ready": False, "blockers": ["dispatch ack missing"], "next_single_action": "run dispatch-ack"},
+            execution_packet=execution_packet,
+            checkpoint={"checkpoint": "docs/agent-runs/run/session-checkpoint.json"},
+            coordinator_summary_path="docs/agent-runs/run/coordinator-summary.json",
+        )
+
+        self.assertEqual("e2e-dev-harness.navigation-map.v1", result["schema"])
+        self.assertEqual({"lifecycle": "CREATED", "workflow_stage": "CLARIFY", "phase": "clarify"}, result["you_are_here"])
+        self.assertFalse(result["status"]["ready"])
+        self.assertEqual(["Runtime hook is not ready", "dispatch ack missing"], result["status"]["blocked_by"])
+        self.assertEqual("run dispatch-ack", result["next_single_action"]["command"])
+        self.assertEqual("preflight", result["next_single_action"]["source"])
+        self.assertEqual("T01", result["active_work"][0]["task_id"])
+        self.assertEqual(["docs/agent-runs/run/design.md"], result["allowed_now"])
+        self.assertIn("do not edit production code", result["forbidden_now"])
+        self.assertEqual(["confirmed Restated Intent and closed Open Questions in the design doc"], result["required_evidence"])
+        self.assertEqual("docs/agent-runs/run/run-state.json", result["artifacts"]["run_state"])
+
+    def test_navigation_map_does_not_show_completed_worker_as_active_work(self) -> None:
+        import navigation_map  # noqa: PLC0415
+
+        result = navigation_map.build(
+            repo=Path("C:/repo"),
+            state_path=Path("C:/repo/docs/agent-runs/run/run-state.json"),
+            state={
+                "run_id": "run",
+                "lifecycle": "CREATED",
+                "dispatches": {
+                    "T01": {
+                        "status": "worker_completed",
+                        "runtime": "claude-code",
+                        "current_agent": "requirements-clarifier",
+                        "context_pack": "docs/agent-runs/run/context-packs/T01.json",
+                    }
+                },
+            },
+            lifecycle="CREATED",
+            workflow_stage="CLARIFY",
+            ready=True,
+            blocked_reasons=[],
+            warnings=[],
+            action={"workflow_stage": "CLARIFY", "phase": "clarify", "command": "dispatch-beat"},
+            preflight={},
+            execution_packet={"phase": "clarify", "objective": "Clarify before planning."},
+            checkpoint={},
+        )
+
+        self.assertEqual([], result["active_work"])
+
     def test_cli_command_modules_preserve_start_contracts(self) -> None:
         from e2e_harness.cli.commands import start as start_command  # noqa: PLC0415
 
@@ -1921,6 +2017,108 @@ class CliCommandFacadeContractTests(unittest.TestCase):
 
         self.assertEqual(0, code)
         self.assertEqual(payload, result)
+
+    def test_coordinator_summary_persists_navigation_map_additively(self) -> None:
+        import coordinator_summary  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            run_dir.mkdir(parents=True)
+            state_path = run_dir / "run-state.json"
+            state = {
+                "run_id": "run",
+                "lifecycle": "CREATED",
+                "dispatches": {
+                    "T01": {
+                        "status": "worker_completed",
+                        "runtime": "claude-code",
+                        "current_agent": "requirements-clarifier",
+                    }
+                },
+            }
+            result = {
+                "ready": True,
+                "lifecycle": "CREATED",
+                "next": {
+                    "phase": "clarify",
+                    "command": "Dispatch the bootstrap requirements-clarifier worker.",
+                    "next_single_action": "Run dispatch-beat --max-workers 1 for mechanical clarification repair task T01b.",
+                },
+                "navigation_map": {
+                    "schema": "e2e-dev-harness.navigation-map.v1",
+                    "you_are_here": {
+                        "lifecycle": "CREATED",
+                        "workflow_stage": "CLARIFY",
+                        "phase": "clarify",
+                    },
+                    "status": {"ready": True, "health": "ready", "blocked_by": []},
+                    "next_single_action": {
+                        "command": "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-beat . --max-workers 1",
+                        "source": "next_action",
+                    },
+                    "active_work": [],
+                    "allowed_now": ["docs/agent-runs/run/design.md"],
+                    "forbidden_now": ["src/**"],
+                    "required_evidence": ["requirements handoff"],
+                    "completion_checks": ["run-state lifecycle becomes CLARIFIED"],
+                    "artifacts": {"run_state": "docs/agent-runs/run/run-state.json"},
+                },
+            }
+
+            summary = coordinator_summary.write(repo, state_path, state, result=result)
+            payload = json.loads(Path(summary["coordinator_summary"]).read_text(encoding="utf-8"))
+
+        self.assertTrue(summary["ready"])
+        self.assertEqual("CREATED", payload["lifecycle"])
+        self.assertEqual("CLARIFY", payload["workflow_stage"])
+        self.assertIn("navigation_map", payload)
+        self.assertEqual("CREATED", payload["navigation_map"]["you_are_here"]["lifecycle"])
+        self.assertIn("dispatch-beat", payload["navigation_map"]["next_single_action"]["command"])
+        self.assertIn("next_action", payload)
+        self.assertIn("T01b", payload["next_action"]["command"])
+        self.assertEqual({}, payload["active_dispatches"])
+        self.assertIn("execution_packet", payload)
+
+    def test_map_cli_facade_returns_navigation_map_only(self) -> None:
+        from e2e_harness.cli.commands import map as map_command  # noqa: PLC0415
+        import argparse  # noqa: PLC0415
+        import e2e_dev_harness  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _code, start_result = e2e_dev_harness.start(
+                argparse.Namespace(
+                    repo=repo,
+                    feature="Quote",
+                    request="Return a quote.",
+                    design_doc=None,
+                    agent_run_dir=None,
+                    run_id="run",
+                    run_date=None,
+                    force=False,
+                    status_file=None,
+                )
+            )
+            status_file = repo / "map-status.json"
+
+            code, result = map_command.run_from_args(
+                argparse.Namespace(
+                    repo=repo,
+                    state=Path(start_result["run_state"]),
+                    runtime="claude-code",
+                    status_file=status_file,
+                )
+            )
+            status_payload = json.loads(status_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code)
+        self.assertEqual("e2e-dev-harness.navigation-map.v1", result["schema"])
+        self.assertEqual("CREATED", result["you_are_here"]["lifecycle"])
+        self.assertEqual("CLARIFY", result["you_are_here"]["workflow_stage"])
+        self.assertEqual(result, status_payload)
+        self.assertNotIn("workflow_plan", result)
+        self.assertNotIn("todo_policy", result)
 
     def test_cli_command_modules_preserve_guard_pre_code_test_impact_and_ac_progress_contracts(self) -> None:
         import e2e_dev_harness  # noqa: PLC0415

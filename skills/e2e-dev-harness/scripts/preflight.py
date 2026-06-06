@@ -326,10 +326,27 @@ def preflight_checks() -> list[dict]:
     ]
 
 
+def _minimal_fix_for_blocker(check: dict, message: str) -> str:
+    if check.get("code") == "BLK_CLARIFY_DISPATCH" and "mechanical repair" in message.lower():
+        task_id = "T01b"
+        marker = "task "
+        if marker in message:
+            tail = message.split(marker, 1)[1].strip()
+            candidate = tail.split(" ", 1)[0].strip()
+            if candidate:
+                task_id = candidate
+        return (
+            f"Run dispatch-beat --max-workers 1 for mechanical clarification repair task {task_id}, "
+            "then dispatch-complete it and rerun clarify."
+        )
+    return str(check["minimal_fix"])
+
+
 def aggregate_preflight_blockers(repo: Path, run_state_path: Path | str | None) -> dict:
     blockers: list[dict] = []
     for check in preflight_checks():
         for message in check["fn"](repo, run_state_path) or []:
+            minimal_fix = _minimal_fix_for_blocker(check, message)
             blockers.append(
                 {
                     "order": len(blockers) + 1,
@@ -337,7 +354,7 @@ def aggregate_preflight_blockers(repo: Path, run_state_path: Path | str | None) 
                     "code": check["code"],
                     "return_phase": check["return_phase"],
                     "message": message,
-                    "minimal_fix": check["minimal_fix"],
+                    "minimal_fix": minimal_fix,
                 }
             )
     return {

@@ -34,7 +34,15 @@ def _compact_next(next_action: dict | None) -> dict:
         "dispatch_command",
         "expected_worker",
     ]
-    return {key: next_action[key] for key in keys if key in next_action}
+    compact = {key: next_action[key] for key in keys if key in next_action}
+    single = next_action.get("next_single_action")
+    if isinstance(single, dict):
+        single = single.get("command", "")
+    single_text = str(single or "").strip()
+    if single_text:
+        compact["command"] = single_text
+        compact["next_single_action"] = single_text
+    return compact
 
 
 def _compact_execution_packet(packet: dict | None) -> dict:
@@ -74,7 +82,42 @@ def _active_dispatches(state: dict) -> dict:
             if dispatch.get(key)
         }
         for task_id, dispatch in dispatches.items()
-        if isinstance(dispatch, dict) and str(dispatch.get("status", "")).lower() not in {"completed", "cancelled"}
+        if isinstance(dispatch, dict) and str(dispatch.get("status", "")).lower() not in {"completed", "worker_completed", "cancelled"}
+    }
+
+
+def _compact_navigation_map(value: dict | None) -> dict:
+    value = value or {}
+    you_are_here = value.get("you_are_here") if isinstance(value.get("you_are_here"), dict) else {}
+    status = value.get("status") if isinstance(value.get("status"), dict) else {}
+    next_action = value.get("next_single_action") if isinstance(value.get("next_single_action"), dict) else {}
+    artifacts = value.get("artifacts") if isinstance(value.get("artifacts"), dict) else {}
+    return {
+        "you_are_here": {
+            key: you_are_here[key]
+            for key in ("lifecycle", "workflow_stage", "phase")
+            if you_are_here.get(key)
+        },
+        "status": {
+            "ready": bool(status.get("ready", False)),
+            "health": status.get("health", "blocked"),
+            "blocked_by": _limited(status.get("blocked_by", []), 5),
+            "warnings": _limited(status.get("warnings", []), 5),
+        },
+        "next_single_action": {
+            key: next_action[key]
+            for key in ("command", "source", "reason")
+            if next_action.get(key)
+        },
+        "active_work": _limited(value.get("active_work", []), 5),
+        "allowed_now": _limited(value.get("allowed_now", []), 5),
+        "forbidden_now": _limited(value.get("forbidden_now", []), 5),
+        "required_evidence": _limited(value.get("required_evidence", []), 5),
+        "artifacts": {
+            key: artifacts[key]
+            for key in ("run_state", "run_dir", "checkpoint", "coordinator_summary")
+            if artifacts.get(key)
+        },
     }
 
 
@@ -152,6 +195,7 @@ def write(
             "command": "Run e2e_dev_harness.py next to refresh coordinator action.",
         },
         "execution_packet": _compact_execution_packet(result.get("execution_packet")),
+        "navigation_map": _compact_navigation_map(result.get("navigation_map")),
         "active_dispatches": _active_dispatches(state),
         "artifact_pointers": _artifact_pointers(target.parent / "run-state.json", result, full_result_path),
         "manual_recovery_events": manual_recovery_events,

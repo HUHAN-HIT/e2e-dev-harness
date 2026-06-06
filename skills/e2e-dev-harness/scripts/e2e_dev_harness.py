@@ -53,6 +53,7 @@ from e2e_harness.cli.commands import handoff as handoff_command  # noqa: E402
 from e2e_harness.cli.commands import hash_artifacts as hash_command  # noqa: E402
 from e2e_harness.cli.commands import guard as guard_command  # noqa: E402
 from e2e_harness.cli.commands import install as install_command  # noqa: E402
+from e2e_harness.cli.commands import map as map_command  # noqa: E402
 from e2e_harness.cli.commands import next as next_command  # noqa: E402
 from e2e_harness.cli.commands import plan as plan_command  # noqa: E402
 from e2e_harness.cli.commands import prepare as prepare_command  # noqa: E402
@@ -1649,6 +1650,10 @@ def next_step(args) -> tuple[int, dict]:
     return next_command.run_from_args(args)
 
 
+def map_view(args) -> tuple[int, dict]:
+    return map_command.run_from_args(args)
+
+
 def add_full_json_arg(parser: argparse.ArgumentParser) -> None:
     return None
 
@@ -2018,6 +2023,12 @@ def main() -> int:
     next_parser.add_argument("--status-file", type=Path)
     add_full_json_arg(next_parser)
 
+    map_parser = subparsers.add_parser("map", help="Print the compact Development Navigation Map")
+    map_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    map_parser.add_argument("--state", required=True, type=Path)
+    map_parser.add_argument("--runtime", default="claude-code", help="Runtime used in suggested dispatch commands.")
+    map_parser.add_argument("--status-file", type=Path)
+
     preflight_parser = subparsers.add_parser(
         "preflight",
         help="Aggregate every applicable gate blocker for the current run-state in one pass.",
@@ -2052,6 +2063,7 @@ def main() -> int:
         gc_run_parser,
         ac_progress_parser,
         next_parser,
+        map_parser,
         preflight_parser,
     ):
         add_output_args(output_parser)
@@ -2115,6 +2127,8 @@ def main() -> int:
             exit_code, result = ac_progress(args)
         elif args.command == "next":
             exit_code, result = next_step(args)
+        elif args.command == "map":
+            exit_code, result = map_view(args)
         elif args.command == "preflight":
             exit_code, result = preflight(args)
         else:

@@ -6937,6 +6937,45 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("above max_chars" in reason for reason in result["blocked_reasons"]))
 
+    def test_context_pack_surfaces_missing_input_files_without_treating_them_as_resolved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text("# Feature\n", encoding="utf-8")
+            schedule = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            schedule.parent.mkdir(parents=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "inputs": [
+                                    "user request",
+                                    "docs/design/feature.md",
+                                    "docs/agent-runs/run/evidence/cross-service-dependencies.json",
+                                ],
+                                "outputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = context_pack.build_pack(repo, schedule, agent="requirements-clarifier")
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual(
+            [{"path": "docs/agent-runs/run/evidence/cross-service-dependencies.json", "reason": "missing"}],
+            result["missing_input_files"],
+        )
+        self.assertEqual("docs/design/feature.md", result["resolved_input_files"][0]["path"])
+        self.assertGreater(result["resolved_input_files"][0]["bytes"], 0)
+
     def test_service_design_gate_requires_global_ac_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

@@ -791,6 +791,30 @@ class DispatchFinishHandoffContractTest(unittest.TestCase):
         self.assertIn("dispatch-finish", commands[2])
         self.assertIn("--handoff docs/agent-runs/run/handoffs/01-requirements-clarifier.md", commands[2])
 
+    def test_requirements_clarifier_packet_requires_worker_self_check_without_gate_authority(self) -> None:
+        repo = Path(".").resolve()
+        packet = dispatcher.manual_worker_packet(
+            repo,
+            Path("docs/agent-runs/run/agent-schedule.json"),
+            Path("docs/agent-runs/run/run-state.json"),
+            {
+                "id": "T01",
+                "agent": "requirements-clarifier",
+                "phase": "clarify",
+                "outputs": [
+                    "docs/design/feature.md",
+                    "docs/agent-runs/run/handoffs/01-requirements-clarifier.md",
+                ],
+            },
+        )
+
+        requirements = packet["handoff_completion_requirements"]
+        self_check = requirements["worker_self_check"]
+        self.assertTrue(self_check["required"])
+        self.assertTrue(any("clarify" in item for item in self_check["required_commands"]))
+        self.assertTrue(any("handoff" in item for item in self_check["required_commands"]))
+        self.assertIn("control-plane revalidates", self_check["authority"])
+
 
 if __name__ == "__main__":
     unittest.main()
