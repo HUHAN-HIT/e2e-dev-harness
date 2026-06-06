@@ -147,6 +147,11 @@ class ClarificationFlowTests(unittest.TestCase):
         self.assertEqual("repair_barrier", result["clarification_transaction"]["stage"])
         self.assertEqual("dispatch_mechanical_repair", result["next_agent_action"])
         self.assertIn("mechanical_repair_dispatch", result)
+        command = result["mechanical_repair_dispatch"]["next_required"]["command"]
+        self.assertIn("dispatch-beat", command)
+        self.assertIn("generated", command)
+        self.assertIn("spawn request/prompt", command)
+        self.assertIn("Do not call Agent directly", command)
 
 
 if __name__ == "__main__":

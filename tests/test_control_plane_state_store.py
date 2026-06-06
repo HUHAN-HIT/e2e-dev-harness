@@ -160,6 +160,29 @@ class ControlPlaneStateStoreTests(unittest.TestCase):
         self.assertEqual(task["kind"], "artifact_repair")
         self.assertEqual(task["repair_targets"], ["docs/design/example.md"])
 
+    def test_repair_transaction_prevents_duplicate_active_repair_tasks(self) -> None:
+        repo, run_dir = self.make_control_plane_with_task("T01")
+
+        first = control_plane.open_repair_transaction(
+            repo,
+            run_dir,
+            code="impact_summary_too_long",
+            target="docs/design/example.md",
+        )
+        second = control_plane.open_repair_transaction(
+            repo,
+            run_dir,
+            code="impact_summary_too_long",
+            target="docs/design/example.md",
+        )
+
+        self.assertTrue(first["ready"])
+        self.assertEqual(first["task_id"], second["task_id"])
+        self.assertEqual(second["status"], "already_open")
+        data = json.loads((run_dir / "control-plane.json").read_text(encoding="utf-8"))
+        repair_tasks = [task for task in data["tasks"] if task.get("kind") == "artifact_repair"]
+        self.assertEqual(1, len(repair_tasks))
+
 
 if __name__ == "__main__":
     unittest.main()

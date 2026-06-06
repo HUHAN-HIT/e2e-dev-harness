@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import agent_roles
-from common import atomic_write_json, posix, read_json_object
+from common import atomic_write_json, now_iso, posix, read_json_object
 from e2e_harness.domain.control_plane_models import default_control_plane
 
 
@@ -144,6 +144,31 @@ def _coordinator_projection(data: dict) -> dict:
     return summary
 
 
+def _next_repair_task_id(tasks: list[dict]) -> str:
+    existing = {str(task.get("id", "")).strip() for task in tasks}
+    for suffix in ("b", "c", "d", "e", "f", "g", "h"):
+        candidate = f"T01{suffix}"
+        if candidate not in existing:
+            return candidate
+    index = 2
+    while True:
+        candidate = f"T01-repair-{index}"
+        if candidate not in existing:
+            return candidate
+        index += 1
+
+
+def _transaction_id(code: str, target: str) -> str:
+    cleaned = "".join(char if char.isalnum() else "-" for char in f"{code}-{target}".lower())
+    while "--" in cleaned:
+        cleaned = cleaned.replace("--", "-")
+    return cleaned.strip("-") or "repair"
+
+
+def _active_transaction(transaction: dict) -> bool:
+    return str(transaction.get("status", "")).strip() in {"opened", "dispatched", "worker_running", "evidence_validated"}
+
+
 def create(repo: Path, run_dir: Path, run_id: str) -> dict:
     path = control_plane_path(run_dir if run_dir.is_absolute() else repo / run_dir)
     data = default_control_plane(run_id)
@@ -250,4 +275,82 @@ def write_legacy_projections(repo: Path, run_dir: Path) -> dict:
         "ready": True,
         "control_plane_path": posix(path),
         "projections": data["projections"],
+    }
+
+
+def open_repair_transaction(
+    repo: Path,
+    run_dir: Path,
+    code: str,
+    target: str,
+    section: str = "Impact Summary",
+    objective: str = "Apply the scheduled mechanical clarification repair.",
+    constraints: list[str] | None = None,
+) -> dict:
+    resolved_run_dir = _resolve(repo, run_dir)
+    path = control_plane_path(resolved_run_dir)
+    if not path.exists():
+        imported = import_legacy(repo, resolved_run_dir)
+        if not imported.get("ready"):
+            return imported
+    data = read_json_object(path)
+    if not data:
+        data = default_control_plane(posix(run_dir))
+
+    repair_code = str(code or "mechanical_repair").strip()
+    repair_target = posix(str(target or "").strip())
+    transactions = data.get("repair_transactions") if isinstance(data.get("repair_transactions"), dict) else {}
+    for transaction in transactions.values():
+        if not isinstance(transaction, dict) or not _active_transaction(transaction):
+            continue
+        if transaction.get("repair_code") == repair_code and transaction.get("target") == repair_target:
+            return {
+                "ready": True,
+                "status": "already_open",
+                "transaction_id": transaction.get("id", ""),
+                "task_id": transaction.get("task_id", ""),
+            }
+
+    tasks = [task for task in data.get("tasks", []) or [] if isinstance(task, dict)]
+    task_id = _next_repair_task_id(tasks)
+    transaction_id = _transaction_id(repair_code, repair_target)
+    task = task_contract(
+        task_id=task_id,
+        agent="requirements-clarifier",
+        phase="clarify",
+        kind="artifact_repair",
+        inputs=[repair_target],
+        outputs=[repair_target],
+        repair_targets=[repair_target],
+        parallel_group="clarification-repair",
+        repair_code=repair_code,
+        repair_section=section,
+        objective=objective,
+        constraints=constraints or [],
+    )
+    task["repair_transaction_id"] = transaction_id
+    task["completion_checks"] = [
+        f"{section} satisfies clarification gate policy.",
+        "Only scheduled artifact repair targets were edited.",
+        "No user-confirmed requirement decisions were changed.",
+    ]
+    tasks.append(task)
+    transactions[transaction_id] = {
+        "id": transaction_id,
+        "repair_code": repair_code,
+        "target": repair_target,
+        "status": "opened",
+        "task_id": task_id,
+        "opened_at": now_iso(),
+    }
+    data["tasks"] = tasks
+    data["repair_transactions"] = transactions
+    atomic_write_json(path, data)
+    projection = write_legacy_projections(repo, resolved_run_dir)
+    return {
+        "ready": bool(projection.get("ready")),
+        "status": "opened",
+        "transaction_id": transaction_id,
+        "task_id": task_id,
+        "task": task,
     }

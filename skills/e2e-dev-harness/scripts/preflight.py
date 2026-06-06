@@ -119,13 +119,24 @@ def clarification_dispatch_blockers(repo: Path, run_state_path: Path | str | Non
     ) or []
     if clarifier_blockers:
         return clarifier_blockers
-    return agent_scheduler.dispatch_completion_blockers_for_tasks(
-        repo,
-        schedule_path,
-        state_file,
-        repair_tasks,
-        "Clarification mechanical repair blocked",
-    ) or []
+    repair_blockers: list[str] = []
+    for task in repair_tasks:
+        if agent_scheduler.task_has_dispatch_completion(repo, schedule_path, state_file, task):
+            continue
+        task_id = str(task.get("id", "")).strip() or "<missing>"
+        agent = str(task.get("agent", "")).strip() or "<missing>"
+        transaction_id = str(task.get("repair_transaction_id", "")).strip()
+        if transaction_id:
+            repair_blockers.append(
+                f"Clarification mechanical repair blocked: active repair transaction {transaction_id} "
+                f"task {task_id} ({agent}) must be completed through dispatch-complete with a worker_completed dispatch event."
+            )
+        else:
+            repair_blockers.append(
+                f"Clarification mechanical repair blocked: task {task_id} ({agent}) must be completed through dispatch-complete "
+                "with a worker_completed dispatch event."
+            )
+    return repair_blockers
 
 
 def clarification_dispatch_recovery(repo: Path, run_state_path: Path | str | None, blockers: list[str]) -> dict:
@@ -163,6 +174,12 @@ def clarification_dispatch_recovery(repo: Path, run_state_path: Path | str | Non
     dispatch = dispatcher.dispatch_for_task(state, str(task.get("id", "")).strip()) if state else {}
     recovery = dispatcher.dispatch_recovery_packet(repo, schedule_path, state_file, task, dispatch)
     if repair_incomplete and task is repair_incomplete:
+        transaction_id = str(task.get("repair_transaction_id", "")).strip()
+        action = (
+            f"Complete active repair transaction {transaction_id} with repair task {task.get('id', 'T01b')} before rerunning clarify."
+            if transaction_id
+            else f"Dispatch mechanical clarification repair task {task.get('id', 'T01b')} before rerunning clarify."
+        )
         return {
             "ready": False,
             "ready_for_implementation": False,
@@ -173,9 +190,7 @@ def clarification_dispatch_recovery(repo: Path, run_state_path: Path | str | Non
             "questions_to_ask_user": [],
             "ask_user_requests": [],
             "agent_remediation_required": True,
-            "agent_remediation_actions": [
-                f"Dispatch mechanical clarification repair task {task.get('id', 'T01b')} before rerunning clarify."
-            ],
+            "agent_remediation_actions": [action],
             "next_agent_action": "dispatch_mechanical_repair",
             **recovery,
         }
@@ -329,15 +344,27 @@ def preflight_checks() -> list[dict]:
 def _minimal_fix_for_blocker(check: dict, message: str) -> str:
     if check.get("code") == "BLK_CLARIFY_DISPATCH" and "mechanical repair" in message.lower():
         task_id = "T01b"
+        transaction_id = ""
+        transaction_marker = "active repair transaction "
+        if transaction_marker in message:
+            tail = message.split(transaction_marker, 1)[1].strip()
+            transaction_id = tail.split(" task ", 1)[0].strip()
         marker = "task "
         if marker in message:
             tail = message.split(marker, 1)[1].strip()
             candidate = tail.split(" ", 1)[0].strip()
             if candidate:
                 task_id = candidate
+        if transaction_id:
+            return (
+                f"Complete active repair transaction {transaction_id}: run dispatch-beat --max-workers 1 for repair task {task_id}, "
+                f"use the generated {task_id} spawn request/prompt for the isolated worker, then dispatch-complete it "
+                "and rerun clarify. Do not call Agent directly before dispatch-beat."
+            )
         return (
             f"Run dispatch-beat --max-workers 1 for mechanical clarification repair task {task_id}, "
-            "then dispatch-complete it and rerun clarify."
+            f"use the generated {task_id} spawn request/prompt for the isolated worker, then dispatch-complete it "
+            "and rerun clarify. Do not call Agent directly before dispatch-beat."
         )
     return str(check["minimal_fix"])
 

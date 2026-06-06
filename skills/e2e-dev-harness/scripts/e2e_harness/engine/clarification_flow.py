@@ -11,7 +11,7 @@ import preflight as preflight_checks
 from common import atomic_write_json, posix, read_json_object
 from e2e_harness.cli.commands import handoff as handoff_command
 from e2e_harness.cli.status import write_status
-from e2e_harness.engine import state_store
+from e2e_harness.engine import control_plane, state_store
 
 
 def _as_repo(path: Path) -> Path:
@@ -85,8 +85,9 @@ def _mechanical_repair_next_required(schedule_path: Path, task_id: str) -> dict:
     return {
         "phase": "clarification_repair",
         "command": (
-            f"Run dispatch-beat --schedule {posix(schedule_path)} --max-workers 1, then dispatch-complete "
-            f"{task_id} after the isolated requirements-clarifier worker updates the scheduled artifact."
+            f"Run dispatch-beat --schedule {posix(schedule_path)} --max-workers 1, use the generated "
+            f"{task_id} spawn request/prompt for the isolated requirements-clarifier worker, then dispatch-complete "
+            f"{task_id} after it updates the scheduled artifact. Do not call Agent directly before dispatch-beat."
         ),
         "code_writes_allowed": False,
     }
@@ -109,51 +110,48 @@ def _ensure_artifact_repair_tasks(
     schedule = read_json_object(schedule_path)
     tasks = [task for task in schedule.get("tasks", []) or [] if isinstance(task, dict)]
     target_ref = _repo_relative(repo, target)
-    role_template = _repo_relative(repo, schedule_path.parent / "agent-roles" / "requirements-clarifier.md")
-    require_role_templates = bool(schedule.get("require_role_templates"))
     added: list[dict] = []
     pending: list[dict] = []
+    transactions: list[dict] = []
     for spec in repair_specs:
         code = str(spec.get("code", "")).strip() or "mechanical_repair"
         existing = _matching_repair_task(tasks, target_ref, code)
         if existing:
             pending.append(existing)
+            transactions.append(
+                {
+                    "status": "already_open",
+                    "task_id": str(existing.get("id", "")),
+                    "transaction_id": str(existing.get("repair_transaction_id", "")),
+                }
+            )
             continue
-        task_id = _next_repair_task_id(tasks)
-        task = {
-            "id": task_id,
-            "agent": "requirements-clarifier",
-            "phase": "clarify",
-            "kind": "artifact_repair",
-            "repair_code": code,
-            "repair_section": spec.get("section", "Impact Summary"),
-            "status": "planned",
-            "inputs": [target_ref],
-            "outputs": [target_ref],
-            "repair_targets": [target_ref],
-            "parallel_group": "clarification-repair",
-            "objective": spec.get("objective", "Apply the scheduled mechanical clarification repair."),
-            "constraints": spec.get("constraints", []),
-            "completion_checks": [
-                f"{spec.get('section', 'Impact Summary')} satisfies clarification gate policy.",
-                "Only scheduled artifact repair targets were edited.",
-                "No user-confirmed requirement decisions were changed.",
-            ],
-        }
-        if require_role_templates:
-            task["role_template"] = role_template
-            task["role_template_key"] = "requirements-clarifier"
-        tasks.append(task)
-        added.append(task)
+        opened = control_plane.open_repair_transaction(
+            repo,
+            schedule_path.parent,
+            code=code,
+            target=target_ref,
+            section=str(spec.get("section", "Impact Summary")),
+            objective=str(spec.get("objective", "Apply the scheduled mechanical clarification repair.")),
+            constraints=spec.get("constraints", []) or [],
+        )
+        if not opened.get("ready"):
+            continue
+        transactions.append(opened)
+        schedule = read_json_object(schedule_path)
+        tasks = [task for task in schedule.get("tasks", []) or [] if isinstance(task, dict)]
+        task_id = str(opened.get("task_id", ""))
+        task = next((item for item in tasks if str(item.get("id", "")) == task_id), opened.get("task", {}))
+        if opened.get("status") == "opened":
+            added.append(task)
         pending.append(task)
-    if added:
-        schedule["tasks"] = tasks
-        atomic_write_json(schedule_path, schedule)
     primary = pending[0] if pending else {}
     task_id = str(primary.get("id", "")).strip()
     return {
         "ready": bool(pending),
         "schedule": posix(schedule_path),
+        "repair_transactions": transactions,
+        "active_repair_transaction": transactions[0] if transactions else {},
         "added_tasks": [{"id": str(task.get("id", "")), "repair_targets": task.get("repair_targets", [])} for task in added],
         "pending_tasks": [
             {"id": str(task.get("id", "")), "repair_targets": task.get("repair_targets", [])}
