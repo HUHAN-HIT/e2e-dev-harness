@@ -8,6 +8,7 @@ import agent_scheduler
 import dispatcher
 import event_log
 import run_state
+from e2e_harness.engine import control_plane
 
 
 def _resolve(repo: Path, path: Path | None) -> Path | None:
@@ -28,6 +29,8 @@ def _run_dir(repo: Path, state_path: Path | None = None, schedule_path: Path | N
 
 def _project(repo: Path, state_path: Path | None = None, schedule_path: Path | None = None) -> dict:
     run_dir = _run_dir(repo, state_path, schedule_path)
+    if (run_dir / "control-plane.json").exists():
+        return control_plane.write_legacy_projections(repo, run_dir)
     return event_log.write_snapshot_projections(run_dir, _resolve(repo, state_path), _resolve(repo, schedule_path))
 
 
@@ -179,7 +182,11 @@ def dispatch_ack(
 ) -> dict:
     result = dispatcher.dispatch_ack(repo, state_path, task_id, agent, worker_handle, worker_session)
     if result.get("ready"):
-        event_log.write_snapshot_projections(_run_dir(repo, state_path), _resolve(repo, state_path), None)
+        run_dir = _run_dir(repo, state_path)
+        if (run_dir / "control-plane.json").exists():
+            control_plane.dispatch_acknowledged(repo, run_dir, result.get("dispatch", {}))
+        else:
+            event_log.write_snapshot_projections(run_dir, _resolve(repo, state_path), None)
     return result
 
 
@@ -204,5 +211,9 @@ def dispatch_complete(
         recovery_approval=recovery_approval,
     )
     if result.get("ready"):
-        _project(repo, state_path, schedule_path)
+        run_dir = _run_dir(repo, state_path, schedule_path)
+        if (run_dir / "control-plane.json").exists():
+            control_plane.dispatch_completed(repo, run_dir, task_id, agent, evidence or [])
+        else:
+            _project(repo, state_path, schedule_path)
     return result

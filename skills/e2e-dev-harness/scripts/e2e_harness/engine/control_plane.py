@@ -354,3 +354,58 @@ def open_repair_transaction(
         "task_id": task_id,
         "task": task,
     }
+
+
+def dispatch_acknowledged(repo: Path, run_dir: Path, dispatch: dict) -> dict:
+    resolved_run_dir = _resolve(repo, run_dir)
+    path = control_plane_path(resolved_run_dir)
+    data = read_json_object(path)
+    if not data:
+        return {"ready": False, "blocked_reasons": [f"Missing {CONTROL_PLANE_FILE} at {posix(path)}."]}
+    task_id = str(dispatch.get("current_task_id", "") or dispatch.get("task_id", "")).strip()
+    if not task_id:
+        return {"ready": False, "blocked_reasons": ["Dispatch task id is required."]}
+    dispatches = data.get("dispatches") if isinstance(data.get("dispatches"), dict) else {}
+    dispatches[task_id] = dict(dispatch)
+    data["dispatches"] = dispatches
+    data["dispatch"] = dict(dispatch)
+    atomic_write_json(path, data)
+    projection = write_legacy_projections(repo, resolved_run_dir)
+    return {"ready": bool(projection.get("ready")), "dispatch": dispatches[task_id]}
+
+
+def dispatch_completed(repo: Path, run_dir: Path, task_id: str, agent: str, evidence: list[str] | None = None) -> dict:
+    resolved_run_dir = _resolve(repo, run_dir)
+    path = control_plane_path(resolved_run_dir)
+    data = read_json_object(path)
+    if not data:
+        return {"ready": False, "blocked_reasons": [f"Missing {CONTROL_PLANE_FILE} at {posix(path)}."]}
+    task_key = str(task_id).strip()
+    dispatches = data.get("dispatches") if isinstance(data.get("dispatches"), dict) else {}
+    current = dict(dispatches.get(task_key, {})) if isinstance(dispatches.get(task_key), dict) else {}
+    current.update(
+        {
+            "current_task_id": task_key,
+            "current_agent": agent,
+            "agent": agent,
+            "status": "worker_completed",
+            "evidence": list(evidence or []),
+        }
+    )
+    dispatches[task_key] = current
+    data["dispatches"] = dispatches
+    data["dispatch"] = current
+    for task in data.get("tasks", []) or []:
+        if isinstance(task, dict) and str(task.get("id", "")).strip() == task_key:
+            task["status"] = "completed"
+            if evidence:
+                task["evidence"] = list(evidence)
+    transactions = data.get("repair_transactions") if isinstance(data.get("repair_transactions"), dict) else {}
+    for transaction in transactions.values():
+        if isinstance(transaction, dict) and str(transaction.get("task_id", "")).strip() == task_key:
+            transaction["status"] = "closed"
+            transaction["closed_at"] = now_iso()
+    data["repair_transactions"] = transactions
+    atomic_write_json(path, data)
+    projection = write_legacy_projections(repo, resolved_run_dir)
+    return {"ready": bool(projection.get("ready")), "dispatch": current}

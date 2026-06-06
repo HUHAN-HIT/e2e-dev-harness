@@ -13,6 +13,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from e2e_harness.engine import control_plane  # noqa: E402
+from e2e_harness.engine import state_store  # noqa: E402
 
 
 class ControlPlaneStateStoreTests(unittest.TestCase):
@@ -182,6 +183,34 @@ class ControlPlaneStateStoreTests(unittest.TestCase):
         data = json.loads((run_dir / "control-plane.json").read_text(encoding="utf-8"))
         repair_tasks = [task for task in data["tasks"] if task.get("kind") == "artifact_repair"]
         self.assertEqual(1, len(repair_tasks))
+
+    def test_dispatch_ack_updates_control_plane_then_projects_legacy_state(self) -> None:
+        repo, run_dir = self.make_control_plane_with_task("T01")
+        path = run_dir / "control-plane.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        dispatch = {
+            "status": "awaiting_runtime_spawn",
+            "runtime": "manual",
+            "current_task_id": "T01",
+            "current_agent": "requirements-clarifier",
+        }
+        data["dispatch"] = dict(dispatch)
+        data["dispatches"] = {"T01": dict(dispatch)}
+        path.write_text(json.dumps(data), encoding="utf-8")
+        control_plane.write_legacy_projections(repo, run_dir)
+
+        ack = state_store.dispatch_ack(
+            repo,
+            run_dir / "run-state.json",
+            "T01",
+            "requirements-clarifier",
+            "worker-1",
+        )
+
+        self.assertTrue(ack["ready"], ack.get("blocked_reasons"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(data["dispatches"]["T01"]["status"], "worker_running")
+        self.assertTrue((run_dir / "run-state.json").exists())
 
 
 if __name__ == "__main__":
