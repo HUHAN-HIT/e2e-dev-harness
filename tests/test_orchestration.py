@@ -4235,12 +4235,15 @@ class OrchestrationArtifactTests(unittest.TestCase):
                 )
             )
             schedule_after = json.loads(schedule_path.read_text(encoding="utf-8"))
+            state_after = json.loads(state_path.read_text(encoding="utf-8"))
 
         repair_tasks = [task for task in schedule_after["tasks"] if task.get("kind") == "artifact_repair"]
-        self.assertEqual(2, code)
+        self.assertEqual(0, code)
+        self.assertEqual("CLARIFIED", state_after["lifecycle"])
         self.assertFalse(result["interaction_required"])
         self.assertTrue(result["agent_remediation_required"])
         self.assertEqual("dispatch_mechanical_repair", result["next_agent_action"])
+        self.assertEqual("mechanical_repair", result["next_required"]["gate"])
         self.assertEqual(1, len(repair_tasks))
         self.assertEqual("T01b", repair_tasks[0]["id"])
         self.assertEqual("clarify", repair_tasks[0]["phase"])

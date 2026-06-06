@@ -93,6 +93,34 @@ class WorkflowGuardTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("Strict Guard" in reason for reason in result["blocked_reasons"]))
 
+    def test_phase_coverage_uses_user_clarification_ready_for_clarify_phase(self) -> None:
+        verify_result = verified_workflow_result()
+        verify_result["clarification"] = {
+            "ready_for_implementation": False,
+            "user_clarification_ready": True,
+            "design_outline_ready": True,
+            "implementation_evidence_ready": False,
+            "mechanical_repair_ready": True,
+        }
+
+        result = workflow_guard.validate_phase_coverage(verify_result, completion_required=True)
+
+        clarify = next(item for item in result["phases"] if item["phase"] == "clarify")
+        self.assertTrue(clarify["ready"])
+
+    def test_legacy_clarification_status_falls_back_with_warning(self) -> None:
+        verify_result = verified_workflow_result()
+        verify_result["clarification"] = {"ready_for_implementation": True}
+
+        result = workflow_guard.validate_verify_result(
+            verify_result,
+            strict=True,
+            require_completion=True,
+        )
+
+        self.assertTrue(result["ready"], result)
+        self.assertTrue(any("legacy clarification readiness" in warning.lower() for warning in result["warnings"]))
+
     def test_guard_blocks_missing_independent_semantic_reviews_in_strict_completion(self) -> None:
         verify_result = verified_workflow_result()
         verify_result["workflow"]["require_semantic_reviews"] = False

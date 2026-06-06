@@ -392,6 +392,15 @@ def pending_dispatch_ack_guidance(repo: Path, lock: Path | None) -> dict:
     return {}
 
 
+def clarification_snapshot_for_lock(repo: Path, lock: Path | None) -> dict:
+    if not lock:
+        return {}
+    state = load_json(run_state_path_for_lock(repo, lock))
+    snapshots = state.get("gate_snapshots") if isinstance(state.get("gate_snapshots"), dict) else {}
+    clarification = snapshots.get("clarification") if isinstance(snapshots.get("clarification"), dict) else {}
+    return clarification
+
+
 def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -> dict:
     state_path = state_path_display(repo, lock)
     todo_list = required_todo_list_for_lifecycle(lifecycle)
@@ -482,6 +491,34 @@ def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -
         },
     }
     selected = actions.get(lifecycle, actions[""])
+    clarification_snapshot = clarification_snapshot_for_lock(repo, lock)
+    if lifecycle == "CLARIFIED" and clarification_snapshot:
+        base["run_state_gate_snapshot"] = clarification_snapshot
+        if clarification_snapshot.get("design_outline_ready") is False:
+            selected = {
+                **selected,
+                "allowed_actions": [
+                    "run dispatch-beat/dispatch-next for requirements-clarifier design-outline repair",
+                    "record dispatch-ack and dispatch-complete for the design-outline repair worker",
+                    "rerun e2e_dev_harness.py clarify after repair evidence is written",
+                ],
+                "phase_guidance": (
+                    "Current lifecycle is CLARIFIED, but the clarification readiness snapshot shows design_outline_ready=false. "
+                    "Repair the design outline before archive creation, R1 review, or plan."
+                ),
+                "next_valid_command": "dispatch design-outline repair worker from the active agent schedule",
+            }
+    if lifecycle in {"PLANNED", "RED_READY"} and clarification_snapshot:
+        base["run_state_gate_snapshot"] = clarification_snapshot
+        if clarification_snapshot.get("implementation_evidence_ready") is False:
+            selected = {
+                **selected,
+                "phase_guidance": (
+                    selected.get("phase_guidance", "")
+                    + " The clarification readiness snapshot still has implementation_evidence_ready=false; "
+                    "complete implementation-planner evidence repair here instead of returning the run to CREATED."
+                ),
+            }
     dispatch_guidance = pending_dispatch_ack_guidance(repo, lock)
     if dispatch_guidance:
         selected = {

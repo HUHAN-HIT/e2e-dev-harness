@@ -359,6 +359,38 @@ def default_review_profile() -> Path:
     return SCRIPT_DIR.parent / "review-profiles" / "default.json"
 
 
+def readiness_blockers(design_result: dict, phase: str) -> tuple[list[str], list[str]]:
+    readiness = design_result.get("readiness") if isinstance(design_result.get("readiness"), dict) else {}
+    if not readiness:
+        if design_result.get("ready_for_implementation") is False:
+            return ["Clarification readiness uses legacy ready_for_implementation=false; rerun clarification gate to get sub-gate readiness."], [
+                "Clarification status lacks readiness sub-gates; fell back to ready_for_implementation."
+            ]
+        return [], []
+
+    required_by_phase = {
+        "planning": ["user_clarification", "design_outline"],
+        "implementation": ["implementation_evidence", "mechanical_repair"],
+        "completion": ["user_clarification", "design_outline", "implementation_evidence", "mechanical_repair"],
+    }
+    blocked: list[str] = []
+    warnings: list[str] = []
+    for gate_name in required_by_phase.get(phase, []):
+        gate = readiness.get(gate_name) if isinstance(readiness.get(gate_name), dict) else {}
+        if gate.get("ready") is not False:
+            continue
+        owner = str(gate.get("owner", "")).strip()
+        next_command = str(gate.get("next_command", "")).strip()
+        gaps = ", ".join(str(item) for item in gate.get("gaps", []) or [])
+        if not owner or not next_command:
+            warnings.append(f"{gate_name} readiness is not ready but lacks owner/next_command; treating as advisory warning.")
+            continue
+        blocked.append(
+            f"{gate_name}_ready=false; owner={owner}; next_command={next_command}; gaps={gaps or '<unspecified>'}"
+        )
+    return blocked, warnings
+
+
 def validate_gate_request(request: GateRequest) -> dict:
     repo = request.repo
     design_doc = request.design_doc
@@ -417,8 +449,9 @@ def validate_gate_request(request: GateRequest) -> dict:
             blocked_reasons.append(f"Design document not found: {design_path}")
         else:
             design_result = clarification_gate.validate(design_path, require_intent=require_intent)
-            if not design_result["ready_for_implementation"]:
-                blocked_reasons.append("Clarification gate is not ready.")
+            readiness_blocked, readiness_warnings = readiness_blockers(design_result, phase)
+            blocked_reasons.extend(readiness_blocked)
+            warnings.extend(readiness_warnings)
     else:
         warnings.append("No design document supplied; clarification readiness was not checked.")
         if phase == "completion":

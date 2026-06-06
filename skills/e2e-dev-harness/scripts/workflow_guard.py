@@ -90,12 +90,24 @@ def phase_status(name: str, ready: bool, evidence: str = "", reason: str = "") -
     }
 
 
+def clarification_ready_value(clarification: dict | None, field: str, warnings: list[str]) -> bool:
+    if not isinstance(clarification, dict):
+        return False
+    if field in clarification:
+        return clarification.get(field) is True
+    if "ready_for_implementation" in clarification:
+        warnings.append(f"Legacy clarification readiness status lacks {field}; fell back to ready_for_implementation.")
+        return clarification.get("ready_for_implementation") is True
+    return False
+
+
 def validate_phase_coverage(
     verify_result: dict,
     completion_required: bool,
     require_strict_guard: bool = False,
 ) -> dict:
     phases: list[dict] = []
+    warnings: list[str] = []
     workflow = verify_result.get("workflow") if isinstance(verify_result.get("workflow"), dict) else {}
     prepare = verify_result.get("prepare")
     clarification = verify_result.get("clarification")
@@ -105,8 +117,18 @@ def validate_phase_coverage(
     prepare_ready = isinstance(prepare, dict) and not prepare.get("blocked")
     phases.append(phase_status("prepare", prepare_ready, "prepare", "Prepare phase is missing or blocked."))
 
-    clarify_ready = isinstance(clarification, dict) and clarification.get("ready_for_implementation") is True
+    clarify_ready = clarification_ready_value(clarification, "user_clarification_ready", warnings)
     phases.append(phase_status("clarify", clarify_ready, "clarification", "Clarification phase is missing or blocked."))
+
+    implementation_evidence_ready = clarification_ready_value(clarification, "implementation_evidence_ready", warnings)
+    phases.append(
+        phase_status(
+            "Implementation Evidence",
+            implementation_evidence_ready,
+            "clarification.implementation_evidence_ready",
+            "Implementation evidence readiness is missing or blocked.",
+        )
+    )
 
     plan_ready = bool(workflow.get("harness") and workflow.get("state"))
     phases.append(
@@ -177,6 +199,7 @@ def validate_phase_coverage(
         "require_strict_guard": require_strict_guard,
         "phases": phases,
         "blocked_reasons": blocked,
+        "warnings": unique(warnings),
     }
 
 
@@ -239,8 +262,8 @@ def validate_verify_result(
     warnings.extend(prepare_warnings)
 
     clarification = verify_result.get("clarification")
-    if isinstance(clarification, dict) and not clarification.get("ready_for_implementation", False):
-        blocked.append("Clarification gate is not ready.")
+    if isinstance(clarification, dict) and not clarification_ready_value(clarification, "user_clarification_ready", warnings):
+        blocked.append("Clarification user_clarification_ready is not ready.")
     elif completion_required and clarification is None:
         blocked.append("Completion workflow requires clarification status.")
 
@@ -272,6 +295,7 @@ def validate_verify_result(
     phase_coverage = None
     if strict and completion_required:
         phase_coverage = validate_phase_coverage(verify_result, completion_required, require_strict_guard=False)
+        warnings.extend(phase_coverage.get("warnings", []) or [])
         if not phase_coverage["ready"]:
             blocked.extend(phase_coverage["blocked_reasons"])
 

@@ -8,7 +8,8 @@ import agent_scheduler
 import clarification_gate
 import dispatcher
 import preflight as preflight_checks
-from common import atomic_write_json, posix, read_json_object
+import run_state as run_state_module
+from common import posix, read_json_object
 from e2e_harness.cli.commands import handoff as handoff_command
 from e2e_harness.cli.status import write_status
 from e2e_harness.engine import control_plane, state_store
@@ -91,6 +92,35 @@ def _mechanical_repair_next_required(schedule_path: Path, task_id: str) -> dict:
         ),
         "code_writes_allowed": False,
     }
+
+
+def _design_outline_next_required() -> dict:
+    return {
+        "phase": "clarification_repair",
+        "gate": "design_outline",
+        "command": "Run a requirements-clarifier design-outline repair worker before plan/archive or R1 review.",
+        "code_writes_allowed": False,
+    }
+
+
+def _plan_next_required() -> dict:
+    return {
+        "phase": "plan",
+        "gate": "design_outline",
+        "command": "Run e2e_dev_harness.py next, then e2e_dev_harness.py plan --create-archive before any code write.",
+        "code_writes_allowed": False,
+    }
+
+
+def _readiness_next_required(result: dict) -> dict:
+    if not result.get("design_outline_ready", False):
+        return _design_outline_next_required()
+    repair = result.get("mechanical_repair_dispatch")
+    if isinstance(repair, dict) and repair.get("next_required"):
+        next_required = dict(repair["next_required"])
+        next_required.setdefault("gate", "mechanical_repair")
+        return next_required
+    return _plan_next_required()
 
 
 def _ensure_artifact_repair_tasks(
@@ -261,6 +291,32 @@ def _with_stage(result: dict, stage: str) -> dict:
     return result
 
 
+def _record_clarification_gate_snapshot(repo: Path, run_state: Path | None, result: dict) -> None:
+    state_path = _resolve_repo_path(repo, run_state)
+    if not state_path or not state_path.exists():
+        return
+    state = read_json_object(state_path)
+    transition = result.get("run_state_transition") if isinstance(result.get("run_state_transition"), dict) else {}
+    if transition.get("lifecycle"):
+        state["lifecycle"] = transition["lifecycle"]
+    state.setdefault("gate_snapshots", {})["clarification"] = {
+        "schema": "e2e-dev-harness.clarification-readiness-snapshot.v1",
+        "ready_for_implementation": result.get("ready_for_implementation", False),
+        "user_clarification_ready": result.get("user_clarification_ready", False),
+        "design_outline_ready": result.get("design_outline_ready", False),
+        "implementation_evidence_ready": result.get("implementation_evidence_ready", False),
+        "mechanical_repair_ready": result.get("mechanical_repair_ready", False),
+        "readiness": result.get("readiness", {}),
+        "next_required": result.get("next_required", {}),
+    }
+    run_state_module.write_state(repo, state_path, state)
+
+
+def _primary_clarification_dispatch_blockers(repo: Path, run_state: Path | None) -> list[str]:
+    blockers = preflight_checks.clarification_dispatch_blockers(repo, run_state)
+    return [reason for reason in blockers if "mechanical repair" not in str(reason).lower()]
+
+
 def run(
     repo: Path,
     design_doc: Path,
@@ -276,7 +332,7 @@ def run(
 
     auto_complete = _auto_complete_single_requirements_clarifier(repo, run_state) if run_state else {}
     if run_state:
-        dispatch_blockers = preflight_checks.clarification_dispatch_blockers(repo, run_state)
+        dispatch_blockers = _primary_clarification_dispatch_blockers(repo, run_state)
         if dispatch_blockers:
             result = preflight_checks.clarification_dispatch_recovery(repo, run_state, dispatch_blockers)
             _with_stage(result, "primary_completion")
@@ -293,22 +349,19 @@ def run(
     _with_stage(result, "validation")
     repair_dispatch = _ensure_mechanical_repair_tasks(repo, run_state, design_path, result)
     if repair_dispatch and repair_dispatch.get("pending_tasks") and not result.get("interaction_required"):
-        _with_stage(result, "repair_barrier")
         result["mechanical_repair_dispatch"] = repair_dispatch
         result["agent_remediation_required"] = True
         result["next_agent_action"] = "dispatch_mechanical_repair"
-        result["next_required"] = repair_dispatch.get("next_required", {})
         contract = result.get("interaction_contract")
         if isinstance(contract, dict):
             contract["agent_remediation_required"] = True
             contract["next_agent_action"] = "dispatch_mechanical_repair"
             contract["mechanical_repair_dispatch"] = repair_dispatch
 
-    if run_state and result.get("ready_for_implementation"):
-        dispatch_blockers = preflight_checks.clarification_dispatch_blockers(repo, run_state)
+    if run_state and result.get("user_clarification_ready"):
+        dispatch_blockers = _primary_clarification_dispatch_blockers(repo, run_state)
         if dispatch_blockers:
             _with_stage(result, "repair_barrier")
-            result["ready_for_implementation"] = False
             result.setdefault("blocked_reasons", []).extend(dispatch_blockers)
             result["clarification_dispatch"] = {"ready": False, "blocked_reasons": dispatch_blockers}
             if auto_complete:
@@ -320,7 +373,7 @@ def run(
             write_status(status_file, result)
             return 2, result
 
-    if run_state and result.get("ready_for_implementation"):
+    if run_state and result.get("user_clarification_ready"):
         _with_stage(result, "transition")
         result["run_state_transition"] = state_store.transition_lifecycle(
             repo,
@@ -330,13 +383,10 @@ def run(
             gate_status="passed",
             evidence=design_path,
         )
-        result["blocked_next_without_plan"] = True
-        result["next_required"] = {
-            "phase": "plan",
-            "command": "Run e2e_dev_harness.py next, then e2e_dev_harness.py plan --create-archive before any code write.",
-            "code_writes_allowed": False,
-        }
+        result["blocked_next_without_plan"] = result.get("design_outline_ready", False)
+        result["next_required"] = _readiness_next_required(result)
+        _record_clarification_gate_snapshot(repo, run_state, result)
     if auto_complete:
         result["clarification_dispatch_auto_complete"] = auto_complete
     write_status(status_file, result)
-    return (0 if result["ready_for_implementation"] else 2), result
+    return (0 if (run_state and result.get("user_clarification_ready")) or result["ready_for_implementation"] else 2), result

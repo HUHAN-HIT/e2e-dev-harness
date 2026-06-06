@@ -448,6 +448,15 @@ class ClarificationGateTests(unittest.TestCase):
         self.assertEqual([], result["questions_to_ask_user"])
         self.assertEqual([], result["ask_user_requests"])
         self.assertTrue(any("Impact Summary" in item for item in result["agent_remediation_actions"]))
+        self.assertTrue(result["user_clarification_ready"], result)
+        self.assertTrue(result["design_outline_ready"], result)
+        self.assertFalse(result["implementation_evidence_ready"], result)
+        self.assertTrue(result["mechanical_repair_ready"], result)
+        self.assertFalse(result["ready_for_implementation"], result)
+        evidence_gate = result["readiness"]["implementation_evidence"]
+        self.assertFalse(evidence_gate["ready"])
+        self.assertEqual("implementation-planner", evidence_gate["owner"])
+        self.assertIn("next_command", evidence_gate)
 
     def test_agent_fixable_change_logic_gaps_do_not_request_user_input(self) -> None:
         markdown = textwrap.dedent(
@@ -496,6 +505,45 @@ class ClarificationGateTests(unittest.TestCase):
         self.assertFalse(result["interaction_required"])
         self.assertEqual([], result["questions_to_ask_user"])
         self.assertTrue(any("Change Logic" in item for item in result["agent_remediation_actions"]))
+        self.assertTrue(result["user_clarification_ready"], result)
+        self.assertTrue(result["design_outline_ready"], result)
+        self.assertFalse(result["implementation_evidence_ready"], result)
+        self.assertEqual("implementation-planner", result["readiness"]["implementation_evidence"]["owner"])
+
+    def test_design_outline_gaps_do_not_request_user_input_after_user_clarification(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Restated Intent
+            - The user wants a refund callback API.
+            - User confirmation: confirmed-by: user @2026-06-03-session.
+
+            ## Scope
+            - services/payment-service
+
+            ## Use Cases
+            - Merchant calls HTTP refund callback endpoint.
+
+            ## Open Questions
+            None. confirmed-by: user @2026-06-03-session.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path, require_intent=True, require_user_confirmation=True)
+
+        self.assertTrue(result["user_clarification_ready"], result)
+        self.assertFalse(result["design_outline_ready"], result)
+        self.assertFalse(result["ready_for_implementation"], result)
+        self.assertFalse(result["interaction_required"], result)
+        self.assertEqual([], result["questions_to_ask_user"])
+        self.assertIn("goal", result["readiness"]["design_outline"]["gaps"])
+        self.assertIn("acceptance", result["readiness"]["design_outline"]["gaps"])
+        self.assertIn("test_design", result["readiness"]["design_outline"]["gaps"])
+        self.assertEqual("requirements-clarifier", result["readiness"]["design_outline"]["owner"])
 
     def test_interface_requirement_requires_change_logic(self) -> None:
         markdown = textwrap.dedent(

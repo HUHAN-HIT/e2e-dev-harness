@@ -142,16 +142,154 @@ class ClarificationFlowTests(unittest.TestCase):
 
             code, result = clarification_flow.run(repo, Path("docs/design/feature.md"), run_state=state_path)
 
-        self.assertEqual(2, code)
+        self.assertEqual(0, code)
         self.assertFalse(result["ready_for_implementation"])
-        self.assertEqual("repair_barrier", result["clarification_transaction"]["stage"])
+        self.assertEqual("transition", result["clarification_transaction"]["stage"])
         self.assertEqual("dispatch_mechanical_repair", result["next_agent_action"])
         self.assertIn("mechanical_repair_dispatch", result)
-        command = result["mechanical_repair_dispatch"]["next_required"]["command"]
+        self.assertEqual("mechanical_repair", result["next_required"]["gate"])
+        command = result["next_required"]["command"]
         self.assertIn("dispatch-beat", command)
         self.assertIn("generated", command)
         self.assertIn("spawn request/prompt", command)
         self.assertIn("Do not call Agent directly", command)
+
+    def test_user_clarified_created_run_transitions_with_missing_implementation_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Restated Intent
+                    - The user wants a refund callback API.
+                    - User confirmation: confirmed-by: user @2026-06-03-session.
+
+                    ## Goal
+                    - Add a refund callback API.
+
+                    ## Scope
+                    - services/payment-service
+
+                    ## Use Cases
+                    - Merchant calls HTTP refund callback endpoint.
+
+                    ## Acceptance Criteria
+                    - AC-1 POST /api/refunds/callback returns accepted status.
+
+                    ## Test Design
+                    - Unit test first.
+
+                    ## Open Questions
+                    None. confirmed-by: user @2026-06-03-session.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+            schedule = state_path.parent / "agent-schedule.json"
+            (state_path.parent / "dispatch-events").mkdir(parents=True)
+            (state_path.parent / "dispatch-events" / "T01-completed.json").write_text(
+                json.dumps({"event": "worker_completed", "task_id": "T01", "agent": "requirements-clarifier"}),
+                encoding="utf-8",
+            )
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": ["docs/design/feature.md"],
+                                "status": "completed",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, result = clarification_flow.run(repo, Path("docs/design/feature.md"), run_state=state_path)
+            updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code)
+        self.assertTrue(result["user_clarification_ready"], result)
+        self.assertTrue(result["design_outline_ready"], result)
+        self.assertFalse(result["implementation_evidence_ready"], result)
+        self.assertFalse(result["ready_for_implementation"], result)
+        self.assertEqual("transition", result["clarification_transaction"]["stage"])
+        self.assertEqual("CLARIFIED", updated_state["lifecycle"])
+        self.assertEqual("plan", result["next_required"]["phase"])
+
+    def test_design_outline_missing_transitions_to_clarified_with_design_repair_next_required(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Restated Intent
+                    - The user wants a refund callback API.
+                    - User confirmation: confirmed-by: user @2026-06-03-session.
+
+                    ## Scope
+                    - services/payment-service
+
+                    ## Use Cases
+                    - Merchant calls HTTP refund callback endpoint.
+
+                    ## Open Questions
+                    None. confirmed-by: user @2026-06-03-session.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+            schedule = state_path.parent / "agent-schedule.json"
+            (state_path.parent / "dispatch-events").mkdir(parents=True)
+            (state_path.parent / "dispatch-events" / "T01-completed.json").write_text(
+                json.dumps({"event": "worker_completed", "task_id": "T01", "agent": "requirements-clarifier"}),
+                encoding="utf-8",
+            )
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": ["docs/design/feature.md"],
+                                "status": "completed",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, result = clarification_flow.run(repo, Path("docs/design/feature.md"), run_state=state_path)
+            updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code)
+        self.assertFalse(result["design_outline_ready"], result)
+        self.assertEqual("CLARIFIED", updated_state["lifecycle"])
+        self.assertEqual("design_outline", result["next_required"]["gate"])
+        self.assertEqual("clarification_repair", result["next_required"]["phase"])
+        self.assertIn("design-outline", result["next_required"]["command"])
 
 
 if __name__ == "__main__":

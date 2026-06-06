@@ -312,6 +312,67 @@ class ImplementationGateTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("dependency discovery evidence" in reason for reason in result["blocked_reasons"]))
 
+    def test_implementation_gate_names_missing_implementation_evidence_readiness(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Refund Callback
+
+            ## Restated Intent
+            - The user wants a refund callback API.
+            - User confirmation: confirmed-by: user @2026-06-03-session.
+
+            ## Goal
+            - Add a refund callback API.
+
+            ## Scope
+            - services/payment-service
+
+            ## Use Cases
+            - Merchant calls HTTP refund callback endpoint.
+
+            ## Acceptance Criteria
+            - AC-1 POST /api/refunds/callback returns accepted status.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None. confirmed-by: user @2026-06-03-session.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "refund.md"
+            kg = repo / "knowledge-graph" / "knowledge-graph-refresh.json"
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            design.parent.mkdir(parents=True)
+            kg.parent.mkdir(parents=True)
+            design.write_text(markdown, encoding="utf-8")
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED"),
+            )
+
+            result = implementation_gate.validate_gate_request(
+                implementation_gate.GateRequest(
+                    repo=repo,
+                    phase="implementation",
+                    design_doc=Path("docs/design/refund.md"),
+                    kg_status_file=kg,
+                    run_state=Path("docs/agent-runs/run/run-state.json"),
+                    require_intent=True,
+                    require_semantic_reviews=False,
+                )
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertNotIn("Clarification gate is not ready.", result["blocked_reasons"])
+        self.assertTrue(any("implementation_evidence_ready" in reason for reason in result["blocked_reasons"]))
+        self.assertTrue(any("implementation-planner" in reason for reason in result["blocked_reasons"]))
+        self.assertIn("next_command", result["design"]["readiness"]["implementation_evidence"])
+
     def test_implementation_gate_allows_explicit_no_harness_state_only_with_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

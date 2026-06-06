@@ -328,11 +328,13 @@ def clarification_questions(result: dict) -> list[str]:
     if result.get("intent_required") and "restated_intent" in result.get("missing_sections", []):
         questions.append("Ask the user to confirm the agent's restated intent before planning.")
     for key in result.get("missing_sections", []):
-        if key == "restated_intent":
+        if key in {"restated_intent", "goal", "scope", "use_cases", "acceptance", "test_design"}:
             continue
         label = SECTION_LABELS.get(key, key.replace("_", " ").title())
         questions.append(f"Ask the user what belongs in {label}, or record the evidence-backed answer in the design doc.")
     for key in result.get("empty_sections", []):
+        if key in {"goal", "scope", "use_cases", "acceptance", "test_design"}:
+            continue
         label = SECTION_LABELS.get(key, key.replace("_", " ").title())
         questions.append(f"Ask the user to clarify {label}, or record the evidence-backed answer in the design doc.")
     for question in result.get("unresolved_open_questions", []):
@@ -344,6 +346,10 @@ def clarification_questions(result: dict) -> list[str]:
 
 def agent_remediation_actions(result: dict) -> list[str]:
     actions: list[str] = []
+    design = result.get("readiness", {}).get("design_outline", {})
+    design_gaps = design.get("gaps", []) if isinstance(design, dict) else []
+    for gap in design_gaps:
+        actions.append(f"Dispatch requirements-clarifier design-outline repair before R1/plan: {gap}")
     for gap in result.get("integration_gaps", []):
         actions.append(f"Update integration evidence in the design doc before implementation: {gap}")
     for gap in result.get("impact_gaps", []):
@@ -399,7 +405,13 @@ def mechanical_remediation_tasks(path: Path, result: dict) -> list[dict]:
                     "gap": gap,
                 }
             )
-        else:
+        elif (
+            "table missing columns" in lowered
+            or "missing affected_callers_consumers" in lowered
+            or "missing required_tests_contracts" in lowered
+            or "must map the interface" in lowered
+            or "affected interfaces table" in lowered
+        ):
             impact_incomplete_gaps.append(str(gap))
     if impact_incomplete_gaps:
         gap_summary = "; ".join(impact_incomplete_gaps[:8])
@@ -426,30 +438,89 @@ def mechanical_remediation_tasks(path: Path, result: dict) -> list[dict]:
                 "gap": gap_summary,
             }
         )
-    change_logic_gaps = [str(gap) for gap in result.get("change_logic_gaps", [])]
-    if change_logic_gaps:
-        gap_summary = "; ".join(change_logic_gaps[:8])
-        if len(change_logic_gaps) > 8:
-            gap_summary += f"; plus {len(change_logic_gaps) - 8} more Change Logic gaps"
-        tasks.append(
-            {
-                "code": "change_logic_incomplete",
-                "kind": "artifact_repair",
-                "section": "Change Logic",
-                "target": str(path),
-                "objective": (
-                    "Complete Change Logic with current behavior, target behavior, runtime path, "
-                    "and state/data/config/request-response effects."
-                ),
-                "constraints": [
-                    "Do not add new product facts or reopen user-confirmed Open Questions.",
-                    "Use existing design scope, acceptance criteria, and repository evidence.",
-                    "Trace only the runtime path needed for the confirmed requirement.",
-                ],
-                "gap": gap_summary,
-            }
-        )
     return tasks
+
+
+def readiness_gate(
+    ready: bool,
+    gaps: list[str],
+    owner: str,
+    allowed_lifecycle: list[str],
+    next_command: str,
+    unblocks: list[str],
+) -> dict:
+    return {
+        "ready": ready,
+        "gaps": gaps,
+        "owner": owner,
+        "allowed_lifecycle": allowed_lifecycle,
+        "next_command": next_command,
+        "unblocks": unblocks,
+    }
+
+
+def readiness_contract(result: dict) -> dict:
+    missing = list(result.get("missing_sections", []) or [])
+    empty = list(result.get("empty_sections", []) or [])
+    design_keys = ["goal", "scope", "use_cases", "acceptance", "test_design"]
+    design_gaps = [key for key in design_keys if key in missing or key in empty]
+
+    user_gaps: list[str] = []
+    if result.get("intent_required") and "restated_intent" in missing:
+        user_gaps.append("restated_intent")
+    if "open_questions" in missing:
+        user_gaps.append("open_questions")
+    if not result.get("open_questions_clear"):
+        user_gaps.extend(str(item) for item in result.get("unresolved_open_questions", []) or [])
+    user_gaps.extend(str(item) for item in result.get("user_confirmation_gaps", []) or [])
+
+    evidence_gaps = (
+        [str(item) for item in result.get("integration_gaps", []) or []]
+        + [str(item) for item in result.get("impact_gaps", []) or []]
+        + [str(item) for item in result.get("change_logic_gaps", []) or []]
+    )
+    mechanical_tasks = result.get("mechanical_remediation_tasks", []) or []
+    mechanical_gaps = [
+        str(item.get("code") or item.get("gap") or "mechanical_repair")
+        for item in mechanical_tasks
+        if isinstance(item, dict)
+    ]
+
+    return {
+        "schema": "e2e-dev-harness.readiness.v1",
+        "user_clarification": readiness_gate(
+            not user_gaps,
+            user_gaps,
+            "user",
+            ["CREATED"],
+            "Record confirmed Restated Intent and closed Open Questions provenance, then rerun clarify.",
+            ["CREATED_TO_CLARIFIED"],
+        ),
+        "design_outline": readiness_gate(
+            not design_gaps,
+            design_gaps,
+            "requirements-clarifier",
+            ["CLARIFIED"],
+            "Run design-outline repair worker before archive creation or R1 review.",
+            ["R1_REVIEW", "PLAN_ARCHIVE"],
+        ),
+        "implementation_evidence": readiness_gate(
+            not evidence_gaps,
+            evidence_gaps,
+            "implementation-planner",
+            ["PLANNED", "RED_READY"],
+            "Run implementation-planner or requirements-clarifier repair to add Impact Summary, Change Logic, and integration/call-chain evidence.",
+            ["IMPLEMENTATION_GATE"],
+        ),
+        "mechanical_repair": readiness_gate(
+            not mechanical_gaps,
+            mechanical_gaps,
+            "requirements-clarifier",
+            ["CLARIFIED", "PLANNED", "RED_READY"],
+            "Dispatch the scheduled mechanical repair worker and rerun clarify.",
+            ["PLAN_ARCHIVE", "IMPLEMENTATION_GATE"],
+        ),
+    }
 
 
 def ask_user_options_for_question(question: str) -> list[dict[str, str]]:
@@ -704,10 +775,8 @@ def validate(path: Path, require_intent: bool = False, require_user_confirmation
     impact_gaps = impact_summary_gaps(markdown)
     logic_gaps = change_logic_gaps(markdown)
     confirmation_gaps = user_confirmation_gaps(markdown, require_intent, oq_clear) if require_user_confirmation else []
-    ready = not missing and not empty_sections and oq_clear and not gaps and not impact_gaps and not logic_gaps and not confirmation_gaps
     result = {
         "path": str(path),
-        "ready_for_implementation": ready,
         "missing_sections": missing,
         "empty_sections": empty_sections,
         "open_questions_clear": oq_clear,
@@ -726,6 +795,18 @@ def validate(path: Path, require_intent: bool = False, require_user_confirmation
         "user_confirmation_gaps": confirmation_gaps,
     }
     result["mechanical_remediation_tasks"] = mechanical_remediation_tasks(path, result)
+    readiness = readiness_contract(result)
+    result["readiness"] = readiness
+    result["user_clarification_ready"] = readiness["user_clarification"]["ready"]
+    result["design_outline_ready"] = readiness["design_outline"]["ready"]
+    result["implementation_evidence_ready"] = readiness["implementation_evidence"]["ready"]
+    result["mechanical_repair_ready"] = readiness["mechanical_repair"]["ready"]
+    result["ready_for_implementation"] = (
+        result["user_clarification_ready"]
+        and result["design_outline_ready"]
+        and result["implementation_evidence_ready"]
+        and result["mechanical_repair_ready"]
+    )
     result["interaction_contract"] = interaction_contract(result)
     result["interaction_required"] = result["interaction_contract"]["interaction_required"]
     result["questions_to_ask_user"] = result["interaction_contract"]["questions_to_ask_user"]
