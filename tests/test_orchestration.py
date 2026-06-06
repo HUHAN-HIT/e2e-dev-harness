@@ -8246,7 +8246,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(dispatch_result["ready"], dispatch_result["blocked_reasons"])
         self.assertTrue(result["ready"], result["blocked_reasons"])
 
-    def test_phase_guard_auto_confirms_dispatcher_generated_review_task(self) -> None:
+    def test_phase_guard_does_not_auto_confirm_dispatcher_generated_review_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             run_dir = repo / "docs" / "agent-runs" / "run"
@@ -8311,8 +8311,13 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(dispatch_result["ready"], dispatch_result["blocked_reasons"])
         self.assertEqual("awaiting_runtime_spawn", before_hook["dispatch"]["status"])
         self.assertTrue(result["ready"], result["blocked_reasons"])
-        self.assertEqual("worker_running_unverified", after_hook["dispatch"]["status"])
-        self.assertEqual("phase_guard", after_hook["dispatch"]["spawn_confirmed_by"])
+        # Option A: phase_guard must not fabricate a confirmed spawn state.
+        self.assertEqual("awaiting_runtime_spawn", after_hook["dispatch"]["status"])
+        self.assertNotEqual("phase_guard", after_hook["dispatch"].get("spawn_confirmed_by"))
+        self.assertTrue(
+            any("dispatch-ack" in str(w) for w in result.get("warnings", [])),
+            result.get("warnings"),
+        )
 
     def test_phase_guard_blocks_direct_reviewer_report_write_without_active_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

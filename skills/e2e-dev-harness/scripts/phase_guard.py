@@ -926,6 +926,16 @@ def validate_dispatch_context(repo: Path, state_data: dict, task_text: str) -> l
 
 
 def auto_confirm_dispatcher_task(repo: Path, lock: Path, state_data: dict, task_text: str) -> str:
+    """Emit guidance when a dispatcher worker-task prompt is observed.
+
+    Option A: observing a worker-task prompt is too weak a signal to advance the
+    dispatch lifecycle. This function no longer fabricates a confirmed spawn
+    (it does not set ``worker_running_unverified``, write a synthetic
+    ``phase-guard-auto-confirm`` handle, or persist run-state). It leaves the
+    dispatch in ``awaiting_runtime_spawn`` and returns a guidance note pointing
+    at the real ``dispatch-ack`` handle / manual-worker packet. The name is kept
+    because its sole caller is ``_evaluate_dispatch_task``.
+    """
     task_id = dispatcher_task_id(task_text)
     if not task_id:
         return ""
@@ -940,21 +950,11 @@ def auto_confirm_dispatcher_task(repo: Path, lock: Path, state_data: dict, task_
         return ""
     if str(dispatch.get("current_task_id", "")) not in {"", task_id}:
         return ""
-    confirmed = dict(dispatch)
-    confirmed.update(
-        {
-            "status": "worker_running_unverified",
-            "worker_handle": str(dispatch.get("worker_handle") or f"phase-guard-auto-confirm:{task_id}"),
-            "worker_session": str(dispatch.get("worker_session") or f"phase-guard-auto-confirm:{task_id}"),
-            "spawn_confirmed_by": "phase_guard",
-            "spawn_acknowledged_at": run_state.now_iso(),
-        }
+    return (
+        f"Dispatcher task {task_id} prompt observed; phase_guard will NOT auto-confirm. "
+        "Run dispatch-ack with a fresh worker handle (or use the manual-worker packet) "
+        "before completion."
     )
-    current_state["dispatch"] = confirmed
-    current_state.setdefault("dispatches", {})[task_id] = confirmed
-    current_state["updated_at"] = run_state.now_iso()
-    run_state.write_state(repo, state_path, current_state)
-    return f"Dispatcher task {task_id} spawn observed by phase_guard; dispatch-ack is still required for trusted completion."
 
 
 def _evaluate_dispatch_task(
