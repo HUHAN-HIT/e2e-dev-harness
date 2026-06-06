@@ -151,6 +151,48 @@ def is_no_open_questions(value: str) -> bool:
     return text.replace("\n", " ").strip() in NONE_VALUES
 
 
+def blocker_code_for_reason(reason: str) -> str:
+    text = str(reason).lower()
+    if "duplicate ready marker" in text:
+        return "ready_marker_duplicate"
+    if "missing ready marker" in text:
+        return "ready_marker_missing"
+    if "ready marker is missing or invalid json" in text:
+        return "ready_marker_invalid"
+    if "ready marker" in text and "status is not ready/verified" in text:
+        return "ready_marker_status_not_ready"
+    if "ready marker" in text and "producer_agent does not match agent_id" in text:
+        return "ready_marker_producer_mismatch"
+    if "ready marker" in text and "must include path" in text:
+        return "ready_marker_path_missing"
+    if "ready marker" in text and "path does not point to this handoff" in text:
+        return "ready_marker_path_mismatch"
+    if "ready marker" in text and "sha256 does not match current handoff content" in text:
+        return "ready_marker_hash_mismatch"
+    if "must declare non-empty input_hashes" in text:
+        return "input_hashes_empty"
+    if "must declare non-empty output_hashes" in text:
+        return "output_hashes_empty"
+    if "self-referential" in text:
+        return "self_referential_outputs"
+    if "open_questions: none" in text or "open questions section is not closed" in text:
+        return "open_questions_not_literal_none"
+    if "ready body section is empty or template-only" in text:
+        return "ready_body_section_empty"
+    if "missing required fields" in text:
+        return "required_frontmatter_missing"
+    return "handoff_contract_blocker"
+
+
+def blocker_codes_for_reasons(reasons: list[str]) -> list[str]:
+    codes: list[str] = []
+    for reason in reasons:
+        code = blocker_code_for_reason(reason)
+        if code not in codes:
+            codes.append(code)
+    return codes
+
+
 def explicit_files(repo: Path, inputs: list[Path] | None) -> list[Path]:
     files: list[Path] = []
     for item in inputs or []:
@@ -437,6 +479,7 @@ def validate(
         "repo": str(repo),
         "ready": not blocked,
         "blocked_reasons": blocked,
+        "blocker_codes": blocker_codes_for_reasons(blocked),
         "warnings": [],
         "scanned_files": [str(path) for path in files],
         "partial_files": [str(path) for path in partials],

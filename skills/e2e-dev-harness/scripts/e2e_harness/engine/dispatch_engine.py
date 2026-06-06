@@ -123,8 +123,30 @@ def finish(
         result["warnings"].extend(handoff_result.get("warnings", []))
         if not handoff_result.get("ready"):
             result["blocked_reasons"] = list(handoff_result.get("blocked_reasons", []))
+            schedule_file = dispatcher.resolve(repo, schedule)
+            schedule_data = dispatcher.read_json(schedule_file) if schedule_file else {}
+            task = dispatcher.agent_scheduler.find_task(schedule_data, task_id) if schedule_data else {}
+            classification, required_action, blocker_codes = dispatcher.ready_handoff_repair_classification(
+                result["blocked_reasons"]
+            )
+            action = dispatcher.coordinator_worker_only_action(
+                repo,
+                schedule,
+                state,
+                task,
+                required_action=required_action,
+                evidence=evidence or [],
+            )
+            result["missing_evidence_type"] = "ready_handoff_contract"
+            result["ready_handoff_blocker_classification"] = classification
+            result["blocker_codes"] = blocker_codes
+            result["coordinator_action"] = action
+            result["next_required"] = action["next_required"]
+            result["worker_owned_outputs"] = action["worker_owned_outputs"]
+            result["forbidden_artifact_writes"] = action["forbidden_artifact_writes"]
+            result["handoff_completion_requirements"] = dispatcher.ready_handoff_completion_requirements(task)
             result["next_hint"] = handoff_result.get(
-                "next_hint", "Fix the handoff blockers, then rerun dispatch-finish."
+                "next_hint", action["primary_command"]
             )
             return result
 
@@ -141,6 +163,11 @@ def finish(
         "manual_worker_packet",
         "next_commands",
         "next_required",
+        "coordinator_action",
+        "worker_owned_outputs",
+        "forbidden_artifact_writes",
+        "workflow_stage",
+        "lifecycle",
     ):
         if key in complete_result:
             result[key] = complete_result[key]

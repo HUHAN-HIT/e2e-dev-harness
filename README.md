@@ -80,10 +80,12 @@ Runs the canonical `install_hooks.py`, so the generated `.claude/settings.json` 
 e2e-harness status   <repo>           # doctor: hooks / index / run-state readiness
 e2e-harness next     <repo>           # next allowed harness action
 e2e-harness dispatch <repo>           # dispatch state + open scheduled tasks
+e2e-harness gc       <repo>           # report artifact-retention cleanup candidates
+e2e-harness cleanup  <repo> --execute # apply artifact-retention cleanup
 e2e-harness exec <script.py> <args>   # run any bundled scripts/<script>.py
 ```
 
-`exec` forwards to `~/.claude/skills/e2e-dev-harness/scripts/<script.py>`; any other subcommand is passed through to `e2e_dev_harness.py`. Override the skill location with `E2E_HARNESS_HOME` and the interpreter with `E2E_HARNESS_PYTHON`.
+`gc` and `cleanup` forward to `gc:run`, which is dry-run by default and deletes only with `--execute`. `exec` forwards to `~/.claude/skills/e2e-dev-harness/scripts/<script.py>`; any other subcommand is passed through to `e2e_dev_harness.py`. Override the skill location with `E2E_HARNESS_HOME` and the interpreter with `E2E_HARNESS_PYTHON`.
 
 ### 4. Tool maintenance (this machine)
 

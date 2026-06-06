@@ -25,6 +25,14 @@ test('dispatch maps to dispatch-status', () => {
     { file: PY, args: [s('e2e_dev_harness.py'), 'dispatch-status', '.'] });
 });
 
+test('gc and cleanup map to gc:run', () => {
+  for (const command of ['gc', 'cleanup']) {
+    assert.deepStrictEqual(
+      resolveCommand(HOME, PY, [command, '.', '--json-full']),
+      { file: PY, args: [s('e2e_dev_harness.py'), 'gc:run', '.', '--json-full'] });
+  }
+});
+
 test('init -> install_hooks.py', () => {
   assert.deepStrictEqual(
     resolveCommand(HOME, PY, ['init', '.', '--runtime', 'claude']),

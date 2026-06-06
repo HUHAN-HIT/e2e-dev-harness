@@ -58,6 +58,15 @@ def _apply_scalars(fm_lines: list[str], scalars: dict[str, str]) -> list[str]:
     return result
 
 
+def _frontmatter_scalar(fm_lines: list[str], key: str) -> str:
+    needle = f"{key}:"
+    for line in fm_lines:
+        stripped = line.lstrip()
+        if stripped.startswith(needle):
+            return stripped[len(needle) :].strip()
+    return ""
+
+
 def _render(fm_lines: list[str], remainder: str) -> str:
     body = "---\n" + "\n".join(fm_lines) + "\n---\n"
     if remainder:
@@ -65,6 +74,32 @@ def _render(fm_lines: list[str], remainder: str) -> str:
     if not body.endswith("\n"):
         body += "\n"
     return body
+
+
+def _closed_open_questions_text(text: str) -> bool:
+    value = text.strip()
+    if handoff_gate.is_no_open_questions(value):
+        return True
+    lowered = " ".join(value.lower().split())
+    return "no open questions" in lowered and ("remain" in lowered or "resolved" in lowered or "needed" in lowered)
+
+
+def _normalize_open_questions_section(remainder: str, frontmatter_open_questions: str) -> tuple[str, bool]:
+    if not handoff_gate.is_no_open_questions(frontmatter_open_questions):
+        return remainder, False
+    lines = remainder.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip().lower() != "## open questions":
+            continue
+        end = index + 1
+        while end < len(lines) and not lines[end].lstrip().startswith("## "):
+            end += 1
+        existing = "\n".join(lines[index + 1 : end]).strip()
+        if not _closed_open_questions_text(existing):
+            return remainder, False
+        replacement = lines[: index + 1] + ["", "None", ""] + lines[end:]
+        return "\n".join(replacement).strip() + "\n", True
+    return remainder, False
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
@@ -116,7 +151,12 @@ def run_finalize(
         )
         return result
 
-    normalized = _render(_apply_scalars(fm_lines, {"agent_id": agent, "status": "ready"}), remainder)
+    updated_fm = _apply_scalars(fm_lines, {"agent_id": agent, "status": "ready"})
+    updated_remainder, normalized_open_questions = _normalize_open_questions_section(
+        remainder,
+        _frontmatter_scalar(updated_fm, "open_questions"),
+    )
+    normalized = _render(updated_fm, updated_remainder)
     _atomic_write_text(handoff, normalized)
 
     marker = handoff_gate.marker_path(handoff)
@@ -144,6 +184,8 @@ def run_finalize(
     result["ready"] = True
     result["ready_marker"] = str(marker)
     result["sha256"] = digest
+    if normalized_open_questions:
+        result["normalized_open_questions"] = True
     return result
 
 

@@ -34,6 +34,8 @@ Project lifecycle (a business repo):
   status <repo>                    Doctor: hooks / index / run-state readiness
   next <repo>                      Next allowed harness action
   dispatch <repo>                  Dispatch state + open scheduled tasks
+  gc <repo> [--execute]            Run artifact retention cleanup (dry-run by default)
+  cleanup <repo> [--execute]       Alias for gc
   exec <script.py> [args]          Run a bundled scripts/<script>.py`;
 
 function skillsDir() {

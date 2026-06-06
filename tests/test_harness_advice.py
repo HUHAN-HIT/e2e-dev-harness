@@ -1,0 +1,204 @@
+from __future__ import annotations
+
+import io
+import json
+import sys
+import tempfile
+import unittest
+
+from contextlib import redirect_stdout
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "skills" / "e2e-dev-harness" / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+import harness_advice  # noqa: E402
+import install_hooks  # noqa: E402
+import phase_guard  # noqa: E402
+import run_state  # noqa: E402
+
+
+def write_pending_dispatch_fixture(repo: Path) -> Path:
+    """Build a CREATED run whose T01 dispatch awaits a runtime worker spawn."""
+    run_dir = repo / "docs" / "agent-runs" / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "artifact-registry.json").write_text(
+        json.dumps(
+            {
+                "schema": "e2e-dev-harness.artifact-registry.v1",
+                "run_id": "docs/agent-runs/run",
+                "selected_mode": "single",
+                "services": [],
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    state_path = run_dir / "run-state.json"
+    state = run_state.build_state(
+        "docs/agent-runs/run",
+        "single",
+        [],
+        "docs/agent-runs/run/artifact-registry.json",
+        "CREATED",
+    )
+    state["dispatch"] = {
+        "status": "awaiting_runtime_spawn",
+        "current_task_id": "T01",
+        "current_agent": "requirements-clarifier",
+        "context_pack": "docs/agent-runs/run/context-packs/T01.json",
+    }
+    state["dispatches"] = {"T01": dict(state["dispatch"])}
+    run_state.write_state(repo, state_path, state)
+    return state_path
+
+
+class HarnessAdviceGuidanceTests(unittest.TestCase):
+    def test_advice_is_silent_without_active_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            result = harness_advice.advice_for_repo(repo)
+        self.assertFalse(result["active_run"])
+        self.assertEqual("", harness_advice.format_advice(result))
+
+    def test_advice_surfaces_pending_dispatch_spawn_and_ack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            write_pending_dispatch_fixture(repo)
+            result = harness_advice.advice_for_repo(repo)
+        self.assertTrue(result["active_run"])
+        self.assertEqual("CREATED", result["lifecycle"])
+        pending = result["pending_dispatch"]
+        self.assertEqual("T01", pending["task_id"])
+        self.assertIn("T01-spawn-request.json", pending["spawn_request"])
+        self.assertIn("dispatch-ack", pending["ack_command"])
+        text = harness_advice.format_advice(result)
+        self.assertIn("T01", text)
+        self.assertIn("requirements-clarifier", text)
+        self.assertIn("dispatch-ack", text)
+        self.assertIn("CREATED", text)
+
+    def test_advice_reminds_worker_owns_scheduled_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            write_pending_dispatch_fixture(repo)
+            text = harness_advice.format_advice(harness_advice.advice_for_repo(repo))
+        self.assertIn("impact-analysis.json", text)
+        self.assertIn("worker", text.lower())
+
+    def test_advice_reuses_phase_guard_guidance(self) -> None:
+        # Single source of truth: advice must equal phase_guard's own compact guidance.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            write_pending_dispatch_fixture(repo)
+            lock = phase_guard.discover_lock(repo.resolve(), None, None)
+            expected = phase_guard.compact_guidance_result(
+                phase_guard.guidance_from_lock(repo.resolve(), lock)
+            )
+            result = harness_advice.advice_for_repo(repo)
+        self.assertEqual(expected.get("next_single_action"), result["next_single_action"])
+
+    def test_advice_degrades_silently_on_malformed_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "broken"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / ".phase-lock").write_text("{ not json", encoding="utf-8")
+            result = harness_advice.advice_for_repo(repo)
+        # A broken run must never raise or block a session; advice stays silent.
+        self.assertIn("active_run", result)
+        self.assertEqual("", harness_advice.format_advice(result))
+
+
+class HarnessAdviceMainTests(unittest.TestCase):
+    def test_main_emits_guidance_and_exits_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            write_pending_dispatch_fixture(repo)
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                code = harness_advice.main([str(repo)])
+            output = buffer.getvalue()
+        self.assertEqual(0, code)
+        self.assertIn("T01", output)
+
+    def test_main_silent_and_exits_zero_without_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                code = harness_advice.main([str(repo)])
+            output = buffer.getvalue()
+        self.assertEqual(0, code)
+        self.assertEqual("", output.strip())
+
+    def test_main_json_mode_is_machine_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            write_pending_dispatch_fixture(repo)
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                code = harness_advice.main([str(repo), "--json"])
+            payload = json.loads(buffer.getvalue())
+        self.assertEqual(0, code)
+        self.assertTrue(payload["active_run"])
+        self.assertEqual("T01", payload["pending_dispatch"]["task_id"])
+
+
+class AdviceHookWiringTests(unittest.TestCase):
+    def test_claude_install_wires_advice_session_hooks_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            install_hooks.install(repo, "claude")
+            install_hooks.install(repo, "claude")  # second install must stay idempotent
+            settings = repo / ".claude" / "settings.json"
+            config = json.loads(settings.read_text(encoding="utf-8"))
+        hooks = config["hooks"]
+        self.assertIn("SessionStart", hooks)
+        self.assertIn("UserPromptSubmit", hooks)
+        self.assertEqual(1, len(hooks["SessionStart"]))
+        self.assertEqual(1, len(hooks["UserPromptSubmit"]))
+        # PreToolUse/Stop counts are unaffected by the advisory hooks.
+        self.assertEqual(1, len(hooks["PreToolUse"]))
+        self.assertEqual(1, len(hooks["Stop"]))
+        session_cmd = hooks["SessionStart"][0]["hooks"][0]["command"]
+        self.assertIn("harness_advice.py", session_cmd)
+        self.assertIn(str(repo.resolve()), session_cmd)
+        # The advisory hook must not carry the blocking phase_guard.
+        self.assertNotIn("phase_guard.py", session_cmd)
+
+    def test_claude_install_preserves_user_session_hooks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            settings = repo / ".claude" / "settings.json"
+            settings.parent.mkdir(parents=True, exist_ok=True)
+            settings.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            "SessionStart": [
+                                {
+                                    "matcher": "",
+                                    "hooks": [{"type": "command", "command": "echo user-hook"}],
+                                }
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            install_hooks.install(repo, "claude")
+            config = json.loads(settings.read_text(encoding="utf-8"))
+        commands = [
+            entry["hooks"][0]["command"]
+            for entry in config["hooks"]["SessionStart"]
+        ]
+        self.assertTrue(any("echo user-hook" in command for command in commands))
+        self.assertTrue(any("harness_advice.py" in command for command in commands))
+
+
+if __name__ == "__main__":
+    unittest.main()

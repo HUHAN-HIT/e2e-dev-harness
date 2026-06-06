@@ -305,6 +305,7 @@ class HandoffGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("ready marker" in reason.lower() for reason in result["blocked_reasons"]))
+        self.assertIn("ready_marker_missing", result["blocker_codes"])
 
     def test_handoff_gate_blocks_stale_ready_marker_hash(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -347,6 +348,7 @@ class HandoffGateTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("sha256" in reason.lower() for reason in result["blocked_reasons"]))
+        self.assertIn("ready_marker_hash_mismatch", result["blocker_codes"])
 
     def test_handoff_gate_blocks_ready_marker_path_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

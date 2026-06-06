@@ -13,6 +13,7 @@ chaining logic this module adds.
 from __future__ import annotations
 
 import json
+import hashlib
 import sys
 import tempfile
 import unittest
@@ -30,6 +31,70 @@ import run_state  # noqa: E402
 from e2e_harness.cli.commands import dispatch as dispatch_command  # noqa: E402
 from e2e_harness.cli.commands import handoff as handoff_command  # noqa: E402
 from e2e_harness.engine import dispatch_engine  # noqa: E402
+
+
+def write_role_template(repo: Path, path: Path) -> None:
+    full = repo / path
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(
+        "# Role\n\n## Role Boundary\nOwn one task.\n\n## Allowed Inputs\nInput.\n\n## Forbidden\nNo coordinator context.\n\n## Required Outputs\nOutput.\n\n## Done When\nDone.\n",
+        encoding="utf-8",
+    )
+
+
+def write_ready_handoff(repo: Path, path: Path, agent_id: str = "requirements-agent") -> None:
+    full = repo / path
+    full.parent.mkdir(parents=True, exist_ok=True)
+    evidence = full.parents[1] / "evidence" / "requirements-summary.md"
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    evidence.write_text("Requirements clarification evidence.\n", encoding="utf-8")
+    evidence_ref = evidence.relative_to(repo).as_posix()
+    evidence_hash = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    full.write_text(
+        (
+            "---\n"
+            "agent: requirements-clarifier\n"
+            f"agent_id: {agent_id}\n"
+            "status: ready\n"
+            "inputs:\n"
+            "  - user request\n"
+            "outputs:\n"
+            f"  - {evidence_ref}\n"
+            "input_hashes:\n"
+            "  - user-request sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "output_hashes:\n"
+            f"  - {evidence_ref} sha256:{evidence_hash}\n"
+            "consumed_by:\n"
+            "  - implementation-planner\n"
+            "open_questions: None\n"
+            "---\n\n"
+            "## Summary\n"
+            "Requirements are clarified for dispatch.\n\n"
+            "## Facts Used\n"
+            "User request and service scope were reviewed.\n\n"
+            "## Decisions Made\n"
+            "The downstream task may use the scheduled context pack.\n\n"
+            "## Open Questions\n"
+            "None\n\n"
+            "## Downstream Assumptions\n"
+            "The implementation agent will stay inside scheduled outputs.\n\n"
+            "## Verification Evidence\n"
+            "Ready marker hash matches this handoff file.\n"
+        ),
+        encoding="utf-8",
+    )
+    full.with_suffix(".ready.json").write_text(
+        json.dumps(
+            {
+                "path": full.name,
+                "sha256": hashlib.sha256(full.read_bytes()).hexdigest(),
+                "producer_agent": agent_id,
+                "status": "ready",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 class DispatchFinishOrchestrationTest(unittest.TestCase):
@@ -187,6 +252,114 @@ class DispatchAckPhaseGuardTest(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("Worker output write blocked" in reason for reason in result["blocked_reasons"]))
 
+    def test_created_coordinator_cannot_write_any_active_worker_owned_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            evidence = Path("docs/agent-runs/run/evidence/requirements-summary.md")
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            state["dispatch"] = {
+                "status": "awaiting_runtime_spawn",
+                "runtime": "codex",
+                "previous_lifecycle": "CREATED",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            (run_dir / "agent-schedule.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": [handoff.as_posix(), evidence.as_posix()],
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = phase_guard.validate_action(
+                repo,
+                "Write",
+                [handoff, evidence],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        message = " ".join(result["blocked_reasons"])
+        self.assertIn(handoff.as_posix(), message)
+        self.assertIn(evidence.as_posix(), message)
+        self.assertIn("dispatch-finish", message)
+        self.assertIn("fresh worker", message.lower())
+
+    def test_fact_forcing_shell_write_to_worker_output_still_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            evidence = Path("docs/agent-runs/run/evidence/requirements-summary.md")
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            state["dispatch"] = {
+                "status": "awaiting_runtime_spawn",
+                "runtime": "codex",
+                "previous_lifecycle": "CREATED",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            (run_dir / "agent-schedule.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": [evidence.as_posix()],
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = phase_guard.validate_action(
+                repo,
+                "powershell",
+                [evidence],
+                run_dir=Path("docs/agent-runs/run"),
+                command_text=f"Set-Content -Path {evidence.as_posix()} -Value 'fact summary'",
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Worker output write blocked" in reason for reason in result["blocked_reasons"]))
+
     def test_manual_dispatch_ack_proof_allows_worker_owned_handoff_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -296,6 +469,258 @@ class DispatchAckPhaseGuardTest(unittest.TestCase):
             )
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_runtime_dispatch_ack_proof_allows_all_scheduled_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            evidence = Path("docs/agent-runs/run/evidence/requirements-summary.md")
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            state["dispatch"] = {
+                "status": "worker_running",
+                "runtime": "codex",
+                "previous_lifecycle": "CREATED",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "worker_handle": "requirements-clarifier-worker",
+                "worker_session": "requirements-clarifier-session",
+                "spawn_confirmed_by": "dispatch_ack",
+                "spawn_acknowledged_at": "2026-06-06T01:31:07Z",
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            (run_dir / "agent-schedule.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": [handoff.as_posix(), evidence.as_posix()],
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = phase_guard.validate_action(
+                repo,
+                "Write",
+                [handoff, evidence],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
+
+class DispatchFinishHandoffContractTest(unittest.TestCase):
+    def test_ready_handoff_with_worker_proof_completes_t01_and_writes_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            role_template = Path("docs/agent-runs/run/agent-roles/requirements-clarifier.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, handoff)
+            state = run_state.build_state("run", "bootstrap", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            state["dispatch"] = {
+                "status": "waiting_dispatch",
+                "runtime": "manual",
+                "previous_lifecycle": "CREATED",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "role_group": "design",
+                                "role_template": role_template.as_posix(),
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                                "outputs": [handoff.as_posix()],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatch_engine.finish(
+                repo,
+                schedule,
+                state_path,
+                "T01",
+                "requirements-clarifier",
+                "manual-worker-1",
+                evidence=[handoff.as_posix()],
+                handoff=None,
+            )
+            updated_schedule = json.loads(schedule.read_text(encoding="utf-8"))
+            updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+            event = json.loads((run_dir / "dispatch-events" / "T01-completed.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("completed", updated_schedule["tasks"][0]["status"])
+        self.assertEqual("worker_completed", updated_state["dispatch"]["status"])
+        self.assertEqual("worker_completed", event["event"])
+        self.assertEqual("T01", event["task_id"])
+
+    def test_body_contract_failure_returns_worker_only_repair_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            role_template = Path("docs/agent-runs/run/agent-roles/requirements-clarifier.md")
+            write_role_template(repo, role_template)
+            (repo / handoff).parent.mkdir(parents=True, exist_ok=True)
+            (repo / handoff).write_text(
+                "---\nagent: requirements-clarifier\nagent_id: worker-1\nstatus: ready\ninputs:\n  - user request\noutputs:\n  - docs/agent-runs/run/evidence/requirements-summary.md\ninput_hashes:\n  - user sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\noutput_hashes:\n  - docs/agent-runs/run/evidence/requirements-summary.md sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nconsumed_by:\n  - implementation-planner\nopen_questions: None\n---\n\n# Agent Handoff\n",
+                encoding="utf-8",
+            )
+            state = run_state.build_state("run", "bootstrap", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            state["dispatch"] = {
+                "status": "waiting_dispatch",
+                "runtime": "manual",
+                "previous_lifecycle": "CREATED",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "role_group": "design",
+                                "role_template": role_template.as_posix(),
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                                "outputs": [handoff.as_posix()],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatch_engine.finish(
+                repo,
+                schedule,
+                state_path,
+                "T01",
+                "requirements-clarifier",
+                "manual-worker-1",
+                evidence=[handoff.as_posix()],
+                handoff=None,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertEqual("complete", result["stage"])
+        self.assertFalse(result["coordinator_action"]["code_writes_allowed"])
+        self.assertEqual("spawn_or_resume_worker", result["coordinator_action"]["required_action"])
+        self.assertIn("ready body section", " ".join(result["blocked_reasons"]))
+
+    def test_handoff_finalize_failure_returns_artifact_repair_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            role_template = Path("docs/agent-runs/run/agent-roles/requirements-clarifier.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, handoff)
+            handoff_path = repo / handoff
+            text = handoff_path.read_text(encoding="utf-8").replace(
+                "## Open Questions\nNone",
+                "## Open Questions\nThe earlier concern is resolved; no user input is needed.",
+            )
+            handoff_path.write_text(text, encoding="utf-8")
+            handoff_path.with_suffix(".ready.json").unlink()
+            state = run_state.build_state("run", "bootstrap", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            state["dispatch"] = {
+                "status": "waiting_dispatch",
+                "runtime": "manual",
+                "previous_lifecycle": "CREATED",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "role_group": "design",
+                                "role_template": role_template.as_posix(),
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                                "outputs": [handoff.as_posix()],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatch_engine.finish(
+                repo,
+                schedule,
+                state_path,
+                "T01",
+                "requirements-clarifier",
+                "manual-worker-1",
+                evidence=[handoff.as_posix()],
+                handoff=handoff,
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertEqual("handoff", result["stage"])
+        self.assertEqual("artifact_repair", result["coordinator_action"]["required_action"])
+        self.assertEqual("artifact_repair", result["next_required"]["phase"])
+        self.assertIn("open_questions_not_literal_none", result["blocker_codes"])
+        self.assertEqual([handoff.as_posix()], result["forbidden_artifact_writes"])
 
     def test_dispatch_ack_recovers_phase_guard_unverified_state(self) -> None:
         """phase_guard auto-confirm leaves the dispatch in worker_running_unverified.

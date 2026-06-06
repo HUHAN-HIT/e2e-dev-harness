@@ -833,10 +833,17 @@ def worker_output_write_blockers(repo: Path, lock: Path | None, output_paths: li
         if not touched:
             continue
         if not worker_output_write_confirmed(dispatch):
+            status = str(dispatch.get("status", "")).strip().lower()
+            if status == "worker_running":
+                next_step = "rerun dispatch-finish after the fresh worker repairs the scheduled outputs"
+            else:
+                next_step = "spawn or acknowledge the fresh worker, then run dispatch-finish after the worker writes its scheduled outputs"
             blocked.append(
                 "Worker output write blocked: scheduled output is owned by active dispatch "
                 + task_id
-                + "; spawn the dispatcher-generated worker and let the Task hook prove the worker session before writing "
+                + "; coordinator code writes are not allowed. Next step: "
+                + next_step
+                + " for "
                 + ", ".join(touched)
                 + "."
             )

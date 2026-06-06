@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -14,6 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skills" / "e2e-dev-harness" / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
+INSTALLED_DRIFT_TEST_FILES = [
+    "phase_guard.py",
+    "dispatcher.py",
+    "e2e_harness/cli/commands/clarify.py",
+    "preflight.py",
+]
 
 import e2e_dev_harness  # noqa: E402
 import harness_doctor  # noqa: E402
@@ -102,6 +109,68 @@ def write_state_doctor_fixture(repo: Path) -> Path:
 
 
 class HarnessDoctorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.home_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.home_dir.cleanup)
+        home_patch = patch.object(harness_doctor.Path, "home", return_value=Path(self.home_dir.name) / "home")
+        home_patch.start()
+        self.addCleanup(home_patch.stop)
+
+    def test_doctor_blocks_installed_skill_script_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            harness_doctor.shutil,
+            "which",
+            side_effect=lambda name: f"C:/tools/{name}.exe" if name in {"pytest", "mvn", "gitnexus"} else "",
+        ), patch.object(
+            harness_doctor.Path,
+            "home",
+            return_value=Path(tmp) / "home",
+        ):
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            (repo / "pom.xml").write_text("<project />\n", encoding="utf-8")
+            installed_scripts = Path(tmp) / "home" / ".codex" / "skills" / "e2e-dev-harness" / "scripts"
+            installed_scripts.mkdir(parents=True)
+            for name in INSTALLED_DRIFT_TEST_FILES:
+                (installed_scripts / name).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(SCRIPTS / name, installed_scripts / name)
+            (installed_scripts / "phase_guard.py").write_text("# drifted runtime copy\n", encoding="utf-8")
+
+            result = harness_doctor.evaluate(repo)
+
+        checks = {item["id"]: item for item in result["checks"]}
+        self.assertFalse(result["ready"])
+        self.assertEqual("fail", checks["installed-skill-drift"]["status"])
+        self.assertIn(".codex", checks["installed-skill-drift"]["message"])
+        self.assertIn("phase_guard.py", checks["installed-skill-drift"]["message"])
+        self.assertIn("install-e2e-dev-harness.mjs --sync", checks["installed-skill-drift"]["remediation"])
+
+    def test_doctor_warns_but_does_not_block_when_installed_skill_hashes_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            harness_doctor.shutil,
+            "which",
+            side_effect=lambda name: f"C:/tools/{name}.exe" if name in {"pytest", "mvn", "gitnexus"} else "",
+        ), patch.object(
+            harness_doctor.Path,
+            "home",
+            return_value=Path(tmp) / "home",
+        ):
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            (repo / "pom.xml").write_text("<project />\n", encoding="utf-8")
+            installed_scripts = Path(tmp) / "home" / ".codex" / "skills" / "e2e-dev-harness" / "scripts"
+            installed_scripts.mkdir(parents=True)
+            for name in INSTALLED_DRIFT_TEST_FILES:
+                (installed_scripts / name).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(SCRIPTS / name, installed_scripts / name)
+
+            result = harness_doctor.evaluate(repo)
+
+        checks = {item["id"]: item for item in result["checks"]}
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("warn", checks["installed-skill-drift"]["status"])
+        self.assertIn("not installed", checks["installed-skill-drift"]["message"])
+
     def test_doctor_empty_repo_includes_bootstrap_guide(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.object(
             harness_doctor.shutil,

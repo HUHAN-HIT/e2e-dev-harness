@@ -104,6 +104,8 @@ def _ensure_mechanical_repair_tasks(repo: Path, run_state: Path | None, design_p
     schedule = read_json_object(schedule_path)
     tasks = [task for task in schedule.get("tasks", []) or [] if isinstance(task, dict)]
     target = _repo_relative(repo, design_path)
+    role_template = _repo_relative(repo, schedule_path.parent / "agent-roles" / "requirements-clarifier.md")
+    require_role_templates = bool(schedule.get("require_role_templates"))
     added: list[dict] = []
     pending: list[dict] = []
     for spec in repair_specs:
@@ -125,7 +127,6 @@ def _ensure_mechanical_repair_tasks(repo: Path, run_state: Path | None, design_p
             "outputs": [target],
             "repair_targets": [target],
             "parallel_group": "clarification-repair",
-            "require_role_templates": False,
             "objective": spec.get("objective", "Apply the scheduled mechanical clarification repair."),
             "constraints": spec.get("constraints", []),
             "completion_checks": [
@@ -134,6 +135,9 @@ def _ensure_mechanical_repair_tasks(repo: Path, run_state: Path | None, design_p
                 "No user-confirmed requirement decisions were changed.",
             ],
         }
+        if require_role_templates:
+            task["role_template"] = role_template
+            task["role_template_key"] = "requirements-clarifier"
         tasks.append(task)
         added.append(task)
         pending.append(task)

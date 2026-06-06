@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -24,6 +25,14 @@ import run_state  # noqa: E402
 
 
 MIN_PYTHON = (3, 10)
+INSTALLED_SKILL_DRIFT_FILES = [
+    Path("phase_guard.py"),
+    Path("dispatcher.py"),
+    Path("e2e_harness") / "cli" / "commands" / "clarify.py",
+    Path("preflight.py"),
+]
+INSTALLED_SKILL_DRIFT_TARGETS = [".codex", ".agents", ".claude"]
+INSTALLED_SKILL_DRIFT_REMEDIATION = "node tools/install-e2e-dev-harness.mjs --sync --yes --json"
 
 
 def check(check_id: str, status: str, severity: str, message: str, remediation: str = "") -> dict:
@@ -75,6 +84,77 @@ def skill_layout_check() -> dict:
             "Reinstall or repair the e2e-dev-harness skill directory.",
         )
     return check("skill-layout", "pass", "info", f"Skill directory looks complete: {SKILL_DIR}")
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def installed_skill_drift_check() -> dict:
+    source_hashes: dict[Path, str] = {}
+    source_missing: list[str] = []
+    for relative_path in INSTALLED_SKILL_DRIFT_FILES:
+        source = SCRIPT_DIR / relative_path
+        if not source.exists():
+            source_missing.append(relative_path.as_posix())
+            continue
+        source_hashes[relative_path] = sha256_file(source)
+    if source_missing:
+        return check(
+            "installed-skill-drift",
+            "fail",
+            "error",
+            "Source skill drift files are missing: " + ", ".join(source_missing),
+            "Repair the source e2e-dev-harness skill before syncing installed runtime copies.",
+        )
+
+    missing_targets: list[str] = []
+    mismatches: list[str] = []
+    checked_targets: list[str] = []
+    home = Path.home()
+    for target in INSTALLED_SKILL_DRIFT_TARGETS:
+        scripts_dir = home / target / "skills" / "e2e-dev-harness" / "scripts"
+        if not scripts_dir.exists():
+            missing_targets.append(str(scripts_dir))
+            continue
+        checked_targets.append(str(scripts_dir))
+        for relative_path, expected_hash in source_hashes.items():
+            installed = scripts_dir / relative_path
+            if not installed.exists():
+                mismatches.append(f"{target}:{relative_path.as_posix()} missing")
+                continue
+            installed_hash = sha256_file(installed)
+            if installed_hash != expected_hash:
+                mismatches.append(f"{target}:{relative_path.as_posix()} hash mismatch")
+
+    if mismatches:
+        return check(
+            "installed-skill-drift",
+            "fail",
+            "error",
+            "Installed e2e-dev-harness skill drift detected: " + "; ".join(mismatches),
+            INSTALLED_SKILL_DRIFT_REMEDIATION,
+        )
+    if missing_targets:
+        detail = "; ".join(missing_targets)
+        prefix = "Installed runtime skill copies match source" if checked_targets else "No installed runtime skill copies were checked"
+        return check(
+            "installed-skill-drift",
+            "warn",
+            "warning",
+            f"{prefix}; runtime target not installed: {detail}",
+            INSTALLED_SKILL_DRIFT_REMEDIATION,
+        )
+    return check(
+        "installed-skill-drift",
+        "pass",
+        "info",
+        "Installed e2e-dev-harness skill copies match source: " + ", ".join(checked_targets),
+    )
 
 
 def repo_shape_check(repo: Path) -> dict:
@@ -632,6 +712,7 @@ def evaluate(repo: Path, strict: bool = False, state: Path | None = None) -> dic
     checks = [
         python_check(),
         skill_layout_check(),
+        installed_skill_drift_check(),
         repo_shape_check(repo),
         pytest_check(),
         maven_check(repo),

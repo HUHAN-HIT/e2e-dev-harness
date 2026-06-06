@@ -83,6 +83,7 @@ def render_runtime_paths(value, repo: Path):
             value.replace("C:\\absolute\\path\\to\\python.exe", sys.executable)
             .replace("C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py", str(SCRIPT_DIR / "phase_guard.py"))
             .replace("C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\harness_stop_guard.py", str(SCRIPT_DIR / "harness_stop_guard.py"))
+            .replace("C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\harness_advice.py", str(SCRIPT_DIR / "harness_advice.py"))
             .replace("C:\\absolute\\path\\to\\target-repo", str(repo.resolve()))
         )
     return value
@@ -183,6 +184,16 @@ def stop_guard_command_present(value) -> bool:
         return any(stop_guard_command_present(item) for item in value)
     if isinstance(value, str):
         return "harness_stop_guard.py" in value and "--hook-input" in value
+    return False
+
+
+def advice_command_present(value) -> bool:
+    if isinstance(value, dict):
+        return any(advice_command_present(item) for item in value.values())
+    if isinstance(value, list):
+        return any(advice_command_present(item) for item in value)
+    if isinstance(value, str):
+        return "harness_advice.py" in value
     return False
 
 
@@ -355,6 +366,21 @@ def merge_claude(existing: dict, hook: dict) -> dict:
         if serialized not in existing_stop_serialized:
             stop.append(item)
             existing_stop_serialized.add(serialized)
+    # Advisory (non-blocking) pre-action hooks. Drop any prior harness_advice
+    # entry then re-add the rendered one so reinstalls stay idempotent, while
+    # leaving the user's own SessionStart/UserPromptSubmit hooks untouched.
+    for event in ("SessionStart", "UserPromptSubmit"):
+        incoming_advice = hook.get("hooks", {}).get(event, [])
+        if not incoming_advice and event not in hooks:
+            continue
+        bucket = hooks.setdefault(event, [])
+        bucket[:] = [item for item in bucket if not advice_command_present(item)]
+        advice_serialized = {json.dumps(item, sort_keys=True) for item in bucket if isinstance(item, dict)}
+        for item in incoming_advice:
+            serialized = json.dumps(item, sort_keys=True)
+            if serialized not in advice_serialized:
+                bucket.append(item)
+                advice_serialized.add(serialized)
     return merged
 
 

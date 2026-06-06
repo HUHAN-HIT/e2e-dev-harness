@@ -118,6 +118,58 @@ class HandoffFinalizeTests(unittest.TestCase):
             again = handoff_command.run_finalize(repo, handoff, "developer-agent-1")
             self.assertTrue(again["ready"], again["blocked_reasons"])
 
+    def test_closed_open_questions_section_is_normalized_to_literal_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run = repo / "docs" / "agent-runs" / "run"
+            (run / "handoffs").mkdir(parents=True)
+            (run / "evidence").mkdir(parents=True)
+            out = run / "evidence" / "impact-summary.md"
+            out.write_text("# Impact Summary\n\nReal content.\n", encoding="utf-8")
+            out_rel = "docs/agent-runs/run/evidence/impact-summary.md"
+            out_hash = hashlib.sha256(out.read_bytes()).hexdigest()
+            handoff = run / "handoffs" / "01-requirements-clarifier.md"
+            handoff.write_text(
+                _complete_handoff_text(out_rel, out_hash).replace(
+                    "## Open Questions\n\nNone\n",
+                    "## Open Questions\n\nNo open questions remain; the user's earlier concern is resolved.\n",
+                ),
+                encoding="utf-8",
+            )
+
+            result = handoff_command.run_finalize(repo, handoff, "developer-agent-1")
+
+            self.assertTrue(result["ready"], result["blocked_reasons"])
+            text = handoff.read_text(encoding="utf-8")
+            self.assertIn("## Open Questions\n\nNone\n", text)
+            self.assertNotIn("earlier concern", text)
+
+    def test_semantic_body_gap_is_not_repaired_and_marker_rolls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run = repo / "docs" / "agent-runs" / "run"
+            (run / "handoffs").mkdir(parents=True)
+            (run / "evidence").mkdir(parents=True)
+            out = run / "evidence" / "impact-summary.md"
+            out.write_text("# Impact Summary\n\nReal content.\n", encoding="utf-8")
+            out_rel = "docs/agent-runs/run/evidence/impact-summary.md"
+            out_hash = hashlib.sha256(out.read_bytes()).hexdigest()
+            handoff = run / "handoffs" / "01-requirements-clarifier.md"
+            handoff.write_text(
+                _complete_handoff_text(out_rel, out_hash).replace(
+                    "The clarifier confirmed the refund-notify scope with the user and locked AC-1.",
+                    "TODO",
+                ),
+                encoding="utf-8",
+            )
+
+            result = handoff_command.run_finalize(repo, handoff, "developer-agent-1")
+
+            self.assertFalse(result["ready"])
+            self.assertTrue(result.get("marker_rolled_back"))
+            self.assertFalse(handoff_gate.marker_path(handoff.resolve()).exists())
+            self.assertTrue(any("ready body section" in item for item in result["blocked_reasons"]))
+
 
 class TaskStateViewTests(unittest.TestCase):
     def test_view_merges_three_status_namespaces_and_suggests_finalize(self) -> None:
