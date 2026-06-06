@@ -1240,6 +1240,27 @@ class EventLogContractTests(unittest.TestCase):
         self.assertEqual("worker_running", projected_state["dispatches"]["T10"]["status"])
         self.assertEqual("agent-schedule.json", projected_schedule["source_snapshot"])
 
+    def test_event_log_projects_snapshots_from_control_plane_when_present(self) -> None:
+        import event_log  # noqa: PLC0415
+        from e2e_harness.engine import control_plane  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            control_plane.create(repo, run_dir, "docs/agent-runs/run")
+            path = run_dir / "control-plane.json"
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["tasks"] = [{"id": "T01", "agent": "requirements-clarifier", "phase": "clarify", "status": "planned"}]
+            path.write_text(json.dumps(data), encoding="utf-8")
+
+            projection = event_log.write_snapshot_projections(run_dir)
+            root_state = json.loads((run_dir / "run-state.json").read_text(encoding="utf-8"))
+            snapshot_state = json.loads((run_dir / "snapshots" / "run-state.json").read_text(encoding="utf-8"))
+
+        self.assertEqual("e2e-dev-harness.snapshot-projection.v1", projection["schema"])
+        self.assertEqual("control-plane.json", root_state["source"])
+        self.assertEqual("control-plane.json", snapshot_state["source"])
+
     def test_event_log_state_api_replays_and_reports_first_mismatch(self) -> None:
         import event_log  # noqa: PLC0415
 

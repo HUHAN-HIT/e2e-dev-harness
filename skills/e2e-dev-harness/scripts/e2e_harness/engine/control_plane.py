@@ -51,6 +51,54 @@ def _normalize_task(task: dict) -> dict:
     return copy
 
 
+def load(repo: Path, run_dir: Path) -> dict:
+    path = control_plane_path(_resolve(repo, run_dir))
+    return read_json_object(path)
+
+
+def _schedule_projection(data: dict) -> dict:
+    schedule = data.get("schedule") if isinstance(data.get("schedule"), dict) else {}
+    return {
+        "schema": "e2e-dev-harness.agent-schedule.v1",
+        "source": CONTROL_PLANE_FILE,
+        "mode": schedule.get("mode", ""),
+        "completion_mode": schedule.get("completion_mode", "dispatcher-confirmed"),
+        "max_workers": schedule.get("max_workers", ""),
+        "tasks": list(data.get("tasks", []) or []),
+    }
+
+
+def _run_state_projection(data: dict) -> dict:
+    return {
+        "schema": "e2e-dev-harness.run-state.v1",
+        "source": CONTROL_PLANE_FILE,
+        "run_id": data.get("run_id", ""),
+        "lifecycle": data.get("lifecycle", "CREATED"),
+        "gates": data.get("gates", {}),
+        "dispatches": data.get("dispatches", {}),
+        "dispatch": data.get("dispatch", {}),
+        "history": data.get("history", []),
+        "artifact_registry": data.get("artifact_registry", ""),
+    }
+
+
+def _phase_lock_projection(data: dict) -> dict:
+    projection = dict(data.get("phase_lock", {})) if isinstance(data.get("phase_lock"), dict) else {}
+    projection.setdefault("schema", "e2e-dev-harness.phase-lock.v1")
+    projection["source"] = CONTROL_PLANE_FILE
+    projection["lifecycle"] = data.get("lifecycle", projection.get("lifecycle", "CREATED"))
+    return projection
+
+
+def _coordinator_projection(data: dict) -> dict:
+    coordinator = data.get("coordinator") if isinstance(data.get("coordinator"), dict) else {}
+    summary = dict(coordinator.get("summary", {})) if isinstance(coordinator.get("summary"), dict) else {}
+    summary["source"] = CONTROL_PLANE_FILE
+    summary.setdefault("run_id", data.get("run_id", ""))
+    summary.setdefault("lifecycle", data.get("lifecycle", "CREATED"))
+    return summary
+
+
 def create(repo: Path, run_dir: Path, run_id: str) -> dict:
     path = control_plane_path(run_dir if run_dir.is_absolute() else repo / run_dir)
     data = default_control_plane(run_id)
@@ -121,4 +169,40 @@ def import_legacy(repo: Path, run_dir: Path) -> dict:
         "ready": not blocking,
         "control_plane_path": posix(path),
         "diagnostics": diagnostics,
+    }
+
+
+def write_legacy_projections(repo: Path, run_dir: Path) -> dict:
+    resolved_run_dir = _resolve(repo, run_dir)
+    path = control_plane_path(resolved_run_dir)
+    data = read_json_object(path)
+    if not data:
+        return {
+            "ready": False,
+            "blocked_reasons": [f"Missing {CONTROL_PLANE_FILE} at {posix(path)}."],
+        }
+
+    projections = {
+        "run-state.json": _run_state_projection(data),
+        "agent-schedule.json": _schedule_projection(data),
+        ".phase-lock": _phase_lock_projection(data),
+        "coordinator-summary.json": _coordinator_projection(data),
+    }
+    for name, projection in projections.items():
+        atomic_write_json(resolved_run_dir / name, projection)
+
+    data["projections"] = {
+        name: {
+            "mode": "compat",
+            "source": CONTROL_PLANE_FILE,
+            "path": posix(resolved_run_dir / name),
+            "authoritative": False,
+        }
+        for name in projections
+    }
+    atomic_write_json(path, data)
+    return {
+        "ready": True,
+        "control_plane_path": posix(path),
+        "projections": data["projections"],
     }

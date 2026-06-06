@@ -311,6 +311,33 @@ def replay_schedule(events: list[dict], base_schedule: dict | None = None) -> di
 
 
 def write_snapshot_projections(run_dir: Path, state_path: Path | None = None, schedule_path: Path | None = None) -> dict:
+    control_plane_file = run_dir / "control-plane.json"
+    if control_plane_file.exists():
+        from e2e_harness.engine import control_plane  # noqa: PLC0415
+
+        result = control_plane.write_legacy_projections(Path("."), run_dir)
+        directory = snapshots_dir(run_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        state_projection = directory / "run-state.json"
+        schedule_projection = directory / "agent-schedule.json"
+        root_state = _read_json(run_dir / "run-state.json")
+        root_schedule = _read_json(run_dir / "agent-schedule.json")
+        if root_state:
+            atomic_write_json(state_projection, root_state)
+        if root_schedule:
+            atomic_write_json(schedule_projection, root_schedule)
+        return {
+            "schema": "e2e-dev-harness.snapshot-projection.v1",
+            "ready": bool(result.get("ready")),
+            "run_dir": str(run_dir).replace("\\", "/"),
+            "source": "control-plane.json",
+            "snapshots": {
+                "run_state": str(state_projection).replace("\\", "/"),
+                "agent_schedule": str(schedule_projection).replace("\\", "/"),
+            },
+            "projections": result.get("projections", {}),
+            "blocked_reasons": result.get("blocked_reasons", []),
+        }
     events = read_events(run_dir)
     directory = snapshots_dir(run_dir)
     directory.mkdir(parents=True, exist_ok=True)

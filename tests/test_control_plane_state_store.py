@@ -109,6 +109,40 @@ class ControlPlaneStateStoreTests(unittest.TestCase):
         self.assertEqual(data["tasks"][0]["runtime_subagent_type"], "requirements-clarifier")
         self.assertEqual(data["projections"]["run-state.json"]["mode"], "compat")
 
+    def make_control_plane_with_task(self, task_id: str) -> tuple[Path, Path]:
+        repo, run_dir = self.make_run_dir()
+        control_plane.create(repo, run_dir, run_id="docs/agent-runs/run")
+        path = run_dir / "control-plane.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["tasks"] = [
+            {
+                "id": task_id,
+                "agent": "requirements-clarifier",
+                "phase": "clarify",
+                "role_group": "design",
+                "outputs": ["docs/design/example.md"],
+                "status": "planned",
+            }
+        ]
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return repo, run_dir
+
+    def test_legacy_projections_are_derived_from_control_plane(self) -> None:
+        repo, run_dir = self.make_control_plane_with_task("T01")
+
+        result = control_plane.write_legacy_projections(repo, run_dir)
+
+        self.assertTrue(result["ready"])
+        state = json.loads((run_dir / "run-state.json").read_text(encoding="utf-8"))
+        schedule = json.loads((run_dir / "agent-schedule.json").read_text(encoding="utf-8"))
+        phase_lock = json.loads((run_dir / ".phase-lock").read_text(encoding="utf-8"))
+        summary = json.loads((run_dir / "coordinator-summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["source"], "control-plane.json")
+        self.assertEqual(schedule["source"], "control-plane.json")
+        self.assertEqual(schedule["tasks"][0]["id"], "T01")
+        self.assertEqual(phase_lock["source"], "control-plane.json")
+        self.assertEqual(summary["source"], "control-plane.json")
+
 
 if __name__ == "__main__":
     unittest.main()
