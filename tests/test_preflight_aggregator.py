@@ -264,6 +264,64 @@ class PreflightAggregatorTests(unittest.TestCase):
         self.assertIn("active repair transaction impact-summary-too-long-docs-design-feature-md", result["next_single_action"])
         self.assertIn("T01b", result["next_single_action"])
 
+    def test_created_state_routes_running_repair_transaction_to_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            install_hooks.install(repo, "claude")
+            state = _write_state(repo, "CREATED")
+            state.write_text(
+                json.dumps(
+                    {
+                        "lifecycle": "CREATED",
+                        "run_id": "r1",
+                        "dispatches": {
+                            "T01c": {
+                                "current_task_id": "T01c",
+                                "current_agent": "requirements-clarifier",
+                                "status": "worker_running",
+                                "worker_handle": "worker-1",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            _write_schedule(
+                state,
+                [
+                    {
+                        "id": "T01",
+                        "agent": "requirements-clarifier",
+                        "phase": "clarify",
+                        "status": "completed",
+                    },
+                    {
+                        "id": "T01c",
+                        "agent": "requirements-clarifier",
+                        "phase": "clarify",
+                        "kind": "artifact_repair",
+                        "status": "claimed",
+                        "repair_transaction_id": "impact-summary-too-long-docs-design-feature-md",
+                        "repair_targets": ["docs/design/feature.md"],
+                    },
+                ],
+            )
+            events = state.parent / "dispatch-events"
+            events.mkdir()
+            (events / "T01-completed.json").write_text(
+                json.dumps({"event": "worker_completed", "task_id": "T01", "agent": "requirements-clarifier"}),
+                encoding="utf-8",
+            )
+
+            result = harness.aggregate_preflight_blockers(repo, state)
+
+        self.assertFalse(result["ready"])
+        self.assertIn("Current dispatch status is worker_running", result["blockers"][0]["message"])
+        self.assertIn("dispatch-finish", result["next_single_action"])
+        self.assertIn("dispatch-complete", result["next_single_action"])
+        self.assertIn("T01c", result["next_single_action"])
+        self.assertNotIn("dispatch-beat", result["next_single_action"])
+
     def test_missing_runtime_hook_blocks_dispatch_preflight_with_install_guidance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

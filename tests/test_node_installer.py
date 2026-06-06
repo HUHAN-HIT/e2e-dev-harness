@@ -236,6 +236,8 @@ class NodeInstallerTests(unittest.TestCase):
             install_root = Path(tmp) / "home"
             project = Path(tmp) / "business-project"
             project.mkdir()
+            root_settings = ROOT / ".claude" / "settings.json"
+            root_settings_before = root_settings.read_bytes() if root_settings.exists() else None
 
             code, payload = self.run_installer(
                 "--install-root",
@@ -254,7 +256,8 @@ class NodeInstallerTests(unittest.TestCase):
 
             self.assertEqual(0, code, payload)
             self.assertTrue((project / ".claude" / "settings.json").exists())
-            self.assertFalse((ROOT / ".claude" / "settings.json").exists())
+            root_settings_after = root_settings.read_bytes() if root_settings.exists() else None
+            self.assertEqual(root_settings_before, root_settings_after)
             self.assertIn("install-hooks", [result["action"] for result in payload["action_results"]])
 
     def test_project_root_must_exist_when_hooks_are_requested(self) -> None:

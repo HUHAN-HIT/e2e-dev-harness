@@ -126,15 +126,19 @@ def clarification_dispatch_blockers(repo: Path, run_state_path: Path | str | Non
         task_id = str(task.get("id", "")).strip() or "<missing>"
         agent = str(task.get("agent", "")).strip() or "<missing>"
         transaction_id = str(task.get("repair_transaction_id", "")).strip()
+        dispatch = dispatcher.dispatch_for_task(state_data, task_id)
+        status = str(dispatch.get("status", "")).strip() if dispatch else ""
+        status_detail = f" Current dispatch status is {status}." if status else ""
         if transaction_id:
             repair_blockers.append(
                 f"Clarification mechanical repair blocked: active repair transaction {transaction_id} "
                 f"task {task_id} ({agent}) must be completed through dispatch-complete with a worker_completed dispatch event."
+                f"{status_detail}"
             )
         else:
             repair_blockers.append(
                 f"Clarification mechanical repair blocked: task {task_id} ({agent}) must be completed through dispatch-complete "
-                "with a worker_completed dispatch event."
+                f"with a worker_completed dispatch event.{status_detail}"
             )
     return repair_blockers
 
@@ -355,6 +359,21 @@ def _minimal_fix_for_blocker(check: dict, message: str) -> str:
             candidate = tail.split(" ", 1)[0].strip()
             if candidate:
                 task_id = candidate
+        status = ""
+        status_marker = "Current dispatch status is "
+        if status_marker in message:
+            tail = message.split(status_marker, 1)[1].strip()
+            status = tail.split(".", 1)[0].strip()
+        if status == "worker_running":
+            if transaction_id:
+                return (
+                    f"Complete active repair transaction {transaction_id}: run dispatch-finish for repair task {task_id} "
+                    "from the acknowledged worker session, or dispatch-complete it with audited worker evidence, then rerun clarify."
+                )
+            return (
+                f"Complete mechanical clarification repair task {task_id}: run dispatch-finish from the acknowledged worker session, "
+                "or dispatch-complete it with audited worker evidence, then rerun clarify."
+            )
         if transaction_id:
             return (
                 f"Complete active repair transaction {transaction_id}: run dispatch-beat --max-workers 1 for repair task {task_id}, "

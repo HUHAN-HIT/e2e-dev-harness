@@ -370,6 +370,23 @@ def open_repair_transaction(
     tasks = [task for task in data.get("tasks", []) or [] if isinstance(task, dict)]
     task_id = _next_repair_task_id(tasks)
     transaction_id = _transaction_id(repair_code, repair_target)
+    base_task = next(
+        (
+            item
+            for item in tasks
+            if str(item.get("agent", "")).strip() == "requirements-clarifier"
+            and str(item.get("role_template", "")).strip()
+        ),
+        {},
+    )
+    role_template = str(base_task.get("role_template", "")).strip()
+    if not role_template:
+        default_role_template = resolved_run_dir / "agent-roles" / "requirements-clarifier.md"
+        if default_role_template.exists():
+            try:
+                role_template = posix(default_role_template.resolve().relative_to(repo.resolve()))
+            except ValueError:
+                role_template = posix(default_role_template)
     task = task_contract(
         task_id=task_id,
         agent="requirements-clarifier",
@@ -383,6 +400,8 @@ def open_repair_transaction(
         repair_section=section,
         objective=objective,
         constraints=constraints or [],
+        role_template=role_template,
+        role_template_key=base_task.get("role_template_key", ""),
     )
     task["repair_transaction_id"] = transaction_id
     task["completion_checks"] = [
