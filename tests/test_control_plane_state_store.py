@@ -45,6 +45,70 @@ class ControlPlaneStateStoreTests(unittest.TestCase):
         self.assertIn("projections", data)
         self.assertEqual(data["phase_lock"]["state"], "code-write-locked")
 
+    def write_legacy_created_run(self) -> tuple[Path, Path]:
+        repo, run_dir = self.make_run_dir()
+        (run_dir / "run-state.json").write_text(
+            json.dumps(
+                {
+                    "schema": "e2e-dev-harness.run-state.v1",
+                    "run_id": "docs/agent-runs/run",
+                    "lifecycle": "CREATED",
+                    "gates": {"clarification": "pending"},
+                    "dispatches": {},
+                    "history": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "agent-schedule.json").write_text(
+            json.dumps(
+                {
+                    "schema": "e2e-dev-harness.agent-schedule.v1",
+                    "mode": "single",
+                    "completion_mode": "dispatcher-confirmed",
+                    "tasks": [
+                        {
+                            "id": "T01",
+                            "agent": "requirements-clarifier",
+                            "phase": "clarify",
+                            "outputs": ["docs/design/example.md"],
+                            "status": "planned",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / ".phase-lock").write_text(
+            json.dumps(
+                {
+                    "schema": "e2e-dev-harness.phase-lock.v1",
+                    "lifecycle": "CREATED",
+                    "state": "code-write-locked",
+                    "code_writes_allowed": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "coordinator-summary.json").write_text(
+            json.dumps({"next_action": {"command": "dispatch-beat"}}),
+            encoding="utf-8",
+        )
+        return repo, run_dir
+
+    def test_import_legacy_run_converges_state_into_control_plane(self) -> None:
+        repo, run_dir = self.write_legacy_created_run()
+
+        result = control_plane.import_legacy(repo, run_dir)
+
+        self.assertTrue(result["ready"])
+        data = json.loads((run_dir / "control-plane.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["lifecycle"], "CREATED")
+        self.assertEqual(data["tasks"][0]["id"], "T01")
+        self.assertEqual(data["tasks"][0]["role_group"], "design")
+        self.assertEqual(data["tasks"][0]["runtime_subagent_type"], "requirements-clarifier")
+        self.assertEqual(data["projections"]["run-state.json"]["mode"], "compat")
+
 
 if __name__ == "__main__":
     unittest.main()
