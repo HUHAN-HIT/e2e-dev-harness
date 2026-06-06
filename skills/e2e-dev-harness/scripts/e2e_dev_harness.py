@@ -211,6 +211,13 @@ def blocked_reason_codes_from_result(result: dict) -> list[str]:
 
 
 def next_command_from_result(result: dict) -> str:
+    navigation_map = result.get("navigation_map")
+    if isinstance(navigation_map, dict):
+        single_action = navigation_map.get("next_single_action")
+        if isinstance(single_action, dict):
+            value = str(single_action.get("command", "")).strip()
+            if value:
+                return value
     next_action = result.get("next_action")
     if isinstance(next_action, dict):
         for key in ("dispatch_command", "command", "next_command"):
@@ -2021,14 +2028,14 @@ def main() -> int:
     ac_progress_parser.add_argument("--unit-test-evidence", required=True, type=Path)
     ac_progress_parser.add_argument("--status-file", type=Path)
 
-    next_parser = subparsers.add_parser("next", help="Show the next allowed harness action from run-state.")
+    next_parser = subparsers.add_parser("next", help="Write the full navigation-state diagnostic from run-state.")
     next_parser.add_argument("repo", nargs="?", default=".", type=Path)
     next_parser.add_argument("--state", required=True, type=Path)
     next_parser.add_argument("--runtime", default="claude-code", help="Runtime used in suggested dispatch commands.")
     next_parser.add_argument("--status-file", type=Path)
     add_full_json_arg(next_parser)
 
-    map_parser = subparsers.add_parser("map", help="Print the compact Development Navigation Map")
+    map_parser = subparsers.add_parser("map", help="Print only the compact Development Navigation Map.")
     map_parser.add_argument("repo", nargs="?", default=".", type=Path)
     map_parser.add_argument("--state", required=True, type=Path)
     map_parser.add_argument("--runtime", default="claude-code", help="Runtime used in suggested dispatch commands.")

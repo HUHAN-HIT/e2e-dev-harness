@@ -4223,6 +4223,12 @@ class OrchestrationArtifactTests(unittest.TestCase):
                                 "agent": "requirements-clarifier",
                                 "phase": "clarify",
                                 "kind": "artifact_repair",
+                                "repair_code": "impact_summary_table_incomplete",
+                                "repair_section": "Impact Summary",
+                                "objective": "Complete the bounded Impact Summary table.",
+                                "constraints": [
+                                    "Do not add new product facts or reopen user-confirmed Open Questions.",
+                                ],
                                 "status": "planned",
                                 "inputs": ["docs/design/feature.md"],
                                 "outputs": ["docs/design/feature.md"],
@@ -4244,6 +4250,12 @@ class OrchestrationArtifactTests(unittest.TestCase):
         prompt = result["dispatch_packets"][0]["task_prompt"]
         self.assertIn("Write only scheduled outputs", prompt)
         self.assertIn("docs/design/feature.md", prompt)
+        self.assertIn("Artifact repair contract:", prompt)
+        self.assertIn("repair_code: impact_summary_table_incomplete", prompt)
+        self.assertIn("repair_section: Impact Summary", prompt)
+        self.assertIn("Repair only the listed repair_targets", prompt)
+        self.assertIn("Do not add, rename, reopen, or answer Open Questions/OQ items", prompt)
+        self.assertIn("This is a bounded repair of existing scheduled artifacts, not a new clarification pass", prompt)
 
     def test_dispatch_next_blocks_task_with_phase_not_allowed_for_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

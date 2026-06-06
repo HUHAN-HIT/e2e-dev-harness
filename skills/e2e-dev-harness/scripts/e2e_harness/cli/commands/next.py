@@ -25,4 +25,4 @@ def run(
 
 
 def run_from_args(args) -> tuple[int, dict]:
-    return coordinator_flow.next_step(args)
+    return coordinator_flow.evaluate_navigation_state(args)

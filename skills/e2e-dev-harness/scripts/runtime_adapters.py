@@ -96,6 +96,18 @@ CODEX_CAPABILITIES = {
     "spawn_requires_tool_call": True,
 }
 
+OPENCODE_CAPABILITIES = {
+    "runtime": "opencode",
+    "supports_subagent": True,
+    "supports_task_hook": True,
+    "supports_isolated_review": True,
+    "supports_blocking_stop": False,
+    "dispatch_mode": "opencode-task",
+    "spawn_tool": "Task",
+    "spawn_requires_tool_call": True,
+    "spawn_acknowledgement": "phase_guard_task_hook_or_dispatch_ack",
+}
+
 MANUAL_CAPABILITIES = {
     "runtime": "manual",
     "supports_subagent": False,
@@ -176,6 +188,22 @@ class RuntimeAdapter:
         agent = str(task.get("agent", "")) or "agent"
         ack_command, completion_command = _completion_commands(task, schedule_path, state_path, repo)
         subagent_type = str(task.get("runtime_subagent_type") or "").strip() or "general-purpose"
+        if capabilities.get("dispatch_mode") == "opencode-task":
+            opencode_agent = str(task.get("opencode_agent") or task.get("opencode_subagent") or "general").strip() or "general"
+            return {
+                "schema": "e2e-dev-harness.runtime-spawn-request.v1",
+                "runtime": capabilities.get("runtime", ""),
+                "tool": "Task",
+                "arguments": {
+                    "agent": opencode_agent,
+                    "prompt": prompt,
+                },
+                "task_id": task_id,
+                "agent": agent,
+                "ack_command": ack_command,
+                "completion_command": completion_command,
+                "context_policy": "fresh OpenCode subagent via Task tool; do not inherit coordinator chat beyond this prompt and context pack.",
+            }
         if capabilities.get("spawn_tool") == "Task":
             return {
                 "schema": "e2e-dev-harness.runtime-spawn-request.v1",
@@ -278,6 +306,8 @@ def adapter_for(runtime: str | None = "claude-code") -> RuntimeAdapter:
         return RuntimeAdapter("claude-code", CLAUDE_CAPABILITIES)
     if normalized == "codex":
         return RuntimeAdapter("codex", CODEX_CAPABILITIES)
+    if normalized == "opencode":
+        return RuntimeAdapter("opencode", OPENCODE_CAPABILITIES)
     if normalized == "manual":
         return RuntimeAdapter("manual", MANUAL_CAPABILITIES)
     data = dict(MANUAL_CAPABILITIES)

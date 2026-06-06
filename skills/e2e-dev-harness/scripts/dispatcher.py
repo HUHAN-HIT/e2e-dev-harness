@@ -313,6 +313,51 @@ def task_without_repair_target_inputs(repo: Path, task: dict) -> dict:
     return filtered
 
 
+def artifact_repair_prompt_lines(task: dict) -> list[str]:
+    if not artifact_repair_task(task):
+        return []
+    repair_code = str(task.get("repair_code", "")).strip() or "<unspecified>"
+    repair_section = str(task.get("repair_section", "")).strip() or "<unspecified>"
+    objective = str(task.get("objective", "")).strip()
+    targets = task.get("repair_targets", []) or task.get("repair_target", []) or task.get("outputs", []) or []
+    if isinstance(targets, str):
+        targets = [targets]
+    lines = [
+        "",
+        "Artifact repair contract:",
+        f"- repair_code: {repair_code}",
+        f"- repair_section: {repair_section}",
+        "- This is a bounded repair of existing scheduled artifacts, not a new clarification pass.",
+        "- Repair only the listed repair_targets and scheduled outputs.",
+        "- Do not modify handoffs, evidence, run-state, schedule, or unrelated design sections.",
+        "- Do not use coordinator chat as authority; follow this generated spawn request/prompt and the context pack.",
+    ]
+    if objective:
+        lines.append(f"- Objective: {objective}")
+    if targets:
+        lines.append("- repair_targets:")
+        lines.extend(f"  - {target}" for target in targets)
+    constraints = [str(item).strip() for item in task.get("constraints", []) or [] if str(item).strip()]
+    if constraints:
+        lines.append("- constraints:")
+        lines.extend(f"  - {item}" for item in constraints)
+    completion_checks = [str(item).strip() for item in task.get("completion_checks", []) or [] if str(item).strip()]
+    if completion_checks:
+        lines.append("- completion_checks:")
+        lines.extend(f"  - {item}" for item in completion_checks)
+    if "open question" not in repair_section.lower() and "oq" != repair_section.lower():
+        lines.extend(
+            [
+                "- Do not add, rename, reopen, or answer Open Questions/OQ items unless repair_section explicitly names Open Questions.",
+                "- Preserve user-confirmed Open Questions and Restated Intent content as-is.",
+            ]
+        )
+    if "impact summary" in repair_section.lower() or repair_code == "impact_summary_table_incomplete":
+        lines.append("- For Impact Summary repairs, update only the Impact Summary section/table and keep the summary bounded to evidence-backed rows.")
+    lines.append("")
+    return lines
+
+
 def task_ready_blockers(repo: Path, schedule: dict, task: dict, agent: str, state: dict | None = None) -> list[str]:
     blocked: list[str] = []
     phase_blocker = phase_dispatch_blocker(task, state)
@@ -793,6 +838,7 @@ def task_prompt(task: dict, pack: dict, invocation_path: Path, repo: Path) -> st
         lines.append("")
     lines.append("Required outputs:")
     lines.extend(f"- {item}" for item in pack.get("allowed_outputs", []) or [])
+    lines.extend(artifact_repair_prompt_lines(task))
     if requires_ready_handoff_contract(pack.get("allowed_outputs", [])):
         lines.extend(ready_handoff_prompt_lines(task))
     return "\n".join(lines)

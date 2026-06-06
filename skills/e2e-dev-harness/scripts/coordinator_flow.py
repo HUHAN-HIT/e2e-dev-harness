@@ -817,7 +817,7 @@ def dispatch_beat(args) -> tuple[int, dict]:
     return _dispatch_with_hook_guard(args, beat=True)
 
 
-def next_step(args) -> tuple[int, dict]:
+def evaluate_navigation_state(args) -> tuple[int, dict]:
     repo = as_repo(args.repo)
     state_path = require_repo_path(repo, args.state, "run state")
     if not state_path.exists():
@@ -898,3 +898,7 @@ def next_step(args) -> tuple[int, dict]:
     result["coordinator_summary"] = summary
     write_status(args.status_file, result)
     return (0 if result["ready"] else 2), result
+
+
+def next_step(args) -> tuple[int, dict]:
+    return evaluate_navigation_state(args)

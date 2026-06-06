@@ -25,7 +25,7 @@ def run(
 
 
 def run_from_args(args) -> tuple[int, dict]:
-    code, result = coordinator_flow.next_step(args)
+    code, result = coordinator_flow.evaluate_navigation_state(args)
     navigation = result.get("navigation_map") if isinstance(result.get("navigation_map"), dict) else {}
     if getattr(args, "status_file", None):
         coordinator_flow.write_status(args.status_file, navigation)

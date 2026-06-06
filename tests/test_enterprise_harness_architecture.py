@@ -866,6 +866,19 @@ class RuntimeAdapterContractTests(unittest.TestCase):
         self.assertTrue(result["unknown_runtime"])
         self.assertTrue(any("Unknown runtime" in warning for warning in result["warnings"]))
 
+    def test_runtime_capabilities_facade_treats_opencode_as_native_subagent_runtime(self) -> None:
+        from e2e_harness.engine import dispatch_engine  # noqa: PLC0415
+
+        result = dispatch_engine.runtime_capabilities("opencode")
+
+        self.assertTrue(result["ready"])
+        self.assertEqual("opencode", result["runtime"])
+        self.assertTrue(result["supports_subagent"])
+        self.assertEqual("opencode-task", result["dispatch_mode"])
+        self.assertEqual("Task", result["spawn_tool"])
+        self.assertNotIn("unknown_runtime", result)
+        self.assertEqual([], result["warnings"])
+
     def test_runtime_adapter_exposes_typed_contract_without_breaking_dict_api(self) -> None:
         import runtime_adapters  # noqa: PLC0415
 
@@ -927,6 +940,7 @@ class RuntimeAdapterContractTests(unittest.TestCase):
 
             task_request = runtime_adapters.adapter_for("claude-code").spawn(task, "prompt", schedule, state, repo)
             codex_request = runtime_adapters.adapter_for("codex").spawn(task, "prompt", schedule, state, repo)
+            opencode_request = runtime_adapters.adapter_for("opencode").spawn(task, "prompt", schedule, state, repo)
             manual_request = runtime_adapters.adapter_for("manual").spawn(task, "prompt", schedule, state, repo)
 
         self.assertEqual("Task", task_request["tool"])
@@ -934,19 +948,27 @@ class RuntimeAdapterContractTests(unittest.TestCase):
         self.assertIn("dispatch-ack", task_request["ack_command"])
         self.assertEqual("multi_agent_v1.spawn_agent", codex_request["tool"])
         self.assertFalse(codex_request["arguments"]["fork_context"])
+        self.assertEqual("Task", opencode_request["tool"])
+        self.assertEqual("general", opencode_request["arguments"]["agent"])
+        self.assertEqual("prompt", opencode_request["arguments"]["prompt"])
+        self.assertIn("fresh OpenCode subagent", opencode_request["context_policy"])
         self.assertIsNone(manual_request)
 
     def test_runtime_adapter_package_exposes_runtime_specific_modules(self) -> None:
-        from e2e_harness.adapters.runtime import claude_code, codex_multi_agent, manual  # noqa: PLC0415
+        from e2e_harness.adapters.runtime import claude_code, codex_multi_agent, manual, opencode_task  # noqa: PLC0415
 
         claude = claude_code.adapter()
         codex = codex_multi_agent.adapter()
+        opencode = opencode_task.adapter()
         manual_adapter = manual.adapter("opencode")
 
         self.assertEqual("Task", claude.spawn({"id": "T1", "agent": "dev"}, {}, "prompt").request["tool"])
         codex_spawn = codex.spawn({"id": "T2", "agent": "dev"}, {}, "prompt")
         self.assertEqual("multi_agent_v1.spawn_agent", codex_spawn.request["tool"])
         self.assertFalse(codex_spawn.request["arguments"]["fork_context"])
+        opencode_spawn = opencode.spawn({"id": "T3", "agent": "dev"}, {}, "prompt")
+        self.assertEqual("Task", opencode_spawn.request["tool"])
+        self.assertEqual("general", opencode_spawn.request["arguments"]["agent"])
         self.assertIsNone(manual_adapter.spawn({"id": "T3", "agent": "dev"}, {}, "prompt").request)
 
     def test_dispatch_ack_uses_runtime_adapter_ack_contract(self) -> None:
@@ -2033,11 +2055,49 @@ class CliCommandFacadeContractTests(unittest.TestCase):
                 "next": {"phase": "clarify"},
                 "blocked_reasons": [],
             }
-            with patch.object(e2e_dev_harness.coordinator_flow, "next_step", return_value=(0, payload)):
+            with patch.object(e2e_dev_harness.coordinator_flow, "evaluate_navigation_state", return_value=(0, payload)):
                 code, result = next_command.run(repo, state=Path("docs/agent-runs/run/run-state.json"))
 
         self.assertEqual(0, code)
         self.assertEqual(payload, result)
+
+    def test_navigation_state_evaluator_is_shared_by_next_map_and_orchestrator(self) -> None:
+        import e2e_dev_harness  # noqa: PLC0415
+        import argparse  # noqa: PLC0415
+        from e2e_harness.cli.commands import map as map_command  # noqa: PLC0415
+        from e2e_harness.cli.commands import next as next_command  # noqa: PLC0415
+        from e2e_harness.engine import orchestrator  # noqa: PLC0415
+
+        payload = {
+            "ready": True,
+            "workflow_stage": "CLARIFY",
+            "next": {"phase": "clarify"},
+            "blocked_reasons": [],
+            "navigation_map": {
+                "schema": "e2e-dev-harness.navigation-map.v1",
+                "you_are_here": {"lifecycle": "CREATED", "workflow_stage": "CLARIFY"},
+                "status": {"ready": True, "health": "ready", "blocked_by": []},
+                "next_single_action": {"command": "run dispatch-beat", "source": "next_action"},
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state = Path("docs/agent-runs/run/run-state.json")
+            with patch.object(e2e_dev_harness.coordinator_flow, "evaluate_navigation_state", return_value=(0, payload)) as evaluate:
+                next_code, next_result = next_command.run(repo, state=state)
+                map_code, map_result = map_command.run(repo, state=state)
+                orchestrator_code, orchestrator_result = orchestrator.next_step(
+                    argparse.Namespace(repo=repo, state=state, runtime="claude-code", status_file=None)
+                )
+
+        self.assertEqual(0, next_code)
+        self.assertEqual(payload, next_result)
+        self.assertEqual(0, map_code)
+        self.assertEqual(payload["navigation_map"], map_result)
+        self.assertEqual(0, orchestrator_code)
+        self.assertEqual(payload, orchestrator_result)
+        self.assertEqual(3, evaluate.call_count)
 
     def test_coordinator_summary_persists_navigation_map_additively(self) -> None:
         import coordinator_summary  # noqa: PLC0415

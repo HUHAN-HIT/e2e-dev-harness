@@ -841,6 +841,24 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertEqual([], event["blocked_reason_codes"])
         self.assertIn("dispatch-beat", event["next_command"])
 
+    def test_command_event_next_command_prefers_navigation_map_single_action(self) -> None:
+        result = {
+            "next_action": {"dispatch_command": "legacy dispatch-next"},
+            "navigation_map": {
+                "schema": "e2e-dev-harness.navigation-map.v1",
+                "next_single_action": {
+                    "command": "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-beat . --max-workers 1",
+                    "source": "preflight",
+                },
+            },
+            "execution_packet": {"primary_command": "legacy primary"},
+        }
+
+        command = e2e_dev_harness.next_command_from_result(result)
+
+        self.assertIn("dispatch-beat", command)
+        self.assertNotIn("dispatch-next", command)
+
     def test_blocked_reason_codes_from_result_reads_blocker_codes_and_code(self) -> None:
         # Blocked gate results carry structured codes under `blocker_codes`
         # (handoff_gate / dispatch_complete / dispatch-finish) and/or a single
