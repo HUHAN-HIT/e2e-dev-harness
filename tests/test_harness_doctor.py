@@ -28,6 +28,53 @@ import kg_refresh  # noqa: E402
 import run_state  # noqa: E402
 
 
+def write_control_plane_doctor_fixture(run_dir: Path) -> Path:
+    path = run_dir / "control-plane.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "e2e-dev-harness.control-plane.v1",
+                "run_id": "docs/agent-runs/run",
+                "lifecycle": "CREATED",
+                "gates": {},
+                "dispatch": {},
+                "dispatches": {},
+                "schedule": {"completion_mode": "dispatcher-confirmed"},
+                "tasks": [
+                    {
+                        "id": "T01",
+                        "agent": "requirements-clarifier",
+                        "phase": "clarify",
+                        "role_group": "design",
+                        "dispatch_contract": "fresh-subagent",
+                        "runtime_subagent_type": "requirements-clarifier",
+                        "status": "completed",
+                    }
+                ],
+                "phase_lock": {
+                    "schema": "e2e-dev-harness.phase-lock.v1",
+                    "lifecycle": "CREATED",
+                    "state": "code-write-locked",
+                    "code_writes_allowed": False,
+                },
+                "coordinator": {
+                    "summary": {
+                        "schema": "e2e-dev-harness.coordinator-summary.v1",
+                        "run_id": "docs/agent-runs/run",
+                        "lifecycle": "CREATED",
+                    }
+                },
+                "repair_transactions": {},
+                "artifacts": {},
+                "projections": {},
+                "history": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def write_state_doctor_fixture(repo: Path) -> Path:
     run_dir = repo / "docs" / "agent-runs" / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -655,6 +702,75 @@ class HarnessDoctorTests(unittest.TestCase):
         self.assertEqual("fail", checks["state-dispatch-tasks"]["status"])
         self.assertIn("phase_guard", checks["state-dispatch-tasks"]["message"])
         self.assertIn("dispatch-ack", checks["state-dispatch-tasks"]["remediation"])
+
+    def test_doctor_reports_projection_drift_from_control_plane(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            harness_doctor.shutil,
+            "which",
+            return_value="C:/tools/tool.exe",
+        ):
+            repo = Path(tmp)
+            state_path = write_state_doctor_fixture(repo)
+            write_control_plane_doctor_fixture(state_path.parent)
+
+            code, result = e2e_dev_harness.doctor(
+                SimpleNamespace(repo=repo, strict=False, status_file=None, state=state_path)
+            )
+
+        self.assertEqual(2, code)
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("control-plane-projection-drift" in reason for reason in result["blocked_reasons"]))
+
+    def test_doctor_reports_control_plane_task_contract_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            harness_doctor.shutil,
+            "which",
+            return_value="C:/tools/tool.exe",
+        ):
+            repo = Path(tmp)
+            state_path = write_state_doctor_fixture(repo)
+            control_plane_path = write_control_plane_doctor_fixture(state_path.parent)
+            data = json.loads(control_plane_path.read_text(encoding="utf-8"))
+            data["tasks"][0].pop("role_group")
+            control_plane_path.write_text(json.dumps(data), encoding="utf-8")
+
+            code, result = e2e_dev_harness.doctor(
+                SimpleNamespace(repo=repo, strict=False, status_file=None, state=state_path)
+            )
+
+        checks = {item["id"]: item for item in result["checks"]}
+        self.assertEqual(2, code)
+        self.assertEqual("fail", checks["state-control-plane"]["status"])
+        self.assertIn("control-plane-task-contract-missing", checks["state-control-plane"]["message"])
+
+    def test_doctor_reports_stale_active_repair_transaction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            harness_doctor.shutil,
+            "which",
+            return_value="C:/tools/tool.exe",
+        ):
+            repo = Path(tmp)
+            state_path = write_state_doctor_fixture(repo)
+            control_plane_path = write_control_plane_doctor_fixture(state_path.parent)
+            data = json.loads(control_plane_path.read_text(encoding="utf-8"))
+            data["repair_transactions"] = {
+                "stale": {
+                    "id": "stale",
+                    "status": "opened",
+                    "task_id": "T01b",
+                    "opened_at": "2000-01-01T00:00:00Z",
+                }
+            }
+            control_plane_path.write_text(json.dumps(data), encoding="utf-8")
+
+            code, result = e2e_dev_harness.doctor(
+                SimpleNamespace(repo=repo, strict=False, status_file=None, state=state_path)
+            )
+
+        checks = {item["id"]: item for item in result["checks"]}
+        self.assertEqual(2, code)
+        self.assertEqual("fail", checks["state-control-plane"]["status"])
+        self.assertIn("control-plane-repair-transaction-stale", checks["state-control-plane"]["message"])
 
     def test_state_doctor_passes_consistent_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.object(

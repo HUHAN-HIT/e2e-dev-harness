@@ -8,6 +8,7 @@ import hashlib
 import json
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -15,6 +16,7 @@ SKILL_DIR = SCRIPT_DIR.parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import agent_scheduler  # noqa: E402
 import install_hooks  # noqa: E402
 import dispatcher  # noqa: E402
 import dir_graph  # noqa: E402
@@ -22,6 +24,7 @@ import event_log  # noqa: E402
 import kg_refresh  # noqa: E402
 import plugin_registry  # noqa: E402
 import run_state  # noqa: E402
+from e2e_harness.engine import control_plane  # noqa: E402
 
 
 MIN_PYTHON = (3, 10)
@@ -373,6 +376,123 @@ def completed_schedule_tasks(schedule: dict) -> list[dict]:
     ]
 
 
+def canonical_json_hash(data: dict) -> str:
+    payload = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def parse_iso_datetime(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def control_plane_projection_payloads(data: dict) -> dict[str, dict]:
+    return {
+        "run-state.json": control_plane._run_state_projection(data),
+        "agent-schedule.json": control_plane._schedule_projection(data),
+        ".phase-lock": control_plane._phase_lock_projection(data),
+        "coordinator-summary.json": control_plane._coordinator_projection(data),
+    }
+
+
+def control_plane_consistency_check(repo: Path, run_dir: Path) -> dict:
+    path = run_dir / control_plane.CONTROL_PLANE_FILE
+    data, error = read_json_file(path)
+    if error or data is None:
+        return check(
+            "state-control-plane",
+            "warn",
+            "warning",
+            f"control-plane-missing: {error}",
+            "Run e2e-harness control-plane repair . --run-dir docs/agent-runs/<run> --scope legacy-import --json.",
+        )
+    if data.get("schema") != "e2e-dev-harness.control-plane.v1":
+        return check(
+            "state-control-plane",
+            "fail",
+            "error",
+            f"control-plane-invalid: unexpected schema {data.get('schema') or '<missing>'}.",
+            "Rebuild control-plane.json from legacy state with --scope legacy-import, then rerun doctor.",
+        )
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    try:
+        control_mtime = path.stat().st_mtime
+    except OSError:
+        control_mtime = 0.0
+
+    for name, expected in control_plane_projection_payloads(data).items():
+        legacy_path = run_dir / name
+        legacy_data, legacy_error = read_json_file(legacy_path)
+        if legacy_error or legacy_data is None:
+            blockers.append(f"control-plane-projection-missing: {name} is missing or invalid: {legacy_error}")
+            continue
+        if canonical_json_hash(legacy_data) != canonical_json_hash(expected):
+            blockers.append(f"control-plane-projection-drift: {name} differs from control-plane projection.")
+        try:
+            if legacy_path.stat().st_mtime > control_mtime + 0.001:
+                blockers.append(f"control-plane-legacy-newer: {name} is newer than control-plane.json.")
+        except OSError:
+            pass
+
+    required_task_fields = ("role_group", "agent", "phase", "dispatch_contract", "runtime_subagent_type")
+    for task in data.get("tasks", []) or []:
+        if not isinstance(task, dict):
+            continue
+        missing = [field for field in required_task_fields if not str(task.get(field, "")).strip()]
+        if missing:
+            blockers.append(
+                "control-plane-task-contract-missing: task "
+                + str(task.get("id", "<missing>"))
+                + " is missing "
+                + ", ".join(missing)
+                + "."
+            )
+
+    transactions = data.get("repair_transactions") if isinstance(data.get("repair_transactions"), dict) else {}
+    now = datetime.now(timezone.utc)
+    active_statuses = {"opened", "dispatched", "worker_running", "evidence_validated"}
+    for transaction in transactions.values():
+        if not isinstance(transaction, dict):
+            continue
+        if str(transaction.get("status", "")).strip() not in active_statuses:
+            continue
+        opened_at = parse_iso_datetime(str(transaction.get("opened_at", "")))
+        if opened_at is None:
+            blockers.append(
+                f"control-plane-repair-transaction-invalid: transaction {transaction.get('id', '<missing>')} has invalid opened_at."
+            )
+            continue
+        age_seconds = (now - opened_at).total_seconds()
+        if age_seconds > agent_scheduler.DEFAULT_LEASE_SECONDS:
+            blockers.append(
+                "control-plane-repair-transaction-stale: transaction "
+                + str(transaction.get("id", "<missing>"))
+                + f" is older than lease ({agent_scheduler.DEFAULT_LEASE_SECONDS}s)."
+            )
+
+    return check(
+        "state-control-plane",
+        "fail" if blockers else ("warn" if warnings else "pass"),
+        "error" if blockers else ("warning" if warnings else "info"),
+        "Control-plane projections and repair transactions are consistent."
+        if not blockers and not warnings
+        else " ".join(blockers + warnings),
+        "Run e2e-harness control-plane repair . --run-dir docs/agent-runs/<run> --scope task-contracts --json, then --scope projections --json.",
+    )
+
+
 def run_timeline(run_dir: Path) -> list[dict]:
     timeline: list[dict] = []
     for item in event_log.read_events(run_dir):
@@ -662,6 +782,7 @@ def state_consistency_checks(repo: Path, state: Path) -> list[dict]:
         lifecycle_check,
         task_check,
         view_check,
+        control_plane_consistency_check(repo, run_dir),
         lock_check,
         summary_check,
         event_check,
