@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import shutil
 import sys
 import tempfile
 import unittest
@@ -22,6 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skills" / "e2e-dev-harness" / "scripts"
+FIXTURES = ROOT / "tests" / "fixtures"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
@@ -30,6 +32,7 @@ import phase_guard  # noqa: E402
 import run_state  # noqa: E402
 from e2e_harness.cli.commands import dispatch as dispatch_command  # noqa: E402
 from e2e_harness.cli.commands import handoff as handoff_command  # noqa: E402
+from e2e_harness.engine import control_plane  # noqa: E402
 from e2e_harness.engine import dispatch_engine  # noqa: E402
 
 
@@ -197,6 +200,14 @@ class DispatchFinishOrchestrationTest(unittest.TestCase):
 
 
 class DispatchAckPhaseGuardTest(unittest.TestCase):
+    def copy_fixture(self, name: str) -> tuple[Path, Path]:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        run_dir = repo / "docs" / "agent-runs" / "run"
+        shutil.copytree(FIXTURES / name, run_dir)
+        return repo, run_dir
+
     def _write_dispatcher_prompt_fixture(self, repo: Path, task: dict | None) -> tuple[Path, str]:
         run_dir = repo / "docs" / "agent-runs" / "run"
         state_path = run_dir / "run-state.json"
@@ -273,6 +284,16 @@ class DispatchAckPhaseGuardTest(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertIn("schedule_contract_invalid", result.get("blocked_reason_codes", []))
+
+    def test_petalpay_t01c_created_repair_spawn_is_allowed_after_contract_import(self) -> None:
+        repo, run_dir = self.copy_fixture("petalpay-created-repair-deadlock")
+        prompt = (run_dir / "dispatch-spawn-requests" / "T01c-prompt.md").read_text(encoding="utf-8")
+
+        imported = control_plane.import_legacy(repo, run_dir)
+        result = phase_guard.validate_action(repo, "Task", [], run_dir=run_dir, task_text=prompt)
+
+        self.assertTrue(imported["ready"], imported.get("diagnostics"))
+        self.assertTrue(result["ready"], result.get("blocked_reasons"))
 
     def test_phase_guard_auto_confirm_does_not_allow_worker_owned_handoff_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

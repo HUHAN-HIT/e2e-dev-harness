@@ -1,0 +1,41 @@
+{
+  "schema": "e2e-dev-harness.control-plane.v1",
+  "run_id": "docs/agent-runs/run",
+  "lifecycle": "CREATED",
+  "gates": {
+    "clarification": "pending"
+  },
+  "phase_lock": {
+    "schema": "e2e-dev-harness.phase-lock.v1",
+    "run_id": "docs/agent-runs/run",
+    "lifecycle": "CREATED",
+    "state": "code-write-locked",
+    "code_writes_allowed": false
+  },
+  "tasks": [
+    {
+      "id": "T01c",
+      "agent": "requirements-clarifier",
+      "phase": "clarify",
+      "kind": "artifact_repair",
+      "role_group": "design",
+      "dispatch_contract": "fresh-subagent",
+      "runtime_subagent_type": "requirements-clarifier",
+      "status": "claimed",
+      "owner": "requirements-clarifier",
+      "outputs": [
+        "docs/design/petalpay-created-repair.md"
+      ],
+      "repair_targets": [
+        "docs/design/petalpay-created-repair.md"
+      ]
+    }
+  ],
+  "dispatch": {},
+  "dispatches": {},
+  "repair_transactions": {},
+  "artifacts": {},
+  "coordinator": {},
+  "projections": {},
+  "history": []
+}

@@ -1,0 +1,25 @@
+{
+  "schema": "e2e-dev-harness.run-state.v1",
+  "run_id": "docs/agent-runs/run",
+  "lifecycle": "CREATED",
+  "gates": {
+    "clarification": "pending"
+  },
+  "dispatch": {
+    "status": "awaiting_runtime_spawn",
+    "runtime": "manual",
+    "current_task_id": "T01c",
+    "current_agent": "requirements-clarifier",
+    "context_pack": "docs/agent-runs/run/context-packs/T01c.json"
+  },
+  "dispatches": {
+    "T01c": {
+      "status": "awaiting_runtime_spawn",
+      "runtime": "manual",
+      "current_task_id": "T01c",
+      "current_agent": "requirements-clarifier",
+      "context_pack": "docs/agent-runs/run/context-packs/T01c.json"
+    }
+  },
+  "history": []
+}

@@ -1,0 +1,7 @@
+{
+  "schema": "e2e-dev-harness.phase-lock.v1",
+  "run_id": "docs/agent-runs/run",
+  "lifecycle": "CREATED",
+  "state": "code-write-locked",
+  "code_writes_allowed": false
+}

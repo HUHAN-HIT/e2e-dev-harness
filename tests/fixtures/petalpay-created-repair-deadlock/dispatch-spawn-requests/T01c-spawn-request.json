@@ -1,0 +1,6 @@
+{
+  "schema": "e2e-dev-harness.dispatch-spawn-request.v1",
+  "task_id": "T01c",
+  "agent": "requirements-clarifier",
+  "context_pack": "docs/agent-runs/run/context-packs/T01c.json"
+}
