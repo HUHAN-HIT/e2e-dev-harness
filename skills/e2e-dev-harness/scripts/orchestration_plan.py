@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import agent_roles  # noqa: E402
+from e2e_harness.engine import control_plane  # noqa: E402
 from kg_refresh import detect  # noqa: E402
 
 
@@ -1051,23 +1052,20 @@ def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) 
                 service = candidate
                 break
         tasks.append(
-            {
-                "id": f"T{index:02d}",
-                "agent": name,
-                "phase": phase,
-                "role_group": role_group_for_phase(phase),
-                "role_template": agent.get("role_template", ""),
-                "role_template_key": agent.get("role_template_key", ""),
-                "service": service,
-                "parallel_group": f"service:{service}" if service and phase in {"tdd-red", "implement", "r3-review"} else phase,
-                "depends_on_phases": depends_on_for_phase(phase),
-                "inputs": agent.get("inputs", []),
-                "outputs": agent.get("outputs", []),
-                "status": "planned",
-                "requires_runtime_dispatch": True,
-                "dispatch_contract": "fresh-subagent",
-                "runtime_subagent_type": runtime_subagent_type_for_phase(phase),
-            }
+            control_plane.task_contract(
+                task_id=f"T{index:02d}",
+                agent=name,
+                phase=phase,
+                role_group=role_group_for_phase(phase),
+                role_template=agent.get("role_template", ""),
+                role_template_key=agent.get("role_template_key", ""),
+                service=service,
+                parallel_group=f"service:{service}" if service and phase in {"tdd-red", "implement", "r3-review"} else phase,
+                depends_on_phases=depends_on_for_phase(phase),
+                inputs=agent.get("inputs", []),
+                outputs=agent.get("outputs", []),
+                runtime_subagent_type=runtime_subagent_type_for_phase(phase),
+            )
         )
     return {
         "schema": "e2e-dev-harness.agent-schedule.v1",

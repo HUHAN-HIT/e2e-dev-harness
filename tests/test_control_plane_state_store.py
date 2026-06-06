@@ -143,6 +143,23 @@ class ControlPlaneStateStoreTests(unittest.TestCase):
         self.assertEqual(phase_lock["source"], "control-plane.json")
         self.assertEqual(summary["source"], "control-plane.json")
 
+    def test_task_factory_fills_required_contract_for_repair_task(self) -> None:
+        task = control_plane.task_contract(
+            task_id="T01b",
+            agent="requirements-clarifier",
+            phase="clarify",
+            kind="artifact_repair",
+            outputs=["docs/design/example.md"],
+            repair_targets=["docs/design/example.md"],
+        )
+
+        self.assertEqual(task["id"], "T01b")
+        self.assertEqual(task["role_group"], "design")
+        self.assertEqual(task["runtime_subagent_type"], "requirements-clarifier")
+        self.assertEqual(task["dispatch_contract"], "fresh-subagent")
+        self.assertEqual(task["kind"], "artifact_repair")
+        self.assertEqual(task["repair_targets"], ["docs/design/example.md"])
+
 
 if __name__ == "__main__":
     unittest.main()

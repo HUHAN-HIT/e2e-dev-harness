@@ -51,6 +51,51 @@ def _normalize_task(task: dict) -> dict:
     return copy
 
 
+def task_contract(
+    task_id: str,
+    agent: str,
+    phase: str,
+    kind: str = "",
+    inputs: list[str] | None = None,
+    outputs: list[str] | None = None,
+    repair_targets: list[str] | None = None,
+    **extra,
+) -> dict:
+    role_key = str(extra.get("role_template_key", "")).strip() or _role_template_key(agent)
+    service = str(extra.get("service", "") or "")
+    parallel_group = str(extra.get("parallel_group", "") or "")
+    if not parallel_group:
+        parallel_group = f"service:{service}" if service and phase in {"tdd-red", "implement", "r3-review"} else phase
+    task = {
+        "id": task_id,
+        "agent": agent,
+        "phase": phase,
+        "role_group": str(extra.get("role_group", "") or agent_roles.phase_role_group(phase) or "coordination"),
+        "role_template": str(extra.get("role_template", "") or ""),
+        "role_template_key": role_key,
+        "service": service,
+        "parallel_group": parallel_group,
+        "depends_on_phases": list(extra.get("depends_on_phases", agent_roles.depends_on_for_phase(phase)) or []),
+        "inputs": list(inputs or extra.get("inputs", []) or []),
+        "outputs": list(outputs or extra.get("outputs", []) or []),
+        "status": str(extra.get("status", "planned") or "planned"),
+        "requires_runtime_dispatch": bool(extra.get("requires_runtime_dispatch", True)),
+        "dispatch_contract": str(extra.get("dispatch_contract", "fresh-subagent") or "fresh-subagent"),
+        "runtime_subagent_type": str(
+            extra.get("runtime_subagent_type", "") or agent_roles.phase_runtime_subagent_type(phase) or agent
+        ),
+    }
+    if kind:
+        task["kind"] = kind
+    if kind == "artifact_repair":
+        task["repair_targets"] = list(repair_targets or extra.get("repair_targets", []) or [])
+        if "repair_code" in extra:
+            task["repair_code"] = extra["repair_code"]
+        if "repair_section" in extra:
+            task["repair_section"] = extra["repair_section"]
+    return task
+
+
 def load(repo: Path, run_dir: Path) -> dict:
     path = control_plane_path(_resolve(repo, run_dir))
     return read_json_object(path)
