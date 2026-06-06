@@ -190,7 +190,30 @@ def section_text(markdown: str, matching_patterns: list[str]) -> str | None:
 
 
 def normalize_table_header(value: str) -> str:
-    value = value.strip().lower().replace("/", "_").replace("-", "_")
+    raw_value = value.strip().lower()
+    localized_key = re.sub(r"\s+", "", raw_value).replace("／", "/")
+    localized_aliases = {
+        "\u7c7b\u578b": "type",
+        "\u63a5\u53e3": "interface",
+        "\u5165\u53e3/\u51fa\u53e3": "interface",
+        "\u5165\u53e3\u51fa\u53e3": "interface",
+        "\u5f71\u54cd\u63a5\u53e3/\u8c03\u7528\u65b9": "affected_callers_consumers",
+        "\u5f71\u54cd\u7684\u63a5\u53e3/\u8c03\u7528\u65b9": "affected_callers_consumers",
+        "\u5f71\u54cd\u63a5\u53e3\u8c03\u7528\u65b9": "affected_callers_consumers",
+        "\u5f71\u54cd\u7684\u63a5\u53e3\u8c03\u7528\u65b9": "affected_callers_consumers",
+        "\u5173\u8054ac": "related_ac",
+        "\u6240\u9700\u6d4b\u8bd5": "required_tests_contracts",
+        "\u5fc5\u9700\u6d4b\u8bd5": "required_tests_contracts",
+        "\u5173\u8054\u5951\u7ea6": "required_tests_contracts",
+        "\u6d4b\u8bd5/\u5951\u7ea6": "required_tests_contracts",
+        "\u6d4b\u8bd5\u5951\u7ea6": "required_tests_contracts",
+        "\u98ce\u9669": "risk",
+        "\u540d\u79f0": "name",
+    }
+    if localized_key in localized_aliases:
+        return localized_aliases[localized_key]
+
+    value = raw_value.replace("/", "_").replace("-", "_")
     value = re.sub(r"[^a-z0-9]+", "_", value)
     value = re.sub(r"_+", "_", value).strip("_")
     aliases = {
@@ -222,7 +245,14 @@ def parse_first_markdown_table(text: str) -> tuple[list[str], list[dict[str, str
         cursor = index + 2
         while cursor < len(lines) and lines[cursor].strip().startswith("|"):
             values = [part.strip() for part in lines[cursor].strip().strip("|").split("|")]
-            rows.append({header: values[pos] if pos < len(values) else "" for pos, header in enumerate(headers)})
+            row: dict[str, str] = {}
+            for pos, header in enumerate(headers):
+                value = values[pos] if pos < len(values) else ""
+                if header in row and value:
+                    row[header] = "; ".join(part for part in (row[header], value) if part)
+                else:
+                    row[header] = value
+            rows.append(row)
             cursor += 1
         return headers, rows
     return [], []

@@ -625,6 +625,53 @@ class ClarificationGateTests(unittest.TestCase):
         self.assertTrue(result["ready_for_implementation"], result)
         self.assertEqual([], result["impact_gaps"])
 
+    def test_impact_summary_accepts_chinese_headers_from_design_docs(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Add a refund callback API.
+
+            ## Scope
+            - services/payment-service
+
+            ## Use Cases
+            - Merchant calls HTTP refund callback endpoint.
+
+            ## Acceptance Criteria
+            - AC-1 POST /api/refunds/callback returns accepted status.
+
+            ## Change Logic
+            - Current behavior: no public refund callback endpoint exists.
+            - Target behavior: POST /api/refunds/callback accepts merchant refund callback requests.
+            - Runtime path: RefundCallbackController -> RefundCallbackService -> RefundRepository.
+            - State/data effect: persists refund status field and response body.
+
+            ## Impact Summary
+            - Source: GitNexus impact + dependency scanner
+            - Raw Evidence: docs/agent-runs/run/evidence/impact-analysis.json
+
+            | AC | \u540d\u79f0 | \u7c7b\u578b | \u5165\u53e3/\u51fa\u53e3 | Source | Raw Evidence | \u5f71\u54cd\u7684\u63a5\u53e3/\u8c03\u7528\u65b9 | \u6240\u9700\u6d4b\u8bd5 | \u5173\u8054\u5951\u7ea6 | \u98ce\u9669 |
+            | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | refund callback | HTTP | POST /api/refunds/callback | GitNexus impact | docs/agent-runs/run/evidence/impact-analysis.json | merchant-admin | controller contract test | OpenAPI response contract | medium |
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "design.md"
+            path.write_text(markdown, encoding="utf-8")
+
+            result = clarification_gate.validate(path)
+
+        self.assertTrue(result["ready_for_implementation"], result)
+        self.assertEqual([], result["impact_gaps"])
+
     def test_impact_summary_blocks_large_raw_gitnexus_dump(self) -> None:
         rows = "\n".join(
             f"| HTTP | GET /api/orders/{index} | caller-{index} | AC-1 | contract test | low |"
