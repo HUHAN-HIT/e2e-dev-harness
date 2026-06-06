@@ -212,6 +212,26 @@ class ControlPlaneStateStoreTests(unittest.TestCase):
         self.assertEqual(data["dispatches"]["T01"]["status"], "worker_running")
         self.assertTrue((run_dir / "run-state.json").exists())
 
+    def test_repair_task_contracts_normalizes_tasks_and_projects_legacy_state(self) -> None:
+        repo, run_dir = self.make_control_plane_with_task("T01")
+        path = run_dir / "control-plane.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["tasks"][0].pop("role_group", None)
+        data["tasks"][0].pop("dispatch_contract", None)
+        data["tasks"][0].pop("runtime_subagent_type", None)
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+        result = control_plane.repair(repo, run_dir, scope="task-contracts")
+
+        self.assertTrue(result["ready"], result.get("blocked_reasons"))
+        self.assertEqual(["task-contracts"], result["scopes"])
+        repaired = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual("design", repaired["tasks"][0]["role_group"])
+        self.assertEqual("fresh-subagent", repaired["tasks"][0]["dispatch_contract"])
+        self.assertEqual("requirements-clarifier", repaired["tasks"][0]["runtime_subagent_type"])
+        schedule = json.loads((run_dir / "agent-schedule.json").read_text(encoding="utf-8"))
+        self.assertEqual("design", schedule["tasks"][0]["role_group"])
+
 
 if __name__ == "__main__":
     unittest.main()

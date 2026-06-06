@@ -6241,6 +6241,67 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("basic", workflow["review_policy"]["effective"]["tier"])
         self.assertFalse(workflow["review_policy"]["downgrade_blocked"])
 
+    def test_control_plane_repair_cli_repairs_task_contracts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            run_dir.mkdir(parents=True)
+            control_plane_path = run_dir / "control-plane.json"
+            control_plane_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.control-plane.v1",
+                        "run_id": "docs/agent-runs/run",
+                        "lifecycle": "CREATED",
+                        "gates": {},
+                        "phase_lock": {
+                            "schema": "e2e-dev-harness.phase-lock.v1",
+                            "lifecycle": "CREATED",
+                            "state": "code-write-locked",
+                            "code_writes_allowed": False,
+                        },
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "status": "planned",
+                            }
+                        ],
+                        "dispatches": {},
+                        "repair_transactions": [],
+                        "artifacts": {},
+                        "coordinator": {},
+                        "projections": {},
+                        "history": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            argv = [
+                "e2e_dev_harness.py",
+                "control-plane",
+                "repair",
+                str(repo),
+                "--run-dir",
+                "docs/agent-runs/run",
+                "--scope",
+                "task-contracts",
+                "--json-full",
+            ]
+            stdout = io.StringIO()
+
+            with patch.object(sys, "argv", argv), redirect_stdout(stdout):
+                code = e2e_dev_harness.main()
+            payload = json.loads(stdout.getvalue())
+            repaired = json.loads(control_plane_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code)
+        self.assertTrue(payload["ready"], payload.get("blocked_reasons"))
+        self.assertEqual(["task-contracts"], payload["scopes"])
+        self.assertEqual("design", repaired["tasks"][0]["role_group"])
+        self.assertEqual("fresh-subagent", repaired["tasks"][0]["dispatch_contract"])
+
     def test_next_reports_clarify_after_start(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -8793,6 +8854,51 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertIn("docs/agent-runs/run/run-state.json", paths)
         self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_phase_guard_allows_control_plane_repair_cli(self) -> None:
+        hook_text = json.dumps(
+            {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py control-plane repair . "
+                        "--run-dir docs/agent-runs/run --scope task-contracts --json"
+                    )
+                },
+            }
+        )
+        tool, paths = phase_guard.parse_hook_input(hook_text)
+        command_text = phase_guard.extract_hook_command_text(hook_text)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+            result = phase_guard.validate_action(repo, tool, [Path(path) for path in paths], command_text=command_text)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_phase_guard_blocks_direct_control_plane_json_mutation(self) -> None:
+        hook_text = json.dumps(
+            {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "python -c \"from pathlib import Path; "
+                        "p=Path('docs/agent-runs/run/control-plane.json'); "
+                        "p.write_text('{}')\""
+                    )
+                },
+            }
+        )
+        tool, paths = phase_guard.parse_hook_input(hook_text)
+        command_text = phase_guard.extract_hook_command_text(hook_text)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            result = phase_guard.validate_action(repo, tool, [Path(path) for path in paths], command_text=command_text)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("Harness control file write blocked" in reason for reason in result["blocked_reasons"]))
 
     def test_phase_guard_blocks_unscoped_inline_shell_mutation(self) -> None:
         hook_text = json.dumps(

@@ -60,7 +60,7 @@ CODE_SUFFIXES = {
 CODE_FILENAMES = {"pom.xml", "build.gradle", "settings.gradle", "Dockerfile"}
 ARTIFACT_PREFIXES = ("docs/agent-runs/",)
 DOC_PREFIXES = ("docs/design/", "docs/requirements/", "docs/review-profiles/", ".e2e/")
-CONTROL_FILENAMES = {".phase-lock", "run-state.json", "artifact-registry.json", "agent-schedule.json"}
+CONTROL_FILENAMES = {".phase-lock", "run-state.json", "artifact-registry.json", "agent-schedule.json", "control-plane.json"}
 HOOK_CONFIG_PATHS = {
     ".claude/settings.json",
     ".codex/hooks/e2e-dev-harness-pre-action.json",
@@ -113,7 +113,7 @@ PYTHON_PATH_LITERAL_RE = re.compile(
     re.IGNORECASE,
 )
 CONTROL_PATH_LITERAL_RE = re.compile(
-    r"(?P<path>(?:[A-Za-z]:)?[A-Za-z0-9_./\\:-]*docs[\\/]+agent-runs[\\/]+[A-Za-z0-9_.-]+[\\/]+(?:\.phase-lock|run-state\.json|artifact-registry\.json|agent-schedule\.json))",
+    r"(?P<path>(?:[A-Za-z]:)?[A-Za-z0-9_./\\:-]*docs[\\/]+agent-runs[\\/]+[A-Za-z0-9_.-]+[\\/]+(?:\.phase-lock|run-state\.json|artifact-registry\.json|agent-schedule\.json|control-plane\.json))",
     re.IGNORECASE,
 )
 SHELL_MUTATION_RE = re.compile(
@@ -124,7 +124,7 @@ SHELL_MUTATION_RE = re.compile(
     r"(?:^|\s)tee(?:\s+-a)?\s+|<<\s*['\"]?[A-Za-z0-9_-]+['\"]?\s*(?:>|>>)?|(?:^|\s)(?:>|>>)\s*)",
     re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
-CONTROL_FILENAME_RE = re.compile(r"(?:\.phase-lock|run-state\.json|artifact-registry\.json|agent-schedule\.json)", re.IGNORECASE)
+CONTROL_FILENAME_RE = re.compile(r"(?:\.phase-lock|run-state\.json|artifact-registry\.json|agent-schedule\.json|control-plane\.json)", re.IGNORECASE)
 HOOK_PATH_KEYS = {
     "file_path",
     "filepath",

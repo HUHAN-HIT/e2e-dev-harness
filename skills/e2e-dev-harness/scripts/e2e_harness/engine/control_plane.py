@@ -278,6 +278,62 @@ def write_legacy_projections(repo: Path, run_dir: Path) -> dict:
     }
 
 
+def repair(repo: Path, run_dir: Path, scope: str) -> dict:
+    resolved_run_dir = _resolve(repo, run_dir)
+    selected = str(scope or "").strip()
+    if selected not in {"task-contracts", "projections", "legacy-import"}:
+        return {
+            "ready": False,
+            "blocked_reasons": [f"Unsupported control-plane repair scope: {selected or '<missing>'}."],
+            "allowed_scopes": ["task-contracts", "projections", "legacy-import"],
+        }
+
+    if selected == "legacy-import":
+        imported = import_legacy(repo, resolved_run_dir)
+        if not imported.get("ready"):
+            imported["scopes"] = [selected]
+            return imported
+        projection = write_legacy_projections(repo, resolved_run_dir)
+        return {
+            **projection,
+            "ready": bool(projection.get("ready")),
+            "scopes": [selected],
+            "imported": imported,
+        }
+
+    if selected == "projections":
+        projection = write_legacy_projections(repo, resolved_run_dir)
+        return {**projection, "scopes": [selected]}
+
+    path = control_plane_path(resolved_run_dir)
+    if not path.exists():
+        imported = import_legacy(repo, resolved_run_dir)
+        if not imported.get("ready"):
+            imported["scopes"] = [selected]
+            return imported
+
+    data = read_json_object(path)
+    if not data:
+        return {
+            "ready": False,
+            "blocked_reasons": [f"Missing {CONTROL_PLANE_FILE} at {posix(path)}."],
+            "scopes": [selected],
+        }
+    tasks = data.get("tasks") if isinstance(data.get("tasks"), list) else []
+    normalized = [_normalize_task(task) for task in tasks if isinstance(task, dict)]
+    changed = normalized != tasks
+    data["tasks"] = normalized
+    atomic_write_json(path, data)
+    projection = write_legacy_projections(repo, resolved_run_dir)
+    return {
+        **projection,
+        "ready": bool(projection.get("ready")),
+        "scopes": [selected],
+        "tasks_repaired": len(normalized),
+        "changed": changed,
+    }
+
+
 def open_repair_transaction(
     repo: Path,
     run_dir: Path,

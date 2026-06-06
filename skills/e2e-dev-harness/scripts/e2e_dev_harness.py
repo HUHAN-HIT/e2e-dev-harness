@@ -46,6 +46,7 @@ import workflow_guard  # noqa: E402, F401  # re-export: tests patch e2e_dev_harn
 from e2e_harness.cli.commands import agent_task as agent_task_command  # noqa: E402
 from e2e_harness.cli.commands import ac_progress as ac_progress_command  # noqa: E402
 from e2e_harness.cli.commands import clarify as clarify_command  # noqa: E402
+from e2e_harness.cli.commands import control_plane as control_plane_command  # noqa: E402
 from e2e_harness.cli.commands import dispatch as dispatch_command  # noqa: E402
 from e2e_harness.cli.commands import doctor as doctor_command  # noqa: E402
 from e2e_harness.cli.commands import gate as gate_command  # noqa: E402
@@ -1654,6 +1655,10 @@ def map_view(args) -> tuple[int, dict]:
     return map_command.run_from_args(args)
 
 
+def control_plane_ops(args) -> tuple[int, dict]:
+    return control_plane_command.run_from_args(args)
+
+
 def add_full_json_arg(parser: argparse.ArgumentParser) -> None:
     return None
 
@@ -2037,6 +2042,24 @@ def main() -> int:
     preflight_parser.add_argument("--state", required=True, type=Path)
     preflight_parser.add_argument("--status-file", type=Path)
 
+    control_plane_parser = subparsers.add_parser(
+        "control-plane",
+        help="Run legal repair operations against the single-file control plane.",
+    )
+    control_plane_subparsers = control_plane_parser.add_subparsers(dest="control_plane_action", required=True)
+    control_plane_repair_parser = control_plane_subparsers.add_parser(
+        "repair",
+        help="Repair control-plane contracts or compatibility projections without editing worker outputs.",
+    )
+    control_plane_repair_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    control_plane_repair_parser.add_argument("--run-dir", required=True, type=Path)
+    control_plane_repair_parser.add_argument(
+        "--scope",
+        required=True,
+        choices=["task-contracts", "projections", "legacy-import"],
+    )
+    control_plane_repair_parser.add_argument("--status-file", type=Path)
+
     for output_parser in (
         start_parser,
         prepare_parser,
@@ -2065,6 +2088,7 @@ def main() -> int:
         next_parser,
         map_parser,
         preflight_parser,
+        control_plane_repair_parser,
     ):
         add_output_args(output_parser)
 
@@ -2131,6 +2155,8 @@ def main() -> int:
             exit_code, result = map_view(args)
         elif args.command == "preflight":
             exit_code, result = preflight(args)
+        elif args.command == "control-plane":
+            exit_code, result = control_plane_ops(args)
         else:
             exit_code, result = verify(args)
     except (FileNotFoundError, ValueError) as error:
