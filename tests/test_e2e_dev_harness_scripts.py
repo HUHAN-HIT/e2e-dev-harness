@@ -8159,6 +8159,201 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(sealed_after, "clarify should auto-seal the clarifier handoff")
         self.assertEqual("worker_completed", updated["dispatch"]["status"])
 
+    def test_clarify_does_not_rewrite_noncanonical_handoff_during_auto_seal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Restated Intent
+                    - The user wants a quote returned.
+                    - User confirmation: confirmed-by: user @2026-06-02
+
+                    ## Goal
+                    - Return a quote.
+
+                    ## Scope
+                    - services/sample-service
+
+                    ## Use Cases
+                    - Create quote.
+
+                    ## Acceptance Criteria
+                    - AC-1 Quote is returned.
+
+                    ## Test Design
+                    - Unit test first.
+
+                    ## Open Questions
+                    None. confirmed-by: user @2026-06-02
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            evidence = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            schedule = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            write_ready_handoff(repo, evidence, agent_id="requirements-clarifier")
+            handoff_path = repo / evidence
+            original_text = handoff_path.read_text(encoding="utf-8").replace(
+                "## Open Questions\nNone",
+                "## Open Questions\nNo open questions remain; the earlier concern is resolved.",
+            )
+            handoff_path.write_text(original_text, encoding="utf-8")
+            marker = handoff_path.with_suffix(".ready.json")
+            marker.unlink()
+            state["dispatch"] = {
+                "status": "worker_running",
+                "runtime": "codex",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "worker_handle": "worker-1",
+                "worker_session": "worker-session-1",
+            }
+            state["dispatches"] = {"T01": state["dispatch"]}
+            run_state.write_state(repo, state_path, state)
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": [evidence.as_posix()],
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=Path("docs/design/feature.md"),
+                run_state=state_path,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.clarify(args)
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+            final_text = handoff_path.read_text(encoding="utf-8")
+            marker_exists = marker.exists()
+
+        self.assertEqual(2, code)
+        self.assertEqual("CREATED", updated["lifecycle"])
+        self.assertEqual(original_text, final_text)
+        self.assertFalse(marker_exists)
+        self.assertEqual("artifact_repair", result["clarification_dispatch_auto_complete"]["coordinator_action"]["required_action"])
+
+    def test_clarify_does_not_refresh_stale_ready_marker_in_place(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Restated Intent
+                    - The user wants a quote returned.
+                    - User confirmation: confirmed-by: user @2026-06-02
+
+                    ## Goal
+                    - Return a quote.
+
+                    ## Scope
+                    - services/sample-service
+
+                    ## Use Cases
+                    - Create quote.
+
+                    ## Acceptance Criteria
+                    - AC-1 Quote is returned.
+
+                    ## Test Design
+                    - Unit test first.
+
+                    ## Open Questions
+                    None. confirmed-by: user @2026-06-02
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            evidence = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            schedule = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            write_ready_handoff(repo, evidence, agent_id="requirements-clarifier")
+            handoff_path = repo / evidence
+            marker = handoff_path.with_suffix(".ready.json")
+            stale_marker = marker.read_text(encoding="utf-8")
+            handoff_path.write_text(
+                handoff_path.read_text(encoding="utf-8").replace(
+                    "Requirements are clarified for dispatch.",
+                    "Requirements are clarified for dispatch with a later edit.",
+                ),
+                encoding="utf-8",
+            )
+            state["dispatch"] = {
+                "status": "worker_running",
+                "runtime": "codex",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "worker_handle": "worker-1",
+                "worker_session": "worker-session-1",
+            }
+            state["dispatches"] = {"T01": state["dispatch"]}
+            run_state.write_state(repo, state_path, state)
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": [evidence.as_posix()],
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=Path("docs/design/feature.md"),
+                run_state=state_path,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.clarify(args)
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+            final_marker = marker.read_text(encoding="utf-8")
+
+        self.assertEqual(2, code)
+        self.assertEqual("CREATED", updated["lifecycle"])
+        self.assertEqual(stale_marker, final_marker)
+        self.assertEqual("artifact_repair", result["clarification_dispatch_auto_complete"]["coordinator_action"]["required_action"])
+        self.assertIn("ready_marker_hash_mismatch", result["clarification_dispatch_auto_complete"]["blocker_codes"])
+
     def test_clarify_blocks_before_requirements_worker_completion_without_design_analysis(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -11150,6 +11345,68 @@ class CoverageGateAcCheckTests(unittest.TestCase):
             result = coverage_gate.validate(repo, matrix, unit, review, design_path)
 
         self.assertTrue(result["ready"])
+
+
+class HashCommandTests(unittest.TestCase):
+    def test_hash_entry_matches_handoff_gate_recomputation(self) -> None:
+        from e2e_harness.cli.commands import hash_artifacts
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            target = repo / "docs" / "agent-runs" / "run" / "evidence" / "impact-summary.md"
+            target.parent.mkdir(parents=True)
+            # CRLF on purpose: byte-exact hashing must not normalize line endings.
+            target.write_bytes(b"# Impact Summary\r\nrisk: LOW\r\n")
+
+            exit_code, result = hash_artifacts.run(repo, [target])
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(result["ready"])
+            self.assertEqual(result["blocked_reasons"], [])
+            entry = result["hash_entries"][0]
+            # The gate recomputes hashes via hashlib.sha256(read_bytes()); the
+            # command MUST produce the identical digest or the gate will reject it.
+            expected = hashlib.sha256(target.read_bytes()).hexdigest()
+            self.assertEqual(entry["sha256"], expected)
+            self.assertEqual(entry["path"], "docs/agent-runs/run/evidence/impact-summary.md")
+            self.assertEqual(
+                entry["frontmatter_line"],
+                f"docs/agent-runs/run/evidence/impact-summary.md sha256:{expected}",
+            )
+
+    def test_hash_missing_file_blocks(self) -> None:
+        from e2e_harness.cli.commands import hash_artifacts
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            exit_code, result = hash_artifacts.run(repo, [repo / "nope.md"])
+
+            self.assertEqual(exit_code, 2)
+            self.assertFalse(result["ready"])
+            self.assertTrue(result["hash_entries"] == [])
+            self.assertTrue(any("nope.md" in reason for reason in result["blocked_reasons"]))
+
+    def test_hash_cli_emits_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            target = repo / "req.md"
+            target.write_bytes(b"user request\n")
+            argv = [
+                "e2e_dev_harness.py",
+                "hash",
+                str(repo),
+                "--path",
+                "req.md",
+            ]
+            stdout = io.StringIO()
+            with patch.object(sys, "argv", argv), redirect_stdout(stdout):
+                code = e2e_dev_harness.main()
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(0, code)
+        expected = hashlib.sha256(b"user request\n").hexdigest()
+        # The compact output contract must surface the hash entries, not strip them.
+        self.assertEqual(payload["hash_entries"][0]["frontmatter_line"], f"req.md sha256:{expected}")
 
 
 if __name__ == "__main__":

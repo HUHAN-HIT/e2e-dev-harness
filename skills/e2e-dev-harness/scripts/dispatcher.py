@@ -23,6 +23,7 @@ import reviewer_gate  # noqa: E402
 import run_state  # noqa: E402
 import runtime_adapters  # noqa: E402
 from common import atomic_write_json, configure_utf8_stdio, posix, read_json_object  # noqa: E402
+from e2e_harness.engine import dispatch_state  # noqa: E402
 from output_contract import workflow_stage_for_lifecycle  # noqa: E402
 
 
@@ -576,11 +577,11 @@ def active_dispatches(state: dict) -> dict[str, dict]:
     dispatches = state.get("dispatches") if isinstance(state.get("dispatches"), dict) else {}
     active: dict[str, dict] = {}
     for task_id, dispatch in dispatches.items():
-        if isinstance(dispatch, dict) and str(dispatch.get("status", "")).lower() in ACTIVE_DISPATCH_STATUSES:
+        if isinstance(dispatch, dict) and dispatch_state.classify(dispatch.get("status", ""), dispatch).active:
             active[str(task_id)] = dispatch
     current = state.get("dispatch") if isinstance(state.get("dispatch"), dict) else {}
     current_id = str(current.get("current_task_id", "")).strip()
-    if current_id and str(current.get("status", "")).lower() in ACTIVE_DISPATCH_STATUSES:
+    if current_id and dispatch_state.classify(current.get("status", ""), current).active:
         active.setdefault(current_id, current)
     return active
 
@@ -845,17 +846,18 @@ def dispatch_completion_blockers(repo: Path, state_path: Path | None, task_id: s
     if str(dispatch.get("current_agent", "")).strip() != agent:
         blocked.append(f"Dispatch agent mismatch: expected {dispatch.get('current_agent', '')}, got {agent}.")
     status = str(dispatch.get("status", "")).strip()
-    if status in {"awaiting_runtime_spawn", "waiting_dispatch", "worker_dispatched", "dispatched"}:
+    facts = dispatch_state.classify(status, dispatch)
+    if facts.awaiting_worker_proof:
         blocked.append(
             "Dispatched task has not been confirmed by a fresh worker; call the runtime spawn tool and let the Task hook confirm, "
             "or run dispatch-ack with the worker handle before dispatch-complete."
         )
-    elif status == "worker_running_unverified" or str(dispatch.get("spawn_confirmed_by", "")).strip() == "phase_guard":
+    elif facts.legacy_unverified:
         blocked.append(
             "Dispatch completion blocked: phase_guard auto-confirm only records that the dispatcher-generated task prompt was observed. "
             "Run dispatch-ack with a fresh worker handle/session before dispatch-complete."
         )
-    elif status != "worker_running":
+    elif not facts.running:
         blocked.append(f"Dispatch status must be worker_running before dispatch-complete; got {status or '<missing>'}.")
     elif not (
         str(dispatch.get("worker_handle", "")).strip()

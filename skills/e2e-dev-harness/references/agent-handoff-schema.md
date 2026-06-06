@@ -45,6 +45,16 @@ Design, test, code, semantic review, and coverage are incompatible role groups. 
 
 Run `scripts/handoff_gate.py` before a downstream agent consumes a handoff. Use `--require-handoffs` for multi-service, contract/data-risk, or split-agent completion gates so an empty `handoffs/` directory blocks. The gate requires a concrete `agent_id`, a pass status, non-empty inputs/outputs, input/output SHA-256 entries, `consumed_by`, `open_questions: None`, a matching ready marker, and non-template body content in `Summary`, `Facts Used`, `Decisions Made`, `Downstream Assumptions`, and `Verification Evidence`. Draft starter files are intentionally not ready until the owning agent fills them. Do not list the handoff file itself in `outputs` or `output_hashes`; `<handoff>.ready.json` is the only place that records the handoff file hash. `output_hashes` must match the current files they name. Non-output `input_hashes` may record upstream or external artifacts that are not present in the current repository, but they still need a valid `sha256:<64-hex>` value.
 
+Do not hand-roll `python -c "import hashlib"` to compute these values. Run the harness `hash` subcommand, which uses the same byte-exact digest the gate recomputes (so the entries can never drift):
+
+```bash
+python skills/e2e-dev-harness/scripts/e2e_dev_harness.py hash . \
+  --path docs/agent-runs/<run>/evidence/impact-summary.md \
+  --path docs/agent-runs/<run>/evidence/another-artifact.md
+```
+
+Each `hash_entries[].frontmatter_line` in the output is already formatted as `<repo-relative-path> sha256:<64-hex>` for direct paste into `input_hashes` / `output_hashes`.
+
 Handoff writes must be atomic. Do not hand-assemble the partial/rename/marker
 steps; the worker writes the handoff body and frontmatter, then runs one command:
 

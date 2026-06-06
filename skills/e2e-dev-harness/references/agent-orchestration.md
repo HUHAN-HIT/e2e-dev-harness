@@ -190,19 +190,22 @@ dispatch: each task has an agent id, phase, service scope, dependency phases,
 input artifacts, output artifacts, and parallel group. Agents update task status
 through dispatcher commands instead of exchanging long free-form chat transcripts.
 Generated tasks also declare `requires_runtime_dispatch: true`,
-`dispatch_contract: fresh-subagent`, and `runtime_subagent_type:
-general-purpose`; the coordinator may write archive scaffolding, but it must not
-treat R1/R2/R3 review or implementation planning as completed until the
+`dispatch_contract: fresh-subagent`, and a role-declared
+`runtime_subagent_type`; the coordinator may write archive scaffolding, but it
+must not treat R1/R2/R3 review or implementation planning as completed until the
 corresponding dispatched task writes its scheduled evidence. The dispatcher
 honors each task's `runtime_subagent_type` when it builds the runtime spawn
-request, so review/coverage tasks can target a specialized reviewer agent. Set
+request, so clarify/design/test/code/review phases can target specialized
+runtime agents instead of collapsing onto `general-purpose`. Set
 `E2E_HARNESS_REVIEWER_SUBAGENT_TYPE` to a runtime subagent your project actually
-has to route R1/R2/R3 and coverage reviews to it; left unset, every task stays
-on `general-purpose` so the harness remains runtime-portable. To route any single
-phase to a harness-aware subagent, set `E2E_HARNESS_SUBAGENT_TYPE_<PHASE>` (phase
+has to route R1/R2/R3 and coverage reviews together; left unset, reviewer tasks
+use their role-declared aliases. To route any single phase to a project-local
+alias, set `E2E_HARNESS_SUBAGENT_TYPE_<PHASE>` (phase
 uppercased, `-` → `_`); e.g. `E2E_HARNESS_SUBAGENT_TYPE_CLARIFY=requirements-clarifier-agent`
 gives the interactive clarify phase a dedicated agent. A per-phase override takes
-precedence over the reviewer default.
+precedence over the reviewer default and role declaration. If a runtime does not
+provide the bundled alias name, update the role asset or environment override to
+the subagent type that runtime actually exposes.
 It also writes short role templates under `agent-roles/`; generated schedules set `require_role_templates: true`, so claim is blocked if the referenced template is missing or malformed.
 
 For multi-service work, `plan --create-archive` leaves run-state at `SERVICE_DESIGN_REQUIRED`. Fill and validate every service design slice with `service-design --run-state` before service code dispatch. Service-scoped code-developer tasks in different `service:<name>` parallel groups may run concurrently only after shared contracts, service designs, the implementation-planner task, service-local TDD plans, and R2 review are stable.

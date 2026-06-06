@@ -7,5 +7,6 @@
     "done": "Review report has request hash, concrete session isolation proof, checked profile items, and status."
   },
   "skills": [],
-  "subagent_kind": "reviewer"
+  "subagent_kind": "reviewer",
+  "runtime_subagent_type": "semantic-reviewer"
 }

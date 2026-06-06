@@ -7,5 +7,6 @@
     "done": "Every AC maps to at least one use case or a documented deferral with owner and approval need."
   },
   "skills": [],
-  "subagent_kind": "general"
+  "subagent_kind": "general",
+  "runtime_subagent_type": "use-case-designer"
 }

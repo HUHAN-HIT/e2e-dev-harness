@@ -7,5 +7,6 @@
     "done": "All behavior/API/data/test-impacting questions are resolved or explicitly blocked, and downstream assumptions are stated."
   },
   "skills": [],
-  "subagent_kind": "general"
+  "subagent_kind": "general",
+  "runtime_subagent_type": "requirements-clarifier"
 }

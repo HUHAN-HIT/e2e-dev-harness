@@ -7,5 +7,6 @@
     "done": "TDD and implementation tasks have bounded inputs, ordered dependencies, and unresolved R1 findings are routed to rework."
   },
   "skills": [],
-  "subagent_kind": "general"
+  "subagent_kind": "general",
+  "runtime_subagent_type": "implementation-planner"
 }

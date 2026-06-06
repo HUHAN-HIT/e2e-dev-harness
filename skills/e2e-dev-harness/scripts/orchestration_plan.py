@@ -1002,10 +1002,10 @@ def reviewer_subagent_type() -> str:
 
     Set E2E_HARNESS_REVIEWER_SUBAGENT_TYPE to a runtime subagent your project
     actually has (e.g. a dedicated code-reviewer agent) to route R1/R2/R3 and
-    coverage reviews to it. Left unset, every task stays on general-purpose so
-    the harness remains runtime-portable.
+    coverage reviews to it. Left unset, reviewer tasks use their role-declared
+    runtime subagent type.
     """
-    return str(os.environ.get(REVIEWER_SUBAGENT_TYPE_ENV, "") or "").strip() or "general-purpose"
+    return str(os.environ.get(REVIEWER_SUBAGENT_TYPE_ENV, "") or "").strip()
 
 
 def subagent_type_env_for_phase(phase: str) -> str:
@@ -1014,10 +1014,9 @@ def subagent_type_env_for_phase(phase: str) -> str:
     `E2E_HARNESS_SUBAGENT_TYPE_<PHASE>` (phase uppercased, `-` -> `_`) lets a
     project pin any single phase to a runtime subagent it actually has — e.g.
     `E2E_HARNESS_SUBAGENT_TYPE_CLARIFY=requirements-clarifier-agent` to give the
-    interactive clarify phase a harness-aware agent instead of the portable
-    `general-purpose` default. Per-phase overrides take precedence over the
-    reviewer-kind default so a project can override one reviewer phase without
-    moving the others.
+    interactive clarify phase a project-local alias instead of the bundled role
+    default. Per-phase overrides take precedence over the reviewer-kind default
+    so a project can override one reviewer phase without moving the others.
     """
     normalized = str(phase or "").strip().upper().replace("-", "_")
     return f"E2E_HARNESS_SUBAGENT_TYPE_{normalized}"
@@ -1032,8 +1031,11 @@ def runtime_subagent_type_for_phase(phase: str) -> str:
     # Otherwise route from the canonical role's declared subagent_kind so
     # declaration and routing stay in one place (see agent_roles.phase_subagent_kind).
     if agent_roles.phase_subagent_kind(phase) == "reviewer":
-        return reviewer_subagent_type()
-    return "general-purpose"
+        reviewer_override = reviewer_subagent_type()
+        if reviewer_override:
+            return reviewer_override
+    role_subagent_type = agent_roles.phase_runtime_subagent_type(phase)
+    return role_subagent_type or "general-purpose"
 
 
 def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) -> dict:

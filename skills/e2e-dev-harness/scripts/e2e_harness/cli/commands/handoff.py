@@ -95,6 +95,8 @@ def _normalize_open_questions_section(remainder: str, frontmatter_open_questions
         while end < len(lines) and not lines[end].lstrip().startswith("## "):
             end += 1
         existing = "\n".join(lines[index + 1 : end]).strip()
+        if handoff_gate.is_no_open_questions(existing):
+            return remainder, False
         if not _closed_open_questions_text(existing):
             return remainder, False
         replacement = lines[: index + 1] + ["", "None", ""] + lines[end:]
@@ -187,6 +189,114 @@ def run_finalize(
     if normalized_open_questions:
         result["normalized_open_questions"] = True
     return result
+
+
+def run_marker_only_seal(
+    repo: Path,
+    handoff_path: Path,
+    agent: str,
+    status_file: Path | None = None,
+) -> dict:
+    repo = Path(repo).resolve()
+    handoff = handoff_path if handoff_path.is_absolute() else repo / handoff_path
+    handoff = handoff.resolve()
+    result: dict = {
+        "schema": "e2e-dev-harness.handoff-marker-only-seal.v1",
+        "ready": False,
+        "blocked_reasons": [],
+        "blocker_codes": [],
+        "handoff": str(handoff),
+        "agent": agent,
+        "auto_completion": {"action": "none"},
+    }
+    if not str(handoff).endswith(".md"):
+        result["blocked_reasons"].append(f"Handoff path must be a .md file: {handoff}")
+        write_status(status_file, result)
+        return result
+    if not handoff.is_file():
+        result["blocked_reasons"].append(f"Handoff file does not exist: {handoff}")
+        write_status(status_file, result)
+        return result
+    agent = str(agent or "").strip()
+    if not agent:
+        result["blocked_reasons"].append("--agent is required to set producer_agent.")
+        write_status(status_file, result)
+        return result
+
+    original = handoff.read_text(encoding="utf-8")
+    fm_lines, remainder, had_fm = _split_frontmatter(original)
+    if not had_fm:
+        result["blocked_reasons"].append(
+            f"Handoff {handoff} has no YAML frontmatter block; worker must write frontmatter + body first."
+        )
+        write_status(status_file, result)
+        return result
+    updated_fm = _apply_scalars(fm_lines, {"agent_id": agent, "status": "ready"})
+    updated_remainder, normalized_open_questions = _normalize_open_questions_section(
+        remainder,
+        _frontmatter_scalar(updated_fm, "open_questions"),
+    )
+    if updated_fm != fm_lines or normalized_open_questions or updated_remainder != remainder:
+        blockers = _content_blockers(repo, handoff)
+        result["blocked_reasons"] = blockers or [
+            "Handoff finalize would rewrite worker-authored markdown; schedule artifact_repair instead of coordinator rewrite."
+        ]
+        result["blocker_codes"] = _blocker_codes(result["blocked_reasons"]) or ["handoff_requires_body_rewrite"]
+        result["auto_completion"] = {"action": "artifact_repair", "reason": "handoff_requires_body_rewrite"}
+        write_status(status_file, result)
+        return result
+
+    marker = handoff_gate.marker_path(handoff)
+    if marker.exists():
+        blockers = _content_blockers(repo, handoff)
+        if not blockers:
+            result["ready"] = True
+            result["ready_marker"] = str(marker)
+            result["sha256"] = hashlib.sha256(handoff.read_bytes()).hexdigest()
+            result["auto_completion"] = {"action": "already_sealed"}
+            write_status(status_file, result)
+            return result
+        result["blocked_reasons"] = blockers
+        result["blocker_codes"] = _blocker_codes(blockers)
+        result["auto_completion"] = {"action": "artifact_repair", "reason": "existing_marker_not_canonical"}
+        write_status(status_file, result)
+        return result
+
+    digest = hashlib.sha256(handoff.read_bytes()).hexdigest()
+    marker_payload = {
+        "path": handoff.relative_to(repo).as_posix(),
+        "sha256": digest,
+        "producer_agent": agent,
+        "status": "ready",
+    }
+    _atomic_write_text(marker, json.dumps(marker_payload, indent=2, ensure_ascii=False) + "\n")
+    blockers = _content_blockers(repo, handoff)
+    if blockers:
+        try:
+            marker.unlink()
+        except OSError:
+            pass
+        result["blocked_reasons"] = blockers
+        result["blocker_codes"] = _blocker_codes(blockers)
+        result["auto_completion"] = {"action": "artifact_repair", "reason": "marker_only_validation_failed"}
+        write_status(status_file, result)
+        return result
+
+    result["ready"] = True
+    result["ready_marker"] = str(marker)
+    result["sha256"] = digest
+    result["auto_completion"] = {"action": "marker_only_seal"}
+    write_status(status_file, result)
+    return result
+
+
+def _blocker_codes(reasons: list[str]) -> list[str]:
+    codes: list[str] = []
+    for reason in reasons or []:
+        code = handoff_gate.blocker_code_for_reason(str(reason))
+        if code not in codes:
+            codes.append(code)
+    return codes
 
 
 def run_from_args(args) -> tuple[int, dict]:

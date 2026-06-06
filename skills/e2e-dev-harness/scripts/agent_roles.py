@@ -28,7 +28,8 @@ TEAM_ASSET_DIR = SKILL_ROOT / "agent-roles" / "teams"
 # legacy `ROLE_TEMPLATE_DETAILS` so `template_text()` renders byte-identical
 # role-template files. `skills` is consumed by `agent_plan()` to declare which
 # skills a role loads. `subagent_kind` ("reviewer"|"general") documents runtime
-# routing intent.
+# routing intent. `runtime_subagent_type` is the concrete runtime agent alias
+# projected into dispatch spawn requests unless a project overrides the phase.
 _FALLBACK_ROLE_REGISTRY: dict[str, dict] = {
     "requirements-clarifier": {
         "template": {
@@ -40,6 +41,7 @@ _FALLBACK_ROLE_REGISTRY: dict[str, dict] = {
         },
         "skills": [],
         "subagent_kind": "general",
+        "runtime_subagent_type": "requirements-clarifier",
     },
     "use-case-designer": {
         "template": {
@@ -51,6 +53,7 @@ _FALLBACK_ROLE_REGISTRY: dict[str, dict] = {
         },
         "skills": [],
         "subagent_kind": "general",
+        "runtime_subagent_type": "use-case-designer",
     },
     "implementation-planner": {
         "template": {
@@ -62,6 +65,7 @@ _FALLBACK_ROLE_REGISTRY: dict[str, dict] = {
         },
         "skills": [],
         "subagent_kind": "general",
+        "runtime_subagent_type": "implementation-planner",
     },
     "test-case-developer": {
         "template": {
@@ -73,6 +77,7 @@ _FALLBACK_ROLE_REGISTRY: dict[str, dict] = {
         },
         "skills": ["superpowers:test-driven-development"],
         "subagent_kind": "general",
+        "runtime_subagent_type": "test-case-developer",
     },
     "code-developer": {
         "template": {
@@ -84,6 +89,7 @@ _FALLBACK_ROLE_REGISTRY: dict[str, dict] = {
         },
         "skills": [],
         "subagent_kind": "general",
+        "runtime_subagent_type": "code-developer",
     },
     "semantic-reviewer": {
         "template": {
@@ -95,6 +101,7 @@ _FALLBACK_ROLE_REGISTRY: dict[str, dict] = {
         },
         "skills": [],
         "subagent_kind": "reviewer",
+        "runtime_subagent_type": "semantic-reviewer",
     },
     "coverage-reviewer": {
         "template": {
@@ -106,6 +113,7 @@ _FALLBACK_ROLE_REGISTRY: dict[str, dict] = {
         },
         "skills": [],
         "subagent_kind": "reviewer",
+        "runtime_subagent_type": "coverage-reviewer",
     },
 }
 
@@ -150,6 +158,7 @@ def load_role_registry(directory: Path | None = None) -> dict[str, dict]:
                 "template": dict(entry["template"]),
                 "skills": list(entry.get("skills", []) or []),
                 "subagent_kind": str(entry.get("subagent_kind", "general") or "general"),
+                "runtime_subagent_type": str(entry.get("runtime_subagent_type", "") or ""),
             }
     if set(loaded) != set(_FALLBACK_ROLE_REGISTRY):
         return {key: dict(value) for key, value in _FALLBACK_ROLE_REGISTRY.items()}
@@ -278,6 +287,14 @@ def phase_subagent_kind(phase: str) -> str:
     if meta is None:
         return ""
     return str(ROLE_REGISTRY.get(meta["canonical_role"], {}).get("subagent_kind", ""))
+
+
+def phase_runtime_subagent_type(phase: str) -> str:
+    """Concrete runtime subagent type declared by the phase's canonical role."""
+    meta = PHASE_REGISTRY.get(phase)
+    if meta is None:
+        return ""
+    return str(ROLE_REGISTRY.get(meta["canonical_role"], {}).get("runtime_subagent_type", ""))
 
 
 # Single source of truth for lifecycle -> phase gating. `allowed` is the set of

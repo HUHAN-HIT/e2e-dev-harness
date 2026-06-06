@@ -7,5 +7,6 @@
     "done": "Every AC maps to use case, tests, code refs, business review, accepted review status, and closed rework."
   },
   "skills": [],
-  "subagent_kind": "reviewer"
+  "subagent_kind": "reviewer",
+  "runtime_subagent_type": "coverage-reviewer"
 }

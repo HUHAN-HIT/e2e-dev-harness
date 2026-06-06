@@ -107,19 +107,32 @@ class PhaseFunctionTests(unittest.TestCase):
 
     REVIEWER_PHASES = ("r1-review", "r2-review", "r3-review", "completion")
     GENERAL_PHASES = ("clarify", "design", "plan", "tdd-red", "implement", "unknown-phase")
+    ROLE_DEFAULTS = {
+        "clarify": "requirements-clarifier",
+        "design": "use-case-designer",
+        "plan": "implementation-planner",
+        "tdd-red": "test-case-developer",
+        "implement": "code-developer",
+        "r1-review": "semantic-reviewer",
+        "r2-review": "semantic-reviewer",
+        "r3-review": "semantic-reviewer",
+        "completion": "coverage-reviewer",
+    }
 
-    def test_runtime_subagent_type_defaults_to_general_when_env_unset(self) -> None:
+    def test_runtime_subagent_type_defaults_to_role_declaration_when_env_unset(self) -> None:
         env = {k: v for k, v in os.environ.items() if k != orchestration_plan.REVIEWER_SUBAGENT_TYPE_ENV}
         with patch.dict(os.environ, env, clear=True):
-            for phase in self.REVIEWER_PHASES + self.GENERAL_PHASES:
-                self.assertEqual("general-purpose", orchestration_plan.runtime_subagent_type_for_phase(phase), phase)
+            for phase, expected in self.ROLE_DEFAULTS.items():
+                self.assertEqual(expected, orchestration_plan.runtime_subagent_type_for_phase(phase), phase)
+            self.assertEqual("general-purpose", orchestration_plan.runtime_subagent_type_for_phase("unknown-phase"))
 
     def test_runtime_subagent_type_routes_reviewer_phases_when_env_set(self) -> None:
         with patch.dict(os.environ, {orchestration_plan.REVIEWER_SUBAGENT_TYPE_ENV: "code-reviewer"}):
             for phase in self.REVIEWER_PHASES:
                 self.assertEqual("code-reviewer", orchestration_plan.runtime_subagent_type_for_phase(phase), phase)
             for phase in self.GENERAL_PHASES:
-                self.assertEqual("general-purpose", orchestration_plan.runtime_subagent_type_for_phase(phase), phase)
+                expected = self.ROLE_DEFAULTS.get(phase, "general-purpose")
+                self.assertEqual(expected, orchestration_plan.runtime_subagent_type_for_phase(phase), phase)
 
     def test_runtime_subagent_type_honors_per_phase_env_override(self) -> None:
         # A project can route a single phase (e.g. interactive clarify) to a
@@ -130,9 +143,9 @@ class PhaseFunctionTests(unittest.TestCase):
                 "requirements-clarifier-agent",
                 orchestration_plan.runtime_subagent_type_for_phase("clarify"),
             )
-            # Other phases stay on the portable default.
+            # Other phases still follow their role declarations.
             for phase in ("design", "plan", "tdd-red", "implement"):
-                self.assertEqual("general-purpose", orchestration_plan.runtime_subagent_type_for_phase(phase), phase)
+                self.assertEqual(self.ROLE_DEFAULTS[phase], orchestration_plan.runtime_subagent_type_for_phase(phase), phase)
 
     def test_per_phase_env_override_beats_reviewer_routing(self) -> None:
         # An explicit per-phase override wins over the reviewer-kind default.
@@ -1603,7 +1616,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
         for task in by_phase.values():
             self.assertTrue(task["requires_runtime_dispatch"])
             self.assertEqual("fresh-subagent", task["dispatch_contract"])
-            self.assertEqual("general-purpose", task["runtime_subagent_type"])
+            self.assertEqual(PhaseFunctionTests.ROLE_DEFAULTS[task["phase"]], task["runtime_subagent_type"])
 
     def test_select_services_discovery_does_not_use_all_candidates(self) -> None:
         facts = {"service_candidates": ["services/order-service", "services/payment-service", "services/catalog-service"]}
@@ -7717,7 +7730,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
             evidence = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
             schedule = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
             write_role_template(repo, role_template)
-            write_ready_handoff(repo, evidence)
+            write_ready_handoff(repo, evidence, agent_id="requirements-clarifier")
             state["dispatch"] = {
                 "status": "worker_running",
                 "runtime": "codex",
@@ -7813,7 +7826,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
             evidence = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
             schedule = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
             write_role_template(repo, role_template)
-            write_ready_handoff(repo, evidence)
+            write_ready_handoff(repo, evidence, agent_id="requirements-clarifier")
             state["dispatch"] = {
                 "status": "worker_running",
                 "runtime": "codex",
@@ -10908,6 +10921,8 @@ class DispatchWaveCheckpointCadenceTest(unittest.TestCase):
 class ReviewerSubagentTypeTest(unittest.TestCase):
     """#3: route review/coverage tasks to a specialized reviewer subagent type."""
 
+    ROLE_DEFAULTS = PhaseFunctionTests.ROLE_DEFAULTS
+
     def _spawn(self, repo: Path, task: dict) -> dict:
         caps = dispatcher.runtime_capabilities("claude-code")
         return dispatcher.spawn_request_for_runtime(
@@ -10941,16 +10956,16 @@ class ReviewerSubagentTypeTest(unittest.TestCase):
         by_phase = {task["phase"]: task for task in schedule["tasks"]}
         for review_phase in ("r1-review", "r2-review", "r3-review"):
             self.assertEqual("code-reviewer", by_phase[review_phase]["runtime_subagent_type"], review_phase)
-        # Non-review work stays on the portable default.
-        self.assertEqual("general-purpose", by_phase["plan"]["runtime_subagent_type"])
+        # Non-review work follows its role declaration.
+        self.assertEqual("implementation-planner", by_phase["plan"]["runtime_subagent_type"])
 
-    def test_agent_schedule_defaults_reviews_to_general_purpose_without_env(self) -> None:
+    def test_agent_schedule_defaults_to_role_declared_subagent_type_without_env(self) -> None:
         artifacts = orchestration_plan.artifacts("checkout", run_date="2026-05-23")
         agents = orchestration_plan.agent_plan("single-review", artifacts, [])
         with patch.dict(orchestration_plan.os.environ, {"E2E_HARNESS_REVIEWER_SUBAGENT_TYPE": ""}, clear=False):
             schedule = orchestration_plan.agent_schedule("single-review", [], agents)
         for task in schedule["tasks"]:
-            self.assertEqual("general-purpose", task["runtime_subagent_type"], task["phase"])
+            self.assertEqual(self.ROLE_DEFAULTS[task["phase"]], task["runtime_subagent_type"], task["phase"])
 
 
 class DispatcherJsonOutputTest(unittest.TestCase):

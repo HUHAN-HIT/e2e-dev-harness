@@ -50,6 +50,7 @@ from e2e_harness.cli.commands import dispatch as dispatch_command  # noqa: E402
 from e2e_harness.cli.commands import doctor as doctor_command  # noqa: E402
 from e2e_harness.cli.commands import gate as gate_command  # noqa: E402
 from e2e_harness.cli.commands import handoff as handoff_command  # noqa: E402
+from e2e_harness.cli.commands import hash_artifacts as hash_command  # noqa: E402
 from e2e_harness.cli.commands import guard as guard_command  # noqa: E402
 from e2e_harness.cli.commands import install as install_command  # noqa: E402
 from e2e_harness.cli.commands import next as next_command  # noqa: E402
@@ -1636,6 +1637,10 @@ def handoff_finalize(args) -> tuple[int, dict]:
     return handoff_command.run_from_args(args)
 
 
+def hash_artifacts(args) -> tuple[int, dict]:
+    return hash_command.run_from_args(args)
+
+
 def ac_progress(args) -> tuple[int, dict]:
     return ac_progress_command.run_from_args(args)
 
@@ -1963,6 +1968,17 @@ def main() -> int:
     handoff_parser.add_argument("--agent", required=True, help="Producer agent id; written to agent_id and the ready marker producer_agent.")
     handoff_parser.add_argument("--status-file", type=Path)
 
+    hash_parser = subparsers.add_parser("hash", help="Emit byte-exact sha256 entries for handoff input_hashes/output_hashes.")
+    hash_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    hash_parser.add_argument(
+        "--path",
+        required=True,
+        action="append",
+        type=Path,
+        help="File to hash (repeatable). Emits '<repo-relative-path> sha256:<64-hex>'.",
+    )
+    hash_parser.add_argument("--status-file", type=Path)
+
     recover_parser = subparsers.add_parser("recover", help="Create an auditable recovery plan for a stuck run.")
     recover_parser.add_argument("repo", nargs="?", default=".", type=Path)
     recover_parser.add_argument("--state", required=True, type=Path)
@@ -2093,6 +2109,8 @@ def main() -> int:
             exit_code, result = dispatch_status(args)
         elif args.command == "handoff":
             exit_code, result = handoff_finalize(args)
+        elif args.command == "hash":
+            exit_code, result = hash_artifacts(args)
         elif args.command == "ac-progress":
             exit_code, result = ac_progress(args)
         elif args.command == "next":
@@ -2157,6 +2175,9 @@ def main() -> int:
             compact[key] = result.get(key, False if key == "dry_run" else 0)
     if args.command == "dispatch-status" and result.get("task_state_views"):
         compact["task_state_views"] = result["task_state_views"]
+    if args.command == "hash":
+        compact["hash_entries"] = result.get("hash_entries", [])
+        compact["blocked_reasons"] = result.get("blocked_reasons", [])
     print(output_contract.render_json(compact))
     return exit_code
 

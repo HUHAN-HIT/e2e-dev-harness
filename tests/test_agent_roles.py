@@ -5,7 +5,7 @@ These tests pin the declarative contract of `agent_roles`:
 - `template_text` renders the same section markers the harness already requires;
 - `resolve_role_key` reproduces the legacy name->key substring semantics;
 - `PHASE_ROLE_GROUPS` covers every workflow phase;
-- declarative `skills` / `subagent_kind` metadata is present for consumers.
+- declarative `skills` / `subagent_kind` / `runtime_subagent_type` metadata is present for consumers.
 """
 from __future__ import annotations
 
@@ -209,6 +209,29 @@ class PhaseSubagentKindTest(unittest.TestCase):
             self.assertEqual(in_review_group, is_reviewer, phase)
 
 
+class PhaseRuntimeSubagentTypeTest(unittest.TestCase):
+    """Role declarations can route phases to concrete runtime subagent types."""
+
+    EXPECTED = {
+        "clarify": "requirements-clarifier",
+        "design": "use-case-designer",
+        "plan": "implementation-planner",
+        "tdd-red": "test-case-developer",
+        "implement": "code-developer",
+        "r1-review": "semantic-reviewer",
+        "r2-review": "semantic-reviewer",
+        "r3-review": "semantic-reviewer",
+        "completion": "coverage-reviewer",
+    }
+
+    def test_phase_runtime_subagent_type_matches_role_declaration(self) -> None:
+        for phase, expected in self.EXPECTED.items():
+            self.assertEqual(expected, agent_roles.phase_runtime_subagent_type(phase), phase)
+
+    def test_phase_runtime_subagent_type_unknown_is_empty(self) -> None:
+        self.assertEqual("", agent_roles.phase_runtime_subagent_type("nonexistent"))
+
+
 class RoleToPhaseTest(unittest.TestCase):
     EXPECTED = {
         "requirements-clarifier": "clarify",
@@ -240,6 +263,10 @@ class RoleMetadataTest(unittest.TestCase):
             self.assertEqual("reviewer", agent_roles.ROLE_REGISTRY[key]["subagent_kind"], key)
         for key in ("code-developer", "test-case-developer", "implementation-planner"):
             self.assertEqual("general", agent_roles.ROLE_REGISTRY[key]["subagent_kind"], key)
+
+    def test_roles_declare_runtime_subagent_type(self) -> None:
+        for key in CANONICAL_KEYS:
+            self.assertEqual(key, agent_roles.ROLE_REGISTRY[key]["runtime_subagent_type"], key)
 
 
 class RoleAssetLoadingTest(unittest.TestCase):
