@@ -1197,6 +1197,82 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
 
+    def test_phase_guard_allows_clarifier_dispatch_task_when_prompt_mentions_code_keyword(self) -> None:
+        # Regression: the requirements-clarifier is the FIRST task of every run
+        # (lifecycle CREATED). Its dispatch prompt naturally describes the
+        # feature to clarify and can contain a code keyword (e.g. Chinese
+        # "实现"). The structured schedule role (role_group=design) is
+        # authoritative and must NOT be overridden by a CODE_TASK_RE keyword
+        # match that routes the Task down the IMPLEMENTED-gated code-agent path,
+        # which can never pass at CREATED -> first-step deadlock.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "bootstrap",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            state["dispatch"] = {
+                "status": "awaiting_runtime_spawn",
+                "runtime": "claude-code",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "context_pack": "docs/agent-runs/run/context-packs/T01.json",
+            }
+            state["dispatches"] = {"T01": state["dispatch"]}
+            run_state.write_state(repo, state_path, state)
+            run_state.write_phase_lock(repo, state_path, state)
+            schedule_path = run_dir / "agent-schedule.json"
+            schedule_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "selected_mode": "bootstrap",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "role_group": "design",
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            pack_path = run_dir / "context-packs" / "T01.json"
+            pack_path.parent.mkdir(parents=True, exist_ok=True)
+            pack_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.context-pack.v1",
+                        "task": {"id": "T01", "agent": "requirements-clarifier"},
+                        "schedule": "docs/agent-runs/run/agent-schedule.json",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = phase_guard.validate_action(
+                repo,
+                "Task",
+                [],
+                run_dir=Path("docs/agent-runs/run"),
+                task_text=(
+                    "Task ID: T01\nAgent: requirements-clarifier\nPhase: clarify\n"
+                    "Context Pack: docs/agent-runs/run/context-packs/T01.json\n"
+                    "澄清结算需求：明确要实现的结算口径与验收标准。"
+                ),
+            )
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+
     def test_phase_guard_blocks_clarification_todo_without_user_interaction(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

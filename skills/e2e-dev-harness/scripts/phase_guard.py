@@ -643,6 +643,24 @@ def schedule_task(schedule: dict, task_id: str) -> dict:
     return {}
 
 
+def dispatcher_task_role_group(repo: Path, lock: Path | None, text: str) -> str:
+    """Resolve the scheduled ``role_group`` for a dispatcher worker-task prompt.
+
+    Returns the lowercased ``role_group`` of the scheduled task referenced by the
+    prompt's Task ID, or ``""`` when the schedule/task cannot be resolved. This is
+    the authoritative signal for whether a dispatch is code/implementation work,
+    replacing the fragile ``CODE_TASK_RE`` keyword heuristic for dispatcher tasks
+    (a clarifier/review/test prompt may legitimately mention a code keyword such
+    as the Chinese "实现" while describing the work).
+    """
+    task_id = dispatcher_task_id(text)
+    if not task_id or not lock or not lock.exists():
+        return ""
+    schedule = load_json(lock.parent / "agent-schedule.json")
+    task = schedule_task(schedule, task_id)
+    return str(task.get("role_group", "")).strip().lower()
+
+
 def normalized_repo_path_text(repo: Path, value: str) -> str:
     text = str(value).strip()
     if not text:
@@ -1367,18 +1385,32 @@ def _validate_action(
         code_task = bool(CODE_TASK_RE.search(text))
         dispatcher_task = bool(dispatcher_task_id(text) and dispatcher_context_pack(text))
         read_only_exploration_task = bool(READ_ONLY_EXPLORATION_TASK_RE.search(text)) and not code_task
-        if dispatcher_task and not code_task:
+        if dispatcher_task:
+            # The scheduled task's structured role is authoritative over the
+            # CODE_TASK_RE keyword heuristic. Only true implementation work
+            # (role_group == "code") is gated on the IMPLEMENTED phase; a
+            # clarifier/review/test dispatch prompt may legitimately contain a
+            # code keyword (e.g. the Chinese "实现") while describing the work,
+            # and must not be forced onto the IMPLEMENTED-gated code path (which
+            # can never pass at CREATED -> first-step deadlock). Fall back to the
+            # keyword heuristic only when the schedule role cannot be resolved.
+            role_group = dispatcher_task_role_group(repo, lock, text)
+            require_lifecycle = (role_group == "code") if role_group else code_task
             blocked = _evaluate_dispatch_task(
                 repo,
                 lock,
                 text,
                 warnings,
-                blocked_message="Dispatcher task blocked: start an e2e-dev-harness run before assigning dispatcher-generated worker tasks.",
-                require_lifecycle=False,
+                blocked_message=(
+                    "Code-agent dispatch blocked: start an e2e-dev-harness run and pass clarify/plan/TDD gates before assigning implementation work."
+                    if require_lifecycle
+                    else "Dispatcher task blocked: start an e2e-dev-harness run before assigning dispatcher-generated worker tasks."
+                ),
+                require_lifecycle=require_lifecycle,
             )
             if blocked is not None:
                 return blocked
-        if code_task:
+        elif code_task:
             blocked = _evaluate_dispatch_task(
                 repo,
                 lock,
