@@ -138,6 +138,13 @@ function main() {
   const py = resolvePython(home);
   if (!py) { console.error('No Python interpreter found. Set E2E_HARNESS_PYTHON.'); process.exit(3); }
 
+  // Keep the bundled skills dir free of __pycache__ byproducts: bundled scripts
+  // are short-lived passthroughs, so cached bytecode is pure litter. Inherited by
+  // the spawned interpreter via process.env; honor an explicit operator override.
+  if (process.env.PYTHONDONTWRITEBYTECODE === undefined) {
+    process.env.PYTHONDONTWRITEBYTECODE = '1';
+  }
+
   let spec;
   try {
     spec = resolveCommand(home, py, argv);

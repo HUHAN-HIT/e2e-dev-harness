@@ -50,6 +50,14 @@ REQUIRED_BY_COMPLETION = {
     "phase_coverage",
     "strict_guard_result",
 }
+DERIVED_BY_COMPLETION = {
+    "knowledge_graph_status": "python skills/e2e-dev-harness/scripts/kg_refresh.py . --json",
+    "dependency_report": "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py prepare . --json-full",
+    "impact_summary": "gitnexus impact <changed-symbol> --repo <repo-root>",
+    "impact_evidence": "gitnexus detect-changes --repo <repo-root> --scope unstaged",
+    "test_impact_plan": "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py test-impact . --output <path>",
+}
+MATERIALIZED_REQUIRED_BY_COMPLETION = REQUIRED_BY_COMPLETION - set(DERIVED_BY_COMPLETION)
 
 
 def sha256(path: Path) -> str:
@@ -98,10 +106,13 @@ def artifact_entry(repo: Path, key: str, value: str, owner: str = "global") -> d
         "owner": owner,
         "path": posix(value),
         "kind": "pattern" if is_pattern else ("directory" if is_dir else "file"),
-        "required_by_completion": key in REQUIRED_BY_COMPLETION,
+        "required_by_completion": key in MATERIALIZED_REQUIRED_BY_COMPLETION,
+        "derived_by_completion": key in DERIVED_BY_COMPLETION,
         "status": "pattern" if is_pattern else ("present" if exists else "planned"),
         "sha256": sha256(resolved) if exists and resolved.is_file() else "",
     }
+    if key in DERIVED_BY_COMPLETION:
+        entry["regenerate_command"] = DERIVED_BY_COMPLETION[key]
     return entry
 
 

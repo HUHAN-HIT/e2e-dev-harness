@@ -1101,6 +1101,35 @@ class EventLogContractTests(unittest.TestCase):
         self.assertEqual(["worker_dispatched", "worker_completed"], [item["event"] for item in events])
         self.assertEqual("worker_completed", replay["T10"]["status"])
 
+    def test_event_log_reads_jsonl_and_legacy_json_events_in_sequence_order(self) -> None:
+        import event_log  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "docs" / "agent-runs" / "run"
+            events_dir = run_dir / "events"
+            events_dir.mkdir(parents=True)
+            (events_dir / "events.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps({"schema": event_log.SCHEMA, "sequence": 1, "event": "worker_dispatched", "task_id": "T10"}),
+                        "{bad json",
+                        json.dumps({"schema": event_log.SCHEMA, "sequence": 3, "event": "gate_passed", "gate": "tdd_red"}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (events_dir / "000002-worker-completed.json").write_text(
+                json.dumps({"schema": event_log.SCHEMA, "sequence": 2, "event": "worker_completed", "task_id": "T10"}),
+                encoding="utf-8",
+            )
+
+            events = event_log.read_events(run_dir)
+
+        self.assertEqual(["worker_dispatched", "worker_completed", "gate_passed"], [item["event"] for item in events])
+        self.assertEqual("events.jsonl:1", events[0]["path"])
+        self.assertEqual("000002-worker-completed.json", events[1]["path"])
+
     def test_dispatch_next_double_writes_legacy_dispatch_event_and_enterprise_event(self) -> None:
         import event_log  # noqa: PLC0415
 

@@ -649,6 +649,12 @@ class UnifiedCliTests(unittest.TestCase):
             full_path = repo / payload["full_result_path"]
             full_path_exists = full_path.exists()
             full_payload = json.loads(full_path.read_text(encoding="utf-8"))
+            index_path = full_path.parent / "index.jsonl"
+            index_entries = [
+                json.loads(line)
+                for line in index_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
 
         self.assertEqual(0, exit_code)
         self.assertIn("full_result_path", payload)
@@ -658,6 +664,10 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertNotIn("workflow_plan", payload)
         self.assertNotIn("todo_policy", payload)
         self.assertTrue(full_path_exists)
+        self.assertEqual("e2e-dev-harness.coordinator-result-index.v1", index_entries[-1]["schema"])
+        self.assertEqual("next", index_entries[-1]["command"])
+        self.assertEqual(payload["full_result_path"], index_entries[-1]["display_path"])
+        self.assertEqual(str(full_path), index_entries[-1]["full_result_path"])
         self.assertIn("workflow_plan", full_payload)
         self.assertIn("todo_policy", full_payload)
         self.assertIn("execution_packet", full_payload)

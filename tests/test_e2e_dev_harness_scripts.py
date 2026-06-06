@@ -7436,6 +7436,48 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("present", refreshed["artifacts"][0]["status"])
         self.assertTrue(refreshed["artifacts"][0]["sha256"])
 
+    def test_artifact_registry_marks_recomputable_completion_derivatives_without_strict_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            exec_plan = repo / "docs" / "agent-runs" / "run" / "exec-plan.md"
+            exec_plan.parent.mkdir(parents=True)
+            exec_plan.write_text("plan\n", encoding="utf-8")
+            registry = artifact_registry.build_registry(
+                repo,
+                "run",
+                {
+                    "exec_plan": "docs/agent-runs/run/exec-plan.md",
+                    "knowledge_graph_status": "docs/agent-runs/run/evidence/kg-status.json",
+                    "phase_coverage": "docs/agent-runs/run/evidence/phase-coverage.json",
+                    "strict_guard_result": "docs/agent-runs/run/evidence/strict-guard.json",
+                },
+                "single",
+                [],
+            )
+            registry_path = repo / "docs" / "agent-runs" / "run" / "artifact-registry.json"
+            artifact_registry.write_registry(repo, registry_path, registry)
+
+            result = artifact_registry.validate_registry(repo, registry_path, strict=True)
+            by_type = {item["type"]: item for item in registry["artifacts"]}
+
+        self.assertFalse(result["ready"], result["blocked_reasons"])
+        self.assertTrue(by_type["exec_plan"]["required_by_completion"])
+        self.assertFalse(by_type["knowledge_graph_status"]["required_by_completion"])
+        self.assertTrue(by_type["knowledge_graph_status"]["derived_by_completion"])
+        self.assertIn("regenerate_command", by_type["knowledge_graph_status"])
+        self.assertTrue(by_type["phase_coverage"]["required_by_completion"])
+        self.assertFalse(by_type["phase_coverage"]["derived_by_completion"])
+        self.assertTrue(by_type["strict_guard_result"]["required_by_completion"])
+        self.assertFalse(by_type["strict_guard_result"]["derived_by_completion"])
+        self.assertTrue(
+            any("phase-coverage.json" in reason for reason in result["blocked_reasons"]),
+            result["blocked_reasons"],
+        )
+        self.assertTrue(
+            any("strict-guard.json" in reason for reason in result["blocked_reasons"]),
+            result["blocked_reasons"],
+        )
+
     def test_artifact_registry_blocks_paths_outside_repo(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

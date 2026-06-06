@@ -99,7 +99,26 @@ def write_full_result(repo: Path, command: str, result: dict, args: Any | None =
     if target is None:
         target = default_full_result_path(repo, command, result, args)
     atomic_write_json(target, result)
+    append_full_result_index(repo, command, result, target)
     return target
+
+
+def append_full_result_index(repo: Path, command: str, result: dict, full_result_path: Path) -> Path:
+    index_path = full_result_path.parent / "index.jsonl"
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "schema": "e2e-dev-harness.coordinator-result-index.v1",
+        "created_at": now_iso(),
+        "command": command,
+        "workflow_stage": workflow_stage_for_lifecycle(result.get("lifecycle", "")),
+        "lifecycle": result.get("lifecycle", ""),
+        "ready": bool(result.get("ready", False)),
+        "full_result_path": str(full_result_path),
+        "display_path": _display_path(repo, full_result_path),
+    }
+    with index_path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n")
+    return index_path
 
 
 def _limited_list(values: Any, limit: int = MAX_SUMMARY_ITEMS) -> list:

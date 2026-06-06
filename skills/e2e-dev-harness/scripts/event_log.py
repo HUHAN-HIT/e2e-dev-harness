@@ -47,7 +47,31 @@ def read_events(run_dir: Path) -> list[dict]:
         if isinstance(data, dict):
             data.setdefault("path", path.name)
             events.append(data)
-    return events
+    jsonl_path = directory / "events.jsonl"
+    if jsonl_path.exists():
+        try:
+            lines = jsonl_path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            lines = []
+        for line_number, line in enumerate(lines, start=1):
+            if not line.strip():
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict):
+                data.setdefault("path", f"{jsonl_path.name}:{line_number}")
+                events.append(data)
+    return sorted(events, key=_event_sort_key)
+
+
+def _event_sort_key(event: dict) -> tuple[int, str]:
+    try:
+        sequence = int(event.get("sequence", 0))
+    except (TypeError, ValueError):
+        sequence = 0
+    return sequence, str(event.get("path", ""))
 
 
 def append_event(run_dir: Path, event: str, payload: dict | None = None) -> Path:

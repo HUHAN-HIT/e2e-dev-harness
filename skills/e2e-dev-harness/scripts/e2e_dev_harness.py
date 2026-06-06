@@ -25,6 +25,7 @@ import cross_service_dependency_scan  # noqa: E402
 import coordinator_flow  # noqa: E402
 import event_log  # noqa: E402
 import execution_trace  # noqa: E402
+import gc_run  # noqa: E402
 import install_hooks  # noqa: E402, F401  # re-export: install command uses legacy.install_hooks
 import harness_doctor  # noqa: E402, F401  # re-export: install command uses legacy.harness_doctor
 # Re-exported so tests can patch e2e_dev_harness.implementation_gate (shared module object).
@@ -1567,6 +1568,17 @@ def timeline(args) -> tuple[int, dict]:
     return timeline_command.run_from_args(args)
 
 
+def gc_run_command(args) -> tuple[int, dict]:
+    return 0, gc_run.run(
+        as_repo(getattr(args, "repo", Path("."))),
+        agent_runs=getattr(args, "agent_runs", Path("docs/agent-runs")),
+        keep_latest=getattr(args, "keep_latest", 5),
+        max_age_days=getattr(args, "max_age_days", 30),
+        keep_results_latest=getattr(args, "keep_results_latest", 20),
+        execute=getattr(args, "execute", False),
+    )
+
+
 def install_project(args) -> tuple[int, dict]:
     return install_command.run_from_args(args)
 
@@ -1960,6 +1972,15 @@ def main() -> int:
     timeline_parser.add_argument("--state", required=True, type=Path)
     timeline_parser.add_argument("--status-file", type=Path)
 
+    gc_run_parser = subparsers.add_parser("gc:run", help="Report or apply harness run artifact retention policy.")
+    gc_run_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    gc_run_parser.add_argument("--agent-runs", type=Path, default=Path("docs/agent-runs"))
+    gc_run_parser.add_argument("--keep-latest", type=int, default=5)
+    gc_run_parser.add_argument("--max-age-days", type=int, default=30)
+    gc_run_parser.add_argument("--keep-results-latest", type=int, default=20)
+    gc_run_parser.add_argument("--execute", action="store_true", help="Delete eligible runs. Omit for dry-run.")
+    gc_run_parser.add_argument("--status-file", type=Path)
+
     ac_progress_parser = subparsers.add_parser("ac-progress", help="Block R3 review until all assigned ACs have implementation and test evidence.")
     ac_progress_parser.add_argument("repo", nargs="?", default=".", type=Path)
     ac_progress_parser.add_argument("--design-doc", type=Path)
@@ -2007,6 +2028,7 @@ def main() -> int:
         dispatch_status_parser,
         recover_parser,
         timeline_parser,
+        gc_run_parser,
         ac_progress_parser,
         next_parser,
         preflight_parser,
@@ -2038,6 +2060,8 @@ def main() -> int:
             exit_code, result = recover(args)
         elif args.command == "timeline":
             exit_code, result = timeline(args)
+        elif args.command == "gc:run":
+            exit_code, result = gc_run_command(args)
         elif args.command == "install":
             exit_code, result = install_project(args)
         elif args.command == "pre-code":
@@ -2120,6 +2144,12 @@ def main() -> int:
             compact["summary"]["workflow_stage"] = "TIMELINE"
         for key in ("run_id", "event_count", "timeline_count", "latest_event"):
             compact[key] = result.get(key, {} if key == "latest_event" else 0)
+    if args.command == "gc:run":
+        compact["workflow_stage"] = "GC"
+        if isinstance(compact.get("summary"), dict):
+            compact["summary"]["workflow_stage"] = "GC"
+        for key in ("dry_run", "run_count", "delete_candidate_count", "deleted_count", "deleted_result_count"):
+            compact[key] = result.get(key, False if key == "dry_run" else 0)
     if args.command == "dispatch-status" and result.get("task_state_views"):
         compact["task_state_views"] = result["task_state_views"]
     print(output_contract.render_json(compact))
