@@ -242,6 +242,55 @@ class DispatchAckPhaseGuardTest(unittest.TestCase):
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
 
+    def test_dispatch_ack_recovers_phase_guard_unverified_state(self) -> None:
+        """phase_guard auto-confirm leaves the dispatch in worker_running_unverified.
+
+        That state must remain ack-able: a fresh real worker handle should be able
+        to acknowledge it and upgrade unverified -> verified. Otherwise dispatch-ack
+        ("not awaiting runtime spawn") and dispatch-complete ("run dispatch-ack")
+        deadlock with no forward CLI transition.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            state["dispatch"] = {
+                "status": "worker_running_unverified",
+                "runtime": "manual",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "worker_handle": "phase-guard-auto-confirm:T01",
+                "worker_session": "phase-guard-auto-confirm:T01",
+                "spawn_confirmed_by": "phase_guard",
+                "spawn_acknowledged_at": "2026-06-04T00:00:00Z",
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+
+            result = dispatcher.dispatch_ack(
+                repo,
+                state_path,
+                "T01",
+                "requirements-clarifier",
+                "requirements-worker-1",
+                "requirements-worker-session-1",
+            )
+
+        self.assertNotIn(
+            "Dispatch is not awaiting runtime spawn acknowledgement.",
+            result.get("blocked_reasons", []),
+        )
+        self.assertTrue(result["ready"], result.get("blocked_reasons"))
+        self.assertEqual(result["dispatch"]["status"], "worker_running")
+        self.assertEqual(result["dispatch"]["spawn_confirmed_by"], "dispatch_ack")
+
     def test_manual_worker_packet_routes_post_write_step_through_dispatch_finish(self) -> None:
         repo = Path(".").resolve()
         packet = dispatcher.manual_worker_packet(

@@ -1561,7 +1561,7 @@ def dispatch_ack(
         return {"ready": False, "blocked_reasons": ["Run state is required to acknowledge a spawned worker."], "warnings": []}
     dispatch = dispatch_for_task(state, task_id)
     blocked: list[str] = []
-    if str(dispatch.get("status", "")) not in {"awaiting_runtime_spawn", "waiting_dispatch"}:
+    if str(dispatch.get("status", "")) not in {"awaiting_runtime_spawn", "waiting_dispatch", "worker_running_unverified"}:
         blocked.append("Dispatch is not awaiting runtime spawn acknowledgement.")
     if str(dispatch.get("current_task_id", "")) != task_id:
         blocked.append(f"Dispatch task mismatch: expected {dispatch.get('current_task_id', '')}, got {task_id}.")
