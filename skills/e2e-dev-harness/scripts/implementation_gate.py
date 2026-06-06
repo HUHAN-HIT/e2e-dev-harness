@@ -99,6 +99,22 @@ def registry_entry(registry: dict, artifact_type: str, owner: str = "global") ->
     return None
 
 
+def discover_memory_updates(repo: Path, explicit: Path | None, state_data: dict, registry_data: dict) -> dict:
+    if explicit:
+        return {"path": resolve_repo_path(repo, explicit), "source": "explicit"}
+    value = registry_entry(registry_data, "proposed_memory_updates")
+    if value:
+        resolved = resolve_repo_path(repo, value)
+        if resolved and resolved.exists():
+            return {"path": resolved, "source": "auto"}
+    run_id = str(state_data.get("run_id") or "").strip()
+    if run_id:
+        candidate = resolve_repo_path(repo, Path(run_id) / "proposed-memory-updates.md")
+        if candidate and candidate.exists():
+            return {"path": candidate, "source": "auto"}
+    return {"path": None, "source": ""}
+
+
 def load_run_state_context(repo: Path, state_path: Path | None) -> tuple[dict, dict, list[str]]:
     if not state_path:
         return {}, {}, []
@@ -387,6 +403,8 @@ def validate_gate_request(request: GateRequest) -> dict:
             )
     state_data, registry_data, state_errors = load_run_state_context(repo, request.run_state)
     blocked_reasons.extend(state_errors)
+    memory_discovery = discover_memory_updates(repo, memory_updates, state_data, registry_data) if phase == "completion" else {"path": memory_updates, "source": "explicit" if memory_updates else ""}
+    memory_updates = memory_discovery["path"]
     workflow_tier_result = evaluate_workflow_tier(repo, workflow_tier, design_doc, dependency_report)
     effective_workflow_tier = workflow_tier_result["tier"]
     if effective_workflow_tier in {"critical", "audited"} and tdd_mode == "off":
@@ -575,6 +593,8 @@ def validate_gate_request(request: GateRequest) -> dict:
         if memory_updates:
             memory_path = memory_updates if memory_updates.is_absolute() else repo / memory_updates
             memory_result = memory_capture.validate_proposed_updates(memory_path, repo)
+            memory_result["path"] = str(memory_path)
+            memory_result["source"] = memory_discovery.get("source", "explicit")
             if not memory_result["ready"]:
                 blocked_reasons.extend(memory_result["blocked_reasons"])
         rework_result = rework_gate.validate(

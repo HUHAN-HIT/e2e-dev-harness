@@ -295,6 +295,72 @@ class DispatchAckPhaseGuardTest(unittest.TestCase):
         self.assertTrue(imported["ready"], imported.get("diagnostics"))
         self.assertTrue(result["ready"], result.get("blocked_reasons"))
 
+    def test_created_clarifier_spawn_hook_uses_schedule_role_not_prompt_keywords(self) -> None:
+        repo, run_dir = self.copy_fixture("petalpay-created-repair-deadlock")
+        prompt = (run_dir / "dispatch-spawn-requests" / "T01c-prompt.md").read_text(encoding="utf-8")
+        hook_text = json.dumps(
+            {
+                "tool_name": "Task",
+                "tool_input": {
+                    "description": "T01c requirements-clarifier",
+                    "prompt": prompt,
+                    "subagent_type": "requirements-clarifier",
+                },
+            }
+        )
+
+        imported = control_plane.import_legacy(repo, run_dir)
+        tool, paths = phase_guard.parse_hook_input(hook_text)
+        task_text = phase_guard.extract_task_text(hook_text)
+        result = phase_guard.validate_action(repo, tool, [Path(path) for path in paths], run_dir=run_dir, task_text=task_text)
+
+        self.assertTrue(imported["ready"], imported.get("diagnostics"))
+        self.assertEqual("Task", tool)
+        self.assertTrue(result["ready"], result.get("blocked_reasons"))
+
+    def test_created_clarifier_markdown_prompt_uses_schedule_role_not_code_keywords(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir, _prompt = self._write_dispatcher_prompt_fixture(
+                repo,
+                {
+                    "id": "T01c",
+                    "agent": "requirements-clarifier",
+                    "phase": "clarify",
+                    "role_group": "design",
+                    "dispatch_contract": "fresh-subagent",
+                    "runtime_subagent_type": "requirements-clarifier",
+                    "status": "claimed",
+                    "owner": "requirements-clarifier",
+                },
+            )
+            prompt = (
+                "You are a fresh isolated worker. Your role is requirements-clarifier.\n\n"
+                "## Task ID\n"
+                "T01c\n\n"
+                "## Context Pack\n"
+                "`docs/agent-runs/run/context-packs/T01c.json`\n\n"
+                "## Forbidden\n"
+                "- Production/test code edits\n"
+                "- Implementation planning\n"
+            )
+            hook_text = json.dumps(
+                {
+                    "tool_name": "Agent",
+                    "tool_input": {
+                        "description": "T01c requirements-clarifier",
+                        "prompt": prompt,
+                        "subagent_type": "general-purpose",
+                    },
+                }
+            )
+
+            tool, paths = phase_guard.parse_hook_input(hook_text)
+            task_text = phase_guard.extract_task_text(hook_text)
+            result = phase_guard.validate_action(repo, tool, [Path(path) for path in paths], run_dir=run_dir, task_text=task_text)
+
+        self.assertTrue(result["ready"], result.get("blocked_reasons"))
+
     def test_phase_guard_auto_confirm_does_not_allow_worker_owned_handoff_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

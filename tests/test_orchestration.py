@@ -41,6 +41,7 @@ import execution_trace  # noqa: E402
 import harness_policy  # noqa: E402
 import harness_verify  # noqa: E402
 import implementation_gate  # noqa: E402
+import memory_capture  # noqa: E402
 import reviewer_gate  # noqa: E402
 import service_design_gate  # noqa: E402
 import task_tier  # noqa: E402
@@ -2365,6 +2366,68 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(result["ready"], result["blocked_reasons"])
         self.assertEqual("request-scoped; no inherited developer chat context", result["context_policy"])
         self.assertEqual(1, result["budget"]["input_files"])
+
+    def test_context_pack_injects_service_memory_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            requirements = repo / "docs" / "agent-runs" / "run" / "handoffs" / "01-requirements-clarifier.md"
+            requirements.parent.mkdir(parents=True)
+            requirements.write_text("Requirement summary\n", encoding="utf-8")
+            (repo / "services" / "order-service" / "src").mkdir(parents=True)
+            memory_capture.init_memory(repo)
+            (repo / "memory" / "decisions.md").write_text(
+                textwrap.dedent(
+                    """
+                    # Decisions Memory
+
+                    ## Entries
+
+                    ### M-1
+
+                    - Type: decision
+                    - Source: design
+                    - Confidence: verified
+                    - Scope: services/order-service
+                    - Phase: code
+                    - Tags: #decision #service/order-service #phase/code
+                    - Links: [[services/order-service]] [[AC-1]]
+                    - Text: Order service owns quote timeout behavior.
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            schedule = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "code-developer-order-service",
+                                "phase": "implement",
+                                "service": "services/order-service",
+                                "changed_files": ["services/order-service/src/QuoteService.java"],
+                                "inputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+                                "outputs": ["docs/agent-runs/run/service-plans/order-service/implementation-manifest.md"],
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = context_pack.build_pack(repo, schedule, service="services/order-service", max_files=2, max_chars=1000)
+
+        self.assertTrue(result["ready"], result["blocked_reasons"])
+        self.assertEqual("optional-context-not-authority", result["memory_policy"])
+        self.assertFalse(result["memory_budget"]["truncated"])
+        self.assertGreater(result["memory_budget"]["actual_chars"], 0)
+        self.assertGreater(result["budget"]["input_bytes"], len("Requirement summary\n"))
+        snippets = "\n".join(item["text"] for item in result["memory_context"]["snippets"])
+        self.assertIn("quote timeout", snippets)
+        self.assertIn("service+phase+path", result["memory_context"]["selection_reason"])
 
     def test_context_pack_marks_service_design_primary_for_code_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

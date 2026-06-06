@@ -14,6 +14,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from common import posix  # noqa: E402
 import dir_graph  # noqa: E402
+import memory_capture  # noqa: E402
 
 
 SCHEMA = "e2e-dev-harness.context-pack.v1"
@@ -92,6 +93,32 @@ def primary_inputs_for_task(task: dict, inputs: list[str]) -> list[str]:
     ]
 
 
+def memory_phase_for_task(task: dict) -> str:
+    phase = str(task.get("phase", "")).strip()
+    if phase in {"clarify", "requirements"}:
+        return "requirements"
+    if phase in {"design", "use-case", "plan"}:
+        return "use-case"
+    if phase in {"tdd-red", "test", "r2-review"}:
+        return "test" if phase != "r2-review" else "review"
+    if phase in {"implement", "code"}:
+        return "code"
+    if phase in {"r1-review", "r3-review", "review"}:
+        return "review"
+    if phase == "completion":
+        return "completion"
+    return "requirements"
+
+
+def task_changed_files(task: dict) -> list[str]:
+    values = task.get("changed_files", [])
+    if isinstance(values, str):
+        return [values]
+    if isinstance(values, list):
+        return [str(value) for value in values if str(value).strip()]
+    return []
+
+
 def build_pack(
     repo: Path,
     schedule_path: Path,
@@ -100,6 +127,7 @@ def build_pack(
     task_id: str | None = None,
     max_files: int = 12,
     max_chars: int = 120_000,
+    max_memory_chars: int = 8_000,
 ) -> dict:
     repo = repo.resolve()
     schedule_file = resolve_repo_path(repo, schedule_path)
@@ -116,6 +144,18 @@ def build_pack(
     primary_inputs = primary_inputs_for_task(task, inputs)
     input_chars, input_files, missing_input_files, input_warnings = estimate_inputs(repo, inputs)
     warnings.extend(input_warnings)
+    memory_phase = memory_phase_for_task(task)
+    memory_context = memory_capture.select_memory(
+        repo,
+        memory_phase,
+        service=str(task.get("service", service or "")).strip() or None,
+        max_chars=max_memory_chars,
+        changed_files=task_changed_files(task),
+        output_format="context-pack",
+    )
+    memory_budget = memory_context.get("memory_budget", {"max_chars": max_memory_chars, "actual_chars": 0, "truncated": False})
+    memory_chars = int(memory_budget.get("actual_chars", 0) or 0)
+    input_chars += memory_chars
     if len(input_files) > max_files:
         blocked.append(f"Context pack has {len(input_files)} file inputs, above max_files={max_files}.")
     if input_chars > max_chars:
@@ -135,6 +175,16 @@ def build_pack(
             "status": task.get("status", ""),
         },
         "context_policy": "request-scoped; no inherited developer chat context",
+        "memory_policy": "optional-context-not-authority",
+        "memory_context": {
+            "phase": memory_phase,
+            "snippets": memory_context.get("snippets", []),
+            "files": memory_context.get("files", []),
+            "tags": memory_context.get("tags", []),
+            "links": memory_context.get("links", []),
+            "selection_reason": memory_context.get("selection_reason", ""),
+        },
+        "memory_budget": memory_budget,
         "input_contract": "service-design-primary" if primary_inputs else "request-scoped",
         "primary_inputs": primary_inputs,
         "budget": {"max_files": max_files, "max_chars": max_chars, "input_files": len(input_files), "input_bytes": input_chars},
@@ -177,6 +227,8 @@ def validate(repo: Path, context_pack: Path, max_files: int = 12, max_chars: int
         blocked.append(f"Context pack input_bytes exceeds max_chars={max_chars}.")
     if data.get("context_policy") != "request-scoped; no inherited developer chat context":
         warnings.append("Context pack should declare request-scoped no-inherited context policy.")
+    if data.get("memory_policy") and data.get("memory_policy") != "optional-context-not-authority":
+        warnings.append("Context pack memory_policy should declare memory as optional context, not authority.")
     return {
         "ready": not blocked,
         "blocked_reasons": blocked,
@@ -196,6 +248,7 @@ def main() -> int:
     parser.add_argument("--validate", dest="validate_pack", type=Path)
     parser.add_argument("--max-files", type=int, default=12)
     parser.add_argument("--max-chars", type=int, default=120_000)
+    parser.add_argument("--max-memory-chars", type=int, default=8_000)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -205,7 +258,16 @@ def main() -> int:
     else:
         if not args.agent_schedule:
             parser.error("--agent-schedule is required unless --validate is used")
-        result = build_pack(repo, args.agent_schedule, args.agent, args.service, args.task_id, args.max_files, args.max_chars)
+        result = build_pack(
+            repo,
+            args.agent_schedule,
+            args.agent,
+            args.service,
+            args.task_id,
+            args.max_files,
+            args.max_chars,
+            args.max_memory_chars,
+        )
         if args.output:
             output = resolve_repo_path(repo, args.output)
             output.parent.mkdir(parents=True, exist_ok=True)

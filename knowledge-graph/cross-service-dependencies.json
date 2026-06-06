@@ -1,0 +1,57 @@
+{
+  "repo": "C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify",
+  "ready": true,
+  "services": [],
+  "affected_services": [],
+  "tool_priority": [
+    "gitnexus",
+    "deterministic-scan",
+    "graphify"
+  ],
+  "java_parser": {
+    "backend": "tree-sitter",
+    "tree_sitter_available": true,
+    "ast_parser_active": true
+  },
+  "gitnexus": {
+    "mode": "auto",
+    "available": true,
+    "primary": true,
+    "suggested_refresh_command": "gitnexus analyze \"C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\"",
+    "scope_services": [],
+    "seed_policy": "context accepts symbol seeds only; impact runs on scoped changed/affected symbols, never service directories",
+    "symbol_seeds": [],
+    "verified": false,
+    "evidence": [
+      {
+        "command": "gitnexus analyze C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify",
+        "exit_code": 127,
+        "stdout_tail": "",
+        "stderr_tail": "[WinError 2] 系统找不到指定的文件。"
+      }
+    ]
+  },
+  "graphify": {
+    "mode": "auxiliary",
+    "role": "auxiliary semantic/document evidence only; inferred or ambiguous edges become clarification questions."
+  },
+  "http": {
+    "clients": [],
+    "providers": []
+  },
+  "dmq": {
+    "producers": [],
+    "consumers": []
+  },
+  "dependencies": [],
+  "scanner_providers": {
+    "ready": true,
+    "providers": [],
+    "blocked_reasons": [],
+    "warnings": []
+  },
+  "unresolved_questions": [],
+  "blocked_reasons": [],
+  "warnings": [],
+  "report_paths": {}
+}

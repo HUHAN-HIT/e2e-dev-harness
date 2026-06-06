@@ -1176,6 +1176,105 @@ class ImplementationGateTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("memory update" in reason.lower() for reason in result["blocked_reasons"]))
 
+    def test_completion_gate_auto_discovers_proposed_memory_updates_from_registry(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Feature
+
+            ## Goal
+            - Return a quote.
+
+            ## Scope
+            - sample-service
+
+            ## Use Cases
+            - Create quote.
+
+            ## Acceptance Criteria
+            - Quote is returned.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        coverage = textwrap.dedent(
+            """
+            | id | acceptance | use_case | service | tests | code_refs | business_review | status |
+            | --- | --- | --- | --- | --- | --- | --- | --- |
+            | AC-1 | Quote is returned | Create quote | services/sample-service | QuoteTest | QuoteService | reviewed | covered |
+            """
+        ).strip()
+        proposed = textwrap.dedent(
+            """
+            # Proposed Memory Updates
+
+            ### M-1
+
+            - Type: decision
+            - Source: design
+            - Confidence: observed
+            - Text: Quote timeout remains 3 seconds.
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run = repo / "docs" / "agent-runs" / "run"
+            design = repo / "docs" / "design" / "feature.md"
+            kg = run / "evidence" / "knowledge-graph-refresh.json"
+            red = run / "evidence" / "red.txt"
+            matrix = run / "evidence" / "coverage.md"
+            unit = run / "evidence" / "unit.txt"
+            review = run / "evidence" / "business.md"
+            memory_updates = run / "proposed-memory-updates.md"
+            state_path = run / "run-state.json"
+            registry_path = run / "artifact-registry.json"
+            for path in (design, kg, red, matrix, unit, review, memory_updates, state_path, registry_path):
+                path.parent.mkdir(parents=True, exist_ok=True)
+            design.write_text(markdown, encoding="utf-8")
+            kg.write_text('{"selected_tools":["gitnexus"]}\n', encoding="utf-8")
+            red.write_text("Red test failed for expected reason.\n", encoding="utf-8")
+            matrix.write_text(coverage, encoding="utf-8")
+            write_command_evidence(unit, "mvn -pl services/sample-service -am test")
+            review.write_text("Reviewed business behavior against AC-1.\n", encoding="utf-8")
+            memory_updates.write_text(proposed, encoding="utf-8")
+            registry_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.artifact-registry.v1",
+                        "artifacts": [
+                            {
+                                "type": "proposed_memory_updates",
+                                "owner": "global",
+                                "path": "docs/agent-runs/run/proposed-memory-updates.md",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = run_state.build_state("docs/agent-runs/run", "single", [], "docs/agent-runs/run/artifact-registry.json", "VERIFIED")
+            run_state.write_state(repo, state_path, state)
+
+            result = implementation_gate.validate_gate(
+                repo,
+                design,
+                kg,
+                "completion",
+                red,
+                matrix,
+                unit,
+                review,
+                run_state=Path("docs/agent-runs/run/run-state.json"),
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertIsNotNone(result["memory_updates"])
+        self.assertEqual("auto", result["memory_updates"]["source"])
+        self.assertTrue(any("memory update" in reason.lower() for reason in result["blocked_reasons"]))
+
     def test_completion_gate_blocks_open_rework_items(self) -> None:
         markdown = textwrap.dedent(
             """

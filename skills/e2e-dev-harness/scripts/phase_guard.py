@@ -196,9 +196,9 @@ import dispatcher  # noqa: E402
 import run_state  # noqa: E402
 import session_checkpoint  # noqa: E402
 
-DISPATCH_TASK_ID_RE = re.compile(r"(?:Task ID|task[_ -]?id)\s*[:=]\s*(?P<task>[A-Za-z0-9_.-]+)", re.IGNORECASE)
+DISPATCH_TASK_ID_RE = re.compile(r"(?:Task ID|task[_ -]?id)\s*(?::|=)?\s*`?(?P<task>[A-Za-z0-9_.-]+)`?", re.IGNORECASE)
 DISPATCH_CONTEXT_PACK_RE = re.compile(
-    r"(?:Context Pack|context[_ -]?pack)\s*[:=]\s*(?P<path>(?:[A-Za-z]:)?[A-Za-z0-9_./\\:-]*context-packs[\\/][A-Za-z0-9_.-]+\.json)",
+    r"(?:Context Pack|context[_ -]?pack)\s*(?::|=)?\s*`?(?P<path>(?:[A-Za-z]:)?[A-Za-z0-9_./\\:-]*context-packs[\\/][A-Za-z0-9_.-]+\.json)`?",
     re.IGNORECASE,
 )
 

@@ -218,14 +218,17 @@ If a reviewer, test, business review, completion gate, or user review finds miss
 
 ## Memory And Reporting
 
-Before dispatching phase-specific or service-scoped agents, select only relevant memory:
+Memory is context, not authority. Code/tests and fresh graph win.
+
+Context packs automatically inject relevant memory:
 
 ```bash
 e2e-harness exec memory_capture.py select . \
   --phase code \
-  --service services/<service>
+  --service services/<service> \
+  --format context-pack
 ```
 
-At completion, process proposed memory updates from the agent run. Promote accepted, approved, or verified entries only after validation.
+At completion, registry `proposed_memory_updates` are validated automatically. Promote accepted, approved, or verified entries only after validation; promotion refreshes `memory/index/*.json`.
 
 Final reports name instructions, evidence, memory, and risks.

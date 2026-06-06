@@ -1,0 +1,32 @@
+{
+  "memory/index": [
+    {
+      "id": "2026-06-06T14:54:22+00:00",
+      "path": "memory/decisions.md",
+      "phase": "code",
+      "scope": "",
+      "text": "Durable harness memory is stored as structured Markdown in memory/*.md, while memory/index/*.json files are generated derived indexes rather than hand-written authority.",
+      "type": "decision"
+    }
+  ],
+  "skills/e2e-dev-harness": [
+    {
+      "id": "2026-06-06T14:54:12+00:00",
+      "path": "memory/project.md",
+      "phase": "",
+      "scope": "",
+      "text": "This repository contains the e2e-dev-harness skill under skills/e2e-dev-harness, with Python workflow scripts under skills/e2e-dev-harness/scripts and unittest coverage under tests.",
+      "type": "project"
+    }
+  ],
+  "skills/e2e-dev-harness/references/memory-integration.md": [
+    {
+      "id": "2026-06-06T14:54:31+00:00",
+      "path": "memory/workflow-preferences.md",
+      "phase": "review",
+      "scope": "",
+      "text": "Harness memory is optional context, not authority; current code and tests, then fresh GitNexus or Graphify evidence, take precedence over durable memory.",
+      "type": "workflow-preference"
+    }
+  ]
+}
