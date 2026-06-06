@@ -121,6 +121,30 @@ class PhaseFunctionTests(unittest.TestCase):
             for phase in self.GENERAL_PHASES:
                 self.assertEqual("general-purpose", orchestration_plan.runtime_subagent_type_for_phase(phase), phase)
 
+    def test_runtime_subagent_type_honors_per_phase_env_override(self) -> None:
+        # A project can route a single phase (e.g. interactive clarify) to a
+        # harness-aware subagent without touching the portable default.
+        env = {orchestration_plan.subagent_type_env_for_phase("clarify"): "requirements-clarifier-agent"}
+        with patch.dict(os.environ, env):
+            self.assertEqual(
+                "requirements-clarifier-agent",
+                orchestration_plan.runtime_subagent_type_for_phase("clarify"),
+            )
+            # Other phases stay on the portable default.
+            for phase in ("design", "plan", "tdd-red", "implement"):
+                self.assertEqual("general-purpose", orchestration_plan.runtime_subagent_type_for_phase(phase), phase)
+
+    def test_per_phase_env_override_beats_reviewer_routing(self) -> None:
+        # An explicit per-phase override wins over the reviewer-kind default.
+        env = {
+            orchestration_plan.REVIEWER_SUBAGENT_TYPE_ENV: "code-reviewer",
+            orchestration_plan.subagent_type_env_for_phase("r2-review"): "security-reviewer",
+        }
+        with patch.dict(os.environ, env):
+            self.assertEqual("security-reviewer", orchestration_plan.runtime_subagent_type_for_phase("r2-review"))
+            # A reviewer phase without its own override still follows the reviewer env.
+            self.assertEqual("code-reviewer", orchestration_plan.runtime_subagent_type_for_phase("r1-review"))
+
 
 class RoleTemplateFilesTest(unittest.TestCase):
     """`ROLE_TEMPLATE_FILES` derives from the role registry, preserving order."""

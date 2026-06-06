@@ -1008,9 +1008,29 @@ def reviewer_subagent_type() -> str:
     return str(os.environ.get(REVIEWER_SUBAGENT_TYPE_ENV, "") or "").strip() or "general-purpose"
 
 
+def subagent_type_env_for_phase(phase: str) -> str:
+    """Env var name a project sets to route one phase to a specific subagent.
+
+    `E2E_HARNESS_SUBAGENT_TYPE_<PHASE>` (phase uppercased, `-` -> `_`) lets a
+    project pin any single phase to a runtime subagent it actually has — e.g.
+    `E2E_HARNESS_SUBAGENT_TYPE_CLARIFY=requirements-clarifier-agent` to give the
+    interactive clarify phase a harness-aware agent instead of the portable
+    `general-purpose` default. Per-phase overrides take precedence over the
+    reviewer-kind default so a project can override one reviewer phase without
+    moving the others.
+    """
+    normalized = str(phase or "").strip().upper().replace("-", "_")
+    return f"E2E_HARNESS_SUBAGENT_TYPE_{normalized}"
+
+
 def runtime_subagent_type_for_phase(phase: str) -> str:
-    # Route from the canonical role's declared subagent_kind so declaration and
-    # routing stay in one place (see agent_roles.phase_subagent_kind).
+    # An explicit per-phase override wins over every default so a project can
+    # route a single phase (e.g. interactive clarify) to a harness-aware agent.
+    override = str(os.environ.get(subagent_type_env_for_phase(phase), "") or "").strip()
+    if override:
+        return override
+    # Otherwise route from the canonical role's declared subagent_kind so
+    # declaration and routing stay in one place (see agent_roles.phase_subagent_kind).
     if agent_roles.phase_subagent_kind(phase) == "reviewer":
         return reviewer_subagent_type()
     return "general-purpose"

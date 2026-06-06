@@ -187,11 +187,16 @@ def write_cli_response_artifact(repo: Path, command: str, args: argparse.Namespa
 
 def blocked_reason_codes_from_result(result: dict) -> list[str]:
     codes: list[str] = []
-    for key in ("blocked_reason_codes", "reason_codes"):
+    # `blocker_codes` is the canonical structured field on gate/dispatch results
+    # (handoff_gate, dispatch_complete, dispatch-finish); `code` is the single
+    # top-level signal preflight emits (e.g. clarification_dispatch_incomplete).
+    # Both were dropped before, leaving stuck runs with empty event codes.
+    for key in ("blocked_reason_codes", "reason_codes", "blocker_codes"):
         values = result.get(key)
         if isinstance(values, list):
             for value in values:
                 append_unique(codes, str(value).strip())
+    append_unique(codes, str(result.get("code", "")).strip())
     blockers = result.get("blockers")
     if isinstance(blockers, list):
         for item in blockers:

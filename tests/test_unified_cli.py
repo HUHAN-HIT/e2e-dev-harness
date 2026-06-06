@@ -731,6 +731,28 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertEqual([], event["blocked_reason_codes"])
         self.assertIn("dispatch-beat", event["next_command"])
 
+    def test_blocked_reason_codes_from_result_reads_blocker_codes_and_code(self) -> None:
+        # Blocked gate results carry structured codes under `blocker_codes`
+        # (handoff_gate / dispatch_complete / dispatch-finish) and/or a single
+        # top-level `code` (preflight, e.g. clarification_dispatch_incomplete).
+        # Both were dropped, leaving command events with empty
+        # blocked_reason_codes so a stuck run could not show WHY it was blocked.
+        result = {
+            "code": "clarification_dispatch_incomplete",
+            "blocker_codes": ["ready_marker_missing", "ready_marker_missing"],
+            "blocked_reasons": ["Handoff is ready but missing ready marker."],
+        }
+        codes = e2e_dev_harness.blocked_reason_codes_from_result(result)
+        self.assertIn("clarification_dispatch_incomplete", codes)
+        self.assertIn("ready_marker_missing", codes)
+        # Deduplicated, no empties.
+        self.assertEqual(len(codes), len(set(codes)))
+        self.assertNotIn("", codes)
+
+    def test_blocked_reason_codes_from_result_empty_when_no_codes(self) -> None:
+        # An ok result with no blocker signal stays empty.
+        self.assertEqual([], e2e_dev_harness.blocked_reason_codes_from_result({"status": "ok"}))
+
     def test_next_cli_full_result_links_structured_command_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

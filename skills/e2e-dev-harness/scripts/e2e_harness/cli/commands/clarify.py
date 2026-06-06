@@ -9,6 +9,7 @@ import clarification_gate
 import dispatcher
 import preflight as preflight_checks
 from common import atomic_write_json, posix, read_json_object
+from e2e_harness.cli.commands import handoff as handoff_command
 from e2e_harness.cli.status import write_status
 from e2e_harness.engine import state_store
 
@@ -159,6 +160,38 @@ def _ensure_mechanical_repair_tasks(repo: Path, run_state: Path | None, design_p
     }
 
 
+def _seal_clarifier_handoffs(repo: Path, task: dict) -> dict:
+    """Seal the clarifier's handoff markdown so completion can pass without the
+    coordinator hand-running ``handoff finalize`` / ``dispatch-finish``.
+
+    The lone interactive clarifier often writes its handoff body but leaves it
+    unsealed (no ``.ready.json`` marker). Completion then blocks on
+    ``ready_marker_missing`` and bounces the coordinator into a fresh-worker
+    dispatch ceremony that can churn for many minutes. Sealing here mirrors what
+    ``dispatch-finish`` already does, so the hash is recomputed automatically
+    instead of by hand.
+
+    Returns the first blocking ``handoff finalize`` result (a genuine content
+    gap the worker must fix), or ``{}`` when every handoff output is sealed.
+    """
+    agent = str(task.get("agent", "")).strip() or "requirements-clarifier"
+    for item in task.get("outputs", []) or []:
+        text = str(item).strip()
+        if not text:
+            continue
+        normalized = text.replace("\\", "/")
+        if "/handoffs/" not in normalized or not normalized.endswith(".md"):
+            continue
+        resolved = Path(text)
+        resolved = resolved if resolved.is_absolute() else repo / resolved
+        if not resolved.is_file():
+            continue
+        finalize = handoff_command.run_finalize(repo, resolved, agent)
+        if not finalize.get("ready"):
+            return finalize
+    return {}
+
+
 def _auto_complete_single_requirements_clarifier(repo: Path, run_state: Path | None) -> dict:
     state_path = _resolve_repo_path(repo, run_state)
     if not state_path or not state_path.exists():
@@ -190,6 +223,12 @@ def _auto_complete_single_requirements_clarifier(repo: Path, run_state: Path | N
     evidence = _existing_task_outputs(repo, task)
     if not task_id or not evidence:
         return {}
+    # Seal the handoff before completion so a worker that wrote its body but did
+    # not run handoff finalize no longer deadlocks the coordinator on a
+    # fresh-worker dispatch ceremony. A genuine content gap is surfaced as-is.
+    seal_blocker = _seal_clarifier_handoffs(repo, task)
+    if seal_blocker:
+        return seal_blocker
     return dispatcher.dispatch_complete(repo, schedule_path, state_path, task_id, agent, evidence)
 
 

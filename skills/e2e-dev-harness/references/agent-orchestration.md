@@ -198,7 +198,11 @@ honors each task's `runtime_subagent_type` when it builds the runtime spawn
 request, so review/coverage tasks can target a specialized reviewer agent. Set
 `E2E_HARNESS_REVIEWER_SUBAGENT_TYPE` to a runtime subagent your project actually
 has to route R1/R2/R3 and coverage reviews to it; left unset, every task stays
-on `general-purpose` so the harness remains runtime-portable.
+on `general-purpose` so the harness remains runtime-portable. To route any single
+phase to a harness-aware subagent, set `E2E_HARNESS_SUBAGENT_TYPE_<PHASE>` (phase
+uppercased, `-` → `_`); e.g. `E2E_HARNESS_SUBAGENT_TYPE_CLARIFY=requirements-clarifier-agent`
+gives the interactive clarify phase a dedicated agent. A per-phase override takes
+precedence over the reviewer default.
 It also writes short role templates under `agent-roles/`; generated schedules set `require_role_templates: true`, so claim is blocked if the referenced template is missing or malformed.
 
 For multi-service work, `plan --create-archive` leaves run-state at `SERVICE_DESIGN_REQUIRED`. Fill and validate every service design slice with `service-design --run-state` before service code dispatch. Service-scoped code-developer tasks in different `service:<name>` parallel groups may run concurrently only after shared contracts, service designs, the implementation-planner task, service-local TDD plans, and R2 review are stable.

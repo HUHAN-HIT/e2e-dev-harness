@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "description": "Installer and CLI wrapper for the e2e-dev-harness skill.",
   "bin": { "e2e-harness": "bin/e2e-harness.js" },
-  "files": ["bin", "lib", "skills/e2e-dev-harness"],
-  "scripts": { "test": "node --test" },
+  "files": ["bin", "lib", "skills/e2e-dev-harness", "tools/pre-merge-check.mjs"],
+  "scripts": {
+    "test": "node --test",
+    "pre-merge-check": "node tools/pre-merge-check.mjs"
+  },
   "license": "MIT"
 }

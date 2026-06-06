@@ -8057,6 +8057,108 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(result["blocked_next_without_plan"])
         self.assertFalse(result["next_required"]["code_writes_allowed"])
 
+    def test_clarify_auto_seals_and_completes_single_clarifier_handoff(self) -> None:
+        # When the lone requirements-clarifier worker has written its handoff body
+        # but not sealed it, the coordinator previously had to hand-run
+        # dispatch-ack/complete/finish with a fresh worker handle, deadlocking for
+        # many minutes. clarify must self-heal: seal the handoff and complete the
+        # dispatch in one shot, then transition to CLARIFIED.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Restated Intent
+                    - The user wants a quote returned.
+                    - User confirmation: confirmed-by: user @2026-06-02
+
+                    ## Goal
+                    - Return a quote.
+
+                    ## Scope
+                    - services/sample-service
+
+                    ## Use Cases
+                    - Create quote.
+
+                    ## Acceptance Criteria
+                    - AC-1 Quote is returned.
+
+                    ## Test Design
+                    - Unit test first.
+
+                    ## Open Questions
+                    None. confirmed-by: user @2026-06-02
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            role_template = Path("docs/agent-runs/run/agent-roles/requirements-clarifier.md")
+            evidence = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            schedule = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, evidence, agent_id="requirements-clarifier")
+            # Worker wrote the handoff body but did NOT seal it (no ready marker).
+            marker = (repo / evidence).with_suffix(".ready.json")
+            marker.unlink()
+            state["dispatch"] = {
+                "status": "worker_running",
+                "runtime": "codex",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "worker_handle": "worker-1",
+                "worker_session": "worker-session-1",
+            }
+            state["dispatches"] = {"T01": state["dispatch"]}
+            run_state.write_state(repo, state_path, state)
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "role_group": "design",
+                                "inputs": [],
+                                "outputs": [evidence.as_posix()],
+                                "role_template": role_template.as_posix(),
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            # No manual dispatch_complete: clarify must seal + complete on its own.
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=Path("docs/design/feature.md"),
+                run_state=state_path,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.clarify(args)
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+            sealed_after = marker.exists()
+
+        self.assertEqual(0, code, result)
+        self.assertEqual("CLARIFIED", updated["lifecycle"])
+        self.assertTrue(sealed_after, "clarify should auto-seal the clarifier handoff")
+        self.assertEqual("worker_completed", updated["dispatch"]["status"])
+
     def test_clarify_blocks_before_requirements_worker_completion_without_design_analysis(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
