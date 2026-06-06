@@ -197,6 +197,83 @@ class DispatchFinishOrchestrationTest(unittest.TestCase):
 
 
 class DispatchAckPhaseGuardTest(unittest.TestCase):
+    def _write_dispatcher_prompt_fixture(self, repo: Path, task: dict | None) -> tuple[Path, str]:
+        run_dir = repo / "docs" / "agent-runs" / "run"
+        state_path = run_dir / "run-state.json"
+        context_pack = run_dir / "context-packs" / "T01c.json"
+        schedule_path = run_dir / "agent-schedule.json"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+        state["dispatch"] = {
+            "status": "awaiting_runtime_spawn",
+            "runtime": "manual",
+            "current_task_id": "T01c",
+            "current_agent": "requirements-clarifier",
+        }
+        state["dispatches"] = {"T01c": dict(state["dispatch"])}
+        run_state.write_state(repo, state_path, state)
+        (run_dir / ".phase-lock").write_text(
+            json.dumps(
+                {
+                    "schema": "e2e-dev-harness.phase-lock.v1",
+                    "run_id": "run",
+                    "lifecycle": "CREATED",
+                    "state": "code-write-locked",
+                }
+            ),
+            encoding="utf-8",
+        )
+        schedule = {"schema": "e2e-dev-harness.agent-schedule.v1", "tasks": [task] if task else []}
+        schedule_path.write_text(json.dumps(schedule), encoding="utf-8")
+        context_pack.parent.mkdir(parents=True, exist_ok=True)
+        context_pack.write_text(
+            json.dumps(
+                {
+                    "schema": "e2e-dev-harness.context-pack.v1",
+                    "task": {"id": "T01c", "agent": "requirements-clarifier"},
+                    "schedule": schedule_path.as_posix(),
+                }
+            ),
+            encoding="utf-8",
+        )
+        prompt = (
+            "Task ID: T01c\n"
+            f"Context Pack: {context_pack.as_posix()}\n"
+            "Repair the Impact Summary and preserve code references without writing implementation code."
+        )
+        return run_dir, prompt
+
+    def test_created_repair_worker_prompt_with_code_word_uses_contract_not_keyword(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir, prompt = self._write_dispatcher_prompt_fixture(
+                repo,
+                {
+                    "id": "T01c",
+                    "agent": "requirements-clarifier",
+                    "phase": "clarify",
+                    "role_group": "design",
+                    "dispatch_contract": "fresh-subagent",
+                    "runtime_subagent_type": "requirements-clarifier",
+                    "status": "claimed",
+                    "owner": "requirements-clarifier",
+                },
+            )
+
+            result = phase_guard.validate_action(repo, "Task", [], run_dir=run_dir, task_text=prompt)
+
+        self.assertTrue(result["ready"], result.get("blocked_reasons"))
+
+    def test_dispatcher_prompt_missing_task_contract_fails_as_schedule_contract_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir, prompt = self._write_dispatcher_prompt_fixture(repo, None)
+
+            result = phase_guard.validate_action(repo, "Task", [], run_dir=run_dir, task_text=prompt)
+
+        self.assertFalse(result["ready"])
+        self.assertIn("schedule_contract_invalid", result.get("blocked_reason_codes", []))
+
     def test_phase_guard_auto_confirm_does_not_allow_worker_owned_handoff_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

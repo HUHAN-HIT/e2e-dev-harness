@@ -656,9 +656,32 @@ def dispatcher_task_role_group(repo: Path, lock: Path | None, text: str) -> str:
     task_id = dispatcher_task_id(text)
     if not task_id or not lock or not lock.exists():
         return ""
-    schedule = load_json(lock.parent / "agent-schedule.json")
+    control_plane = load_json(lock.parent / "control-plane.json")
+    schedule = control_plane if control_plane.get("schema") == "e2e-dev-harness.control-plane.v1" else load_json(lock.parent / "agent-schedule.json")
     task = schedule_task(schedule, task_id)
     return str(task.get("role_group", "")).strip().lower()
+
+
+def dispatcher_task_contract_blocker(repo: Path, lock: Path | None, text: str) -> dict:
+    task_id = dispatcher_task_id(text)
+    if not task_id or not lock or not lock.exists():
+        return {}
+    control_plane = load_json(lock.parent / "control-plane.json")
+    schedule = control_plane if control_plane.get("schema") == "e2e-dev-harness.control-plane.v1" else load_json(lock.parent / "agent-schedule.json")
+    task = schedule_task(schedule, task_id)
+    if not task:
+        return {"code": "schedule_contract_invalid", "message": f"Dispatcher task {task_id} is missing from the task contract."}
+    missing = [
+        field
+        for field in ("role_group", "agent", "phase", "dispatch_contract", "runtime_subagent_type")
+        if not str(task.get(field, "")).strip()
+    ]
+    if missing:
+        return {
+            "code": "schedule_contract_invalid",
+            "message": f"Dispatcher task {task_id} is missing required contract fields: {', '.join(missing)}.",
+        }
+    return {}
 
 
 def normalized_repo_path_text(repo: Path, value: str) -> str:
@@ -1393,16 +1416,22 @@ def _validate_action(
         dispatcher_task = bool(dispatcher_task_id(text) and dispatcher_context_pack(text))
         read_only_exploration_task = bool(READ_ONLY_EXPLORATION_TASK_RE.search(text)) and not code_task
         if dispatcher_task:
+            contract_blocker = dispatcher_task_contract_blocker(repo, lock, text)
+            if contract_blocker:
+                return {
+                    "ready": False,
+                    "blocked_reasons": [contract_blocker["message"]],
+                    "blocked_reason_codes": [contract_blocker["code"]],
+                    "warnings": warnings,
+                    **guidance_from_lock(repo, lock),
+                }
             # The scheduled task's structured role is authoritative over the
             # CODE_TASK_RE keyword heuristic. Only true implementation work
             # (role_group == "code") is gated on the IMPLEMENTED phase; a
             # clarifier/review/test dispatch prompt may legitimately contain a
-            # code keyword (e.g. the Chinese "实现") while describing the work,
-            # and must not be forced onto the IMPLEMENTED-gated code path (which
-            # can never pass at CREATED -> first-step deadlock). Fall back to the
-            # keyword heuristic only when the schedule role cannot be resolved.
+            # code keyword while describing the work.
             role_group = dispatcher_task_role_group(repo, lock, text)
-            require_lifecycle = (role_group == "code") if role_group else code_task
+            require_lifecycle = role_group == "code"
             blocked = _evaluate_dispatch_task(
                 repo,
                 lock,
