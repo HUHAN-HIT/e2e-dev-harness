@@ -1,7 +1,7 @@
 """Derived whole-journey navigation map (no hand-maintained state)."""
 from __future__ import annotations
 
-from harness_v2.core import gates
+from harness_v2.core import gates, dispatch
 from harness_v2.core.lifecycle import Phase, catalog
 
 GOAL = "VERIFIED"
@@ -19,6 +19,8 @@ def _phase_status(spine: list[Phase], state: dict, idx: int, repo_root=None) -> 
         ok, _ = gates.gate_passes(phase, rec, repo_root)
         if phase.next_phase is None and ok:
             return "done"
+        if rec.get("dispatch") == dispatch.DispatchStatus.FAILED.value:
+            return "blocked"
         return "current"
     return "pending"
 
