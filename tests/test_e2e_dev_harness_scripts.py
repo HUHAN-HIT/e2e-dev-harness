@@ -42,6 +42,7 @@ import implementation_gate  # noqa: E402
 import implementation_manifest  # noqa: E402
 import install_hooks  # noqa: E402
 import harness_stop_guard  # noqa: E402
+import generate_ledger_hook  # noqa: E402
 import kg_refresh  # noqa: E402
 import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
@@ -11969,6 +11970,60 @@ class DispatchPhaseGuardTests(unittest.TestCase):
         # to the canonical map, this turns red.
         self.assertNotIn("design", dispatcher._DISPATCH_PHASE_ALLOWLIST["CLARIFIED"])
         self.assertIn("clarify", dispatcher._DISPATCH_PHASE_ALLOWLIST["CLARIFIED"])
+
+
+class GenerateLedgerHookTests(unittest.TestCase):
+    """D3 background ledger regeneration must be non-blocking and self-healing."""
+
+    def _write_run(self, repo: Path) -> Path:
+        run_dir = repo / "docs" / "agent-runs" / "run"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "exec-plan.md").write_text("plan\n", encoding="utf-8")
+        registry = artifact_registry.build_registry(
+            repo,
+            "run",
+            {"exec_plan": "docs/agent-runs/run/exec-plan.md"},
+            "single",
+            [],
+        )
+        artifact_registry.write_registry(repo, run_dir / "artifact-registry.json", registry)
+        state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json")
+        run_state.write_state(repo, run_dir / "run-state.json", state)
+        return run_dir / "run-state.json"
+
+    def test_run_generates_missing_run_summary_and_returns_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = self._write_run(repo)
+            summary_json = state_path.parent / "run-summary.json"
+            self.assertFalse(summary_json.exists())
+
+            code = generate_ledger_hook.run(repo, state_path)
+
+            self.assertEqual(0, code)
+            self.assertTrue(summary_json.exists())
+            written = json.loads(summary_json.read_text(encoding="utf-8"))
+
+        self.assertEqual("e2e-dev-harness.run-summary.v1", written["schema"])
+
+    def test_run_records_degradation_and_returns_zero_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = self._write_run(repo)
+            run_dir = state_path.parent
+
+            def _boom(*args, **kwargs):
+                raise RuntimeError("forced ledger failure")
+
+            with patch.object(generate_ledger_hook.harness_verify, "validate", _boom):
+                code = generate_ledger_hook.run(repo, state_path)
+
+            degradation = run_dir / "evidence" / "ledger-hook-degradation.json"
+            self.assertEqual(0, code)
+            self.assertTrue(degradation.exists())
+            payload = json.loads(degradation.read_text(encoding="utf-8"))
+
+        self.assertIn("forced ledger failure", payload["error"])
 
 
 if __name__ == "__main__":
