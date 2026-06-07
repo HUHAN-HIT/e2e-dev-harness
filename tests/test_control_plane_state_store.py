@@ -363,6 +363,23 @@ class ControlPlaneSsotRegression(unittest.TestCase):
             schedule = json.loads((run_dir / "agent-schedule.json").read_text(encoding="utf-8"))
             self.assertEqual([t["id"] for t in schedule["tasks"]], ["T01", "T02"])
 
+    def test_projection_never_drops_tasks_present_on_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, run_dir = self._make_run(tmp)
+            # Simulate the legacy failure: agent-schedule.json on disk is AHEAD of the control plane.
+            from common import atomic_write_json
+            schedule = json.loads((run_dir / "agent-schedule.json").read_text(encoding="utf-8"))
+            schedule["tasks"].append(
+                control_plane.task_contract("T06", "service-designer-jeepay-core", "design", service="jeepay-core")
+            )
+            atomic_write_json(run_dir / "agent-schedule.json", schedule)
+            # A control->legacy projection (e.g. from dispatch-ack) must reconcile, not erase T06.
+            control_plane.write_legacy_projections(repo, run_dir)
+            out = json.loads((run_dir / "agent-schedule.json").read_text(encoding="utf-8"))
+            self.assertIn("T06", [t["id"] for t in out["tasks"]])
+            data = control_plane.load(repo, run_dir)
+            self.assertIn("T06", [t["id"] for t in data["tasks"]], "stale control plane must absorb the on-disk task")
+
 
 if __name__ == "__main__":
     unittest.main()

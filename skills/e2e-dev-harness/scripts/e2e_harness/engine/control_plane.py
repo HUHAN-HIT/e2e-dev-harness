@@ -388,6 +388,34 @@ def import_legacy(repo: Path, run_dir: Path) -> dict:
     }
 
 
+def _reconcile_on_disk_tasks(data: dict, run_dir: Path) -> dict:
+    """Defense-in-depth: never let a stale control plane erase tasks that already
+    exist in the on-disk agent-schedule.json. Any task id present on disk but
+    missing from the control plane is folded in before projecting."""
+    schedule_file = run_dir / "agent-schedule.json"
+    on_disk = read_json_object(schedule_file)
+    disk_tasks = on_disk.get("tasks") if isinstance(on_disk.get("tasks"), list) else []
+    if not disk_tasks:
+        return data
+    cp_tasks = [task for task in data.get("tasks", []) if isinstance(task, dict)]
+    known = {str(task.get("id", "")).strip() for task in cp_tasks}
+    appended = False
+    for task in disk_tasks:
+        if not isinstance(task, dict):
+            continue
+        task_id = str(task.get("id", "")).strip()
+        if task_id and task_id not in known:
+            cp_tasks.append(_normalize_task(task))
+            known.add(task_id)
+            appended = True
+    if appended:
+        data["tasks"] = cp_tasks
+        data.setdefault("diagnostics", []).append(
+            {"code": "control_plane_absorbed_on_disk_tasks", "severity": "warning"}
+        )
+    return data
+
+
 def write_legacy_projections(repo: Path, run_dir: Path) -> dict:
     resolved_run_dir = _resolve(repo, run_dir)
     path = control_plane_path(resolved_run_dir)
@@ -398,6 +426,7 @@ def write_legacy_projections(repo: Path, run_dir: Path) -> dict:
             "blocked_reasons": [f"Missing {CONTROL_PLANE_FILE} at {posix(path)}."],
         }
     data = _merge_dispatch_events(data, resolved_run_dir)
+    data = _reconcile_on_disk_tasks(data, resolved_run_dir)
     atomic_write_json(path, data)
 
     projections = {
