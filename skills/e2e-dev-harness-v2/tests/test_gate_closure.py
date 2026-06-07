@@ -17,3 +17,11 @@ def test_closure_detects_unproduced_evidence():
     ok, unmet = gates.gate_closure_ok(broken)
     assert ok is False
     assert "ghost" in unmet
+
+
+def test_all_builtin_tiers_gate_closed():
+    from harness_v2 import pipeline
+    for tier in ("minimal", "standard", "critical", "audited"):
+        spine = pipeline.build_spine(tier)
+        ok, unmet = gates.gate_closure_ok(spine)
+        assert ok is True, f"tier {tier} not gate-closed: {unmet}"
