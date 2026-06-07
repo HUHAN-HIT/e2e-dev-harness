@@ -52,6 +52,16 @@ def run(
         ]
         write_status(status_file, result)
         return 2, result
+    # SSOT: compute the plan's target lifecycle exactly once so the control plane
+    # and run-state advance in lockstep. Non-empty ONLY when an archive is created,
+    # because that is the only path that advances run-state lifecycle.
+    plan_lifecycle = ""
+    if create_archive:
+        plan_lifecycle = (
+            "SERVICE_DESIGN_REQUIRED"
+            if result.get("selected_mode") == "multi" and len(result.get("selected_services", [])) > 1
+            else "PLANNED"
+        )
     if create_archive or write_exec_plan:
         run_dir = legacy.require_repo_path(repo, Path(result["agent_run_dir"]), "agent run directory")
         (run_dir / "handoffs").mkdir(parents=True, exist_ok=True)
@@ -84,14 +94,17 @@ def run(
         schedule_path.write_text(json.dumps(result["agent_schedule"], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         result["agent_schedule_written"] = str(schedule_path)
         # SSOT: fold the expanded schedule into the control plane so the planning
-        # expansion never lives only in the legacy agent-schedule.json. Lifecycle is
-        # committed later in this command (run-state), so persist the task set only.
+        # expansion never lives only in the legacy agent-schedule.json. When an
+        # archive is created, the lifecycle is committed here in lockstep with
+        # run-state (both use plan_lifecycle); when only write_exec_plan (no
+        # archive), plan_lifecycle is "" so only the task set is persisted with no
+        # lifecycle transition -- correct because run-state is not advanced there.
         if (run_dir / "control-plane.json").exists():
             control_plane.replace_tasks(
                 repo,
                 run_dir,
                 result["agent_schedule"].get("tasks", []),
-                lifecycle="",
+                lifecycle=plan_lifecycle,
             )
         kg_artifact = legacy.write_kg_status_artifact(
             repo,
@@ -126,11 +139,9 @@ def run(
             "artifact registry",
         )
         artifact_registry.write_registry(repo, registry_path, registry)
-        lifecycle = (
-            "SERVICE_DESIGN_REQUIRED"
-            if result.get("selected_mode") == "multi" and len(result.get("selected_services", [])) > 1
-            else "PLANNED"
-        )
+        # Reuse the single source computed above so run-state and control-plane
+        # commit the IDENTICAL lifecycle value (guaranteed equal inside create_archive).
+        lifecycle = plan_lifecycle
         state = run_state.build_state(
             result["agent_run_dir"],
             result.get("selected_mode", ""),

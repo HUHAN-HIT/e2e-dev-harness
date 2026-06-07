@@ -6877,6 +6877,11 @@ class OrchestrationArtifactTests(unittest.TestCase):
             self.assertGreater(len(persisted_ids), 1, persisted_ids)
             schedule_ids = [task["id"] for task in result["agent_schedule"]["tasks"]]
             self.assertEqual(sorted(schedule_ids), sorted(persisted_ids))
+            # Lockstep: the control-plane lifecycle must advance with run-state and must
+            # NOT remain CLARIFIED. This multi-service plan targets SERVICE_DESIGN_REQUIRED.
+            self.assertEqual("SERVICE_DESIGN_REQUIRED", persisted["lifecycle"])
+            self.assertNotEqual("CLARIFIED", persisted["lifecycle"])
+            self.assertEqual(result["run_state_lifecycle"], persisted["lifecycle"])
 
     def test_unmatched_requested_services_are_reported(self) -> None:
         facts = {"service_candidates": ["services/order-service"]}
