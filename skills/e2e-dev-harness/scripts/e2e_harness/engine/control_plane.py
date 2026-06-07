@@ -43,6 +43,9 @@ def _normalize_task(task: dict) -> dict:
     copy.setdefault("runtime_subagent_type", agent_roles.phase_runtime_subagent_type(phase) or agent)
     copy.setdefault("parallel_group", phase or "coordination")
     copy.setdefault("depends_on_phases", agent_roles.depends_on_for_phase(phase))
+    copy.setdefault("required_skill", agent_roles.phase_required_skill(phase))
+    copy.setdefault("required_skill_path", agent_roles.phase_required_skill_path(phase))
+    copy.setdefault("skill_reference_set", agent_roles.phase_skill_reference_set(phase))
     copy.setdefault("requires_runtime_dispatch", True)
     copy.setdefault("dispatch_contract", "fresh-subagent")
     copy.setdefault("status", "planned")
@@ -83,6 +86,13 @@ def task_contract(
         "dispatch_contract": str(extra.get("dispatch_contract", "fresh-subagent") or "fresh-subagent"),
         "runtime_subagent_type": str(
             extra.get("runtime_subagent_type", "") or agent_roles.phase_runtime_subagent_type(phase) or agent
+        ),
+        "required_skill": str(extra.get("required_skill", "") or agent_roles.phase_required_skill(phase)),
+        "required_skill_path": str(
+            extra.get("required_skill_path", "") or agent_roles.phase_required_skill_path(phase)
+        ),
+        "skill_reference_set": list(
+            extra.get("skill_reference_set", []) or agent_roles.phase_skill_reference_set(phase)
         ),
     }
     if kind:

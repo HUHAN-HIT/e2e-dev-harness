@@ -47,6 +47,49 @@ import memory_capture  # noqa: E402
 import reviewer_gate  # noqa: E402
 import service_design_gate  # noqa: E402
 import task_tier  # noqa: E402
+from e2e_harness.engine import control_plane  # noqa: E402
+
+
+class PhaseSkillCapabilitySeamTests(unittest.TestCase):
+    def test_normalize_task_adds_phase_skill_capability(self) -> None:
+        task = control_plane._normalize_task({"agent": "requirements-clarifier", "phase": "clarify"})
+
+        self.assertEqual("e2e-harness-clarification", task["required_skill"])
+        self.assertEqual("skills/e2e-harness-clarification/SKILL.md", task["required_skill_path"])
+        self.assertEqual(["clarification-gate", "agent-instructions"], task["skill_reference_set"])
+
+    def test_normalize_task_unmapped_phase_has_empty_capability(self) -> None:
+        task = control_plane._normalize_task({"agent": "coordinator", "phase": "coordination"})
+
+        self.assertEqual("", task["required_skill"])
+        self.assertEqual("", task["required_skill_path"])
+        self.assertEqual([], task["skill_reference_set"])
+
+    def test_normalize_task_preserves_explicit_capability(self) -> None:
+        task = control_plane._normalize_task({
+            "agent": "requirements-clarifier",
+            "phase": "clarify",
+            "required_skill": "custom-skill",
+        })
+
+        self.assertEqual("custom-skill", task["required_skill"])
+
+    def test_task_contract_adds_phase_skill_capability(self) -> None:
+        task = control_plane.task_contract("T01", "implementer", "implement")
+
+        self.assertEqual("e2e-harness-implementation", task["required_skill"])
+        self.assertEqual("skills/e2e-harness-implementation/SKILL.md", task["required_skill_path"])
+        self.assertEqual(["tdd-java-spring", "implementation-gates"], task["skill_reference_set"])
+
+    def test_schedule_projection_carries_capability_fields(self) -> None:
+        data = control_plane.default_control_plane("run-1")
+        data["tasks"] = [control_plane._normalize_task({"agent": "requirements-clarifier", "phase": "clarify"})]
+
+        projection = control_plane._schedule_projection(data)
+        task = projection["tasks"][0]
+
+        self.assertEqual("e2e-harness-clarification", task["required_skill"])
+        self.assertEqual("skills/e2e-harness-clarification/SKILL.md", task["required_skill_path"])
 
 
 class PhaseFunctionTests(unittest.TestCase):
