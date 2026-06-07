@@ -171,6 +171,13 @@ class PhaseSkillCapabilitySeamTests(unittest.TestCase):
 
         self.assertTrue(any("required_skill" in reason for reason in blockers))
 
+    def test_role_templates_name_required_worker_skill(self) -> None:
+        text = e2e_dev_harness.role_template_text("requirements-clarifier")
+
+        self.assertIn("Required Worker Skill", text)
+        self.assertIn("e2e-harness-clarification", text)
+        self.assertIn("Do not inherit coordinator chat context", text)
+
 
 class PhaseFunctionTests(unittest.TestCase):
     """Pin `phase_for_agent` / `depends_on_for_phase` behavior at the registry seam."""

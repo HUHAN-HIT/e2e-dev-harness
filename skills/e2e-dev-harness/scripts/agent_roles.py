@@ -455,6 +455,24 @@ def resolve_role_key(agent_name: str) -> str:
     return ""
 
 
+def _required_worker_skill_section(role: str) -> str:
+    """Compact phase-skill capability section appended to a role template.
+
+    Returns "" when the role's phase has no mapped worker skill (additive).
+    """
+    phase = role_to_phase(role)
+    skill = phase_required_skill(phase)
+    if not skill:
+        return ""
+    return (
+        "\n## Required Worker Skill\n\n"
+        f"- Skill: `{skill}`\n"
+        f"- Skill file: `{phase_required_skill_path(phase)}`\n"
+        "- Load only this worker skill plus the context pack and listed input files.\n"
+        "- Do not inherit coordinator chat context.\n"
+    )
+
+
 def template_text(role: str) -> str:
     """Render the role-template markdown for a canonical role key.
 
@@ -483,7 +501,7 @@ def template_text(role: str) -> str:
 ## Done When
 
 {detail["done"]}
-"""
+""" + _required_worker_skill_section(role)
 
 
 def role_skills(role_key: str) -> list[str]:
