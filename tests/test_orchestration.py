@@ -4255,13 +4255,19 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual("CLARIFIED", state_after["lifecycle"])
         self.assertFalse(result["interaction_required"])
-        self.assertTrue(result["agent_remediation_required"])
-        # No dispatched mechanical repair: stays in inline clarification remediation
-        # and the next gate is the normal design_outline plan gate, not mechanical_repair.
-        self.assertEqual("continue_clarification_remediation", result["next_agent_action"])
+        # The pure-format repair is surfaced to the coordinator as an inline
+        # one-Edit action rather than a dispatched worker round-trip.
+        self.assertEqual("apply_inline_format_repair", result["next_agent_action"])
         self.assertNotIn("mechanical_repair_dispatch", result)
         self.assertEqual("design_outline", result["next_required"]["gate"])
         self.assertEqual(0, len(repair_tasks))
+        # The inline repair tasks are surfaced (not discarded) and the format
+        # coordinator action permits code/markdown writes for the inline Edit.
+        inline_repair_tasks = result.get("inline_repair_tasks", [])
+        self.assertTrue(inline_repair_tasks)
+        self.assertEqual("impact_summary_too_long", inline_repair_tasks[0]["code"])
+        self.assertEqual("format", inline_repair_tasks[0]["repair_class"])
+        self.assertIs(True, result.get("coordinator_action", {}).get("code_writes_allowed"))
         # The oversized summary is still detected and routed to inline repair.
         remediation = result.get("mechanical_remediation_tasks", [])
         inline_repairs = [task for task in remediation if task.get("code") == "impact_summary_too_long"]

@@ -151,16 +151,120 @@ class ClarificationFlowTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertFalse(result["ready_for_implementation"])
         self.assertEqual("transition", result["clarification_transaction"]["stage"])
-        self.assertEqual("continue_clarification_remediation", result["next_agent_action"])
+        self.assertEqual("apply_inline_format_repair", result["next_agent_action"])
         self.assertNotIn("mechanical_repair_dispatch", result)
         self.assertEqual("design_outline", result["next_required"]["gate"])
         self.assertNotIn("dispatch-beat", result["next_required"]["command"])
+        # The inline repair tasks are surfaced (not discarded) and the format
+        # coordinator action permits the inline one-Edit repair.
+        inline_repair_tasks = result.get("inline_repair_tasks", [])
+        self.assertTrue(inline_repair_tasks)
+        self.assertEqual("impact_summary_too_long", inline_repair_tasks[0]["code"])
+        self.assertEqual("format", inline_repair_tasks[0]["repair_class"])
+        self.assertIs(True, result.get("coordinator_action", {}).get("code_writes_allowed"))
         # The repair is still surfaced, classified as an inline format repair.
         remediation = result.get("mechanical_remediation_tasks", [])
         inline_repairs = [task for task in remediation if task.get("code") == "impact_summary_too_long"]
         self.assertEqual(1, len(inline_repairs))
         self.assertEqual("format", inline_repairs[0]["repair_class"])
         self.assertIs(True, inline_repairs[0]["inline_allowed"])
+
+    def test_primary_complete_judgment_repair_raises_dispatch_barrier(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            # The Impact Summary table is PRESENT but INCOMPLETE: it is missing the
+            # required affected_callers_consumers and required_tests_contracts
+            # columns. That yields the judgment-class impact_summary_table_incomplete
+            # gap (NOT the oversized format gap), which must dispatch a worker
+            # artifact_repair round-trip rather than an inline format Edit.
+            markdown = textwrap.dedent(
+                """\
+                # Feature
+
+                ## Restated Intent
+                - The user wants a refund callback.
+                - User confirmation: confirmed-by: user @2026-06-02
+
+                ## Goal
+                - Add refund callback support.
+
+                ## Scope
+                - services/payment-service
+
+                ## Use Cases
+                - Merchant calls HTTP refund callback endpoint.
+
+                ## Acceptance Criteria
+                - AC-1 POST /api/refunds/callback returns accepted status.
+
+                ## Test Design
+                - Unit test first.
+
+                ## Open Questions
+                None. confirmed-by: user @2026-06-02
+
+                ## Change Logic
+                - Current behavior: no public refund callback endpoint exists.
+                - Target behavior: POST /api/refunds/callback accepts merchant refund callback requests.
+                - Runtime path: RefundCallbackController -> RefundCallbackService -> RefundRepository.
+                - State/data effect: persists refund status field and response body.
+
+                ## Impact Summary
+                - Source: GitNexus impact
+                - Raw Evidence: docs/agent-runs/run/evidence/impact.json
+
+                | type | interface | related AC | risk |
+                | --- | --- | --- | --- |
+                | HTTP | POST /api/refunds/callback | AC-1 | medium |
+                """
+            ).strip()
+            design.write_text(markdown, encoding="utf-8")
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.write_state(repo, state_path, state)
+            schedule = state_path.parent / "agent-schedule.json"
+            (state_path.parent / "dispatch-events").mkdir(parents=True)
+            (state_path.parent / "dispatch-events" / "T01-completed.json").write_text(
+                json.dumps({"event": "worker_completed", "task_id": "T01", "agent": "requirements-clarifier"}),
+                encoding="utf-8",
+            )
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": ["docs/design/feature.md"],
+                                "status": "completed",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, result = clarification_flow.run(repo, Path("docs/design/feature.md"), run_state=state_path)
+            schedule_after = json.loads(schedule.read_text(encoding="utf-8"))
+
+        # A judgment-class gap raises the dispatch barrier end-to-end.
+        self.assertEqual("dispatch_mechanical_repair", result["next_agent_action"])
+        self.assertTrue(result["agent_remediation_required"])
+        self.assertIn("mechanical_repair_dispatch", result)
+        self.assertNotIn("inline_repair_tasks", result)
+        # A dispatched artifact_repair worker task is created.
+        repair_tasks = [task for task in schedule_after["tasks"] if task.get("kind") == "artifact_repair"]
+        self.assertEqual(1, len(repair_tasks))
+        # The surfaced remediation task is judgment-class, not inline format.
+        remediation = result.get("mechanical_remediation_tasks", [])
+        judgment_repairs = [task for task in remediation if task.get("code") == "impact_summary_table_incomplete"]
+        self.assertEqual(1, len(judgment_repairs))
+        self.assertEqual("judgment", judgment_repairs[0]["repair_class"])
+        self.assertIs(False, judgment_repairs[0]["inline_allowed"])
 
     def test_user_clarified_created_run_transitions_with_missing_implementation_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

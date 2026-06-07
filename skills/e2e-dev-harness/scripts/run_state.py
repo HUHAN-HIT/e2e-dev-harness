@@ -117,7 +117,7 @@ def build_state(
 def workflow_tier(state: dict | None) -> str:
     if not isinstance(state, dict):
         return "standard"
-    tier = str(state.get("workflow_tier", "")).strip()
+    tier = str(state.get("workflow_tier", "")).strip().lower()
     return tier or "standard"
 
 

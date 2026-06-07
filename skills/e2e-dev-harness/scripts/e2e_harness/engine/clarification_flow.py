@@ -379,6 +379,19 @@ def run(
             contract["agent_remediation_required"] = True
             contract["next_agent_action"] = "dispatch_mechanical_repair"
             contract["mechanical_repair_dispatch"] = repair_dispatch
+    elif repair_dispatch and repair_dispatch.get("inline_tasks") and not result.get("interaction_required"):
+        result["inline_repair_tasks"] = repair_dispatch["inline_tasks"]
+        result["next_agent_action"] = "apply_inline_format_repair"
+        state_path = _resolve_repo_path(repo, run_state) if run_state else None
+        if state_path:
+            schedule_path = state_path.parent / "agent-schedule.json"
+            result["coordinator_action"] = dispatcher.coordinator_worker_only_action(
+                repo, schedule_path, state_path, None, repair_class="format",
+            )
+        contract = result.get("interaction_contract")
+        if isinstance(contract, dict):
+            contract["next_agent_action"] = "apply_inline_format_repair"
+            contract["inline_repair_tasks"] = repair_dispatch["inline_tasks"]
 
     if run_state and result.get("user_clarification_ready"):
         dispatch_blockers = _primary_clarification_dispatch_blockers(repo, run_state)
