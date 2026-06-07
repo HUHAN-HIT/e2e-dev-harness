@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -23,8 +24,19 @@ import run_state  # noqa: E402
 from e2e_harness.engine import control_plane  # noqa: E402
 
 
-def write_control_plane_fixture(repo: Path, *, dispatch_task_id: str, task_ids: list[str]) -> Path:
-    """Build a control-plane.json with the given dispatch and task set, projected to legacy state."""
+def write_control_plane_fixture(
+    repo: Path,
+    *,
+    dispatch_task_id: str,
+    task_ids: list[str],
+    repair_transactions: dict | None = None,
+) -> Path:
+    """Build a control-plane.json with the given dispatch and task set, projected to legacy state.
+
+    ``repair_transactions`` is injected into the control plane BEFORE legacy projections are
+    written so the projections stay consistent (repair transactions are not part of any
+    projection payload) and only the stale-transaction blocker can fire on its own.
+    """
     run_dir = repo / "docs" / "agent-runs" / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
     control_plane.create(repo, run_dir, run_id="docs/agent-runs/run")
@@ -35,6 +47,8 @@ def write_control_plane_fixture(repo: Path, *, dispatch_task_id: str, task_ids: 
     data = control_plane.load(repo, run_dir)
     data["tasks"] = tasks
     data["dispatch"] = {"current_task_id": dispatch_task_id, "current_agent": "service-designer-core", "status": "worker_running"}
+    if repair_transactions is not None:
+        data["repair_transactions"] = repair_transactions
     from common import atomic_write_json
 
     atomic_write_json(control_plane.control_plane_path(run_dir), data)
@@ -255,6 +269,46 @@ class ControlPlaneDivergenceTests(unittest.TestCase):
         )
         self.assertEqual(divergence["status"], "fail")
         # The real divergence must be the primary blocker, ahead of any stale-transaction check.
+        self.assertEqual(summary["primary_blocker_code"], "state-control-plane-divergence")
+
+    def test_divergence_outranks_co_present_stale_transaction_blocker(self) -> None:
+        """Ranking guarantee: when BOTH the divergence and a genuine stale repair transaction
+        fail simultaneously, divergence must still be selected as the primary blocker. Seeding
+        only the divergence (as above) is trivial -- the stale-tx check is co-present here so a
+        future reorder that lets the stale-tx blocker win would fail this test."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            # (b) A genuinely stale repair transaction: active status ("opened") with an
+            # opened_at well beyond DEFAULT_LEASE_SECONDS (1800s) -> control_plane_consistency_check
+            # emits the "control-plane-repair-transaction-stale" blocker, so state-control-plane FAILs
+            # on its own. repair_transactions is not part of any projection, so this is the only
+            # blocker it triggers (no projection-drift masking the ranking comparison).
+            stale_opened_at = (
+                datetime.now(timezone.utc) - timedelta(seconds=harness_doctor.agent_scheduler.DEFAULT_LEASE_SECONDS + 600)
+            ).isoformat()
+            repair_transactions = {
+                "RT01": {
+                    "id": "RT01",
+                    "status": "opened",
+                    "opened_at": stale_opened_at,
+                    "repair_code": "control-plane-projection-drift",
+                }
+            }
+            # (a) The divergence: dispatch points at T06 but the task set has no T06.
+            state_path = write_control_plane_fixture(
+                repo,
+                dispatch_task_id="T06",
+                task_ids=["T01"],
+                repair_transactions=repair_transactions,
+            )
+            summary = harness_doctor.state_navigation_summary(repo, state_path)
+        checks_by_name = {str(check.get("name", "")): check for check in summary["checks"]}
+        # Both blockers are live simultaneously, so the ranking comparison is non-trivial.
+        self.assertEqual(checks_by_name["state-control-plane-divergence"]["status"], "fail")
+        self.assertIn("state-control-plane", checks_by_name)
+        self.assertEqual(checks_by_name["state-control-plane"]["status"], "fail")
+        self.assertIn("control-plane-repair-transaction-stale", checks_by_name["state-control-plane"]["message"])
+        # Divergence WINS over the co-present stale-transaction blocker.
         self.assertEqual(summary["primary_blocker_code"], "state-control-plane-divergence")
 
 

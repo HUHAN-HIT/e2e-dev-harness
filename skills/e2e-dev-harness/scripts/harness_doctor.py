@@ -812,6 +812,9 @@ def state_consistency_checks(repo: Path, state: Path) -> list[dict]:
     divergence_check = control_plane_divergence_check(repo, run_dir)
     control_plane_checks = [control_plane_consistency_check(repo, run_dir)]
     if divergence_check is not None:
+        # insert(0) is load-bearing: divergence must sit AHEAD of the consistency check so it
+        # outranks any co-present stale-transaction blocker. primary_blocker_code picks the first
+        # failing check (see selection site in state_navigation_summary) -- do NOT reorder/collapse.
         control_plane_checks.insert(0, divergence_check)
 
     return [
@@ -848,6 +851,10 @@ def state_navigation_summary(repo: Path, state: Path) -> dict:
             if value
         }
         compact_checks.append(compact)
+        # LOAD-BEARING: check LIST ORDER encodes blocker priority -- the FIRST failing check
+        # becomes the primary blocker. This is why state-control-plane-divergence is placed
+        # before state-control-plane at the ranking site (see insert(0, ...) below); reordering
+        # the checks list silently changes which blocker is reported.
         if not primary_blocker_code and status == "fail":
             primary_blocker_code = name
     failed = any(item.get("status") == "fail" for item in compact_checks)
