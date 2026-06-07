@@ -312,5 +312,42 @@ class ControlPlaneStateStoreTests(unittest.TestCase):
         self.assertEqual("design", schedule["tasks"][0]["role_group"])
 
 
+class ControlPlaneSsotRegression(unittest.TestCase):
+    def _make_run(self, tmp: str):
+        repo = Path(tmp)
+        run_dir = repo / "docs" / "agent-runs" / "run"
+        run_dir.mkdir(parents=True)
+        control_plane.create(repo, run_dir, run_id="docs/agent-runs/run")
+        # Clarify done: lifecycle CLARIFIED, only the clarify task exists in the control plane.
+        control_plane.transition_lifecycle(
+            repo, run_dir, "CLARIFIED", gate="clarification", gate_status="passed"
+        )
+        t01 = control_plane.task_contract("T01", "requirements-clarifier", "clarify", status="completed")
+        data = control_plane.load(repo, run_dir)
+        data["tasks"] = [t01]
+        from common import atomic_write_json
+        atomic_write_json(control_plane.control_plane_path(run_dir), data)
+        control_plane.write_legacy_projections(repo, run_dir)
+        return repo, run_dir
+
+    def test_dispatch_ack_does_not_drop_expanded_schedule(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, run_dir = self._make_run(tmp)
+            # Planner expands the schedule THROUGH the control plane (P2 contract).
+            expanded = [
+                control_plane.task_contract("T01", "requirements-clarifier", "clarify", status="completed"),
+                control_plane.task_contract("T06", "service-designer-jeepay-core", "design", service="jeepay-core"),
+            ]
+            control_plane.replace_tasks(repo, run_dir, expanded, lifecycle="SERVICE_DESIGN_REQUIRED")
+            # A dispatch-ack for T06 must NOT shrink the schedule back to clarify-only.
+            control_plane.dispatch_acknowledged(
+                repo, run_dir, {"current_task_id": "T06", "current_agent": "service-designer-jeepay-core", "status": "worker_running"}
+            )
+            schedule = json.loads((run_dir / "agent-schedule.json").read_text(encoding="utf-8"))
+            ids = [t["id"] for t in schedule["tasks"]]
+            self.assertIn("T06", ids, "dispatch-ack must not drop the expanded task set")
+            self.assertIn("T01", ids)
+
+
 if __name__ == "__main__":
     unittest.main()
