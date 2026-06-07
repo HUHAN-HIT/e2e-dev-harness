@@ -11818,5 +11818,77 @@ class HashCommandTests(unittest.TestCase):
         self.assertEqual(payload["hash_entries"][0]["frontmatter_line"], f"req.md sha256:{expected}")
 
 
+class DispatchPhaseGuardTests(unittest.TestCase):
+    def test_dispatch_phase_guard_blocks_design_task_under_clarified(self) -> None:
+        # Petalpay split-brain regression: a real T06 (design phase) was dispatched
+        # while the control-plane lifecycle was still CLARIFIED. Design work belongs
+        # to SERVICE_DESIGN_REQUIRED, not CLARIFIED (which only dispatches the R1
+        # design-review). The dispatch beat must BLOCK such a phase/lifecycle
+        # mismatch rather than spawn a worker and write a dispatched event.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            schedule = run_dir / "agent-schedule.json"
+            state_path = run_dir / "run-state.json"
+            role_template = Path("docs/agent-runs/run/agent-roles/use-case-designer.md")
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, handoff)
+            run_state.write_state(
+                repo,
+                state_path,
+                run_state.build_state(
+                    "docs/agent-runs/run",
+                    "single-review",
+                    [],
+                    "docs/agent-runs/run/artifact-registry.json",
+                    "CLARIFIED",
+                ),
+            )
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "selected_mode": "single-review",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T06",
+                                "agent": "use-case-designer",
+                                "phase": "design",
+                                "role_group": "design",
+                                "inputs": [handoff.as_posix()],
+                                "outputs": ["docs/agent-runs/run/handoffs/02-use-case-designer.md"],
+                                "role_template": role_template.as_posix(),
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dispatcher.dispatch_beat(repo, schedule, state_path, runtime="claude-code", max_workers=1)
+
+            dispatched_event = run_dir / "dispatch-events" / "T06-dispatched.json"
+            self.assertFalse(dispatched_event.exists(), "T06 must not be dispatched under CLARIFIED")
+
+        self.assertFalse(result["ready"], result)
+        blocked_ids = [item.get("task_id") for item in result.get("blocked_tasks", [])]
+        self.assertIn("T06", blocked_ids)
+        t06_reasons = [
+            reason
+            for item in result.get("blocked_tasks", [])
+            if item.get("task_id") == "T06"
+            for reason in item.get("blocked_reasons", [])
+        ]
+        self.assertTrue(
+            any("phase" in reason.lower() and "CLARIFIED" in reason for reason in t06_reasons),
+            t06_reasons,
+        )
+        self.assertEqual([], [task.get("id") for task in result.get("claimed_tasks", [])])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1403,6 +1403,34 @@ def waiting_dispatch_result(
     }
 
 
+# Phase/lifecycle dispatch guard (petalpay split-brain regression). The
+# control-plane lifecycle (state_data["lifecycle"]) is authoritative; a task
+# whose phase does not belong to the current lifecycle must be BLOCKED rather
+# than dispatched. Phase strings are the canonical values from
+# agent_roles.PHASE_REGISTRY (clarify, design, plan, tdd-red, implement,
+# r1-review, r2-review, r3-review, completion) plus the multi-service
+# "service-design" phase emitted by service-designer-* agents. Lifecycle
+# strings are run_state.LIFECYCLE. Unmapped lifecycles (WAITING_DISPATCH,
+# REWORK_REQUIRED, VERIFIED, ARCHIVED) fail open so recovery/terminal states are
+# never hard-blocked here.
+_LIFECYCLE_ALLOWED_PHASES: dict[str, set[str]] = {
+    "CREATED": {"clarify"},
+    "CLARIFIED": {"clarify", "r1-review"},
+    "SERVICE_DESIGN_REQUIRED": {"service-design", "design"},
+    "PLANNED": {"plan", "tdd-red", "r1-review", "r2-review"},
+    "RED_READY": {"implement"},
+    "IMPLEMENTED": {"implement", "r3-review", "completion"},
+    "REVIEWED": {"completion"},
+}
+
+
+def _phase_allowed(phase: str, lifecycle: str) -> bool:
+    allowed = _LIFECYCLE_ALLOWED_PHASES.get(str(lifecycle).strip())
+    if allowed is None:
+        return True  # unknown lifecycle: do not block (fail-open, logged by diagnostics)
+    return str(phase).strip() in allowed
+
+
 def dispatch_beat(
     repo: Path,
     schedule_path: Path,
@@ -1424,6 +1452,23 @@ def dispatch_beat(
     lifecycle = str(state_data.get("lifecycle", "")) if isinstance(state_data, dict) else ""
     recent_events = recent_completion_events(repo, state_path, schedule_path)
     tasks, blocked_tasks = ready_tasks(repo, schedule, max_workers=max_workers, parallel_policy=parallel_policy, state=state_data)
+    guarded: list[dict] = []
+    for task in tasks:
+        if _phase_allowed(task.get("phase", ""), lifecycle):
+            guarded.append(task)
+        else:
+            blocked_tasks.append(
+                {
+                    "task_id": str(task.get("id", "")),
+                    "agent": str(task.get("agent", "")),
+                    "phase": task.get("phase", ""),
+                    "parallel_group": task_parallel_group(task),
+                    "blocked_reasons": [
+                        f"phase '{task.get('phase', '')}' not permitted in lifecycle '{lifecycle}'."
+                    ],
+                }
+            )
+    tasks = guarded
     if not tasks:
         open_task = next_open_task(schedule)
         if open_task:
