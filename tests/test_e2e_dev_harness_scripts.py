@@ -6216,8 +6216,9 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual("basic", workflow["review_policy"]["user_requested"])
         self.assertEqual("standard", workflow["review_policy"]["auto_minimum"]["tier"])
-        self.assertEqual("standard", workflow["review_policy"]["effective"]["tier"])
-        self.assertTrue(workflow["review_policy"]["downgrade_blocked"])
+        self.assertEqual("basic", workflow["review_policy"]["effective"]["tier"])
+        self.assertFalse(workflow["review_policy"]["downgrade_blocked"])
+        self.assertTrue(workflow["review_policy"]["downgrade_requires_provenance"])
         self.assertEqual(workflow["review_policy"], state["review_policy"])
 
     def test_start_cli_accepts_review_tier_override(self) -> None:
@@ -6244,8 +6245,9 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertEqual(0, code)
         self.assertEqual("basic", workflow["review_policy"]["user_requested"])
-        self.assertEqual("standard", workflow["review_policy"]["effective"]["tier"])
-        self.assertTrue(workflow["review_policy"]["downgrade_blocked"])
+        self.assertEqual("basic", workflow["review_policy"]["effective"]["tier"])
+        self.assertFalse(workflow["review_policy"]["downgrade_blocked"])
+        self.assertTrue(workflow["review_policy"]["downgrade_requires_provenance"])
 
     def test_start_cli_compact_output_reports_review_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6273,8 +6275,8 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("compact", payload["stdout_mode"])
         self.assertEqual("basic", payload["review_policy"]["user_requested"])
         self.assertEqual("standard", payload["review_policy"]["auto_minimum"])
-        self.assertEqual("standard", payload["review_policy"]["effective"])
-        self.assertTrue(payload["review_policy"]["downgrade_blocked"])
+        self.assertEqual("basic", payload["review_policy"]["effective"])
+        self.assertFalse(payload["review_policy"]["downgrade_blocked"])
 
     def test_start_cli_review_tier_overrides_phase_profile_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -9958,7 +9960,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertNotIn("contracts", result["required_gates"])
         self.assertNotIn("strict-guard", result["required_gates"])
 
-    def test_workflow_tier_explicit_basic_cannot_downgrade_critical_auto_minimum(self) -> None:
+    def test_workflow_tier_explicit_basic_downgrade_from_critical_allowed_with_provenance(self) -> None:
         design_text = "Publish a DMQ refund callback with topic, tag, group, and payload contract."
         facts = {"service_candidates": ["services/refund-service", "services/ledger-service"], "multi_service": True}
         dependency_report = {"dependencies": [{"kind": "dmq"}], "unresolved_questions": []}
@@ -9966,11 +9968,11 @@ class OrchestrationArtifactTests(unittest.TestCase):
         result = task_tier.evaluate("basic", design_text, facts, dependency_report)
 
         self.assertEqual("basic", result["user_requested"])
-        self.assertEqual("critical", result["auto_minimum"]["tier"])
-        self.assertEqual("critical", result["effective"]["tier"])
-        self.assertEqual("critical", result["tier"])
-        self.assertTrue(result["downgrade_blocked"])
-        self.assertIn("contracts", result["required_gates"])
+        self.assertEqual("critical", result["auto_recommended"]["tier"])
+        self.assertEqual("basic", result["effective"]["tier"])
+        self.assertEqual("basic", result["tier"])
+        self.assertFalse(result["downgrade_blocked"])
+        self.assertTrue(result["downgrade_requires_provenance"])
 
     def test_workflow_tier_auto_marks_cross_service_http_api_as_critical(self) -> None:
         design_text = "Add a REST API client from order-service to payment-service."

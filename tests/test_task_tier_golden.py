@@ -71,6 +71,27 @@ class TaskTierGoldenTests(unittest.TestCase):
         )
         self.assertEqual("audited", result["tier"])
 
+    def test_audited_downgrade_still_blocked(self):
+        result = task_tier.evaluate(
+            "basic",
+            "Run a compliance audit of the regulatory incident path.",
+            {"service_candidates": ["services/order"]},
+            {"dependencies": []},
+        )
+        self.assertEqual("audited", result["tier"])
+        self.assertTrue(result["downgrade_blocked"])
+
+    def test_weak_signal_with_dependency_is_critical(self):
+        # `schema` is a weak signal: standalone it stays minimal, but with a
+        # cross-service dependency kind it must escalate to critical. No payment/
+        # messaging keyword is present, so this isolates the weak-signal branch.
+        result = self._auto(
+            "Update the response schema for the order lookup view.",
+            {"service_candidates": ["services/order", "services/billing"], "multi_service": True},
+            {"dependencies": [{"kind": "http"}]},
+        )
+        self.assertEqual("critical", result["tier"])
+
 
 if __name__ == "__main__":
     unittest.main()

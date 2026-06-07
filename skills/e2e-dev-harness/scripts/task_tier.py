@@ -9,9 +9,15 @@ import re
 from pathlib import Path
 
 
-TIERS = ("auto", "basic", "standard", "critical", "audited")
-ENFORCED_TIERS = ("basic", "standard", "critical", "audited")
+TIERS = ("auto", "minimal", "basic", "standard", "critical", "audited")
+ENFORCED_TIERS = ("minimal", "basic", "standard", "critical", "audited")
 TIER_RANK = {tier: index for index, tier in enumerate(ENFORCED_TIERS)}
+MINIMAL_GATES = [
+    "clarification",
+    "test-evidence",
+    "task-alignment",
+    "run-state",
+]
 BASE_GATES = [
     "clarification",
     "impact-summary",
@@ -59,7 +65,6 @@ PAYMENT_KEYWORDS = {
 }
 CONTRACT_KEYWORDS = {
     "contract",
-    "schema",
     "compatibility",
     "接口",
     "契约",
@@ -72,14 +77,19 @@ WEAK_CONTRACT_KEYWORDS = {
     "client",
     "endpoint",
 }
+WEAK_SIGNAL_KEYWORDS = {
+    "repository",
+    "mapper",
+    "tag",
+    "group",
+    "schema",
+}
 DATA_KEYWORDS = {
     "database",
     "db",
     "sql",
     "migration",
     "transaction",
-    "repository",
-    "mapper",
     "audit",
     "数据",
     "迁移",
@@ -93,8 +103,6 @@ MESSAGING_KEYWORDS = {
     "rocketmq",
     "rabbitmq",
     "topic",
-    "tag",
-    "group",
     "producer",
     "consumer",
     "sender",
@@ -124,12 +132,13 @@ def gates_for(tier: str) -> list[str]:
         return CRITICAL_GATES
     if tier == "standard":
         return STANDARD_GATES
+    if tier == "minimal":
+        return MINIMAL_GATES
     return BASE_GATES
 
 
 def automatic_minimum(tier: str, reasons: list[str]) -> tuple[str, list[str]]:
-    if tier == "standard" and reasons == ["design-backed requirement detected"]:
-        return "basic", ["no risk keyword or dependency evidence requires review escalation"]
+    """Stable seam: the auto recommendation IS the safety minimum. Kept for the auto_minimum output contract."""
     return tier, reasons
 
 
@@ -172,13 +181,14 @@ def classify_auto(design_text: str, facts: dict, dependency_report: dict) -> tup
         risk_reasons.extend(weak_contract_reasons)
     risk_reasons.extend(keyword_reasons(design_text, DATA_KEYWORDS, "data"))
     risk_reasons.extend(keyword_reasons(design_text, MESSAGING_KEYWORDS, "messaging"))
+    weak_signal_reasons = keyword_reasons(design_text, WEAK_SIGNAL_KEYWORDS, "weak-signal")
+    if weak_signal_reasons and (multi_service or kinds):
+        risk_reasons.extend(weak_signal_reasons)
     if kinds or reasons or risk_reasons:
         return "critical", reasons + risk_reasons
     if weak_contract_reasons:
         return "standard", ["single-service API surface detected"] + weak_contract_reasons
-    if design_text.strip():
-        return "standard", ["design-backed requirement detected"]
-    return "basic", ["minimal scoped change detected"]
+    return "minimal", ["no risk keyword, dependency, or multi-service evidence detected"]
 
 
 def evaluate(requested: str, design_text: str = "", facts: dict | None = None, dependency_report: dict | None = None) -> dict:
@@ -192,13 +202,21 @@ def evaluate(requested: str, design_text: str = "", facts: dict | None = None, d
         tier = auto_tier
         reasons = auto_reasons
         downgrade_blocked = False
+        downgrade_requires_provenance = False
     else:
-        downgrade_blocked = TIER_RANK[requested] < TIER_RANK[minimum_tier]
+        below_minimum = TIER_RANK[requested] < TIER_RANK[minimum_tier]
+        downgrade_blocked = below_minimum and minimum_tier == "audited"
+        downgrade_requires_provenance = below_minimum and not downgrade_blocked
         tier = minimum_tier if downgrade_blocked else requested
         reasons = [f"workflow tier explicitly set to {requested}"]
         if downgrade_blocked:
-            reasons.append(f"requested tier below automatic safety minimum {minimum_tier}; using {tier}")
+            reasons.append(f"requested tier below audited safety minimum; using {tier}")
             reasons.extend(minimum_reasons)
+        elif downgrade_requires_provenance:
+            reasons.append(
+                f"requested tier below automatic recommendation {minimum_tier}; "
+                "record confirmed-by: user @<date/session/artifact> provenance"
+            )
     return {
         "requested": requested,
         "user_requested": requested,
@@ -218,6 +236,7 @@ def evaluate(requested: str, design_text: str = "", facts: dict | None = None, d
             "required_gates": gates_for(tier),
         },
         "downgrade_blocked": downgrade_blocked,
+        "downgrade_requires_provenance": downgrade_requires_provenance,
         "tier": tier,
         "reasons": reasons,
         "required_gates": gates_for(tier),
