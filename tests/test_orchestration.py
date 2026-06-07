@@ -91,6 +91,27 @@ class PhaseSkillCapabilitySeamTests(unittest.TestCase):
         self.assertEqual("e2e-harness-clarification", task["required_skill"])
         self.assertEqual("skills/e2e-harness-clarification/SKILL.md", task["required_skill_path"])
 
+    def test_agent_schedule_projects_phase_required_skill(self) -> None:
+        agents = [
+            {"name": "requirements-clarifier"},
+            {"name": "implementer"},
+            {"name": "r2-reviewer"},
+            {"name": "coverage-reviewer"},
+        ]
+        schedule = orchestration_plan.agent_schedule("single-review", [], agents)
+        tasks = schedule["tasks"]
+
+        # Every generated task's required_skill agrees with the phase capability map.
+        for task in tasks:
+            self.assertEqual(
+                agent_roles.phase_required_skill(task["phase"]),
+                task["required_skill"],
+                task["phase"],
+            )
+        by_phase = {task["phase"]: task for task in tasks}
+        self.assertEqual("e2e-harness-clarification", by_phase["clarify"]["required_skill"])
+        self.assertEqual("e2e-harness-completion", by_phase["completion"]["required_skill"])
+
 
 class PhaseFunctionTests(unittest.TestCase):
     """Pin `phase_for_agent` / `depends_on_for_phase` behavior at the registry seam."""
