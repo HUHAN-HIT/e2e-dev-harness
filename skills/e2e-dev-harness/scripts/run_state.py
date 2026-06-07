@@ -114,6 +114,18 @@ def build_state(
     }
 
 
+def workflow_tier(state: dict | None) -> str:
+    if not isinstance(state, dict):
+        return "standard"
+    tier = str(state.get("workflow_tier", "")).strip()
+    return tier or "standard"
+
+
+def set_workflow_tier(state: dict, tier: str) -> dict:
+    state["workflow_tier"] = str(tier or "standard").strip() or "standard"
+    return state
+
+
 def atomic_write_text(target: Path, text: str) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)

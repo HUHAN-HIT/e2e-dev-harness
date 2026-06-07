@@ -330,6 +330,12 @@ def complete_dispatched_task(repo: Path, schedule_path: Path, state_path: Path, 
 
 
 class OrchestrationArtifactTests(unittest.TestCase):
+    def test_run_state_workflow_tier_round_trip(self) -> None:
+        state = run_state.build_state("docs/agent-runs/run", "single", [], "docs/agent-runs/run/artifact-registry.json")
+        self.assertEqual("standard", run_state.workflow_tier(state))
+        run_state.set_workflow_tier(state, "minimal")
+        self.assertEqual("minimal", run_state.workflow_tier(state))
+
     def test_start_creates_controlled_run_design_and_locked_phase(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
