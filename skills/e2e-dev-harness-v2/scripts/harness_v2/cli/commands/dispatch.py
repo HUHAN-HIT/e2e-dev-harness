@@ -1,13 +1,13 @@
 """dispatch: emit one pointer worker packet for the current phase."""
 from __future__ import annotations
 
-from harness_v2.core import run_state, lifecycle, dispatch
+from harness_v2.core import run_state, dispatch
 from harness_v2 import pipeline
 
 
 def run(args) -> tuple[int, dict]:
     state = run_state.load(args.state)
-    spine = lifecycle.build_spine(pipeline.active_phase_names(state.get("pipeline", "minimal")))
+    spine = pipeline.build_spine(state.get("pipeline", "minimal"))
     name = state.get("current_phase")
     phase = next((p for p in spine if p.name == name), None)
     if phase is None or not phase.worker_skill:

@@ -19,6 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("start"); s.add_argument("--repo", default=".")
     s.add_argument("--feature", required=True); s.add_argument("--request", required=True)
+    s.add_argument("--tier", choices=["minimal", "standard", "critical", "audited"], default="minimal")
 
     for verb in ("next", "dispatch", "status"):
         sp = sub.add_parser(verb); sp.add_argument("--state", required=True); sp.add_argument("--repo", default=".")

@@ -29,10 +29,14 @@ def catalog() -> dict[str, Phase]:
     return dict(_CATALOG)
 
 
-def build_spine(phase_names: list[str]) -> list[Phase]:
+def build_spine(phase_names: list[str], overrides: dict | None = None) -> list[Phase]:
+    overrides = overrides or {}
     spine: list[Phase] = []
     for i, name in enumerate(phase_names):
         base = _CATALOG[name]
         nxt = phase_names[i + 1] if i + 1 < len(phase_names) else None
-        spine.append(replace(base, next_phase=nxt))
+        fields = {"next_phase": nxt}
+        if name in overrides:
+            fields.update(overrides[name])
+        spine.append(replace(base, **fields))
     return spine
