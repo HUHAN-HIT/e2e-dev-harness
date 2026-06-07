@@ -29,6 +29,15 @@ python $S status --state <run-state>     # 人读导航地图
 
 `start` → 循环{ `next` → 若 `complete` 收尾;否则 `dispatch` 当前阶段 → spawn worker 子 agent(自加载 `next_action.skill`)→ worker `submit` 证据 → 回到 `next` } 直到 `VERIFIED`。
 
-## tier (M1: minimal)
+## tier 与流水线 (M2)
 
-`minimal` = CREATED→CLARIFIED→RED→IMPLEMENTED→VERIFIED(跳过 PLANNED/REVIEWED)。更高 tier 与用户自定义流水线见后续里程碑。
+`start --tier <t>` 选择流水线(默认 `minimal`,`auto` 由请求文本分类):
+
+| tier | 活跃阶段 | 说明 |
+|---|---|---|
+| `minimal` | CREATED→CLARIFIED→RED→IMPLEMENTED→VERIFIED | 跳过 PLANNED/REVIEWED |
+| `standard` | 全主干 | 单 reviewer |
+| `critical` | 全主干 | REVIEWED 派 r1/r2/r3 三份独立 review(隔离上下文,不 review 自己实现) |
+| `audited` | 全主干 | r1/r2/r3 + VERIFIED 增 audit_replay 证据 |
+
+裁剪是结构性的:被跳阶段从计算出的 spine 移除,`next` 越过、导航地图渲染 `– skipped`。每个内建 tier 都过 I2 门禁闭包(`gate_closure_ok`)。门禁校验**真实产物**(文件存在+非空+哈希;`failing_tests`/`passing_tests` 须为命令证据且退出码正确)。
