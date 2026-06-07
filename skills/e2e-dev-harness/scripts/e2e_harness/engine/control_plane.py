@@ -692,3 +692,54 @@ def dispatch_completed(repo: Path, run_dir: Path, task_id: str, agent: str, evid
     atomic_write_json(path, data)
     projection = write_legacy_projections(repo, resolved_run_dir)
     return {"ready": bool(projection.get("ready")), "dispatch": current}
+
+
+def replace_tasks(
+    repo: Path,
+    run_dir: Path,
+    tasks: list[dict],
+    lifecycle: str = "",
+    gate: str = "",
+    gate_status: str = "",
+) -> dict:
+    """Authoritatively set the control-plane task set, then project outward.
+
+    This is the only sanctioned path for the planner/service-design expansion to
+    persist the schedule. Dispatch/claim/completion state is reconciled separately
+    from dispatch-events, so we normalise the structural task list here and let
+    write_legacy_projections fold the live dispatch state back on top.
+    """
+    resolved_run_dir = _resolve(repo, run_dir)
+    path = control_plane_path(resolved_run_dir)
+    if not path.exists():
+        imported = import_legacy(repo, resolved_run_dir)
+        if not imported.get("ready"):
+            return imported
+    data = read_json_object(path)
+    if not data:
+        return {"ready": False, "blocked_reasons": [f"Missing {CONTROL_PLANE_FILE} at {posix(path)}."]}
+
+    normalized = [_normalize_task(task) for task in tasks if isinstance(task, dict)]
+    data["tasks"] = normalized
+
+    target = str(lifecycle or "").strip()
+    if target:
+        # Atomic plan+lifecycle commit so the gate can never lag the schedule (P4 precondition).
+        data["lifecycle"] = target
+        gates = dict(data.get("gates", {})) if isinstance(data.get("gates"), dict) else {}
+        selected_gate = str(gate or "").strip()
+        if selected_gate:
+            gates[selected_gate] = str(gate_status or "passed")
+        data["gates"] = gates
+        phase_lock = dict(data.get("phase_lock", {})) if isinstance(data.get("phase_lock"), dict) else {}
+        phase_lock["lifecycle"] = target
+        data["phase_lock"] = phase_lock
+
+    atomic_write_json(path, data)
+    projection = write_legacy_projections(repo, resolved_run_dir)
+    return {
+        "ready": bool(projection.get("ready")),
+        "control_plane_path": posix(path),
+        "tasks": len(normalized),
+        "lifecycle": data.get("lifecycle", ""),
+    }

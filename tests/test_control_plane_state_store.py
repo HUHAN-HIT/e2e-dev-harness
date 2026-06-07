@@ -348,6 +348,21 @@ class ControlPlaneSsotRegression(unittest.TestCase):
             self.assertIn("T06", ids, "dispatch-ack must not drop the expanded task set")
             self.assertIn("T01", ids)
 
+    def test_replace_tasks_persists_into_control_plane_and_projects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, run_dir = self._make_run(tmp)
+            tasks = [
+                control_plane.task_contract("T01", "requirements-clarifier", "clarify", status="completed"),
+                control_plane.task_contract("T02", "service-designer-core", "design", service="core"),
+            ]
+            result = control_plane.replace_tasks(repo, run_dir, tasks, lifecycle="SERVICE_DESIGN_REQUIRED")
+            self.assertTrue(result["ready"])
+            data = control_plane.load(repo, run_dir)
+            self.assertEqual([t["id"] for t in data["tasks"]], ["T01", "T02"])
+            self.assertEqual(data["lifecycle"], "SERVICE_DESIGN_REQUIRED")
+            schedule = json.loads((run_dir / "agent-schedule.json").read_text(encoding="utf-8"))
+            self.assertEqual([t["id"] for t in schedule["tasks"]], ["T01", "T02"])
+
 
 if __name__ == "__main__":
     unittest.main()
