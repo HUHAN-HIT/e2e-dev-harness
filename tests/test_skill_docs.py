@@ -29,6 +29,14 @@ class SkillDocumentationTests(unittest.TestCase):
 
         self.assertEqual([], offenders)
 
+    def test_main_harness_skill_points_to_phase_capability_contract(self) -> None:
+        skill = (ROOT / "skills" / "e2e-dev-harness" / "SKILL.md").read_text(encoding="utf-8")
+        contract = ROOT / "skills" / "e2e-dev-harness" / "references" / "phase-skill-capabilities.md"
+
+        self.assertTrue(contract.exists())
+        self.assertIn("phase-skill-capabilities.md", skill)
+        self.assertIn("control plane is the single source of truth", contract.read_text(encoding="utf-8"))
+
     def test_phase_worker_skills_are_small_and_stage_scoped(self) -> None:
         expected = {
             "e2e-harness-clarification": "clarification",

@@ -70,6 +70,7 @@ Load each `references/*.md` only when its rule's phase begins, never all at star
   Multi-service `plan --create-archive` enters `SERVICE_DESIGN_REQUIRED`; dispatch service-design workers and validate returned slices before R2/TDD red or service code-agent dispatch.
 - Design, test, code, review, and coverage are separate role groups.
   `agent-schedule.json` assigns different agents, references generated `agent-roles/*.md`, and downstream agents consume ready handoffs instead of chat memory.
+- Phase workers load stage skills from each task's `required_skill` (control-plane sourced); coordinator loads only the core skill plus context-pack paths (`references/phase-skill-capabilities.md`).
 - Review profiles are portable project policy. Auto-discover project profiles and extend bundled profiles only when useful.
   Use common issue guidance for reviewer focus. `references/review-profiles.md` and `references/common-review-issues.md`.
 - R1/R2/R3 are independent-agent reviews, not same-chat roleplay.
