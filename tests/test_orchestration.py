@@ -161,6 +161,20 @@ class PhaseFunctionTests(unittest.TestCase):
             # A reviewer phase without its own override still follows the reviewer env.
             self.assertEqual("code-reviewer", orchestration_plan.runtime_subagent_type_for_phase("r1-review"))
 
+    def test_phase_skill_capability_accessors(self) -> None:
+        self.assertEqual("e2e-harness-clarification", agent_roles.phase_required_skill("clarify"))
+        self.assertEqual(
+            "skills/e2e-harness-clarification/SKILL.md",
+            agent_roles.phase_required_skill_path("clarify"),
+        )
+        self.assertIn("clarification-gate", agent_roles.phase_skill_reference_set("clarify"))
+        self.assertEqual("e2e-harness-implementation", agent_roles.phase_required_skill("implement"))
+        self.assertEqual("e2e-harness-review", agent_roles.phase_required_skill("r2-review"))
+        # Unmapped phase degrades to empty (tier-safe, additive).
+        self.assertEqual("", agent_roles.phase_required_skill("coordination"))
+        self.assertEqual("", agent_roles.phase_required_skill_path("coordination"))
+        self.assertEqual([], agent_roles.phase_skill_reference_set("coordination"))
+
 
 class RoleTemplateFilesTest(unittest.TestCase):
     """`ROLE_TEMPLATE_FILES` derives from the role registry, preserving order."""

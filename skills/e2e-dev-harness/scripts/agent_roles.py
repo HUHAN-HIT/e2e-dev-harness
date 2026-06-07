@@ -233,6 +233,68 @@ PHASE_ROLE_GROUPS: dict[str, str] = {
 }
 
 
+# Phase -> (required_skill, required_skill_path, reference_set). Additive and
+# optional: phases absent here (coordination, minimal-only bespoke phases) carry
+# no capability fields and never block. Gates in scripts remain authoritative.
+PHASE_SKILL_CAPABILITIES: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "clarify": (
+        "e2e-harness-clarification",
+        "skills/e2e-harness-clarification/SKILL.md",
+        ("clarification-gate", "agent-instructions"),
+    ),
+    "plan": (
+        "e2e-harness-planning",
+        "skills/e2e-harness-planning/SKILL.md",
+        ("agent-orchestration", "implementation-gates"),
+    ),
+    "tdd-red": (
+        "e2e-harness-tdd-red",
+        "skills/e2e-harness-tdd-red/SKILL.md",
+        ("tdd-java-spring", "agent-orchestration"),
+    ),
+    "implement": (
+        "e2e-harness-implementation",
+        "skills/e2e-harness-implementation/SKILL.md",
+        ("tdd-java-spring", "implementation-gates"),
+    ),
+    "r1-review": (
+        "e2e-harness-review",
+        "skills/e2e-harness-review/SKILL.md",
+        ("review-profiles", "common-review-issues"),
+    ),
+    "r2-review": (
+        "e2e-harness-review",
+        "skills/e2e-harness-review/SKILL.md",
+        ("review-profiles", "common-review-issues"),
+    ),
+    "r3-review": (
+        "e2e-harness-review",
+        "skills/e2e-harness-review/SKILL.md",
+        ("review-profiles", "common-review-issues"),
+    ),
+    "coverage-review": (
+        "e2e-harness-completion",
+        "skills/e2e-harness-completion/SKILL.md",
+        ("implementation-gates", "requirements-archive"),
+    ),
+}
+
+
+def phase_required_skill(phase: str) -> str:
+    entry = PHASE_SKILL_CAPABILITIES.get(str(phase).strip())
+    return entry[0] if entry else ""
+
+
+def phase_required_skill_path(phase: str) -> str:
+    entry = PHASE_SKILL_CAPABILITIES.get(str(phase).strip())
+    return entry[1] if entry else ""
+
+
+def phase_skill_reference_set(phase: str) -> list[str]:
+    entry = PHASE_SKILL_CAPABILITIES.get(str(phase).strip())
+    return list(entry[2]) if entry else []
+
+
 def depends_on_for_phase(phase: str) -> list[str]:
     """Phases that must complete before `phase` (fresh copy per call).
 
