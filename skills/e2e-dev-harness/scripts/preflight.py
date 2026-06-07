@@ -89,6 +89,8 @@ def clarification_dispatch_blockers(repo: Path, run_state_path: Path | str | Non
     state_data = read_json_object(state_file)
     if not state_data:
         return [f"Run state is unreadable for clarification dispatch check: {state_file}"]
+    if str(state_data.get("workflow_tier", "")).strip().lower() == "minimal":
+        return []
     if str(state_data.get("lifecycle", "")).upper() != "CREATED":
         return []
 

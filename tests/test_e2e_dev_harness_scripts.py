@@ -48,6 +48,7 @@ import memory_capture  # noqa: E402
 import orchestration_plan  # noqa: E402
 import auto_transition  # noqa: E402
 import phase_guard  # noqa: E402
+import preflight  # noqa: E402
 import run_summary  # noqa: E402
 import run_state  # noqa: E402
 import session_checkpoint  # noqa: E402
@@ -241,6 +242,29 @@ class ClarificationGateTests(unittest.TestCase):
         self.assertEqual([], low["change_logic_gaps"])
         self.assertEqual([], low["integration_gaps"])
         self.assertTrue(low["implementation_evidence_ready"])
+
+    def test_minimal_tier_exempts_clarification_dispatch_blockers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            base = run_state.build_state(
+                "docs/agent-runs/run",
+                "bootstrap",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+
+            minimal_state = run_state.set_workflow_tier(dict(base), "minimal")
+            run_state.write_state(repo, state_path, minimal_state)
+            self.assertFalse((state_path.parent / "agent-schedule.json").exists())
+            self.assertEqual([], preflight.clarification_dispatch_blockers(repo, state_path))
+
+            standard_state = run_state.set_workflow_tier(dict(base), "standard")
+            run_state.write_state(repo, state_path, standard_state)
+            blockers = preflight.clarification_dispatch_blockers(repo, state_path)
+            self.assertTrue(blockers)
+            self.assertTrue(any("agent-schedule.json is missing" in b for b in blockers))
 
     def test_format_repairs_are_inline_allowed(self) -> None:
         path = Path("docs/design/x.md")
