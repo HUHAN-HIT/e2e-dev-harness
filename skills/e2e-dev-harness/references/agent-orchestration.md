@@ -70,6 +70,36 @@ returned runtime tools, records worker handles through the Task hook or
 writes `dispatch-events/<task-id>-completed.json`; the next beat can use those
 events plus the updated schedule to unlock successors.
 
+## Scheduling Strategy Layer
+
+The scheduling strategy layer decides how a run should be split before the
+dispatcher claims workers. It emits `scheduling_decision` into the plan result
+and `agent-schedule.json` as metadata and audit evidence first. Top-level
+schedule fields such as `team_preset`, `completion_mode`, `execution_model`, and
+`max_workers` remain derived from the selected team preset; strategy details
+live under `scheduling_decision` and per-task `scheduling` metadata until a later
+explicit behavior-changing dispatcher slice consumes them.
+
+- `single-worker`: small, low-risk single-service work. Code remains serial.
+- `split-single`: complex single-service work. The schedule records
+  acceptance-criterion lanes and reviewer lanes, but single service code lanes need non-overlapping edit scopes before concurrent code dispatch.
+- `service-parallel`: multi-service work. Service-local design, test, code, and
+  R3 review tasks may run in parallel across distinct service groups after their
+  gates and handoffs are ready.
+
+Reviewer aggregation is explicit:
+
+- `single-reviewer-chain`: single-service role-separated review chain.
+- `task-item-reviews-then-service-r3`: task-item review evidence rolls up into
+  the service implementation review.
+- `service-reviews-then-global-r3`: service-local implementation reviews finish
+  before the global R3/completion review closes cross-service contracts.
+
+The dispatcher remains a mechanical executor. Strategy decides the intended
+split and concurrency policy; `dispatch-beat`, `agent_scheduler`, `phase_guard`,
+and reviewer gates still enforce readiness, ownership, leases, write scope, and
+completion evidence.
+
 ## Coordinator Context Budget
 
 Coordinator CLI output is intentionally bounded. `next`, `gate`, and

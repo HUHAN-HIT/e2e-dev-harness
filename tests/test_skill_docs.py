@@ -196,6 +196,15 @@ class SkillDocumentationTests(unittest.TestCase):
                 self.assertIn(term, skill_text)
 
 
+class AgentSchedulingStrategyDocsTests(unittest.TestCase):
+    def test_agent_orchestration_documents_scheduling_strategy_layer(self) -> None:
+        text = (ROOT / "skills" / "e2e-dev-harness" / "references" / "agent-orchestration.md").read_text(encoding="utf-8")
+
+        self.assertIn("Scheduling Strategy Layer", text)
+        self.assertIn("single service code lanes need non-overlapping edit scopes", text)
+        self.assertIn("service-reviews-then-global-r3", text)
+
+
 
 
 class SuperpowersProbeCompatibilityTests(unittest.TestCase):

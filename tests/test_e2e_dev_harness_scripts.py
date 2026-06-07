@@ -778,6 +778,72 @@ class CheckpointGateTests(unittest.TestCase):
         self.assertTrue(any("clarify" in warning for warning in result["warnings"]))
 
 
+class PlanSchedulingDecisionTests(unittest.TestCase):
+    def test_plan_result_contains_scheduling_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            service = repo / "services" / "order-service"
+            (service / "src" / "main" / "java" / "com" / "example").mkdir(parents=True)
+            (service / "pom.xml").write_text("<project />\n", encoding="utf-8")
+            (service / "src" / "main" / "java" / "com" / "example" / "AppConfig.java").write_text(
+                "@Configuration\npublic class AppConfig {}\n",
+                encoding="utf-8",
+            )
+            (repo / "pom.xml").write_text(
+                textwrap.dedent(
+                    """
+                    <project xmlns="http://maven.apache.org/POM/4.0.0">
+                      <modelVersion>4.0.0</modelVersion>
+                      <modules>
+                        <module>services/order-service</module>
+                      </modules>
+                    </project>
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True, exist_ok=True)
+            design.write_text(
+                "\n".join(
+                    [
+                        "# Feature",
+                        "",
+                        "## Scope",
+                        "- services/order-service",
+                        "",
+                        "## Acceptance Criteria",
+                        "- AC-1: Validate order.",
+                        "- AC-2: Persist audit.",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                repo=repo,
+                mode="single-review",
+                design_doc=design,
+                agent_run_dir=None,
+                run_date=None,
+                service_scope="affected",
+                service=["services/order-service"],
+                path=None,
+                dependency_report=None,
+                create_archive=False,
+                write_exec_plan=None,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.plan(args)
+
+        self.assertEqual(0, code)
+        self.assertEqual("split-single", result["scheduling_decision"]["execution_model"])
+        self.assertEqual(
+            result["scheduling_decision"],
+            result["agent_schedule"]["scheduling_decision"],
+        )
+
+
 class KnowledgeGraphRefreshTests(unittest.TestCase):
     def test_detect_finds_maven_service_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

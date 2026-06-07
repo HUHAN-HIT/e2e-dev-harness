@@ -13,3 +13,4 @@ test/__pycache__
 .archive/
 .e2e/coordinator-results/
 .e2e/events/
+.ruff_cache

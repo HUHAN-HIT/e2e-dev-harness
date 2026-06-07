@@ -212,6 +212,85 @@ class ControlPlaneStateStoreTests(unittest.TestCase):
         self.assertEqual(data["dispatches"]["T01"]["status"], "worker_running")
         self.assertTrue((run_dir / "run-state.json").exists())
 
+    def test_later_dispatch_attempt_is_not_overwritten_by_stale_completed_event(self) -> None:
+        repo, run_dir = self.make_control_plane_with_task("T03")
+        path = run_dir / "control-plane.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        running_dispatch = {
+            "status": "worker_running",
+            "runtime": "claude-code",
+            "current_task_id": "T03",
+            "current_agent": "design-reviewer",
+            "worker_handle": "fresh-reviewer-worker",
+            "worker_session": "fresh-reviewer-worker",
+            "started_at": "2026-06-07T02:24:42Z",
+            "spawn_acknowledged_at": "2026-06-07T02:31:44Z",
+            "spawn_confirmed_by": "dispatch_ack",
+        }
+        data["dispatch"] = dict(running_dispatch)
+        data["dispatches"] = {
+            "T03": {
+                **running_dispatch,
+                "status": "worker_completed",
+                "completed_at": "2026-06-07T02:23:57Z",
+                "evidence": ["docs/agent-runs/run/reviews/R1-design-review.md"],
+            }
+        }
+        data["tasks"][0].update(
+            {
+                "agent": "design-reviewer",
+                "phase": "r1-review",
+                "role_group": "review",
+                "status": "claimed",
+                "owner": "design-reviewer",
+                "claimed_at": "2026-06-07T02:24:42Z",
+                "heartbeat_at": "2026-06-07T02:24:42Z",
+                "completed_at": "2026-06-07T02:23:57Z",
+                "evidence": ["docs/agent-runs/run/reviews/R1-design-review.md"],
+            }
+        )
+        path.write_text(json.dumps(data), encoding="utf-8")
+        event_dir = run_dir / "dispatch-events"
+        event_dir.mkdir()
+        (event_dir / "T03-completed.json").write_text(
+            json.dumps(
+                {
+                    "schema": "e2e-dev-harness.dispatch-event.v1",
+                    "event": "worker_completed",
+                    "task_id": "T03",
+                    "agent": "design-reviewer",
+                    "evidence": ["docs/agent-runs/run/reviews/R1-design-review.md"],
+                    "worker_handle": "fresh-reviewer-worker",
+                    "worker_session": "fresh-reviewer-worker",
+                    "created_at": "2026-06-07T02:23:57Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (event_dir / "T03-dispatched.json").write_text(
+            json.dumps(
+                {
+                    "schema": "e2e-dev-harness.dispatch-event.v1",
+                    "event": "worker_dispatched",
+                    "task_id": "T03",
+                    "agent": "design-reviewer",
+                    "runtime": "claude-code",
+                    "created_at": "2026-06-07T02:24:42Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = control_plane.write_legacy_projections(repo, run_dir)
+
+        self.assertTrue(result["ready"], result.get("blocked_reasons"))
+        state = json.loads((run_dir / "run-state.json").read_text(encoding="utf-8"))
+        schedule = json.loads((run_dir / "agent-schedule.json").read_text(encoding="utf-8"))
+        self.assertEqual("worker_running", state["dispatches"]["T03"]["status"])
+        self.assertEqual("worker_running", state["dispatch"]["status"])
+        self.assertEqual("claimed", schedule["tasks"][0]["status"])
+        self.assertNotIn("completed_at", schedule["tasks"][0])
+
     def test_repair_task_contracts_normalizes_tasks_and_projects_legacy_state(self) -> None:
         repo, run_dir = self.make_control_plane_with_task("T01")
         path = run_dir / "control-plane.json"

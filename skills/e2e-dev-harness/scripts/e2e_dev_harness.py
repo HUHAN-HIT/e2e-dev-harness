@@ -651,7 +651,19 @@ def orchestration_status(
     artifacts = orchestration_plan.artifacts(
         slug, agent_run_dir, run_date, artifact_services, merged_members=layout["merged_services"]
     )
+    scheduling_decision = orchestration_plan.scheduling_strategy.decide(
+        selected,
+        artifact_services,
+        reasons,
+        design_text,
+    )
     agents = orchestration_plan.agent_plan(selected, artifacts, artifact_services)
+    schedule = orchestration_plan.agent_schedule(
+        selected,
+        artifact_services,
+        agents,
+        scheduling_decision=scheduling_decision,
+    )
     return {
         "requested_mode": mode,
         "enabled": True,
@@ -669,9 +681,15 @@ def orchestration_status(
         "reasons": reasons,
         "agent_run_dir": artifacts["agent_run_dir"],
         "handoff_artifacts": artifacts,
-        "multi_agent_decision": orchestration_plan.multi_agent_decision(selected, services, reasons),
+        "scheduling_decision": scheduling_decision,
+        "multi_agent_decision": orchestration_plan.multi_agent_decision(
+            selected,
+            services,
+            reasons,
+            scheduling_decision=scheduling_decision,
+        ),
         "agents": agents,
-        "agent_schedule": orchestration_plan.agent_schedule(selected, artifact_services, agents),
+        "agent_schedule": schedule,
     }
 
 

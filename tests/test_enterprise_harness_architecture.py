@@ -2717,5 +2717,59 @@ class CliCommandFacadeContractTests(unittest.TestCase):
         self.assertEqual("UNKNOWN", event["lifecycle"])
 
 
+class DispatcherSchedulingPolicyTests(unittest.TestCase):
+    def test_ready_tasks_blocks_scope_gated_single_service_code_parallelism(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state = run_state.build_state(
+                "docs/agent-runs/run",
+                "single-review",
+                ["services/order-service"],
+                "docs/agent-runs/run/artifact-registry.json",
+                "IMPLEMENTED",
+            )
+            schedule = {
+                "schema": "e2e-dev-harness.agent-schedule.v1",
+                "scheduling_decision": {
+                    "execution_model": "split-single",
+                    "parallelism": {"code": "gated-by-edit-scope"},
+                },
+                "tasks": [
+                    {
+                        "id": "T01",
+                        "agent": "code-developer-order-service-a",
+                        "phase": "implement",
+                        "role_group": "code",
+                        "service": "services/order-service",
+                        "parallel_group": "task-item:services/order-service:AC-1",
+                        "inputs": [],
+                        "outputs": ["docs/agent-runs/run/service-plans/order-service/code-agent-a.md"],
+                        "scheduling": {"requires_scope_partition": True},
+                        "status": "planned",
+                    },
+                    {
+                        "id": "T02",
+                        "agent": "code-developer-order-service-b",
+                        "phase": "implement",
+                        "role_group": "code",
+                        "service": "services/order-service",
+                        "parallel_group": "task-item:services/order-service:AC-2",
+                        "inputs": [],
+                        "outputs": ["docs/agent-runs/run/service-plans/order-service/code-agent-b.md"],
+                        "scheduling": {"requires_scope_partition": True},
+                        "status": "planned",
+                    },
+                ],
+            }
+
+            selected, blocked = dispatcher.ready_tasks(repo, schedule, max_workers=2, state=state)
+
+        self.assertEqual(["T01"], [task["id"] for task in selected])
+        self.assertTrue(any(item["task_id"] == "T02" for item in blocked))
+        self.assertTrue(
+            any("scope partition" in reason for item in blocked for reason in item["blocked_reasons"])
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

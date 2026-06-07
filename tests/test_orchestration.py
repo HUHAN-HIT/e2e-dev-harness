@@ -22,6 +22,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import orchestration_plan  # noqa: E402
+import scheduling_strategy  # noqa: E402
 import agent_roles  # noqa: E402
 import auto_transition  # noqa: E402
 import phase_guard  # noqa: E402
@@ -10776,6 +10777,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
                 self.assertEqual("dispatcher-confirmed", schedule["completion_mode"])
                 self.assertEqual("coordinator-only-dispatch", schedule["execution_model"])
+                self.assertIn("scheduling_decision", schedule)
 
     def test_agent_schedule_uses_declared_team_presets_for_capacity_metadata(self) -> None:
         bootstrap = orchestration_plan.agent_schedule(
@@ -10794,6 +10796,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(4, multi["max_workers"])
         self.assertEqual("dispatcher-confirmed", multi["completion_mode"])
         self.assertEqual("coordinator-only-dispatch", multi["execution_model"])
+        self.assertEqual("service-parallel", multi["scheduling_decision"]["execution_model"])
 
     def test_plan_archive_writes_concrete_review_request_agent_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -11163,6 +11166,124 @@ class ReviewerSubagentTypeTest(unittest.TestCase):
             schedule = orchestration_plan.agent_schedule("single-review", [], agents)
         for task in schedule["tasks"]:
             self.assertEqual(self.ROLE_DEFAULTS[task["phase"]], task["runtime_subagent_type"], task["phase"])
+
+
+class SchedulingDecisionProjectionTests(unittest.TestCase):
+    def test_agent_schedule_explicit_empty_decision_preserves_team_preset(self) -> None:
+        artifacts = orchestration_plan.artifacts(
+            "feature",
+            None,
+            "2026-06-06",
+            ["services/order-service"],
+        )
+        agents = orchestration_plan.agent_plan(
+            "multi",
+            artifacts,
+            ["services/order-service"],
+        )
+
+        schedule = orchestration_plan.agent_schedule(
+            "multi",
+            ["services/order-service"],
+            agents,
+            scheduling_decision={},
+        )
+
+        self.assertEqual("coordinator-only-dispatch", schedule["execution_model"])
+        self.assertEqual(4, schedule["max_workers"])
+
+    def test_agent_schedule_includes_scheduling_decision_when_supplied(self) -> None:
+        artifacts = orchestration_plan.artifacts(
+            "feature",
+            None,
+            "2026-06-06",
+            ["services/order-service"],
+        )
+        agents = orchestration_plan.agent_plan(
+            "single-review",
+            artifacts,
+            ["services/order-service"],
+        )
+        decision = {
+            "schema": "e2e-dev-harness.scheduling-decision.v1",
+            "execution_model": "split-single",
+            "max_workers": 2,
+            "parallelism": {"code": "gated-by-edit-scope"},
+        }
+
+        schedule = orchestration_plan.agent_schedule(
+            "single-review",
+            ["services/order-service"],
+            agents,
+            scheduling_decision=decision,
+        )
+
+        self.assertEqual(decision, schedule["scheduling_decision"])
+        self.assertEqual(1, schedule["max_workers"])
+        self.assertEqual("coordinator-only-dispatch", schedule["execution_model"])
+
+
+class SplitSingleServiceLaneTests(unittest.TestCase):
+    def test_task_scheduling_metadata_normalizes_acceptance_ids(self) -> None:
+        task = {"phase": "implement"}
+        decision = {
+            "execution_model": "split-single",
+            "task_split": {
+                "strategy": "acceptance-criteria",
+                "acceptance_ids": "AC-1",
+            },
+            "parallelism": {"code": "gated-by-edit-scope"},
+        }
+
+        self.assertEqual(
+            [],
+            orchestration_plan.task_scheduling_metadata(task, decision)["acceptance_ids"],
+        )
+
+        decision["task_split"]["acceptance_ids"] = ["AC-1", 2, None]
+
+        self.assertEqual(
+            ["AC-1", "2", "None"],
+            orchestration_plan.task_scheduling_metadata(task, decision)["acceptance_ids"],
+        )
+
+    def test_split_single_schedule_marks_code_task_as_scope_gated(self) -> None:
+        artifacts = orchestration_plan.artifacts(
+            "feature",
+            None,
+            "2026-06-06",
+            ["services/order-service"],
+        )
+        agents = orchestration_plan.agent_plan(
+            "single-review",
+            artifacts,
+            ["services/order-service"],
+        )
+        decision = scheduling_strategy.decide(
+            "single-review",
+            ["services/order-service"],
+            ["large or design-heavy implementation context"],
+            "## Acceptance Criteria\n- AC-1: Validate.\n- AC-2: Persist.\n",
+        )
+
+        schedule = orchestration_plan.agent_schedule(
+            "single-review",
+            ["services/order-service"],
+            agents,
+            scheduling_decision=decision,
+        )
+        code_tasks = [task for task in schedule["tasks"] if task["phase"] == "implement"]
+
+        self.assertEqual(1, len(code_tasks))
+        self.assertEqual(
+            "gated-by-edit-scope",
+            code_tasks[0]["scheduling"]["code_parallelism"],
+        )
+        self.assertEqual(
+            ["AC-1", "AC-2"],
+            code_tasks[0]["scheduling"]["acceptance_ids"],
+        )
+        self.assertTrue(code_tasks[0]["scheduling"]["requires_scope_partition"])
 
 
 class DispatcherJsonOutputTest(unittest.TestCase):

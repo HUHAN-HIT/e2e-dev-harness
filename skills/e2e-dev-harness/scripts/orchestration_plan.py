@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import agent_roles  # noqa: E402
+import scheduling_strategy  # noqa: E402
 from e2e_harness.engine import control_plane  # noqa: E402
 from kg_refresh import detect  # noqa: E402
 
@@ -1039,10 +1040,46 @@ def runtime_subagent_type_for_phase(phase: str) -> str:
     return role_subagent_type or "general-purpose"
 
 
-def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) -> dict:
+def task_scheduling_metadata(task: dict, decision: dict) -> dict:
+    phase = str(task.get("phase", "")).strip()
+    decision_data = decision if isinstance(decision, dict) else {}
+    parallelism = decision_data.get("parallelism", {})
+    if not isinstance(parallelism, dict):
+        parallelism = {}
+    task_split = decision_data.get("task_split", {})
+    if not isinstance(task_split, dict):
+        task_split = {}
+    acceptance_ids = task_split.get("acceptance_ids", [])
+    if isinstance(acceptance_ids, list):
+        acceptance_ids = [str(item) for item in acceptance_ids]
+    else:
+        acceptance_ids = []
+    if phase == "implement" and decision_data.get("execution_model") == "split-single":
+        return {
+            "execution_model": decision_data.get("execution_model", ""),
+            "task_split": task_split.get("strategy", ""),
+            "acceptance_ids": acceptance_ids,
+            "code_parallelism": parallelism.get("code", "serial"),
+            "requires_scope_partition": parallelism.get("code") == "gated-by-edit-scope",
+        }
+    return {
+        "execution_model": decision_data.get("execution_model", ""),
+        "task_split": task_split.get("strategy", ""),
+        "code_parallelism": parallelism.get("code", "serial"),
+        "requires_scope_partition": False,
+    }
+
+
+def agent_schedule(
+    selected_mode: str,
+    services: list[str],
+    agents: list[dict],
+    scheduling_decision: dict | None = None,
+) -> dict:
     tasks: list[dict] = []
     team_preset_key = agent_roles.team_preset_key(selected_mode)
     team_preset = agent_roles.team_preset_for_mode(selected_mode)
+    decision = scheduling_decision or scheduling_strategy.decide(selected_mode, services, [])
     for index, agent in enumerate(agents, start=1):
         name = str(agent.get("name", f"agent-{index}"))
         phase = phase_for_agent(name)
@@ -1051,22 +1088,22 @@ def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) 
             if service_slug(candidate) in name:
                 service = candidate
                 break
-        tasks.append(
-            control_plane.task_contract(
-                task_id=f"T{index:02d}",
-                agent=name,
-                phase=phase,
-                role_group=role_group_for_phase(phase),
-                role_template=agent.get("role_template", ""),
-                role_template_key=agent.get("role_template_key", ""),
-                service=service,
-                parallel_group=f"service:{service}" if service and phase in {"tdd-red", "implement", "r3-review"} else phase,
-                depends_on_phases=depends_on_for_phase(phase),
-                inputs=agent.get("inputs", []),
-                outputs=agent.get("outputs", []),
-                runtime_subagent_type=runtime_subagent_type_for_phase(phase),
-            )
+        task = control_plane.task_contract(
+            task_id=f"T{index:02d}",
+            agent=name,
+            phase=phase,
+            role_group=role_group_for_phase(phase),
+            role_template=agent.get("role_template", ""),
+            role_template_key=agent.get("role_template_key", ""),
+            service=service,
+            parallel_group=f"service:{service}" if service and phase in {"tdd-red", "implement", "r3-review"} else phase,
+            depends_on_phases=depends_on_for_phase(phase),
+            inputs=agent.get("inputs", []),
+            outputs=agent.get("outputs", []),
+            runtime_subagent_type=runtime_subagent_type_for_phase(phase),
         )
+        task["scheduling"] = task_scheduling_metadata(task, decision)
+        tasks.append(task)
     return {
         "schema": "e2e-dev-harness.agent-schedule.v1",
         "selected_mode": selected_mode,
@@ -1074,6 +1111,7 @@ def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) 
         "completion_mode": team_preset.get("completion_mode", DEFAULT_COMPLETION_MODE),
         "execution_model": team_preset.get("execution_model", DEFAULT_EXECUTION_MODEL),
         "max_workers": team_preset.get("max_workers", 1),
+        "scheduling_decision": decision,
         "require_role_templates": True,
         "services": services,
         "coordination": "machine-readable task board; agents update task status and artifact hashes instead of exchanging long free-form chat.",
@@ -1081,7 +1119,12 @@ def agent_schedule(selected_mode: str, services: list[str], agents: list[dict]) 
     }
 
 
-def multi_agent_decision(selected_mode: str, services: list[str], reasons: list[str]) -> dict:
+def multi_agent_decision(
+    selected_mode: str,
+    services: list[str],
+    reasons: list[str],
+    scheduling_decision: dict | None = None,
+) -> dict:
     criteria = [
         "multiple affected services/modules",
         "HTTP/DMQ/shared contract boundary",
@@ -1092,7 +1135,7 @@ def multi_agent_decision(selected_mode: str, services: list[str], reasons: list[
     evidence = list(reasons)
     if services:
         evidence.append("selected services/modules: " + ", ".join(services))
-    return {
+    result = {
         "use_multi_agent": selected_mode == "multi",
         "selected_mode": selected_mode,
         "criteria": criteria,
@@ -1105,6 +1148,9 @@ def multi_agent_decision(selected_mode: str, services: list[str], reasons: list[
             "completion gate passes --require-handoffs for multi-service/split-agent runs",
         ],
     }
+    if scheduling_decision is not None:
+        result["scheduling_decision"] = scheduling_decision
+    return result
 
 
 def main() -> int:

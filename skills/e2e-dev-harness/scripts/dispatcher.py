@@ -656,6 +656,27 @@ def active_parallel_groups(state: dict) -> set[str]:
     return groups
 
 
+def scheduling_policy_blockers(task: dict, selected: list[dict]) -> list[str]:
+    scheduling = task.get("scheduling") if isinstance(task.get("scheduling"), dict) else {}
+    if not scheduling.get("requires_scope_partition"):
+        return []
+    phase = str(task.get("phase", "")).strip()
+    service = str(task.get("service", "")).strip()
+    if phase != "implement" or not service:
+        return []
+    for prior in selected:
+        prior_scheduling = prior.get("scheduling") if isinstance(prior.get("scheduling"), dict) else {}
+        if (
+            prior_scheduling.get("requires_scope_partition")
+            and str(prior.get("phase", "")).strip() == "implement"
+            and str(prior.get("service", "")).strip() == service
+        ):
+            return [
+                f"Task requires explicit scope partition before concurrent code dispatch in {service}."
+            ]
+    return []
+
+
 def ready_tasks(
     repo: Path,
     schedule: dict,
@@ -694,6 +715,8 @@ def ready_tasks(
             blockers.append(f"Task parallel group {group} already has an active dispatch.")
         if not blockers and parallel_policy == "distinct_parallel_group" and group in used_groups:
             blockers = [f"Task shares parallel group {group} with another task in this beat."]
+        if not blockers:
+            blockers.extend(scheduling_policy_blockers(task, selected))
         if blockers:
             blocked.append(
                 {

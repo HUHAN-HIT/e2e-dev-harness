@@ -144,6 +144,18 @@ def _coordinator_projection(data: dict) -> dict:
     return summary
 
 
+def _dispatch_event_timestamp(event_data: dict) -> str:
+    return str(event_data.get("created_at", "") or event_data.get("updated_at", "")).strip()
+
+
+def _dispatch_status_timestamp(dispatch: dict) -> str:
+    for key in ("completed_at", "spawn_acknowledged_at", "started_at", "updated_at"):
+        value = str(dispatch.get(key, "")).strip()
+        if value:
+            return value
+    return ""
+
+
 def _merge_dispatch_events(data: dict, run_dir: Path) -> dict:
     dispatch_event_dir = run_dir / "dispatch-events"
     if not dispatch_event_dir.exists():
@@ -171,9 +183,21 @@ def _merge_dispatch_events(data: dict, run_dir: Path) -> dict:
     dispatches = dict(data.get("dispatches", {})) if isinstance(data.get("dispatches"), dict) else {}
     tasks = [dict(task) for task in data.get("tasks", []) if isinstance(task, dict)]
     task_by_id = {str(task.get("id", "")).strip(): task for task in tasks}
+    top_dispatch = data.get("dispatch") if isinstance(data.get("dispatch"), dict) else {}
+    top_task_id = str(top_dispatch.get("current_task_id", "")).strip()
+    if top_task_id:
+        nested = dispatches.get(top_task_id) if isinstance(dispatches.get(top_task_id), dict) else {}
+        top_timestamp = _dispatch_status_timestamp(top_dispatch)
+        nested_timestamp = _dispatch_status_timestamp(nested)
+        if not nested or (top_timestamp and (not nested_timestamp or top_timestamp >= nested_timestamp)):
+            dispatches[top_task_id] = dict(top_dispatch)
 
-    for path in sorted(dispatch_event_dir.glob("*.json")):
+    event_items: list[tuple[str, str, Path, dict]] = []
+    for path in dispatch_event_dir.glob("*.json"):
         event_data = read_json_object(path)
+        event_items.append((_dispatch_event_timestamp(event_data), path.name, path, event_data))
+
+    for _timestamp, _name, path, event_data in sorted(event_items):
         event_name = str(event_data.get("event", "")).strip()
         task_id = str(event_data.get("task_id", "")).strip()
         if not task_id or event_name not in status_by_event:
@@ -181,21 +205,26 @@ def _merge_dispatch_events(data: dict, run_dir: Path) -> dict:
         agent = str(event_data.get("agent", "")).strip()
         current = dict(dispatches.get(task_id, {})) if isinstance(dispatches.get(task_id), dict) else {}
         event_status = status_by_event[event_name]
+        event_timestamp = _dispatch_event_timestamp(event_data)
+        current_timestamp = _dispatch_status_timestamp(current)
+        if event_timestamp and current_timestamp and event_timestamp < current_timestamp:
+            continue
         current_status = str(current.get("status", "")).strip()
-        selected_status = (
-            event_status
-            if status_rank.get(event_status, 0) >= status_rank.get(current_status, 0)
-            else current_status
-        )
+        event_is_newer = bool(event_timestamp and current_timestamp and event_timestamp > current_timestamp)
+        if status_rank.get(event_status, 0) < status_rank.get(current_status, 0) and not event_is_newer:
+            continue
         current.update(
             {
-                "status": selected_status,
+                "status": event_status,
                 "current_task_id": task_id,
                 "current_agent": agent or current.get("current_agent", current.get("agent", "")),
                 "agent": agent or current.get("agent", current.get("current_agent", "")),
                 "projected_from_dispatch_event": posix(path.relative_to(run_dir)),
             }
         )
+        if event_name != "worker_completed":
+            current.pop("completed_at", None)
+            current.pop("evidence", None)
         if event_data.get("worker_handle"):
             current["worker_handle"] = event_data.get("worker_handle")
         if event_data.get("worker_session"):
@@ -217,6 +246,9 @@ def _merge_dispatch_events(data: dict, run_dir: Path) -> dict:
             task["status"] = task_status_by_event[event_name]
             if agent:
                 task["owner"] = agent
+            if event_name != "worker_completed":
+                task.pop("completed_at", None)
+                task.pop("evidence", None)
             if event_data.get("created_at"):
                 if event_name == "worker_dispatched":
                     task["claimed_at"] = event_data.get("created_at")
@@ -226,8 +258,33 @@ def _merge_dispatch_events(data: dict, run_dir: Path) -> dict:
             if event_data.get("evidence"):
                 task["evidence"] = event_data.get("evidence")
 
+    for task_id, dispatch in dispatches.items():
+        task = task_by_id.get(task_id)
+        if task is None:
+            continue
+        status = str(dispatch.get("status", "")).strip()
+        agent = str(dispatch.get("current_agent", "") or dispatch.get("agent", "")).strip()
+        if agent:
+            task["owner"] = agent
+        if status == "worker_completed":
+            task["status"] = "completed"
+            if dispatch.get("completed_at"):
+                task["completed_at"] = dispatch.get("completed_at")
+            if dispatch.get("evidence"):
+                task["evidence"] = dispatch.get("evidence")
+        elif status:
+            task["status"] = "claimed"
+            if dispatch.get("started_at"):
+                task["claimed_at"] = dispatch.get("started_at")
+                task["heartbeat_at"] = dispatch.get("started_at")
+            task.pop("completed_at", None)
+            task.pop("evidence", None)
+
     if dispatches:
         data["dispatches"] = dispatches
+        current_task_id = str(top_dispatch.get("current_task_id", "")).strip()
+        if current_task_id and isinstance(dispatches.get(current_task_id), dict):
+            data["dispatch"] = dict(dispatches[current_task_id])
     if tasks:
         data["tasks"] = tasks
     return data
