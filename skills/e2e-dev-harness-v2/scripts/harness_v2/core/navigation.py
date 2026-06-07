@@ -1,0 +1,45 @@
+"""Derived whole-journey navigation map (no hand-maintained state)."""
+from __future__ import annotations
+
+from harness_v2.core import gates
+from harness_v2.core.lifecycle import Phase, catalog
+
+GOAL = "VERIFIED"
+
+
+def _phase_status(spine: list[Phase], state: dict, idx: int) -> str:
+    names = [p.name for p in spine]
+    cur = state.get("current_phase", spine[0].name)
+    cur_idx = names.index(cur) if cur in names else 0
+    phase = spine[idx]
+    rec = state.get("phases", {}).get(phase.name, {})
+    if idx < cur_idx:
+        return "done"
+    if idx == cur_idx:
+        ok, _ = gates.gate_passes(phase, rec)
+        if phase.next_phase is None and ok:
+            return "done"
+        return "current"
+    return "pending"
+
+
+def navigation_map(spine: list[Phase], state: dict) -> dict:
+    phases = [{"name": p.name, "status": _phase_status(spine, state, i)}
+              for i, p in enumerate(spine)]
+    active = {p.name for p in spine}
+    full = []
+    for name in catalog():
+        if name in active:
+            st = next(x["status"] for x in phases if x["name"] == name)
+        else:
+            st = "skipped"
+        full.append({"name": name, "status": st})
+    done = sum(1 for p in phases if p["status"] == "done")
+    return {
+        "schema": "e2e-dev-harness-v2.navigation-map.v1",
+        "goal": GOAL,
+        "you_are_here": state.get("current_phase", spine[0].name),
+        "phases": phases,
+        "full_catalog": full,
+        "progress": f"{done}/{len(spine)}",
+    }
