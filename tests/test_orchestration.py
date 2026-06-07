@@ -42,6 +42,7 @@ import execution_trace  # noqa: E402
 import harness_policy  # noqa: E402
 import harness_verify  # noqa: E402
 import implementation_gate  # noqa: E402
+import lifecycle_policy  # noqa: E402
 import memory_capture  # noqa: E402
 import reviewer_gate  # noqa: E402
 import service_design_gate  # noqa: E402
@@ -881,6 +882,14 @@ class OrchestrationArtifactTests(unittest.TestCase):
                 self.assertNotIn("Fill every service-designs", joined)
                 self.assertNotIn("Continue TDD red/green", joined)
                 self.assertNotIn("Capture red-test evidence", joined)
+
+    def test_minimal_lifecycle_is_single_worker_one_pass(self) -> None:
+        todo = lifecycle_policy.required_todo_list_for_lifecycle("CREATED", None, tier="minimal")
+        self.assertTrue(any("single worker" in t.lower() or "one pass" in t.lower() for t in todo))
+        self.assertNotIn("dispatch-ack", " ".join(todo).lower())
+        self.assertFalse(any("r1" in t.lower() or "review worker" in t.lower() for t in todo))
+        std = lifecycle_policy.required_todo_list_for_lifecycle("CREATED", None, tier="standard")
+        self.assertEqual(std, lifecycle_policy.required_todo_list_for_lifecycle("CREATED", None))
 
     def test_next_and_phase_guard_share_lifecycle_policy(self) -> None:
         for lifecycle in ("CREATED", "CLARIFIED", "SERVICE_DESIGN_REQUIRED", "PLANNED", "RED_READY", "IMPLEMENTED"):

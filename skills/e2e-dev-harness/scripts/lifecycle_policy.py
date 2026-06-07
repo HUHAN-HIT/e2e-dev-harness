@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ask_user_bridge
+import run_state
 
 
 TODO_RULE = (
@@ -84,7 +85,30 @@ def clarification_interaction_for_lifecycle(lifecycle: str) -> dict:
     }
 
 
-def required_todo_list_for_lifecycle(lifecycle: str, state: dict | None = None) -> list[str]:
+def _minimal_todo_list_for_lifecycle(lifecycle: str) -> list[str]:
+    state_path = "docs/agent-runs/<run>/run-state.json"
+    lists = {
+        "CREATED": [
+            "Dispatch a single worker to complete clarify, plan, implement, and test in one pass; do not re-dispatch per phase and do not run an independent reviewer dispatch.",
+            "Relay only unresolved Restated Intent or Open Questions from the worker to the user.",
+            f"Advance run-state ({state_path}) through its states for run-state integrity; minimal tier does not require per-state worker hand-back cycles.",
+        ],
+        "VERIFIED": [
+            "Enforce only the load-bearing gates (clarification, test-evidence, task-alignment, run-state) at the VERIFIED exit and report evidence paths.",
+        ],
+    }
+    return lists.get(
+        lifecycle,
+        [
+            "Continue the single worker's one pass (clarify, plan, implement, test); coordinator runs only control-plane finish and next, with no independent reviewer dispatch.",
+            f"Run e2e_dev_harness.py next --state {state_path} to advance; enforce only the load-bearing 4 gates at the VERIFIED exit.",
+        ],
+    )
+
+
+def required_todo_list_for_lifecycle(lifecycle: str, state: dict | None = None, tier: str = "standard") -> list[str]:
+    if str(tier).strip().lower() == "minimal":
+        return _minimal_todo_list_for_lifecycle(lifecycle)
     state_path = "docs/agent-runs/<run>/run-state.json"
     schedule_path = "docs/agent-runs/<run>/agent-schedule.json"
     lists = {
@@ -183,6 +207,6 @@ def todo_policy_for_lifecycle(lifecycle: str, state: dict | None = None) -> dict
         "mode": "phase-scoped",
         "lifecycle": lifecycle or "<missing>",
         "rule": TODO_RULE,
-        "required_todo_list": required_todo_list_for_lifecycle(lifecycle, state),
+        "required_todo_list": required_todo_list_for_lifecycle(lifecycle, state, run_state.workflow_tier(state)),
         "exploration_policy": exploration_policy_for_lifecycle(lifecycle),
     }
