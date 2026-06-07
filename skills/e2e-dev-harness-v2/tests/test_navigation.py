@@ -32,3 +32,52 @@ def test_map_marks_skipped_phases():
     full = {p["name"]: p["status"] for p in m["full_catalog"]}
     assert full["PLANNED"] == "skipped"
     assert full["REVIEWED"] == "skipped"
+
+
+def test_map_carries_per_phase_gate_summary():
+    st = run_state.new_run_state("r1", "f", "r")
+    engine.evaluate(_spine(), st)  # blocked at CLARIFIED, no evidence
+    m = navigation.navigation_map(_spine(), st)
+    clar = next(p for p in m["phases"] if p["name"] == "CLARIFIED")
+    assert clar["gate"]["required"] == 1
+    assert clar["gate"]["missing"] == ["clarification"]
+    assert clar["gate"]["ok"] is False
+
+
+def test_map_reports_remaining_gates_to_goal():
+    st = run_state.new_run_state("r1", "f", "r")
+    engine.evaluate(_spine(), st)
+    m = navigation.navigation_map(_spine(), st)
+    # CLARIFIED(1) + RED(1) + IMPLEMENTED(1) + VERIFIED(1) = 4 unmet gate keys ahead
+    assert m["remaining_gates"] == 4
+
+
+def test_map_frames_next_action_inside_map():
+    st = run_state.new_run_state("r1", "f", "r")
+    engine.evaluate(_spine(), st)
+    m = navigation.navigation_map(_spine(), st)
+    assert m["next"]["phase"] == "CLARIFIED"
+    assert "e2e-harness-clarification" in m["next"]["action"]
+
+
+def test_map_next_is_null_when_complete(tmp_path):
+    import json, sys
+    from harness_v2.adapters.evidence import command_evidence as ce
+    st = run_state.new_run_state("r1", "f", "r")
+    spine = _spine()
+    base = tmp_path / "art"; base.mkdir(parents=True, exist_ok=True)
+    for _ in range(10):
+        res = engine.evaluate(spine, st, tmp_path)
+        if res["complete"]:
+            break
+        ph = next(p for p in spine if p.name == res["blocked_phase"])
+        for key in ph.produces:
+            if key in ("failing_tests", "passing_tests"):
+                code = 1 if key == "failing_tests" else 0
+                f = base / f"{ph.name}-{key}.json"
+                f.write_text(json.dumps(ce.record_command(tmp_path, f'"{sys.executable}" -c "import sys; sys.exit({code})"')), encoding="utf-8")
+            else:
+                f = base / f"{ph.name}-{key}.md"; f.write_text("real", encoding="utf-8")
+            engine.submit_evidence(st, ph.name, key, str(f), repo_root=tmp_path)
+    m = navigation.navigation_map(spine, st, tmp_path)
+    assert m["next"] is None
