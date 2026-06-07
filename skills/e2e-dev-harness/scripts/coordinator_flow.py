@@ -180,8 +180,8 @@ def clarification_interaction_contract() -> dict:
     return lifecycle_policy.clarification_interaction_for_lifecycle("CREATED")
 
 
-def required_todo_list_for_lifecycle(lifecycle: str, state: dict | None = None) -> list[str]:
-    return lifecycle_policy.required_todo_list_for_lifecycle(lifecycle, state)
+def required_todo_list_for_lifecycle(lifecycle: str, state: dict | None = None, tier: str | None = None) -> list[str]:
+    return lifecycle_policy.required_todo_list_for_lifecycle(lifecycle, state, tier or run_state.workflow_tier(state))
 
 
 def exploration_policy_for_lifecycle(lifecycle: str) -> dict:

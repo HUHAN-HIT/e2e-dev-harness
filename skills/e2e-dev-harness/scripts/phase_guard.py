@@ -392,8 +392,8 @@ def requirements_clarifier_task_for_state(repo: Path, state_path: Path, state_da
     )
 
 
-def required_todo_list_for_lifecycle(lifecycle: str) -> list[str]:
-    return lifecycle_policy.required_todo_list_for_lifecycle(lifecycle)
+def required_todo_list_for_lifecycle(lifecycle: str, tier: str = "standard") -> list[str]:
+    return lifecycle_policy.required_todo_list_for_lifecycle(lifecycle, None, tier)
 
 
 def exploration_policy_for_lifecycle(lifecycle: str) -> dict:
