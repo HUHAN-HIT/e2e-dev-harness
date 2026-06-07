@@ -137,6 +137,40 @@ class PhaseSkillCapabilitySeamTests(unittest.TestCase):
         self.assertIn("Skill file: skills/e2e-harness-clarification/SKILL.md", prompt)
         self.assertIn("Reference set: clarification-gate", prompt)
 
+    def test_legacy_task_without_capability_is_not_blocked(self) -> None:
+        task = {"id": "T01", "agent": "requirements-clarifier", "phase": "clarify", "status": "ready"}
+
+        self.assertEqual([], agent_scheduler.capability_blockers(task))
+
+    def test_generated_capability_fields_are_not_blocked(self) -> None:
+        task = {
+            "id": "T01",
+            "phase": "clarify",
+            "required_skill": "e2e-harness-clarification",
+            "required_skill_path": "skills/e2e-harness-clarification/SKILL.md",
+        }
+
+        self.assertEqual([], agent_scheduler.capability_blockers(task))
+
+    def test_capability_path_outside_repo_is_blocked(self) -> None:
+        task = {
+            "id": "T01",
+            "phase": "clarify",
+            "required_skill": "e2e-harness-clarification",
+            "required_skill_path": "../outside/SKILL.md",
+        }
+
+        blockers = agent_scheduler.capability_blockers(task)
+
+        self.assertTrue(any("required_skill_path" in reason for reason in blockers))
+
+    def test_capability_skill_token_must_be_hyphenated_lowercase(self) -> None:
+        task = {"id": "T01", "phase": "clarify", "required_skill": "Bad Skill Name"}
+
+        blockers = agent_scheduler.capability_blockers(task)
+
+        self.assertTrue(any("required_skill" in reason for reason in blockers))
+
 
 class PhaseFunctionTests(unittest.TestCase):
     """Pin `phase_for_agent` / `depends_on_for_phase` behavior at the registry seam."""

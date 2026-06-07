@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -380,6 +381,27 @@ def evidence_matches_outputs(task: dict, evidence: list[str]) -> bool:
     return bool(outputs & normalized_evidence)
 
 
+_SKILL_TOKEN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def capability_blockers(task: dict) -> list[str]:
+    """Validate phase skill capability fields only when present.
+
+    Missing fields are allowed (legacy schedules and minimal-tier single-pass
+    runs carry none). Present-but-malformed fields are blocked.
+    """
+    blocked: list[str] = []
+    skill = task.get("required_skill", "")
+    if skill and not _SKILL_TOKEN.match(str(skill)):
+        blocked.append(f"required_skill must be a lowercase hyphenated token: {skill!r}")
+    path = task.get("required_skill_path", "")
+    if path:
+        normalized = str(path).replace("\\", "/")
+        if normalized.startswith("/") or ".." in normalized.split("/"):
+            blocked.append(f"required_skill_path must resolve inside the repository: {path!r}")
+    return blocked
+
+
 def evidence_content_blockers(repo: Path, evidence: list[str]) -> list[str]:
     blocked: list[str] = []
     for item in evidence:
@@ -509,6 +531,9 @@ def claim(
     template_blockers = role_template_blockers(repo, schedule, task)
     if template_blockers:
         return {"ready": False, "blocked_reasons": template_blockers, "warnings": []}
+    skill_capability_blockers = capability_blockers(task)
+    if skill_capability_blockers:
+        return {"ready": False, "blocked_reasons": skill_capability_blockers, "warnings": []}
     _deps_ready, missing_deps = phases_completed(schedule, [str(phase) for phase in task.get("depends_on_phases", []) or []])
     satisfied = lifecycle_satisfied_phases(repo, state_path)
     missing_deps = [phase for phase in missing_deps if phase not in satisfied]
