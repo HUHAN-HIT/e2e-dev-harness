@@ -124,10 +124,16 @@ manual-recovery path:
 
 ```bash
 # 1. Write a recovery-approval request and get explicit user approval.
-python "$HARNESS" dispatch-status "$REPO" --write-recovery-request --task-id T06
+#    --schedule is required; --write-recovery-request takes the output PATH.
+python "$HARNESS" dispatch-status "$REPO" \
+  --schedule "$RUN_DIR/agent-schedule.json" \
+  --task-id T06 \
+  --write-recovery-request "$RUN_DIR/T06-recovery-request.json"
 
 # 2. After approval, record the completion with the design as evidence.
+#    --schedule is required on dispatch-complete.
 python "$HARNESS" dispatch-complete "$REPO" \
+  --schedule "$RUN_DIR/agent-schedule.json" \
   --task-id T06 \
   --manual-recovery \
   --recovery-approval "$RUN_DIR/<approval-file>" \
@@ -168,7 +174,9 @@ python "$HARNESS" next "$REPO" --state "$RUN_DIR/run-state.json"
 #    Expect: state_confidence != "blocked".
 
 # 2. Doctor must report no control-plane divergence.
-python "$HARNESS" doctor "$REPO" --run-dir "$RUN_DIR"
+#    doctor has no --run-dir; pass --state and it derives run_dir from the
+#    state file's parent to run the state-control-plane-divergence check.
+python "$HARNESS" doctor "$REPO" --state "$RUN_DIR/run-state.json" --json
 #    Expect: NO "state-control-plane-divergence" check failure.
 ```
 
