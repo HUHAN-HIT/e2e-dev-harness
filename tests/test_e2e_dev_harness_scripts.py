@@ -6277,6 +6277,44 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(workflow["review_policy"]["downgrade_requires_provenance"])
         self.assertEqual(workflow["review_policy"], state["review_policy"])
 
+    def test_start_persists_effective_workflow_tier_on_run_state(self) -> None:
+        request = "Fix a small utility helper function."
+        self.assertEqual("minimal", task_tier.evaluate("auto", request)["tier"])
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            args = SimpleNamespace(
+                repo=repo,
+                feature="Utility Helper",
+                request=request,
+                design_doc=None,
+                agent_run_dir=None,
+                run_id="run",
+                run_date=None,
+                workflow_profile="auto",
+                force=False,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.start(args)
+            state = json.loads(Path(result["run_state"]).read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code)
+        self.assertEqual("minimal", state["workflow_tier"])
+        self.assertEqual("minimal", run_state.workflow_tier(state))
+
+    def test_workflow_tier_falls_back_to_review_policy_effective_tier(self) -> None:
+        self.assertEqual(
+            "minimal",
+            run_state.workflow_tier({"review_policy": {"effective": {"tier": "minimal"}}}),
+        )
+        self.assertEqual(
+            "basic",
+            run_state.workflow_tier(
+                {"workflow_tier": "basic", "review_policy": {"effective": {"tier": "critical"}}}
+            ),
+        )
+        self.assertEqual("standard", run_state.workflow_tier({}))
+
     def test_start_cli_accepts_review_tier_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

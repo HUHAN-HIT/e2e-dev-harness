@@ -118,6 +118,12 @@ def workflow_tier(state: dict | None) -> str:
     if not isinstance(state, dict):
         return "standard"
     tier = str(state.get("workflow_tier", "")).strip().lower()
+    if not tier:
+        review = state.get("review_policy")
+        if isinstance(review, dict):
+            effective = review.get("effective")
+            if isinstance(effective, dict):
+                tier = str(effective.get("tier", "")).strip().lower()
     return tier or "standard"
 
 

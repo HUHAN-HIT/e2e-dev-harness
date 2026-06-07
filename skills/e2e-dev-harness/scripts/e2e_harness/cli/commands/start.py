@@ -309,6 +309,7 @@ def run(
     state["workflow_profile"] = workflow_plan["selected_profile"]
     state["workflow_plan"] = artifacts["workflow_plan"]
     state["review_policy"] = workflow_plan["review_policy"]
+    run_state.set_workflow_tier(state, str(review_policy.get("effective", {}).get("tier", "standard")))
     state["manual_confirm_phases"] = workflow_plan["manual_confirm_phases"]
     state["dispatch_policy"] = workflow_plan["dispatch_policy"]
     state_path = _require_repo_path(repo, Path(artifacts["run_state"]), "run state")
