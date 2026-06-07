@@ -9622,6 +9622,38 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual(1, len(config["hooks"]["PreToolUse"]))
         self.assertEqual(1, len(config["hooks"]["Stop"]))
 
+    def test_install_hooks_registers_ledger_command_in_single_stop_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            settings = repo / ".claude" / "settings.json"
+            settings.parent.mkdir(parents=True)
+
+            first = install_hooks.install(repo, "claude")
+            second = install_hooks.install(repo, "claude")
+            config = json.loads(settings.read_text(encoding="utf-8"))
+            validation = install_hooks.validate_config(settings)
+
+        self.assertTrue(first["ready"], first["blocked_reasons"])
+        self.assertTrue(second["ready"], second["blocked_reasons"])
+        self.assertTrue(validation["ready"], validation["blocked_reasons"])
+        # Exactly one Stop matcher-group must survive idempotent reinstall.
+        self.assertEqual(1, len(config["hooks"]["Stop"]))
+        stop_group = config["hooks"]["Stop"][0]
+        commands = [hook.get("command", "") for hook in stop_group.get("hooks", [])]
+        # The single Stop group carries BOTH the strict stop guard and the
+        # background ledger regeneration, with no duplication after reinstall.
+        guard_cmds = [c for c in commands if "harness_stop_guard.py" in c]
+        ledger_cmds = [c for c in commands if "generate_ledger_hook.py" in c]
+        self.assertEqual(1, len(guard_cmds), commands)
+        self.assertEqual(1, len(ledger_cmds), commands)
+        ledger_cmd = ledger_cmds[0]
+        self.assertIn(
+            str(ROOT / "skills" / "e2e-dev-harness" / "scripts" / "generate_ledger_hook.py"),
+            ledger_cmd,
+        )
+        self.assertIn(str(repo), ledger_cmd)
+        self.assertIn("--hook-input", ledger_cmd)
+
     def test_install_hooks_rejects_repo_relative_phase_guard_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -12139,6 +12171,56 @@ class GenerateLedgerHookTests(unittest.TestCase):
             payload = json.loads(degradation.read_text(encoding="utf-8"))
 
         self.assertIn("forced ledger failure", payload["error"])
+
+    def test_main_stop_hook_cli_generates_missing_summary_and_returns_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = self._write_run(repo)
+            summary_json = state_path.parent / "run-summary.json"
+            self.assertFalse(summary_json.exists())
+
+            stdin = io.StringIO("")
+            with patch.object(sys, "stdin", stdin):
+                code = generate_ledger_hook.main([str(repo), "--hook-input", "-"])
+
+            self.assertEqual(0, code)
+            self.assertTrue(summary_json.exists())
+            written = json.loads(summary_json.read_text(encoding="utf-8"))
+
+        self.assertEqual("e2e-dev-harness.run-summary.v1", written["schema"])
+
+    def test_main_stop_hook_cli_quiet_when_no_active_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            # No docs/agent-runs at all: nothing to backfill, exit 0 quietly.
+            stdin = io.StringIO("")
+            with patch.object(sys, "stdin", stdin):
+                code = generate_ledger_hook.main([str(repo), "--hook-input", "-"])
+
+            self.assertEqual(0, code)
+            self.assertFalse((repo / "docs" / "agent-runs").exists())
+
+    def test_main_stop_hook_cli_records_degradation_and_returns_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = self._write_run(repo)
+            run_dir = state_path.parent
+
+            def _boom(*args, **kwargs):
+                raise RuntimeError("forced cli ledger failure")
+
+            stdin = io.StringIO("garbage not json")
+            with patch.object(generate_ledger_hook.harness_verify, "validate", _boom), patch.object(
+                sys, "stdin", stdin
+            ):
+                code = generate_ledger_hook.main([str(repo), "--hook-input", "-"])
+
+            degradation = run_dir / "evidence" / "ledger-hook-degradation.json"
+            self.assertEqual(0, code)
+            self.assertTrue(degradation.exists())
+            payload = json.loads(degradation.read_text(encoding="utf-8"))
+
+        self.assertIn("forced cli ledger failure", payload["error"])
 
 
 if __name__ == "__main__":

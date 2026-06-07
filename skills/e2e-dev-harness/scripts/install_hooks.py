@@ -83,6 +83,7 @@ def render_runtime_paths(value, repo: Path):
             value.replace("C:\\absolute\\path\\to\\python.exe", sys.executable)
             .replace("C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py", str(SCRIPT_DIR / "phase_guard.py"))
             .replace("C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\harness_stop_guard.py", str(SCRIPT_DIR / "harness_stop_guard.py"))
+            .replace("C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\generate_ledger_hook.py", str(SCRIPT_DIR / "generate_ledger_hook.py"))
             .replace("C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\harness_advice.py", str(SCRIPT_DIR / "harness_advice.py"))
             .replace("C:\\absolute\\path\\to\\target-repo", str(repo.resolve()))
         )

@@ -24,6 +24,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import artifact_registry  # noqa: E402
+import harness_stop_guard  # noqa: E402
 import harness_verify  # noqa: E402
 
 
@@ -107,12 +108,63 @@ def run(repo: Path, run_state_path: Path) -> int:
     return 0
 
 
+def _drain_hook_input(source: str | None) -> None:
+    """Drain stdin when the runtime feeds it; tolerate empty/garbage/no stdin."""
+    if source == "-":
+        try:
+            sys.stdin.read()
+        except Exception:  # noqa: BLE001 - draining stdin must never raise
+            pass
+
+
+def _discover_run_state(repo: Path, explicit: Path | None) -> Path | None:
+    """Locate the active run-state path the same way the stop guard does.
+
+    Prefers an explicit ``--state`` path; otherwise reuses
+    ``harness_stop_guard.latest_run_state`` (latest ``docs/agent-runs/*/run-state.json``
+    by mtime) so discovery stays a single source of truth.
+    """
+    if explicit:
+        return explicit
+    try:
+        return harness_stop_guard.latest_run_state(repo)
+    except Exception:  # noqa: BLE001 - discovery failure must degrade to "no run"
+        return None
+
+
 def main(argv: list[str] | None = None) -> int:
+    """Stop-hook entry point.
+
+    Invoked as ``generate_ledger_hook.py <target-repo> --hook-input -`` (the
+    standard harness Stop/advice hook argv shape). ALWAYS returns 0 and NEVER
+    raises: any error is recorded as degradation evidence under the run dir and
+    the process still exits 0. When no active run-state is found, exits 0
+    quietly (nothing to backfill).
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", nargs="?", default=".", type=Path)
-    parser.add_argument("--state", required=True, type=Path)
-    args = parser.parse_args(argv)
-    return run(args.repo, args.state)
+    parser.add_argument("--state", "--run-state", dest="state", type=Path)
+    parser.add_argument(
+        "--hook-input",
+        help="JSON hook input, or '-' for stdin (drained, not required).",
+    )
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit:
+        # A Stop hook must never abort the main flow on bad argv.
+        return 0
+
+    _drain_hook_input(args.hook_input)
+
+    try:
+        repo = Path(args.repo).resolve()
+        state_path = _discover_run_state(repo, args.state)
+        if not state_path:
+            # No active harness run-state: nothing to backfill, exit quietly.
+            return 0
+        return run(repo, state_path)
+    except Exception:  # noqa: BLE001 - top-level guard; hook must never raise
+        return 0
 
 
 if __name__ == "__main__":

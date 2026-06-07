@@ -18,6 +18,10 @@
           {
             "type": "command",
             "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\harness_stop_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --strict --json"
+          },
+          {
+            "type": "command",
+            "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\generate_ledger_hook.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input -"
           }
         ]
       }
