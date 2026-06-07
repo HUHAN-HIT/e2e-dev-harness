@@ -64,7 +64,7 @@ class ClarificationFlowTests(unittest.TestCase):
         self.assertEqual("dispatch_completion_proof_missing", result["clarification_blocker_kind"])
         self.assertIn("clarification content may already be present", result["operator_guidance"])
 
-    def test_primary_complete_repair_pending_blocks_at_repair_barrier(self) -> None:
+    def test_primary_complete_format_repair_is_inline_not_barrier(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             design = repo / "docs" / "design" / "feature.md"
@@ -144,17 +144,23 @@ class ClarificationFlowTests(unittest.TestCase):
 
             code, result = clarification_flow.run(repo, Path("docs/design/feature.md"), run_state=state_path)
 
+        # Spec S3.2: a pure-format Impact Summary repair is applied inline rather
+        # than forcing a dispatch-beat barrier. The transaction still transitions,
+        # but the next gate is the normal design_outline plan gate and the command
+        # never forces dispatch-beat.
         self.assertEqual(0, code)
         self.assertFalse(result["ready_for_implementation"])
         self.assertEqual("transition", result["clarification_transaction"]["stage"])
-        self.assertEqual("dispatch_mechanical_repair", result["next_agent_action"])
-        self.assertIn("mechanical_repair_dispatch", result)
-        self.assertEqual("mechanical_repair", result["next_required"]["gate"])
-        command = result["next_required"]["command"]
-        self.assertIn("dispatch-beat", command)
-        self.assertIn("generated", command)
-        self.assertIn("spawn request/prompt", command)
-        self.assertIn("Do not call Agent directly", command)
+        self.assertEqual("continue_clarification_remediation", result["next_agent_action"])
+        self.assertNotIn("mechanical_repair_dispatch", result)
+        self.assertEqual("design_outline", result["next_required"]["gate"])
+        self.assertNotIn("dispatch-beat", result["next_required"]["command"])
+        # The repair is still surfaced, classified as an inline format repair.
+        remediation = result.get("mechanical_remediation_tasks", [])
+        inline_repairs = [task for task in remediation if task.get("code") == "impact_summary_too_long"]
+        self.assertEqual(1, len(inline_repairs))
+        self.assertEqual("format", inline_repairs[0]["repair_class"])
+        self.assertIs(True, inline_repairs[0]["inline_allowed"])
 
     def test_user_clarified_created_run_transitions_with_missing_implementation_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -4144,7 +4144,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertTrue(any("input handoff is not ready" in reason for reason in blockers))
 
-    def test_clarify_creates_mechanical_repair_task_for_oversized_impact_summary(self) -> None:
+    def test_clarify_inlines_oversized_impact_summary_repair(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             run_dir = repo / "docs" / "agent-runs" / "run"
@@ -4247,19 +4247,27 @@ class OrchestrationArtifactTests(unittest.TestCase):
             schedule_after = json.loads(schedule_path.read_text(encoding="utf-8"))
             state_after = json.loads(state_path.read_text(encoding="utf-8"))
 
+        # Spec S3.2: a pure-format oversized Impact Summary repair is applied inline
+        # (surfaced under mechanical_remediation_tasks), NOT dispatched as a worker
+        # round-trip. No artifact_repair task should be scheduled and no dispatch
+        # barrier should be raised.
         repair_tasks = [task for task in schedule_after["tasks"] if task.get("kind") == "artifact_repair"]
         self.assertEqual(0, code)
         self.assertEqual("CLARIFIED", state_after["lifecycle"])
         self.assertFalse(result["interaction_required"])
         self.assertTrue(result["agent_remediation_required"])
-        self.assertEqual("dispatch_mechanical_repair", result["next_agent_action"])
-        self.assertEqual("mechanical_repair", result["next_required"]["gate"])
-        self.assertEqual(1, len(repair_tasks))
-        self.assertEqual("T01b", repair_tasks[0]["id"])
-        self.assertEqual("clarify", repair_tasks[0]["phase"])
-        self.assertEqual(role_template.as_posix(), repair_tasks[0]["role_template"])
-        self.assertEqual("requirements-clarifier", repair_tasks[0]["role_template_key"])
-        self.assertEqual([Path("docs/design/feature.md").as_posix()], repair_tasks[0]["repair_targets"])
+        # No dispatched mechanical repair: stays in inline clarification remediation
+        # and the next gate is the normal design_outline plan gate, not mechanical_repair.
+        self.assertEqual("continue_clarification_remediation", result["next_agent_action"])
+        self.assertNotIn("mechanical_repair_dispatch", result)
+        self.assertEqual("design_outline", result["next_required"]["gate"])
+        self.assertEqual(0, len(repair_tasks))
+        # The oversized summary is still detected and routed to inline repair.
+        remediation = result.get("mechanical_remediation_tasks", [])
+        inline_repairs = [task for task in remediation if task.get("code") == "impact_summary_too_long"]
+        self.assertEqual(1, len(inline_repairs))
+        self.assertEqual("format", inline_repairs[0]["repair_class"])
+        self.assertIs(True, inline_repairs[0]["inline_allowed"])
 
     def test_dispatch_beat_dispatches_created_mechanical_repair_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
