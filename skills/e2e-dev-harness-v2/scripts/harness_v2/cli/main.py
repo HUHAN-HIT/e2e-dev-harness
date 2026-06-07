@@ -24,7 +24,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp = sub.add_parser(verb); sp.add_argument("--state", required=True); sp.add_argument("--repo", default=".")
 
     sm = sub.add_parser("submit"); sm.add_argument("--state", required=True); sm.add_argument("--repo", default=".")
-    sm.add_argument("--phase", required=True); sm.add_argument("--key", required=True); sm.add_argument("--path", required=True)
+    sm.add_argument("--phase", required=True); sm.add_argument("--key", default=None); sm.add_argument("--path", default=None)
+    sm.add_argument("--status", choices=["done", "failed"], default="done")
+    sm.add_argument("--reason", default=None)
 
     g = sub.add_parser("gate"); g.add_argument("--state", required=True); g.add_argument("--repo", default=".")
     g.add_argument("--phase", default=None)

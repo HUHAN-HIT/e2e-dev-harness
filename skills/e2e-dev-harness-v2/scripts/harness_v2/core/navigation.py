@@ -7,7 +7,7 @@ from harness_v2.core.lifecycle import Phase, catalog
 GOAL = "VERIFIED"
 
 
-def _phase_status(spine: list[Phase], state: dict, idx: int) -> str:
+def _phase_status(spine: list[Phase], state: dict, idx: int, repo_root=None) -> str:
     names = [p.name for p in spine]
     cur = state.get("current_phase", spine[0].name)
     cur_idx = names.index(cur) if cur in names else 0
@@ -16,15 +16,15 @@ def _phase_status(spine: list[Phase], state: dict, idx: int) -> str:
     if idx < cur_idx:
         return "done"
     if idx == cur_idx:
-        ok, _ = gates.gate_passes(phase, rec)
+        ok, _ = gates.gate_passes(phase, rec, repo_root)
         if phase.next_phase is None and ok:
             return "done"
         return "current"
     return "pending"
 
 
-def navigation_map(spine: list[Phase], state: dict) -> dict:
-    phases = [{"name": p.name, "status": _phase_status(spine, state, i)}
+def navigation_map(spine: list[Phase], state: dict, repo_root=None) -> dict:
+    phases = [{"name": p.name, "status": _phase_status(spine, state, i, repo_root)}
               for i, p in enumerate(spine)]
     active = {p.name for p in spine}
     full = []
