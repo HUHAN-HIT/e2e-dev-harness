@@ -272,7 +272,7 @@ PHASE_SKILL_CAPABILITIES: dict[str, tuple[str, str, tuple[str, ...]]] = {
         "skills/e2e-harness-review/SKILL.md",
         ("review-profiles", "common-review-issues"),
     ),
-    "coverage-review": (
+    "completion": (
         "e2e-harness-completion",
         "skills/e2e-harness-completion/SKILL.md",
         ("implementation-gates", "requirements-archive"),

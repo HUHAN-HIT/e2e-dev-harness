@@ -170,6 +170,8 @@ class PhaseFunctionTests(unittest.TestCase):
         self.assertIn("clarification-gate", agent_roles.phase_skill_reference_set("clarify"))
         self.assertEqual("e2e-harness-implementation", agent_roles.phase_required_skill("implement"))
         self.assertEqual("e2e-harness-review", agent_roles.phase_required_skill("r2-review"))
+        # Completion phase uses the real PHASE_REGISTRY key "completion" (not "coverage-review").
+        self.assertEqual("e2e-harness-completion", agent_roles.phase_required_skill("completion"))
         # Unmapped phase degrades to empty (tier-safe, additive).
         self.assertEqual("", agent_roles.phase_required_skill("coordination"))
         self.assertEqual("", agent_roles.phase_required_skill_path("coordination"))
