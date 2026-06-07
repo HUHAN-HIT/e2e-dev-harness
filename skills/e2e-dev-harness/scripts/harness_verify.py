@@ -39,6 +39,28 @@ def resolve(repo: Path, path: str | None) -> Path | None:
     return resolved
 
 
+# Ledger / 台账 artifact blocked-reason markers. These are documentation/audit
+# trail artifacts (artifact-registry completeness, requirements-archive,
+# coverage-matrix) that should warn — not block — run completion for
+# non-audited tiers. The substrings below are the EXACT reason texts emitted by
+# artifact_registry.validate_registry ("Artifact registry: " prefix),
+# implementation_gate's requirements-archive branch ("Requirements archive: "
+# and the auto-discover failure message), and coverage_gate's matrix checks
+# ("Coverage matrix ..."). They are deliberately narrow so load-bearing
+# blockers (test evidence, alignment, run-state lifecycle, contracts, handoffs,
+# policy, semantic reviews, "not VERIFIED") stay blocking.
+_LEDGER_REASON_MARKERS = (
+    "Artifact registry: ",
+    "Requirements archive: ",
+    "requires --requirements-archive when requirements archive is required",
+    "Coverage matrix",
+)
+
+
+def _is_ledger_reason(reason: str) -> bool:
+    return any(marker in reason for marker in _LEDGER_REASON_MARKERS)
+
+
 def registry_entry(registry: dict, artifact_type: str, owner: str = "global") -> Path | None:
     for item in registry.get("artifacts", []):
         if not isinstance(item, dict):
@@ -132,6 +154,20 @@ def validate(
         )
         if not gate_result["ready"]:
             blocked.extend("Completion gate: " + reason for reason in gate_result["blocked_reasons"])
+
+    # D3: ledger / 台账 artifacts (artifact-registry completeness,
+    # requirements-archive, coverage-matrix) are non-blocking for non-audited
+    # tiers. A background hook regenerates them, so missing/incomplete ledger
+    # artifacts become warnings here. The "audited" tier keeps them blocking as
+    # audit evidence.
+    if tier != "audited":
+        retained: list[str] = []
+        for reason in blocked:
+            if _is_ledger_reason(reason):
+                warnings.append(reason)
+            else:
+                retained.append(reason)
+        blocked = retained
 
     return {
         "repo": str(repo),
