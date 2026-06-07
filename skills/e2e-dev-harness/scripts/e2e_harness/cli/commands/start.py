@@ -46,6 +46,15 @@ def _posix_relative(path: Path, repo: Path) -> str:
     return str(path.relative_to(repo)).replace("\\", "/")
 
 
+def _unique_default_run_id(repo: Path, base_run_id: str) -> str:
+    candidate = base_run_id
+    counter = 2
+    while (repo / "docs" / "agent-runs" / candidate).exists():
+        candidate = f"{base_run_id}-{counter}"
+        counter += 1
+    return candidate
+
+
 def design_template(feature: str, request: str = "") -> str:
     title = feature.strip() or "Feature"
     original = request.strip() or "<paste the original user request here>"
@@ -249,7 +258,9 @@ def run(
         return 2, result
 
     slug = orchestration_plan.safe_slug(feature)
-    run_id = run_id or orchestration_plan.default_run_id(slug, run_date)
+    if not run_id:
+        base_run_id = orchestration_plan.default_run_id(slug, run_date)
+        run_id = base_run_id if agent_run_dir else _unique_default_run_id(repo, base_run_id)
     run_dir = _require_repo_path(repo, agent_run_dir or Path(f"docs/agent-runs/{run_id}"), "agent run directory")
     design_path = _require_repo_path(repo, design_doc or Path(f"docs/design/{slug}.md"), "design document")
     artifacts = orchestration_plan.artifacts(slug, _posix_relative(run_dir, repo), run_date, [])

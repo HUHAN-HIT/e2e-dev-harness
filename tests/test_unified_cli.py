@@ -1043,14 +1043,17 @@ class UnifiedCliTests(unittest.TestCase):
             ), patch("sys.stdout", stdout):
                 exit_code = e2e_dev_harness.main()
             payload = json.loads(stdout.getvalue())
+            full_payload = json.loads((repo / payload["full_result_path"]).read_text(encoding="utf-8"))
 
         self.assertEqual(2, exit_code)
         self.assertFalse(payload["ready"])
-        self.assertEqual("missing_run_state", payload["failure_taxonomy"])
-        self.assertEqual(["missing_run_state"], payload["blocked_reason_codes"])
-        self.assertIn(str(missing_state), payload["blocked_reasons"][0])
-        self.assertIn("start", payload["next_single_action"])
-        self.assertNotIn("next . --state", payload["next_single_action"])
+        self.assertEqual(["missing_run_state"], payload["blocker_codes"])
+        self.assertIn(missing_state.as_posix(), payload["blocked_reasons"][0])
+        self.assertIn("start", payload["next_action"]["command"])
+        self.assertNotIn("next . --state", payload["next_action"]["command"])
+        self.assertEqual("missing_run_state", full_payload["failure_taxonomy"])
+        self.assertEqual("missing_run_state", full_payload["code"])
+        self.assertEqual("start", full_payload["navigation_map"]["next_single_action"]["source"])
 
     def test_command_event_next_command_prefers_navigation_map_single_action(self) -> None:
         result = {

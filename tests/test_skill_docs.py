@@ -63,6 +63,14 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("Gemini", skill_text)
         self.assertIn("references/platform-compatibility.md", skill_text)
 
+    def test_skill_requires_start_for_new_design_doc_requests(self) -> None:
+        skill_text = (ROOT / "skills" / "e2e-dev-harness" / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("If the user provides a design document path", skill_text)
+        self.assertIn("treat it as a brand-new run", skill_text)
+        self.assertIn("Do not call `next --state` with a previous or latest run-state", skill_text)
+        self.assertIn("copy the returned `run_state` path into the first `next --state` command", skill_text)
+
     def test_skill_declares_custom_review_profile_reference(self) -> None:
         skill_text = (ROOT / "skills" / "e2e-dev-harness" / "SKILL.md").read_text(encoding="utf-8")
 

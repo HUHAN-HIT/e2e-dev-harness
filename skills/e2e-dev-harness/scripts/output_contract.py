@@ -185,7 +185,10 @@ def _fit_compact_payload(payload: dict) -> dict:
         return payload
     payload.pop("navigation_map", None)
     payload["warnings"] = []
-    payload["blocked_reasons"] = []
+    if isinstance(payload.get("blocked_reasons"), list):
+        payload["blocked_reasons"] = payload["blocked_reasons"][:1]
+    if _compact_json_size(payload) > MAX_COMPACT_CHARS:
+        payload["blocked_reasons"] = []
     return payload
 
 

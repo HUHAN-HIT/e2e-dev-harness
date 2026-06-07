@@ -2041,6 +2041,41 @@ class CliCommandFacadeContractTests(unittest.TestCase):
         self.assertEqual("clarify", result["next"]["phase"])
         self.assertEqual([], result["blocked_reasons"])
 
+    def test_start_auto_run_id_does_not_reuse_existing_agent_run_dir(self) -> None:
+        from e2e_harness.cli.commands import start as start_command  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            first_code, first = start_command.run(
+                repo,
+                feature="Refund MQ",
+                request="Publish refund notification after success.",
+                run_date="2026-06-07",
+            )
+            second_code, second = start_command.run(
+                repo,
+                feature="Refund MQ",
+                request="Publish a different refund requirement.",
+                run_date="2026-06-07",
+            )
+            second_state = json.loads(Path(second["run_state"]).read_text(encoding="utf-8"))
+            second_registry = json.loads(Path(second["artifact_registry"]).read_text(encoding="utf-8"))
+            first_state_exists = Path(first["run_state"]).exists()
+            second_state_exists = Path(second["run_state"]).exists()
+
+        self.assertEqual(0, first_code, first)
+        self.assertEqual(0, second_code, second)
+        self.assertEqual("2026-06-07-Refund-MQ", first["run_id"])
+        self.assertEqual("2026-06-07-Refund-MQ-2", second["run_id"])
+        self.assertNotEqual(first["agent_run_dir"], second["agent_run_dir"])
+        self.assertTrue(first_state_exists)
+        self.assertTrue(second_state_exists)
+        self.assertEqual("docs/agent-runs/2026-06-07-Refund-MQ-2", second_state["run_id"])
+        self.assertEqual(
+            "docs/agent-runs/2026-06-07-Refund-MQ-2",
+            second_registry["run_id"],
+        )
+
     def test_cli_command_modules_preserve_plan_contracts(self) -> None:
         from e2e_harness.cli.commands import plan as plan_command  # noqa: PLC0415
 
@@ -2192,6 +2227,9 @@ class CliCommandFacadeContractTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text(json.dumps({"run_id": "run", "lifecycle": "CREATED"}), encoding="utf-8")
             payload = {
                 "ready": True,
                 "workflow_stage": "CLARIFY",
@@ -2227,6 +2265,9 @@ class CliCommandFacadeContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             state = Path("docs/agent-runs/run/run-state.json")
+            state_path = repo / state
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text(json.dumps({"run_id": "run", "lifecycle": "CREATED"}), encoding="utf-8")
             with patch.object(e2e_dev_harness.coordinator_flow, "evaluate_navigation_state", return_value=(0, payload)) as evaluate:
                 next_code, next_result = next_command.run(repo, state=state)
                 map_code, map_result = map_command.run(repo, state=state)

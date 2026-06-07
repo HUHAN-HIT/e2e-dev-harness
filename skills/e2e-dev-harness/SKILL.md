@@ -15,7 +15,7 @@ This skill is agent-neutral for Codex, Claude Code, Gemini CLI, OpenCode, and ru
 
 ## Fast Path
 
-Start every non-trivial run before dependency analysis or implementation so `.phase-lock` can block production-code writes until the implementation gate passes:
+For a brand-new user requirement, start the run first. Do this before dependency analysis or implementation so `.phase-lock` can block production-code writes until the implementation gate passes:
 
 ```bash
 e2e-harness start . \
@@ -23,7 +23,16 @@ e2e-harness start . \
   --request "<original user request>"
 ```
 
-Call `next` and do only the returned phase:
+If the user provides a design document path, treat it as a brand-new run:
+start with `--design-doc <path>` even if other `docs/agent-runs/*` directories exist.
+Do not call `next --state` with a previous or latest run-state.
+After `start` succeeds, copy the returned `run_state` path into the first `next --state` command.
+
+Use `next` only after `start` has returned a real `docs/agent-runs/<run>/run-state.json`,
+or when resuming an existing run whose `run-state.json` already exists.
+If the run-state path is missing, do not guess it and do not run `next`; run `start` first.
+
+Then call `next` and do only the returned phase:
 
 ```bash
 e2e-harness next . \
@@ -76,9 +85,7 @@ Load each `references/*.md` only when its rule's phase begins, never all at star
 - R1/R2/R3 are independent-agent reviews, not same-chat roleplay.
   Reviewer Invocation JSON must prove runtime/session isolation; same agent or same session blocks.
 - Archive the final requirement summary so future analysis avoids replaying every run artifact. `references/requirements-archive.md`.
-- Completion requires task-completion proof, not chat claims: every AC has concrete code refs and concrete test refs.
-  Semantic reviews, implementation manifest, coverage matrix, unit-test JSON, business review, dependency report when cross-service,
-  task-alignment evidence, closed rework, and passing guard are completion evidence.
+- Completion requires task-completion proof, not chat claims: each AC maps to concrete code/tests, reviews, manifests, coverage, business review, dependency evidence when cross-service, closed rework, and guard.
 - The implementation completion unit is all assigned ACs, not the first passing AC.
   After any AC turns green, apply `ac-progress` to worker evidence; if ACs remain, continue code-developer dispatch without asking whether to proceed or start R3.
   R3 review is allowed only after `e2e_dev_harness.py ac-progress` is ready for the current service slice or global design.
@@ -129,8 +136,8 @@ Load each `references/*.md` only when its rule's phase begins, never all at star
 ## Agent Orchestration
 
 Default to `single` only for small low-risk single-service work.
-Use explicit `single-review` only for single-service medium work with separated design/test/code agents plus formal reviewer invocations.
-Use `multi` for cross-service, contract/data-risk, design-heavy, or user-requested context isolation.
+Use `single-review` for medium work with separated design/test/code and reviewers.
+Use `multi` for cross-service, contract/data-risk, design-heavy, or user-requested isolation.
 
 Large `multi` schedules are normal: `expected_handoffs` predicts sessions; never downgrade to manual coding.
 
@@ -143,27 +150,16 @@ e2e-harness exec orchestration_plan.py . \
 
 Important boundaries:
 
-- `auto` recommends `single`, `single-review`, or `multi`; risk/large single-service work becomes `single-review`.
-- `single` and `single-review` escalate to `multi` if multiple affected services/modules, contract/data-risk, or design-heavy evidence is detected; do not keep serial same-agent coding for multi-service work.
-- Discovery scope lists service candidates but does not create service plans.
-- Affected scope creates service plans only from explicit `--service` / `--path`, dependency evidence, or design-declared affected services/modules.
-- Multi-service work keeps each service plan and code-agent handoff under `docs/agent-runs/<run>/service-plans/<service>/`.
-- Service code agents consume `service-designs/<service>.md`, service implementation plan, and service-local test impact plan; do not reload the full global design unless the slice is incomplete.
-- Before dispatching, create `context-packs/<task>.json` from `agent-schedule.json`; never pass inherited developer chat as worker context.
-- `dispatch-beat --max-workers N` dispatches a ready wave across distinct `parallel_group` values by default; rerun after worker completion events.
-- Returned spawn requests target Claude Code `Task` or Codex `multi_agent_v1.spawn_agent`; invoke them with fresh worker context, then confirm with the Task hook or `dispatch-ack` before `dispatch-complete`.
-- `dispatch-next` remains the single-worker compatibility wrapper when a runtime cannot consume a beat wave yet.
-- Before a service code agent writes code, claim its task with `e2e_dev_harness.py agent-task --action claim --schedule docs/agent-runs/<run>/agent-schedule.json --task-id <id> --agent <agent> --state docs/agent-runs/<run>/run-state.json`.
-- Generated schedules use `completion_mode: dispatcher-confirmed`.
-  Complete scheduled role tasks through `dispatch-complete` after `dispatch-ack`.
-  Use `agent-task --action complete --allow-local-completion` only for explicit
-  legacy/manual recovery with an audit warning.
-- The orchestration result records `multi_agent_decision` with criteria, evidence, and required artifacts.
-- R1/R2/R3 reviews must be independent agents or separate reviewer sessions; one consolidated after-the-fact review is invalid.
-- Coverage Reviewer always runs before completion.
-- Service-local R2/R3 reviews are required for every generated service plan.
-- Handoffs are file boundaries with ready markers and hashes; do not rely on chat memory.
-- For multi-service, contract/data-risk, or split-agent work, completion must pass `--require-handoffs` so empty `handoffs/` cannot masquerade as a completed archive.
+- `auto` picks `single`, `single-review`, or `multi`; risk, multiple services/modules, contracts, or design-heavy evidence escalate isolation.
+- Discovery scope lists candidates only; affected scope creates plans from explicit `--service` / `--path`, dependency evidence, or design-declared scope.
+- Multi-service work keeps service plans and code handoffs under `docs/agent-runs/<run>/service-plans/<service>/`.
+- Service agents consume local design, plan, and test impact files; do not reload the global design unless the slice is incomplete.
+- Before dispatching, create `context-packs/<task>.json` from `agent-schedule.json`; never pass inherited coordinator chat to workers.
+- `dispatch-beat --max-workers N` dispatches ready waves by `parallel_group`; rerun after worker completion. `dispatch-next` is the single-worker fallback.
+- Spawn requests target Claude Code `Task` or Codex `multi_agent_v1.spawn_agent`; confirm with the Task hook or `dispatch-ack`, then `dispatch-complete`.
+- Service code agents must claim with `agent-task --action claim` before writes; scheduled role tasks complete through dispatcher-confirmed evidence, not local chat.
+- R1/R2/R3, Coverage Reviewer, and service-local reviews must be independent where generated; one after-the-fact review is invalid.
+- Handoffs are file boundaries with ready markers and hashes; multi-service, contract/data-risk, or split-agent completion requires `--require-handoffs`.
 
 For role contracts, handoff schema, atomic handoff, and reviewer invocation details, read `references/agent-orchestration.md` and `references/agent-handoff-schema.md`.
 
