@@ -610,9 +610,25 @@ def coordinator_worker_only_action(
     task: dict | None,
     required_action: str = "spawn_or_resume_worker",
     evidence: list[str] | None = None,
+    repair_class: str | None = None,
 ) -> dict:
     outputs = task_outputs(task)
     primary = dispatch_finish_command(repo, schedule_path, state_path, task, evidence)
+    if str(repair_class or "").strip().lower() == "format":
+        return {
+            "schema": "e2e-dev-harness.coordinator-action.v1",
+            "code_writes_allowed": True,
+            "required_action": "inline_edit",
+            "worker_owned_outputs": outputs,
+            "forbidden_artifact_writes": [],
+            "primary_command": primary,
+            "next_required": {
+                "phase": "inline_edit",
+                "primary_command": primary,
+                "command": primary,
+            },
+            "worker_context_policy": "Pure-format artifact repair may be applied inline by the coordinator with a single Edit; no worker dispatch required.",
+        }
     return {
         "schema": "e2e-dev-harness.coordinator-action.v1",
         "code_writes_allowed": False,

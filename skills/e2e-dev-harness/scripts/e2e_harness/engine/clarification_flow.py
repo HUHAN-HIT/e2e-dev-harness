@@ -193,8 +193,23 @@ def _ensure_artifact_repair_tasks(
 
 
 def _ensure_mechanical_repair_tasks(repo: Path, run_state: Path | None, design_path: Path, result: dict) -> dict:
-    repair_specs = [item for item in result.get("mechanical_remediation_tasks", []) or [] if isinstance(item, dict)]
-    return _ensure_artifact_repair_tasks(repo, run_state, design_path, repair_specs)
+    all_specs = [item for item in result.get("mechanical_remediation_tasks", []) or [] if isinstance(item, dict)]
+    inline_specs = [s for s in all_specs if s.get("inline_allowed")]
+    dispatch_specs = [s for s in all_specs if not s.get("inline_allowed")]
+    dispatch = _ensure_artifact_repair_tasks(repo, run_state, design_path, dispatch_specs)
+    if inline_specs:
+        dispatch = dict(dispatch)
+        dispatch["inline_tasks"] = [
+            {
+                "code": s.get("code"),
+                "section": s.get("section"),
+                "target": str(design_path),
+                "objective": s.get("objective"),
+                "repair_class": "format",
+            }
+            for s in inline_specs
+        ]
+    return dispatch
 
 
 def _ensure_handoff_repair_task(repo: Path, run_state: Path | None, target: Path, seal_result: dict) -> dict:
