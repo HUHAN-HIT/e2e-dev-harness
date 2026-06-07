@@ -190,6 +190,9 @@ def build_pack(
         "budget": {"max_files": max_files, "max_chars": max_chars, "input_files": len(input_files), "input_bytes": input_chars},
         "allowed_inputs": inputs,
         "allowed_outputs": outputs,
+        "required_skill": task.get("required_skill", ""),
+        "required_skill_path": task.get("required_skill_path", ""),
+        "skill_reference_set": task.get("skill_reference_set", []) if isinstance(task.get("skill_reference_set"), list) else [],
         "resolved_input_files": input_files,
         "missing_input_files": missing_input_files,
     }
@@ -229,6 +232,13 @@ def validate(repo: Path, context_pack: Path, max_files: int = 12, max_chars: int
         warnings.append("Context pack should declare request-scoped no-inherited context policy.")
     if data.get("memory_policy") and data.get("memory_policy") != "optional-context-not-authority":
         warnings.append("Context pack memory_policy should declare memory as optional context, not authority.")
+    required_skill_path = data.get("required_skill_path", "")
+    if isinstance(required_skill_path, str) and required_skill_path:
+        try:
+            if not resolve_repo_path(repo, required_skill_path).exists():
+                warnings.append(f"required_skill_path missing from repo: {required_skill_path}")
+        except (ValueError, RuntimeError):
+            blocked.append(f"required_skill_path resolves outside repo: {required_skill_path}")
     return {
         "ready": not blocked,
         "blocked_reasons": blocked,

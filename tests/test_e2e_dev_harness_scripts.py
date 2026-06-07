@@ -7205,6 +7205,39 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("request-scoped; no inherited developer chat context", result["context_policy"])
         self.assertEqual(1, result["budget"]["input_files"])
 
+    def test_context_pack_includes_required_worker_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            schedule.parent.mkdir(parents=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "status": "ready",
+                                "required_skill": "e2e-harness-clarification",
+                                "required_skill_path": "skills/e2e-harness-clarification/SKILL.md",
+                                "skill_reference_set": ["clarification-gate", "agent-instructions"],
+                                "inputs": [],
+                                "outputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = context_pack.build_pack(repo, schedule, task_id="T01")
+
+        self.assertEqual("e2e-harness-clarification", result["required_skill"])
+        self.assertEqual("skills/e2e-harness-clarification/SKILL.md", result["required_skill_path"])
+        self.assertEqual(["clarification-gate", "agent-instructions"], result["skill_reference_set"])
+
     def test_context_pack_blocks_outputs_outside_dir_graph_role_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
