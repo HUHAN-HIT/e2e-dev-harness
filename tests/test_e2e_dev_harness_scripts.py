@@ -9271,6 +9271,24 @@ class OrchestrationArtifactTests(unittest.TestCase):
             }
             state["dispatches"] = {"T01": dict(state["dispatch"])}
             run_state.write_state(repo, state_path, state)
+            (state_path.parent / "agent-schedule.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             result = phase_guard.validate_action(
                 repo,
@@ -9280,9 +9298,9 @@ class OrchestrationArtifactTests(unittest.TestCase):
             )
 
         self.assertFalse(result["ready"])
-        self.assertTrue(any("requirements-clarifier" in reason for reason in result["blocked_reasons"]))
-        self.assertIn("manual_worker_packet", result)
-        self.assertIn("dispatch-ack", " ".join(result["manual_worker_packet"]["next_commands"]))
+        message = " ".join(result["blocked_reasons"])
+        self.assertIn("Worker output write blocked", message)
+        self.assertIn("dispatch-finish", message)
 
     def test_phase_guard_allows_requirements_worker_writing_owned_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -9297,15 +9315,37 @@ class OrchestrationArtifactTests(unittest.TestCase):
                 "current_agent": "requirements-clarifier",
                 "worker_handle": "requirements-worker-1",
                 "worker_session": "requirements-worker-session-1",
+                "spawn_confirmed_by": "dispatch_ack",
+                "spawn_acknowledged_at": "2026-06-06T00:00:00Z",
+                "manual_worker_confirmed": True,
             }
             state["dispatches"] = {"T01": dict(state["dispatch"])}
             run_state.write_state(repo, state_path, state)
+            (state_path.parent / "agent-schedule.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             result = phase_guard.validate_action(
                 repo,
                 "Write",
                 [Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")],
                 run_dir=Path("docs/agent-runs/run"),
+                actor_session="requirements-worker-session-1",
             )
 
         self.assertTrue(result["ready"], result["blocked_reasons"])

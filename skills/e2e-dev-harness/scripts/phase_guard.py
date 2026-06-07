@@ -168,6 +168,16 @@ DIRECT_HOOK_CONFIG_WRITE_RE = re.compile(
     r"(?:Set-Content|Add-Content|Out-File|New-Item|Remove-Item|Move-Item|Copy-Item|>|>>)\b[^\r\n]*(?:\.claude[\\/]settings\.json|\.codex[\\/]hooks[\\/]e2e-dev-harness-pre-action\.json|\.gemini[\\/]hooks[\\/]e2e-dev-harness-pre-tool-use\.json|\.opencode[\\/]plugins[\\/]e2e-dev-harness\.js)",
     re.IGNORECASE,
 )
+HARNESS_INTERNAL_DEBUG_TOOL_RE = re.compile(
+    r"(?:^|\s)(?:grep|find|cat|rg|python(?:3)?(?:\.exe)?\s+-c)\b",
+    re.IGNORECASE,
+)
+HARNESS_INTERNAL_DEBUG_TARGET_RE = re.compile(
+    r"(?:\.claude|\.codex|\.agents)[\\/]+skills[\\/]+e2e-dev-harness[\\/]+scripts\b|"
+    r"handoff_gate\.py\b|"
+    r"e2e_harness[\\/]cli[\\/]commands[\\/]handoff\.py\b",
+    re.IGNORECASE,
+)
 HOOK_PATH_KEYS = {
     "file_path",
     "filepath",
@@ -182,6 +192,17 @@ HOOK_PATH_KEYS = {
     "absolutePath",
     "glob",
     "pattern",
+}
+HOOK_ACTOR_KEYS = {
+    "actor_session",
+    "actorSession",
+    "session",
+    "session_id",
+    "sessionId",
+    "worker_handle",
+    "workerHandle",
+    "worker_session",
+    "workerSession",
 }
 TASK_TEXT_KEYS = {"description", "prompt", "task", "subagent_type", "title", "todos", "content"}
 WRITE_PAYLOAD_KEYS = {"content", "input", "new_string", "old_string", "patch", "replacement", "text"}
@@ -983,6 +1004,42 @@ def worker_output_write_confirmed(dispatch: dict) -> bool:
     return False
 
 
+def requirements_clarifier_artifact_write_confirmed(
+    repo: Path,
+    state_path: Path,
+    state_data: dict,
+    artifact_paths: list[Path],
+    actor_session: str = "",
+) -> bool:
+    actor = actor_session.strip()
+    if not actor:
+        return False
+    requested = {
+        posix_relative(repo, resolve_for_repo(repo, path))
+        for path in artifact_paths
+    }
+    if not requested:
+        return False
+    for dispatch in active_dispatches(state_data):
+        current_agent = str(dispatch.get("current_agent", "")).strip().lower()
+        if "requirements-clarifier" not in current_agent:
+            continue
+        if not worker_output_write_confirmed(dispatch):
+            continue
+        worker_refs = {
+            str(dispatch.get("worker_session", "")).strip(),
+            str(dispatch.get("worker_handle", "")).strip(),
+        }
+        worker_refs.discard("")
+        if actor not in worker_refs:
+            continue
+        task_id = str(dispatch.get("current_task_id", "")).strip()
+        owned_outputs = task_outputs_for_dispatch(repo, state_path, task_id)
+        if requested.issubset(owned_outputs):
+            return True
+    return False
+
+
 def todo_list_blockers(repo: Path, lock: Path | None, task_text: str) -> tuple[list[str], str]:
     text = task_text.strip()
     if not text:
@@ -1192,6 +1249,38 @@ def parse_hook_input(text: str) -> tuple[str, list[str]]:
     return tool, paths
 
 
+def parse_hook_actor_session(text: str) -> str:
+    if not text.strip():
+        return ""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return ""
+    values = collect_hook_actor_values(data)
+    return values[0] if values else ""
+
+
+def collect_hook_actor_values(value) -> list[str]:
+    values: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in HOOK_ACTOR_KEYS:
+                if isinstance(item, str) and item.strip():
+                    values.append(item.strip())
+            elif isinstance(item, (dict, list)):
+                values.extend(collect_hook_actor_values(item))
+    elif isinstance(value, list):
+        for item in value:
+            values.extend(collect_hook_actor_values(item))
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        if value not in seen:
+            unique.append(value)
+            seen.add(value)
+    return unique
+
+
 def collect_hook_paths(value) -> list[str]:
     paths: list[str] = []
     if isinstance(value, dict):
@@ -1361,6 +1450,14 @@ def high_output_shell_classification(command: str) -> str:
     return ""
 
 
+def harness_internal_debug_shell_classification(command: str) -> str:
+    if not command or is_harness_control_cli(command) or is_command_evidence_cli(command):
+        return ""
+    if HARNESS_INTERNAL_DEBUG_TOOL_RE.search(command) and HARNESS_INTERNAL_DEBUG_TARGET_RE.search(command):
+        return "created_harness_internal_debugging"
+    return ""
+
+
 def run_dir_for_tool_event(repo: Path, run_dir: Path | None, lock: Path | None) -> Path | None:
     if run_dir:
         return run_dir if run_dir.is_absolute() else repo / run_dir
@@ -1455,6 +1552,7 @@ def _validate_action(
     command_text: str = "",
     task_text: str = "",
     write_payload_text: str = "",
+    actor_session: str = "",
     require_session_checkpoint: bool = False,
     checkpoint_max_age_minutes: int = 30,
 ) -> dict:
@@ -1466,6 +1564,41 @@ def _validate_action(
     warnings: list[str] = []
     lock = discover_lock(repo, lock_path, run_dir)
     if normalized in SHELL_TOOLS:
+        internal_debug_classification = harness_internal_debug_shell_classification(command_text)
+        if internal_debug_classification and lock and lock.exists():
+            _lock_data, state_data, state_blockers = lock_state_pair(repo, lock)
+            if not state_blockers and str(state_data.get("lifecycle", "")) == "CREATED":
+                event_path = write_coordinator_tool_event(
+                    repo,
+                    run_dir,
+                    lock,
+                    tool,
+                    "blocked_created_harness_internal_debugging",
+                    command_text,
+                    paths,
+                )
+                budget = {
+                    "schema": "e2e-dev-harness.coordinator-tool-budget.v1",
+                    "classification": internal_debug_classification,
+                    "policy": "created_harness_internal_debugging_requires_worker",
+                    "paths": result_paths(repo, paths),
+                    "recommended_action": (
+                        "CREATED coordinator must dispatch/complete the requirements-clarifier "
+                        "or generated artifact repair worker instead of inspecting harness internals locally."
+                    ),
+                }
+                result = {
+                    "ready": False,
+                    "blocked_reasons": [
+                        "CREATED coordinator must dispatch/complete the requirements-clarifier or generated artifact repair worker instead of inspecting handoff_gate.py, handoff.py, or local harness skill internals with Bash."
+                    ],
+                    "warnings": warnings,
+                    "coordinator_tool_budget": budget,
+                    **guidance_from_lock(repo, lock),
+                }
+                if event_path:
+                    result["coordinator_tool_event_path"] = event_path
+                return result
         high_output_classification = high_output_shell_classification(command_text)
         if high_output_classification:
             event_path = write_coordinator_tool_event(
@@ -1725,7 +1858,13 @@ def _validate_action(
                     "artifact_paths": result_paths(repo, clarifier_artifact_paths),
                     **guidance_from_lock(repo, lock),
                 }
-            if lifecycle == "CREATED" and not requirements_clarifier_worker_running(state_data):
+            if lifecycle == "CREATED" and not requirements_clarifier_artifact_write_confirmed(
+                repo,
+                state_path,
+                state_data,
+                clarifier_artifact_paths,
+                actor_session=actor_session,
+            ):
                 task = requirements_clarifier_task_for_state(repo, state_path, state_data)
                 schedule_path = state_path.parent / "agent-schedule.json"
                 dispatch = dispatcher.dispatch_for_task(state_data, str(task.get("id", "")).strip())
@@ -1733,7 +1872,7 @@ def _validate_action(
                 return {
                     "ready": False,
                     "blocked_reasons": [
-                        "Requirements-clarifier artifact write blocked: CREATED coordinator must wait for an active requirements-clarifier worker before writing design, requirements handoff, or impact evidence."
+                        "Requirements-clarifier artifact write blocked: CREATED coordinator must use dispatch-ack proof for the requirements-clarifier or generated artifact repair worker, let that worker write its scheduled outputs, then run dispatch-finish before updating design, requirements handoff, or impact evidence."
                     ],
                     "warnings": warnings,
                     "phase_lock": str(lock),
@@ -2056,6 +2195,7 @@ def validate_action(
     command_text: str = "",
     task_text: str = "",
     write_payload_text: str = "",
+    actor_session: str = "",
     require_session_checkpoint: bool = False,
     checkpoint_max_age_minutes: int = 30,
     compact_guidance: bool = False,
@@ -2070,6 +2210,7 @@ def validate_action(
         command_text=command_text,
         task_text=task_text,
         write_payload_text=write_payload_text,
+        actor_session=actor_session,
         require_session_checkpoint=require_session_checkpoint,
         checkpoint_max_age_minutes=checkpoint_max_age_minutes,
     )
@@ -2101,10 +2242,12 @@ def main() -> int:
         command_text = extract_hook_command_text(hook_text)
         write_payload_text = extract_hook_write_payload_text(hook_text)
         task_text = extract_task_text(hook_text)
+        actor_session = parse_hook_actor_session(hook_text)
     else:
         command_text = ""
         write_payload_text = ""
         task_text = ""
+        actor_session = ""
     result = validate_action(
         args.repo,
         tool,
@@ -2115,6 +2258,7 @@ def main() -> int:
         command_text=command_text,
         write_payload_text=write_payload_text,
         task_text=task_text,
+        actor_session=actor_session,
         require_session_checkpoint=args.require_session_checkpoint,
         checkpoint_max_age_minutes=args.checkpoint_max_age_minutes,
         compact_guidance=args.compact_guidance,

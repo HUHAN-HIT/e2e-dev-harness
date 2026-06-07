@@ -140,6 +140,55 @@ def _limited_strings(values: Any, limit: int = MAX_SUMMARY_ITEMS) -> list[str]:
     return [_compact_string(value) for value in values[:limit]]
 
 
+def _compact_blocker_codes(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [_compact_string(value, 64) for value in values[:5] if str(value or "").strip()]
+
+
+def _compact_repair_next_action(repo: Path, action: Any) -> dict:
+    if not isinstance(action, dict):
+        return {}
+    compact = {
+        key: _compact_string(action[key], 100)
+        for key in ("action", "worker_path", "reason")
+        if action.get(key)
+    }
+    if action.get("handoff"):
+        compact["handoff"] = _compact_string(_display_path(repo, action["handoff"]), 140)
+    return compact
+
+
+def _compact_json_size(payload: dict) -> int:
+    return len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+
+
+def _fit_compact_payload(payload: dict) -> dict:
+    if _compact_json_size(payload) <= MAX_COMPACT_CHARS:
+        return payload
+    repair = payload.get("repair_next_action")
+    if isinstance(repair, dict):
+        repair.pop("handoff", None)
+    if _compact_json_size(payload) <= MAX_COMPACT_CHARS:
+        return payload
+    if isinstance(payload.get("blocker_codes"), list):
+        payload["blocker_codes"] = payload["blocker_codes"][:3]
+    if _compact_json_size(payload) <= MAX_COMPACT_CHARS:
+        return payload
+    if isinstance(repair, dict):
+        repair.pop("reason", None)
+    if _compact_json_size(payload) <= MAX_COMPACT_CHARS:
+        return payload
+    if isinstance(payload.get("blocker_codes"), list):
+        payload["blocker_codes"] = payload["blocker_codes"][:1]
+    if _compact_json_size(payload) <= MAX_COMPACT_CHARS:
+        return payload
+    payload.pop("navigation_map", None)
+    payload["warnings"] = []
+    payload["blocked_reasons"] = []
+    return payload
+
+
 def _compact_next(next_action: Any) -> dict:
     if not isinstance(next_action, dict):
         return {}
@@ -370,6 +419,8 @@ def compact_payload(
     lifecycle = result.get("lifecycle", "") or navigation_here.get("lifecycle", "")
     workflow_stage = navigation_here.get("workflow_stage") or workflow_stage_for_lifecycle(lifecycle)
     ready = bool(result.get("ready", navigation_status.get("ready", False)))
+    blocker_codes = _compact_blocker_codes(result.get("blocker_codes"))
+    repair_next_action = _compact_repair_next_action(repo, result.get("repair_next_action"))
     payload = {
         "ready": ready,
         "workflow_stage": workflow_stage,
@@ -386,6 +437,8 @@ def compact_payload(
         },
         "artifact_paths": _artifact_paths(repo, result, full_result_path, coordinator_summary_path),
         "next_action": _compact_next(result.get("next")),
+        "blocker_codes": blocker_codes,
+        "repair_next_action": repair_next_action,
         "execution_packet": _compact_execution_packet(result.get("execution_packet")),
         "navigation_map": _compact_navigation_map(navigation_source),
         "checkpoint": session.get("checkpoint", ""),
@@ -421,6 +474,10 @@ def compact_payload(
     }
     if review_policy:
         payload["review_policy"] = review_policy
+    if not payload["blocker_codes"]:
+        payload.pop("blocker_codes")
+    if not payload["repair_next_action"]:
+        payload.pop("repair_next_action")
     if not payload["navigation_map"]:
         payload.pop("navigation_map")
     text = json.dumps(payload, ensure_ascii=False)
@@ -474,6 +531,8 @@ def compact_payload(
                 for key in ("workflow_stage", "phase", "command", "orchestration_action", "dispatch_command")
                 if key in next_action
             },
+            "blocker_codes": blocker_codes,
+            "repair_next_action": repair_next_action,
             "navigation_map": _minimal_navigation_map(navigation_source),
             "full_result_path": _stdout_path(repo, full_result_path),
             "command_event_path": _stdout_path(repo, result.get("command_event_path", "")) if result.get("command_event_path") else "",
@@ -490,6 +549,10 @@ def compact_payload(
             payload["coordinator_context_budget"] = budget_signal
         if review_policy:
             payload["review_policy"] = review_policy
+        if not payload["blocker_codes"]:
+            payload.pop("blocker_codes")
+        if not payload["repair_next_action"]:
+            payload.pop("repair_next_action")
         if payload.get("navigation_map") and len(json.dumps(payload, ensure_ascii=False)) > MAX_COMPACT_CHARS:
             payload["navigation_map"] = _tiny_navigation_map(navigation_source)
         map_action = payload.get("navigation_map", {}).get("next_single_action", {})
@@ -502,6 +565,8 @@ def compact_payload(
             payload["next_action"] = {}
             payload["warnings"] = []
             payload["blocked_reasons"] = []
+    if blocker_codes or repair_next_action:
+        return _fit_compact_payload(payload)
     return payload
 
 

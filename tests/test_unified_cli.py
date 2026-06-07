@@ -642,6 +642,66 @@ class UnifiedCliTests(unittest.TestCase):
 
         self.assertIn("T01b", payload["next_action"]["command"])
 
+    def test_compact_payload_preserves_handoff_repair_codes_when_truncated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            full_result = repo / "docs" / "agent-runs" / "run" / "coordinator-results" / "handoff.json"
+            payload = output_contract.compact_payload(
+                repo,
+                "handoff finalize",
+                {
+                    "ready": False,
+                    "lifecycle": "CREATED",
+                    "blocked_reasons": ["blocker-" + ("x" * 5000)],
+                    "warnings": ["warning-" + ("y" * 5000)],
+                    "blocker_codes": [
+                        "ready_body_section_empty",
+                        "open_questions_not_literal_none",
+                        "input_hashes_empty",
+                        "output_hashes_empty",
+                        "self_referential_outputs",
+                    ],
+                    "repair_next_action": {
+                        "action": "artifact_repair",
+                        "worker_path": "artifact_repair",
+                        "reason": "handoff_content_contract_blocked",
+                        "handoff": str(repo / "docs" / "agent-runs" / "run" / "handoffs" / "01-requirements-clarifier.md"),
+                    },
+                },
+                full_result,
+                "docs/agent-runs/run/coordinator-summary.json",
+            )
+            rendered = output_contract.render_json(payload)
+
+        self.assertLess(len(rendered.encode("utf-8")), output_contract.MAX_COMPACT_CHARS)
+        self.assertEqual(
+            ["ready_body_section_empty", "open_questions_not_literal_none", "input_hashes_empty"],
+            payload["blocker_codes"],
+        )
+        self.assertEqual("artifact_repair", payload["repair_next_action"]["action"])
+        self.assertEqual("artifact_repair", payload["repair_next_action"]["worker_path"])
+
+    def test_compact_payload_preserves_rerun_handoff_finalize_action(self) -> None:
+        payload = output_contract.compact_payload(
+            Path("C:/repo"),
+            "handoff finalize",
+            {
+                "ready": False,
+                "lifecycle": "CREATED",
+                "blocker_codes": ["handoff_contract_blocker"],
+                "repair_next_action": {
+                    "action": "rerun_handoff_finalize",
+                    "reason": "handoff_finalize_invocation_blocked",
+                    "handoff": "C:/repo/handoff.txt",
+                },
+            },
+            Path("C:/repo/docs/agent-runs/run/coordinator-results/handoff.json"),
+        )
+
+        self.assertEqual(["handoff_contract_blocker"], payload["blocker_codes"])
+        self.assertEqual("rerun_handoff_finalize", payload["repair_next_action"]["action"])
+        self.assertEqual("handoff.txt", payload["repair_next_action"]["handoff"])
+
     def test_next_cli_quiet_default_writes_full_result_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

@@ -42,6 +42,10 @@ WORKER_OUTPUT_REMINDER = (
     "must be written by the dispatched worker, not the coordinator. Spawn or "
     "acknowledge the worker first; do not write them directly."
 )
+CREATED_REQUIREMENTS_RELAY_REMINDER = (
+    "CREATED clarification boundary: the coordinator only dispatches, acknowledges, "
+    "and relays worker output; it must not write or repair the requirements handoff locally."
+)
 
 
 def _inactive() -> dict:
@@ -108,6 +112,8 @@ def format_advice(result: dict) -> str:
             lines.append("  - Spawn the dispatcher-generated Task from: " + spawn_request)
         if ack_command:
             lines.append("  - Then record: " + ack_command)
+    if lifecycle == "CREATED":
+        lines.append(CREATED_REQUIREMENTS_RELAY_REMINDER)
     lines.append(WORKER_OUTPUT_REMINDER)
     return "\n".join(lines)
 

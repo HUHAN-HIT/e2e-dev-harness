@@ -411,6 +411,7 @@ class DispatchAckPhaseGuardTest(unittest.TestCase):
                 "Write",
                 [evidence],
                 run_dir=Path("docs/agent-runs/run"),
+                actor_session="requirements-worker-session-1",
             )
 
         self.assertFalse(result["ready"])
@@ -737,6 +738,7 @@ class DispatchAckPhaseGuardTest(unittest.TestCase):
                 "Write",
                 [evidence],
                 run_dir=Path("docs/agent-runs/run"),
+                actor_session="requirements-worker-session-1",
             )
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
@@ -792,6 +794,7 @@ class DispatchAckPhaseGuardTest(unittest.TestCase):
                 "Write",
                 [evidence],
                 run_dir=Path("docs/agent-runs/run"),
+                actor_session="requirements-clarifier-session",
             )
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
@@ -847,9 +850,198 @@ class DispatchAckPhaseGuardTest(unittest.TestCase):
                 "Write",
                 [handoff, evidence],
                 run_dir=Path("docs/agent-runs/run"),
+                actor_session="requirements-clarifier-session",
             )
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_created_dispatch_ack_without_actor_session_cannot_update_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            state["dispatch"] = {
+                "status": "worker_running",
+                "runtime": "codex",
+                "previous_lifecycle": "CREATED",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "worker_handle": "requirements-clarifier-worker",
+                "worker_session": "requirements-clarifier-session",
+                "spawn_confirmed_by": "dispatch_ack",
+                "spawn_acknowledged_at": "2026-06-06T01:31:07Z",
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            (run_dir / "agent-schedule.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": [handoff.as_posix()],
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = phase_guard.validate_action(
+                repo,
+                "Write",
+                [handoff],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertIn("Requirements-clarifier artifact write blocked", result["blocked_reasons"][0])
+
+    def test_created_running_clarifier_without_dispatch_ack_cannot_update_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            handoff = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            state["dispatch"] = {
+                "status": "worker_running",
+                "runtime": "codex",
+                "previous_lifecycle": "CREATED",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "worker_handle": "requirements-clarifier-worker",
+                "worker_session": "requirements-clarifier-session",
+            }
+            state["dispatches"] = {"T01": dict(state["dispatch"])}
+            run_state.write_state(repo, state_path, state)
+            evidence = Path("docs/agent-runs/run/evidence/requirements-summary.md")
+            (run_dir / "agent-schedule.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "outputs": [evidence.as_posix()],
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = phase_guard.validate_action(
+                repo,
+                "Update",
+                [handoff],
+                run_dir=Path("docs/agent-runs/run"),
+            )
+
+        self.assertFalse(result["ready"])
+        message = " ".join(result["blocked_reasons"])
+        self.assertIn("Requirements-clarifier artifact write blocked", message)
+        self.assertIn("dispatch-ack", message)
+
+    def test_created_bash_harness_internal_handoff_repair_debugging_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Bash",
+                [],
+                run_dir=Path("docs/agent-runs/run"),
+                command_text="grep -R \"open_questions\" .claude/skills/e2e-dev-harness/scripts/handoff_gate.py",
+            )
+
+        self.assertFalse(result["ready"])
+        message = " ".join(result["blocked_reasons"])
+        self.assertIn("CREATED coordinator must dispatch", message)
+        self.assertIn("requirements-clarifier", message)
+        self.assertIn("artifact repair worker", message)
+
+    def test_created_bash_git_bash_wide_handoff_gate_scan_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Bash",
+                [],
+                run_dir=Path("docs/agent-runs/run"),
+                command_text='find C:/Users/me/.claude/skills/e2e-dev-harness/scripts -name "handoff_gate.py" 2>/dev/null | head -3',
+            )
+
+        self.assertFalse(result["ready"])
+        self.assertEqual("created_harness_internal_debugging", result["coordinator_tool_budget"]["classification"])
+
+    def test_created_bash_small_non_internal_read_only_command_stays_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            run_state.write_state(repo, state_path, state)
+
+            result = phase_guard.validate_action(
+                repo,
+                "Bash",
+                [],
+                run_dir=Path("docs/agent-runs/run"),
+                command_text="cat docs/agent-runs/run/run-state.json",
+            )
+
+        self.assertTrue(result["ready"], result.get("blocked_reasons"))
 
     def test_coordinator_high_output_shell_is_blocked_and_recorded_as_tool_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1176,6 +1368,59 @@ class DispatchFinishHandoffContractTest(unittest.TestCase):
         self.assertTrue(any("clarify" in item for item in self_check["required_commands"]))
         self.assertTrue(any("handoff" in item for item in self_check["required_commands"]))
         self.assertIn("control-plane revalidates", self_check["authority"])
+
+    def test_ready_handoff_guidance_orders_hashes_before_final_dispatch_finish(self) -> None:
+        task = {
+            "id": "T01",
+            "agent": "requirements-clarifier",
+            "inputs": ["docs/agent-runs/run/context-packs/T01.json"],
+            "outputs": [
+                "docs/agent-runs/run/evidence/requirements-summary.md",
+                "docs/agent-runs/run/handoffs/01-requirements-clarifier.md",
+            ],
+        }
+
+        requirements = dispatcher.ready_handoff_completion_requirements(task)
+        prompt = "\n".join(dispatcher.ready_handoff_prompt_lines(task))
+        steps = "\n".join(requirements["required_steps"])
+        self_check_commands = "\n".join(requirements["worker_self_check"]["required_commands"])
+
+        self.assertIn("all declared input/output artifacts", steps)
+        self.assertIn("after the final Markdown content is stable", steps)
+        self.assertIn("last completion step", steps)
+        self.assertIn("dispatch-finish --handoff", steps)
+        self.assertIn("all declared input/output artifacts", prompt)
+        self.assertIn("stable Markdown", prompt)
+        self.assertIn("last", prompt)
+        self.assertIn("dispatch-finish --handoff", self_check_commands)
+        self.assertNotIn("Run handoff --path ... --agent ... or dispatch-finish", steps)
+        self.assertNotIn("Run handoff --path ... --agent ... or dispatch-finish", self_check_commands)
+
+    def test_manual_worker_packet_prefers_dispatch_finish_over_bare_handoff_finalize(self) -> None:
+        repo = Path(".").resolve()
+        packet = dispatcher.manual_worker_packet(
+            repo,
+            Path("docs/agent-runs/run/agent-schedule.json"),
+            Path("docs/agent-runs/run/run-state.json"),
+            {
+                "id": "T01",
+                "agent": "requirements-clarifier",
+                "inputs": ["docs/agent-runs/run/context-packs/T01.json"],
+                "outputs": [
+                    "docs/agent-runs/run/evidence/requirements-summary.md",
+                    "docs/agent-runs/run/handoffs/01-requirements-clarifier.md",
+                ],
+            },
+        )
+
+        text = "\n".join(packet["next_commands"])
+
+        self.assertIn("Final worker step", text)
+        self.assertIn("hash all declared input/output artifacts", text)
+        self.assertIn("stable Markdown", text)
+        self.assertIn("dispatch-finish", packet["next_commands"][-1])
+        self.assertIn("--handoff docs/agent-runs/run/handoffs/01-requirements-clarifier.md", packet["next_commands"][-1])
+        self.assertNotIn("handoff finalize", text.lower())
 
 
 if __name__ == "__main__":

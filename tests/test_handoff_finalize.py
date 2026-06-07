@@ -89,6 +89,8 @@ class HandoffFinalizeTests(unittest.TestCase):
             self.assertFalse(handoff_gate.marker_path(handoff.resolve()).exists())
             # Blockers are specific, not a vague failure.
             self.assertTrue(any("non-empty" in r for r in result["blocked_reasons"]))
+            self.assertEqual(result["repair_next_action"]["action"], "artifact_repair")
+            self.assertEqual(result["repair_next_action"]["worker_path"], "artifact_repair")
 
     def test_complete_handoff_writes_ready_marker_and_normalizes_frontmatter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -169,6 +171,48 @@ class HandoffFinalizeTests(unittest.TestCase):
             self.assertTrue(result.get("marker_rolled_back"))
             self.assertFalse(handoff_gate.marker_path(handoff.resolve()).exists())
             self.assertTrue(any("ready body section" in item for item in result["blocked_reasons"]))
+            self.assertIn("ready_body_section_empty", result["blocker_codes"])
+            self.assertEqual(result["repair_next_action"]["action"], "artifact_repair")
+            self.assertEqual(result["repair_next_action"]["worker_path"], "artifact_repair")
+            self.assertIn("artifact repair", result["next_hint"])
+            self.assertNotIn("Fix the blockers", result["next_hint"])
+
+    def test_open_questions_failure_reports_structured_blocker_code(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run = repo / "docs" / "agent-runs" / "run"
+            (run / "handoffs").mkdir(parents=True)
+            (run / "evidence").mkdir(parents=True)
+            out = run / "evidence" / "impact-summary.md"
+            out.write_text("# Impact Summary\n\nReal content.\n", encoding="utf-8")
+            out_rel = "docs/agent-runs/run/evidence/impact-summary.md"
+            out_hash = hashlib.sha256(out.read_bytes()).hexdigest()
+            handoff = run / "handoffs" / "01-requirements-clarifier.md"
+            handoff.write_text(
+                _complete_handoff_text(out_rel, out_hash).replace(
+                    "## Open Questions\n\nNone\n",
+                    "## Open Questions\n\nThe earlier concern is resolved; no user input is needed.\n",
+                ),
+                encoding="utf-8",
+            )
+
+            result = handoff_command.run_finalize(repo, handoff, "developer-agent-1")
+
+            self.assertFalse(result["ready"])
+            self.assertIn("open_questions_not_literal_none", result["blocker_codes"])
+
+    def test_invocation_failure_does_not_route_to_artifact_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoff = repo / "handoff.txt"
+            handoff.write_text("not a markdown handoff\n", encoding="utf-8")
+
+            result = handoff_command.run_finalize(repo, handoff, "developer-agent-1")
+
+            self.assertFalse(result["ready"])
+            self.assertIn("handoff_contract_blocker", result["blocker_codes"])
+            self.assertEqual(result["repair_next_action"]["action"], "rerun_handoff_finalize")
+            self.assertNotEqual(result["repair_next_action"]["action"], "artifact_repair")
 
 
 class TaskStateViewTests(unittest.TestCase):

@@ -24,6 +24,14 @@ import handoff_gate
 from e2e_harness.cli.status import write_status
 
 _SCALAR_KEYS_ORDER = ("agent_id", "status")
+_ARTIFACT_REPAIR_BLOCKER_CODES = {
+    "input_hashes_empty",
+    "output_hashes_empty",
+    "open_questions_not_literal_none",
+    "ready_body_section_empty",
+    "required_frontmatter_missing",
+    "self_referential_outputs",
+}
 
 
 def _split_frontmatter(text: str) -> tuple[list[str], str, bool]:
@@ -130,26 +138,29 @@ def run_finalize(
         "schema": "e2e-dev-harness.handoff-finalize.v1",
         "ready": False,
         "blocked_reasons": [],
+        "blocker_codes": [],
         "warnings": [],
         "handoff": str(handoff),
         "agent": agent,
     }
 
     if not str(handoff).endswith(".md"):
-        result["blocked_reasons"].append(f"Handoff path must be a .md file: {handoff}")
+        _record_blockers(result, [f"Handoff path must be a .md file: {handoff}"], handoff)
         return result
     if not handoff.is_file():
-        result["blocked_reasons"].append(f"Handoff file does not exist: {handoff}")
+        _record_blockers(result, [f"Handoff file does not exist: {handoff}"], handoff)
         return result
     agent = str(agent or "").strip()
     if not agent:
-        result["blocked_reasons"].append("--agent is required to set agent_id / producer_agent.")
+        _record_blockers(result, ["--agent is required to set agent_id / producer_agent."], handoff)
         return result
 
     fm_lines, remainder, had_fm = _split_frontmatter(handoff.read_text(encoding="utf-8"))
     if not had_fm:
-        result["blocked_reasons"].append(
-            f"Handoff {handoff} has no YAML frontmatter block; worker must write frontmatter + body first."
+        _record_blockers(
+            result,
+            [f"Handoff {handoff} has no YAML frontmatter block; worker must write frontmatter + body first."],
+            handoff,
         )
         return result
 
@@ -178,9 +189,8 @@ def run_finalize(
             marker.unlink()
         except OSError:
             pass
-        result["blocked_reasons"] = blockers
+        _record_blockers(result, blockers, handoff)
         result["marker_rolled_back"] = True
-        result["next_hint"] = "Fix the blockers in the handoff body/frontmatter, then rerun handoff finalize."
         return result
 
     result["ready"] = True
@@ -297,6 +307,34 @@ def _blocker_codes(reasons: list[str]) -> list[str]:
         if code not in codes:
             codes.append(code)
     return codes
+
+
+def _record_blockers(result: dict, reasons: list[str], handoff: Path) -> None:
+    result["blocked_reasons"] = list(reasons)
+    result["blocker_codes"] = _blocker_codes(result["blocked_reasons"])
+    result["repair_next_action"] = _repair_next_action(result["blocker_codes"], handoff)
+    if result["repair_next_action"]["action"] == "artifact_repair":
+        result["next_hint"] = (
+            "Schedule an artifact repair worker for this handoff, then rerun handoff finalize after the worker "
+            "updates the body/frontmatter."
+        )
+    else:
+        result["next_hint"] = "Correct the handoff finalize invocation, then rerun handoff finalize."
+
+
+def _repair_next_action(blocker_codes: list[str], handoff: Path) -> dict:
+    if any(code in _ARTIFACT_REPAIR_BLOCKER_CODES for code in blocker_codes):
+        return {
+            "action": "artifact_repair",
+            "worker_path": "artifact_repair",
+            "reason": "handoff_content_contract_blocked",
+            "handoff": str(handoff),
+        }
+    return {
+        "action": "rerun_handoff_finalize",
+        "reason": "handoff_finalize_invocation_blocked",
+        "handoff": str(handoff),
+    }
 
 
 def run_from_args(args) -> tuple[int, dict]:

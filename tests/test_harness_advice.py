@@ -124,6 +124,15 @@ class HarnessAdviceGuidanceTests(unittest.TestCase):
         self.assertIn("impact-analysis.json", text)
         self.assertIn("worker", text.lower())
 
+    def test_created_advice_keeps_coordinator_relay_only_for_requirements_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            write_pending_dispatch_fixture(repo)
+            text = harness_advice.format_advice(harness_advice.advice_for_repo(repo))
+
+        self.assertIn("coordinator only dispatches, acknowledges, and relays worker output", text)
+        self.assertIn("must not write or repair the requirements handoff locally", text)
+
     def test_advice_reuses_phase_guard_guidance(self) -> None:
         # Single source of truth: advice must equal phase_guard's own compact guidance.
         with tempfile.TemporaryDirectory() as tmp:

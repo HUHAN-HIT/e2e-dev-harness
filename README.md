@@ -172,6 +172,20 @@ The map reports:
 - allowed and forbidden writes now
 - required evidence and key artifact paths
 
+The map has three detail levels:
+
+- Compact stdout: `you_are_here`, `state_confidence`, `next_single_action`, `primary_blocker_code`, and a short `must_read_paths` list.
+- `coordinator-summary.json`: durable coordinator resume view with bounded diagnostic checks and authority pointers.
+- `full_result_path` / `--json-full`: full control-plane result with execution packet, workflow overview, preflight, and state diagnostics.
+
+Use `state_confidence` as the first trust signal:
+
+- `ready`: run-state and derived views agree.
+- `degraded`: the main lifecycle is readable, but a derived view such as `coordinator-summary.json` is stale.
+- `blocked`: a required control-plane surface is missing, invalid, or inconsistent.
+
+The map remains read-only. Repair still goes through the command named in `next_single_action` or through doctor/recovery commands.
+
 Use `next --json-full` or the `full_result_path` when you need the complete workflow plan, execution packet, todo policy, or checkpoint details. Use `doctor --state` when environment health or state consistency looks abnormal.
 
 Then fill the generated design doc and run clarification/discovery:

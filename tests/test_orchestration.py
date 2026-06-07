@@ -5203,8 +5203,11 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertIn("Summary, Facts Used, Decisions Made, Open Questions, Downstream Assumptions, Verification Evidence", prompt)
         self.assertIn("Do not hand-roll python", prompt)
         self.assertIn("e2e_dev_harness.py hash", prompt)
-        self.assertIn("handoff --path", prompt)
         self.assertIn("dispatch-finish --handoff", prompt)
+        self.assertIn("all declared input/output artifacts", prompt)
+        self.assertIn("stable Markdown", prompt)
+        self.assertIn("last completion step", prompt)
+        self.assertNotIn("handoff --path", prompt)
         self.assertNotIn("Compute SHA-256 hashes", prompt)
 
     def test_task_prompt_routes_missing_inputs_out_of_input_hashes(self) -> None:
