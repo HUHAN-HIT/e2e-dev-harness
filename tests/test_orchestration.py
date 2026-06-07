@@ -8013,6 +8013,100 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertEqual("worker_completed", event["event"])
         self.assertTrue(result["clarification_dispatch_auto_complete"]["ready"])
 
+    def test_clarify_threads_minimal_workflow_tier_into_validate(self) -> None:
+        # minimal tier in run-state makes clarification_flow.run pass tier through to validate
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design = repo / "docs" / "design" / "feature.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(
+                textwrap.dedent(
+                    """
+                    # Feature
+
+                    ## Restated Intent
+                    - The user wants a refund notification published.
+                    - User confirmation: confirmed-by: user @2026-06-07
+
+                    ## Goal
+                    - Publish a refund notification.
+
+                    ## Scope
+                    - order-service payment refund API across services
+
+                    ## Use Cases
+                    - Publish refund notification to the payment topic.
+
+                    ## Acceptance Criteria
+                    - AC-1 refund API returns success.
+
+                    ## Test Design
+                    - Unit test first.
+
+                    ## Open Questions
+                    None. confirmed-by: user @2026-06-07
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            state = run_state.build_state("run", "single", [], "docs/agent-runs/run/artifact-registry.json", "CREATED")
+            run_state.set_workflow_tier(state, "minimal")
+            role_template = Path("docs/agent-runs/run/agent-roles/requirements-clarifier.md")
+            evidence = Path("docs/agent-runs/run/handoffs/01-requirements-clarifier.md")
+            schedule = repo / "docs" / "agent-runs" / "run" / "agent-schedule.json"
+            write_role_template(repo, role_template)
+            write_ready_handoff(repo, evidence, agent_id="requirements-clarifier")
+            state["dispatch"] = {
+                "status": "worker_running",
+                "runtime": "codex",
+                "current_task_id": "T01",
+                "current_agent": "requirements-clarifier",
+                "worker_handle": "worker-1",
+                "worker_session": "worker-session-1",
+            }
+            state["dispatches"] = {"T01": state["dispatch"]}
+            run_state.write_state(repo, state_path, state)
+            schedule.parent.mkdir(parents=True, exist_ok=True)
+            schedule.write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "require_role_templates": True,
+                        "tasks": [
+                            {
+                                "id": "T01",
+                                "agent": "requirements-clarifier",
+                                "phase": "clarify",
+                                "role_group": "design",
+                                "inputs": [],
+                                "outputs": [evidence.as_posix()],
+                                "role_template": role_template.as_posix(),
+                                "status": "claimed",
+                                "owner": "requirements-clarifier",
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                repo=repo,
+                design_doc=Path("docs/design/feature.md"),
+                run_state=state_path,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.clarify(args)
+
+        self.assertEqual(0, code, result)
+        self.assertEqual("minimal", result.get("tier"))
+        self.assertEqual([], result.get("impact_gaps", []))
+        self.assertEqual([], result.get("change_logic_gaps", []))
+        self.assertEqual([], result.get("integration_gaps", []))
+
     def test_clarify_blocks_created_run_state_without_requirements_worker_completion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

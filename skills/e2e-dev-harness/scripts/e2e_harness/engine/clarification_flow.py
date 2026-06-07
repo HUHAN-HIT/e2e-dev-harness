@@ -341,10 +341,17 @@ def run(
             write_status(status_file, result)
             return 2, result
 
+    tier = "standard"
+    if run_state:
+        _state_path = _resolve_repo_path(repo, run_state)
+        if _state_path and _state_path.exists():
+            tier = run_state_module.workflow_tier(read_json_object(_state_path))
+
     result = clarification_gate.validate(
         design_path,
         require_intent=require_intent,
         require_user_confirmation=require_user_confirmation,
+        tier=tier,
     )
     _with_stage(result, "validation")
     repair_dispatch = _ensure_mechanical_repair_tasks(repo, run_state, design_path, result)
