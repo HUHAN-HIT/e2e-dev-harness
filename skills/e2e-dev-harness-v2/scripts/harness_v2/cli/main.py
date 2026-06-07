@@ -33,7 +33,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    code, result = _COMMANDS[args.command](args)
+    try:
+        code, result = _COMMANDS[args.command](args)
+    except Exception as exc:  # noqa: BLE001 — contract: every command emits JSON
+        sys.stdout.write(json.dumps({"error": str(exc)}, ensure_ascii=False))
+        return 2
     sys.stdout.write(json.dumps(result, ensure_ascii=False))
     return code
 

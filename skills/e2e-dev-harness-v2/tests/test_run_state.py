@@ -30,3 +30,27 @@ def test_save_refreshes_updated_at(tmp_path):
     p = tmp_path / "run-state.json"
     run_state.save(p, st, now="20260607T010101Z")
     assert run_state.load(p)["updated_at"] == "20260607T010101Z"
+
+
+import json
+import pytest
+from pathlib import Path
+
+
+def test_load_rejects_schema_mismatch(tmp_path):
+    from harness_v2.core import run_state
+    p = tmp_path / "bad.json"
+    p.write_text(json.dumps({"schema": "wrong", "run_id": "x"}), encoding="utf-8")
+    with pytest.raises(ValueError) as ei:
+        run_state.load(p)
+    assert "schema" in str(ei.value)
+
+
+def test_save_is_atomic_no_partial_on_replace(tmp_path):
+    from harness_v2.core import run_state
+    st = run_state.new_run_state("r1", "feat", "req")
+    p = tmp_path / "run-state.json"
+    run_state.save(p, st)
+    leftovers = [q.name for q in tmp_path.iterdir() if q.name != "run-state.json"]
+    assert leftovers == []
+    assert run_state.load(p)["run_id"] == "r1"

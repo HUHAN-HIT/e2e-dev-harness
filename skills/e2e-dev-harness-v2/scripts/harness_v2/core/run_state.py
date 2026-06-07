@@ -1,7 +1,8 @@
-"""SSOT run-state: one JSON file, versioned schema."""
+"""SSOT run-state: one JSON file, versioned schema, atomic writes."""
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,7 +34,13 @@ def new_run_state(run_id: str, feature: str, request: str,
 
 
 def load(path: str | Path) -> dict:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    got = data.get("schema")
+    if got != SCHEMA:
+        raise ValueError(
+            f"run-state schema mismatch: expected {SCHEMA!r}, got {got!r}"
+        )
+    return data
 
 
 def save(path: str | Path, state: dict, now: str | None = None) -> None:
@@ -41,4 +48,7 @@ def save(path: str | Path, state: dict, now: str | None = None) -> None:
     state["updated_at"] = _stamp(now)
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+    text = json.dumps(state, indent=2, ensure_ascii=False)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, p)
