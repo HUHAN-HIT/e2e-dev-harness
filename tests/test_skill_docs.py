@@ -29,6 +29,24 @@ class SkillDocumentationTests(unittest.TestCase):
 
         self.assertEqual([], offenders)
 
+    def test_phase_worker_skills_are_small_and_stage_scoped(self) -> None:
+        expected = {
+            "e2e-harness-clarification": "clarification",
+            "e2e-harness-planning": "planning",
+            "e2e-harness-tdd-red": "red test",
+            "e2e-harness-implementation": "implementation",
+            "e2e-harness-review": "review",
+            "e2e-harness-completion": "completion",
+        }
+        for skill, phrase in expected.items():
+            path = ROOT / "skills" / skill / "SKILL.md"
+            self.assertTrue(path.exists(), skill)
+            text = path.read_text(encoding="utf-8")
+            self.assertIn(f"name: {skill}", text)
+            self.assertIn(phrase, text.lower())
+            self.assertIn("Do not inherit coordinator chat context", text)
+            self.assertLess(len(text.splitlines()), 140)
+
     def test_skill_points_non_codex_agents_to_platform_compatibility_reference(self) -> None:
         skill_text = (ROOT / "skills" / "e2e-dev-harness" / "SKILL.md").read_text(encoding="utf-8")
 
