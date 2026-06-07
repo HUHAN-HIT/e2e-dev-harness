@@ -856,6 +856,15 @@ def task_prompt(task: dict, pack: dict, invocation_path: Path, repo: Path) -> st
         lines.append("Primary inputs:")
         lines.extend(f"- {item}" for item in primary_inputs)
         lines.append("")
+    required_skill = str(pack.get("required_skill", "") or task.get("required_skill", ""))
+    if required_skill:
+        lines.append(f"Required worker skill: {required_skill}")
+        lines.append(f"Skill file: {pack.get('required_skill_path', '') or task.get('required_skill_path', '')}")
+        reference_set = pack.get("skill_reference_set", []) or task.get("skill_reference_set", [])
+        if reference_set:
+            lines.append("Reference set: " + ", ".join(str(item) for item in reference_set))
+        lines.append("Load only this worker skill plus the context pack and listed input files.")
+        lines.append("")
     lines.append("Allowed inputs:")
     lines.extend(f"- {item}" for item in pack.get("allowed_inputs", []) or [])
     lines.append("")

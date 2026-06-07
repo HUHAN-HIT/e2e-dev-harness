@@ -247,6 +247,10 @@ class RuntimeAdapter:
         capabilities = self.capabilities()
         task_id = str(task.get("id", ""))
         agent = str(task.get("agent", "")) or "agent"
+        skill_meta = {
+            "required_skill": str(task.get("required_skill", "")),
+            "required_skill_path": str(task.get("required_skill_path", "")),
+        }
         ack_command, completion_command = _completion_commands(task, schedule_path, state_path, repo)
         subagent_type, subagent_metadata = projected_task_subagent_type(task, capabilities)
         if capabilities.get("dispatch_mode") == "opencode-task":
@@ -264,6 +268,7 @@ class RuntimeAdapter:
                 "ack_command": ack_command,
                 "completion_command": completion_command,
                 "context_policy": "fresh OpenCode subagent via Task tool; do not inherit coordinator chat beyond this prompt and context pack.",
+                **skill_meta,
             }
         if capabilities.get("spawn_tool") == "Task":
             return {
@@ -280,6 +285,7 @@ class RuntimeAdapter:
                 "ack_command": ack_command,
                 "completion_command": completion_command,
                 "context_policy": "fresh Claude Code Task only; no inherited coordinator chat beyond this prompt and context pack.",
+                **skill_meta,
                 **subagent_metadata,
             }
         if capabilities.get("spawn_tool") == "multi_agent_v1.spawn_agent":
@@ -291,12 +297,14 @@ class RuntimeAdapter:
                     "agent_type": "worker",
                     "fork_context": False,
                     "message": prompt,
+                    **skill_meta,
                 },
                 "task_id": task_id,
                 "agent": agent,
                 "ack_command": ack_command,
                 "completion_command": completion_command,
                 "context_policy": "fresh worker only; fork_context=false; use context pack instead of coordinator chat.",
+                **skill_meta,
             }
         return None
 

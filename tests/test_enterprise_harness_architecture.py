@@ -908,6 +908,30 @@ class RuntimeAdapterContractTests(unittest.TestCase):
         self.assertFalse(manual.capabilities()["supports_subagent"])
         self.assertEqual("gemini", manual.capabilities()["runtime"])
 
+    def test_runtime_spawn_request_carries_required_skill_metadata(self) -> None:
+        import runtime_adapters  # noqa: PLC0415
+
+        adapter = runtime_adapters.adapter_for("codex")
+        task = {
+            "id": "T01",
+            "agent": "requirements-clarifier",
+            "phase": "clarify",
+            "required_skill": "e2e-harness-clarification",
+            "required_skill_path": "skills/e2e-harness-clarification/SKILL.md",
+        }
+
+        request = adapter.spawn(
+            task,
+            "worker prompt",
+            Path("docs/agent-runs/run/agent-schedule.json"),
+            None,
+            Path("."),
+        )
+
+        self.assertEqual("e2e-harness-clarification", request["required_skill"])
+        self.assertEqual("skills/e2e-harness-clarification/SKILL.md", request["required_skill_path"])
+        self.assertEqual("e2e-harness-clarification", request["arguments"]["required_skill"])
+
     def test_unknown_runtime_adapter_fallback_is_visible_in_capabilities(self) -> None:
         import runtime_adapters  # noqa: PLC0415
 

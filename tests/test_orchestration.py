@@ -112,6 +112,31 @@ class PhaseSkillCapabilitySeamTests(unittest.TestCase):
         self.assertEqual("e2e-harness-clarification", by_phase["clarify"]["required_skill"])
         self.assertEqual("e2e-harness-completion", by_phase["completion"]["required_skill"])
 
+    def test_worker_prompt_names_required_skill_and_reference_set(self) -> None:
+        task = {
+            "id": "T01",
+            "agent": "requirements-clarifier",
+            "phase": "clarify",
+            "required_skill": "e2e-harness-clarification",
+            "required_skill_path": "skills/e2e-harness-clarification/SKILL.md",
+            "skill_reference_set": ["clarification-gate"],
+            "outputs": ["docs/agent-runs/run/handoffs/01-requirements-clarifier.md"],
+        }
+        pack = {
+            "allowed_inputs": [],
+            "allowed_outputs": task["outputs"],
+            "required_skill": task["required_skill"],
+            "required_skill_path": task["required_skill_path"],
+            "skill_reference_set": task["skill_reference_set"],
+        }
+        prompt = dispatcher.task_prompt(
+            task, pack, Path("docs/agent-runs/run/dispatch-invocations/T01.json"), Path(".")
+        )
+
+        self.assertIn("Required worker skill: e2e-harness-clarification", prompt)
+        self.assertIn("Skill file: skills/e2e-harness-clarification/SKILL.md", prompt)
+        self.assertIn("Reference set: clarification-gate", prompt)
+
 
 class PhaseFunctionTests(unittest.TestCase):
     """Pin `phase_for_agent` / `depends_on_for_phase` behavior at the registry seam."""
