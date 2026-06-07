@@ -129,6 +129,7 @@ RAW_EVIDENCE_RE = re.compile(
 )
 IMPACT_MAX_CHARS = 2400
 IMPACT_MAX_ROWS = 12
+LOW_EVIDENCE_TIERS = {"minimal", "basic"}
 IMPACT_REQUIRED_COLUMNS = {
     "type",
     "interface",
@@ -369,6 +370,8 @@ def mechanical_remediation_tasks(path: Path, result: dict) -> list[dict]:
                 {
                     "code": "impact_summary_too_long",
                     "kind": "artifact_repair",
+                    "repair_class": "format",
+                    "inline_allowed": True,
                     "section": "Impact Summary",
                     "target": str(path),
                     "max_chars": IMPACT_MAX_CHARS,
@@ -390,6 +393,8 @@ def mechanical_remediation_tasks(path: Path, result: dict) -> list[dict]:
                 {
                     "code": "impact_summary_table_too_large",
                     "kind": "artifact_repair",
+                    "repair_class": "format",
+                    "inline_allowed": True,
                     "section": "Impact Summary",
                     "target": str(path),
                     "max_chars": IMPACT_MAX_CHARS,
@@ -421,6 +426,8 @@ def mechanical_remediation_tasks(path: Path, result: dict) -> list[dict]:
             {
                 "code": "impact_summary_table_incomplete",
                 "kind": "artifact_repair",
+                "repair_class": "judgment",
+                "inline_allowed": False,
                 "section": "Impact Summary",
                 "target": str(path),
                 "max_chars": IMPACT_MAX_CHARS,
@@ -755,7 +762,7 @@ def change_logic_gaps(markdown: str) -> list[str]:
     return gaps
 
 
-def validate(path: Path, require_intent: bool = False, require_user_confirmation: bool = False) -> dict:
+def validate(path: Path, require_intent: bool = False, require_user_confirmation: bool = False, tier: str = "standard") -> dict:
     markdown = path.read_text(encoding="utf-8")
     titles = [title for title, _start, _end in headings(markdown)]
     required_items = REQUIRED if require_intent else {key: value for key, value in REQUIRED.items() if key != "restated_intent"}
@@ -774,6 +781,10 @@ def validate(path: Path, require_intent: bool = False, require_user_confirmation
     gaps = integration_gaps(markdown)
     impact_gaps = impact_summary_gaps(markdown)
     logic_gaps = change_logic_gaps(markdown)
+    if str(tier).strip().lower() in LOW_EVIDENCE_TIERS:
+        gaps = []
+        impact_gaps = []
+        logic_gaps = []
     confirmation_gaps = user_confirmation_gaps(markdown, require_intent, oq_clear) if require_user_confirmation else []
     result = {
         "path": str(path),
@@ -793,6 +804,7 @@ def validate(path: Path, require_intent: bool = False, require_user_confirmation
         "intent_required": require_intent,
         "user_confirmation_required": require_user_confirmation,
         "user_confirmation_gaps": confirmation_gaps,
+        "tier": str(tier).strip().lower() or "standard",
     }
     result["mechanical_remediation_tasks"] = mechanical_remediation_tasks(path, result)
     readiness = readiness_contract(result)

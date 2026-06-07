@@ -221,6 +221,37 @@ def write_implemented_state(repo: Path, state_path: Path, state: dict) -> None:
 
 
 class ClarificationGateTests(unittest.TestCase):
+    def test_clarification_validate_low_tier_skips_evidence_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = Path(tmp) / "design.md"
+            doc.write_text(
+                "# Feature\n\n## Restated Intent\nDo X. confirmed-by: user @2026-06-07\n\n"
+                "## Open Questions\nNone.\n\n## Goal\nX\n\n"
+                "## Scope\norder-service payment refund API across services\n\n"
+                "## Use Cases\n- U1 publish refund notification to the payment topic\n\n"
+                "## Acceptance Criteria\n- AC1 refund API returns success\n\n## Test Design\n- T1\n\n"
+                "## Integration Touchpoints\nAdd a payment refund API across services.\n",
+                encoding="utf-8",
+            )
+            high = clarification_gate.validate(doc, require_intent=True, require_user_confirmation=True, tier="critical")
+            low = clarification_gate.validate(doc, require_intent=True, require_user_confirmation=True, tier="minimal")
+        self.assertTrue(high.get("impact_gaps") or high.get("change_logic_gaps") or high.get("integration_gaps"))
+        self.assertEqual([], low["impact_gaps"])
+        self.assertEqual([], low["change_logic_gaps"])
+        self.assertEqual([], low["integration_gaps"])
+        self.assertTrue(low["implementation_evidence_ready"])
+
+    def test_format_repairs_are_inline_allowed(self) -> None:
+        path = Path("docs/design/x.md")
+        too_long = clarification_gate.mechanical_remediation_tasks(path, {"impact_gaps": ["Impact Summary must stay bounded"]})
+        incomplete = clarification_gate.mechanical_remediation_tasks(path, {"impact_gaps": ["affected interfaces table missing columns"]})
+        self.assertTrue(too_long)
+        self.assertTrue(all(t["inline_allowed"] for t in too_long))
+        self.assertEqual({"format"}, {t["repair_class"] for t in too_long})
+        self.assertTrue(incomplete)
+        self.assertFalse(any(t["inline_allowed"] for t in incomplete))
+        self.assertEqual({"judgment"}, {t["repair_class"] for t in incomplete})
+
     def test_resolved_open_questions_without_none_marker_are_clear(self) -> None:
         clear, unresolved = clarification_gate.open_questions_clear(
             "All API behavior is covered by the acceptance criteria."
