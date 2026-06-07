@@ -493,6 +493,29 @@ def control_plane_consistency_check(repo: Path, run_dir: Path) -> dict:
     )
 
 
+def control_plane_divergence_check(repo: Path, run_dir: Path) -> dict | None:
+    """Detect schedule/dispatch split-brain: dispatch references a task absent from the task set."""
+    path = run_dir / control_plane.CONTROL_PLANE_FILE
+    data, error = read_json_file(path)
+    if error or data is None:
+        return None
+    dispatched_id = str((data.get("dispatch") or {}).get("current_task_id", "")).strip()
+    task_ids = {str(task.get("id", "")).strip() for task in data.get("tasks", []) if isinstance(task, dict)}
+    if dispatched_id and dispatched_id not in task_ids:
+        return check(
+            "state-control-plane-divergence",
+            "fail",
+            "error",
+            (
+                f"control-plane-divergence: dispatch references task '{dispatched_id}' "
+                "that is not in the control-plane task set; schedule and dispatch state have split."
+            ),
+            "Rebuild the schedule through the harness so dispatch and the control-plane task set agree "
+            "(replace_tasks / plan), then rerun doctor.",
+        )
+    return None
+
+
 def _repo_display_path(repo: Path, path: Path) -> str:
     try:
         return path.resolve().relative_to(repo.resolve()).as_posix()
@@ -784,12 +807,19 @@ def state_consistency_checks(repo: Path, state: Path) -> list[dict]:
         "Inspect docs/agent-runs/<run>/events in sequence order; repair the first mismatched event or rebuild derived snapshots from the event log.",
     )
 
+    # The real schedule/dispatch divergence must rank AHEAD of the stale-transaction blocker
+    # so the primary blocker reported is the true split-brain, not a misleading stale-tx message.
+    divergence_check = control_plane_divergence_check(repo, run_dir)
+    control_plane_checks = [control_plane_consistency_check(repo, run_dir)]
+    if divergence_check is not None:
+        control_plane_checks.insert(0, divergence_check)
+
     return [
         check("state-run-state", "pass", "info", f"Run-state loaded: {state_path}"),
         lifecycle_check,
         task_check,
         view_check,
-        control_plane_consistency_check(repo, run_dir),
+        *control_plane_checks,
         lock_check,
         summary_check,
         event_check,
@@ -836,9 +866,9 @@ def state_navigation_summary(repo: Path, state: Path) -> dict:
             _repo_display_path(repo, run_dir / "events"),
         ],
         "authority": {
-            "primary": "run-state.json",
-            "derived": ["agent-schedule.json", run_state.PHASE_LOCK, "coordinator-summary.json"],
-            "audit": ["dispatch-events", "events", control_plane.CONTROL_PLANE_FILE],
+            "primary": control_plane.CONTROL_PLANE_FILE,
+            "derived": ["run-state.json", "agent-schedule.json", run_state.PHASE_LOCK, "coordinator-summary.json"],
+            "audit": ["dispatch-events", "events"],
         },
     }
 

@@ -511,6 +511,16 @@ def transition_lifecycle(
     coordinator["summary"] = summary
     data["coordinator"] = coordinator
 
+    # Garbage-collect stale clarify-scope repair transactions once the run leaves clarification.
+    if target not in {"CREATED", "CLARIFIED"}:
+        transactions = data.get("repair_transactions") if isinstance(data.get("repair_transactions"), dict) else {}
+        for transaction in transactions.values():
+            if isinstance(transaction, dict) and _active_transaction(transaction):
+                if str(transaction.get("repair_code", "")) == "impact_summary_too_long":
+                    transaction["status"] = "superseded"
+                    transaction["closed_at"] = now_iso()
+        data["repair_transactions"] = transactions
+
     atomic_write_json(path, data)
     return {"ready": True, "control_plane_path": posix(path), "lifecycle": target}
 

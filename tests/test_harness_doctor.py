@@ -805,7 +805,9 @@ class HarnessDoctorTests(unittest.TestCase):
 
         self.assertEqual("blocked", summary["state_confidence"])
         self.assertEqual("state-control-plane", summary["primary_blocker_code"])
-        self.assertEqual("run-state.json", summary["authority"]["primary"])
+        # control-plane.json is now the single source of truth; run-state.json is a derived projection.
+        self.assertEqual("control-plane.json", summary["authority"]["primary"])
+        self.assertIn("run-state.json", summary["authority"]["derived"])
         self.assertIn("docs/agent-runs/run/run-state.json", summary["must_read_paths"])
         self.assertIn("docs/agent-runs/run/agent-schedule.json", summary["must_read_paths"])
         self.assertTrue(any(item["name"] == "state-lifecycle" for item in summary["checks"]))

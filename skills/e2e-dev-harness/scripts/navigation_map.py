@@ -9,6 +9,12 @@ from typing import Any
 SCHEMA = "e2e-dev-harness.navigation-map.v1"
 MAX_LIST = 8
 
+# control-plane.json is the single source of truth; legacy files are derived projections.
+DEFAULT_AUTHORITY = {
+    "primary": "control-plane.json",
+    "derived": ["run-state.json", "agent-schedule.json", ".phase-lock", "coordinator-summary.json"],
+}
+
 
 def _strings(values: Any, limit: int = MAX_LIST) -> list[str]:
     if not isinstance(values, list):
@@ -139,10 +145,11 @@ def build(
     diagnostics: dict | None = None,
 ) -> dict:
     diagnostics = diagnostics or {}
-    authority = diagnostics.get("authority") if isinstance(diagnostics.get("authority"), dict) else {
-        "primary": "run-state.json",
-        "derived": ["agent-schedule.json", ".phase-lock", "coordinator-summary.json"],
-    }
+    authority = (
+        diagnostics.get("authority")
+        if isinstance(diagnostics.get("authority"), dict)
+        else dict(DEFAULT_AUTHORITY)
+    )
     phase = str(action.get("phase") or execution_packet.get("phase") or "").strip()
     preflight_blockers = _strings(preflight.get("blockers", []))
     return {

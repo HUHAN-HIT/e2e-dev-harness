@@ -363,6 +363,36 @@ class ControlPlaneSsotRegression(unittest.TestCase):
             schedule = json.loads((run_dir / "agent-schedule.json").read_text(encoding="utf-8"))
             self.assertEqual([t["id"] for t in schedule["tasks"]], ["T01", "T02"])
 
+    def test_lifecycle_advance_supersedes_stale_clarify_repair_transaction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, run_dir = self._make_run(tmp)
+            # Seed an open clarify-scope repair transaction (shape matches open_repair_transaction).
+            from common import atomic_write_json
+
+            path = control_plane.control_plane_path(run_dir)
+            data = control_plane.load(repo, run_dir)
+            data["repair_transactions"] = {
+                "impact-summary-too-long-docs-design-example-md": {
+                    "id": "impact-summary-too-long-docs-design-example-md",
+                    "repair_code": "impact_summary_too_long",
+                    "target": "docs/design/example.md",
+                    "status": "opened",
+                    "task_id": "T01b",
+                    "opened_at": control_plane.now_iso(),
+                }
+            }
+            atomic_write_json(path, data)
+
+            # Leaving CLARIFIED for SERVICE_DESIGN_REQUIRED must GC the stale clarify repair.
+            control_plane.transition_lifecycle(
+                repo, run_dir, "SERVICE_DESIGN_REQUIRED", gate="service-design", gate_status="passed"
+            )
+
+            after = control_plane.load(repo, run_dir)
+            transaction = after["repair_transactions"]["impact-summary-too-long-docs-design-example-md"]
+            self.assertEqual(transaction["status"], "superseded")
+            self.assertTrue(transaction.get("closed_at"))
+
     def test_projection_never_drops_tasks_present_on_disk(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, run_dir = self._make_run(tmp)

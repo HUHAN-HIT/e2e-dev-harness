@@ -16,9 +16,30 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import harness_advice  # noqa: E402
+import harness_doctor  # noqa: E402
 import install_hooks  # noqa: E402
 import phase_guard  # noqa: E402
 import run_state  # noqa: E402
+from e2e_harness.engine import control_plane  # noqa: E402
+
+
+def write_control_plane_fixture(repo: Path, *, dispatch_task_id: str, task_ids: list[str]) -> Path:
+    """Build a control-plane.json with the given dispatch and task set, projected to legacy state."""
+    run_dir = repo / "docs" / "agent-runs" / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    control_plane.create(repo, run_dir, run_id="docs/agent-runs/run")
+    tasks = [
+        control_plane.task_contract(task_id, "service-designer-core", "design", service="core")
+        for task_id in task_ids
+    ]
+    data = control_plane.load(repo, run_dir)
+    data["tasks"] = tasks
+    data["dispatch"] = {"current_task_id": dispatch_task_id, "current_agent": "service-designer-core", "status": "worker_running"}
+    from common import atomic_write_json
+
+    atomic_write_json(control_plane.control_plane_path(run_dir), data)
+    control_plane.write_legacy_projections(repo, run_dir)
+    return run_dir / "run-state.json"
 
 
 def write_pending_dispatch_fixture(repo: Path) -> Path:
@@ -198,6 +219,43 @@ class AdviceHookWiringTests(unittest.TestCase):
         ]
         self.assertTrue(any("echo user-hook" in command for command in commands))
         self.assertTrue(any("harness_advice.py" in command for command in commands))
+
+
+class ControlPlaneAuthorityTests(unittest.TestCase):
+    def test_navigation_authority_primary_is_control_plane(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = write_control_plane_fixture(repo, dispatch_task_id="T01", task_ids=["T01"])
+            summary = harness_doctor.state_navigation_summary(repo, state_path)
+        authority = summary["authority"]
+        self.assertEqual(authority["primary"], control_plane.CONTROL_PLANE_FILE)
+        self.assertEqual(authority["primary"], "control-plane.json")
+        # run-state.json is now a derived projection, not the source of truth.
+        self.assertIn("run-state.json", authority["derived"])
+
+    def test_navigation_map_default_authority_primary_is_control_plane(self) -> None:
+        import navigation_map
+
+        default_authority = navigation_map.DEFAULT_AUTHORITY
+        self.assertEqual(default_authority["primary"], "control-plane.json")
+        self.assertIn("run-state.json", default_authority["derived"])
+
+
+class ControlPlaneDivergenceTests(unittest.TestCase):
+    def test_dispatch_referencing_unknown_task_is_primary_blocker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            # Dispatch points at T06 but the task set has no T06 -> schedule/dispatch split.
+            state_path = write_control_plane_fixture(repo, dispatch_task_id="T06", task_ids=["T01"])
+            summary = harness_doctor.state_navigation_summary(repo, state_path)
+        names = [str(check.get("name", "")) for check in summary["checks"]]
+        self.assertIn("state-control-plane-divergence", names)
+        divergence = next(
+            check for check in summary["checks"] if check.get("name") == "state-control-plane-divergence"
+        )
+        self.assertEqual(divergence["status"], "fail")
+        # The real divergence must be the primary blocker, ahead of any stale-transaction check.
+        self.assertEqual(summary["primary_blocker_code"], "state-control-plane-divergence")
 
 
 if __name__ == "__main__":
