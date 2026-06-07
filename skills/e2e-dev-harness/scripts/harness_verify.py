@@ -53,6 +53,8 @@ _LEDGER_REASON_MARKERS = (
     "Artifact registry: ",
     "Requirements archive: ",
     "requires --requirements-archive when requirements archive is required",
+    "requires artifact-registry.json",
+    "requires requirements archive on completion",
     "Coverage matrix",
 )
 

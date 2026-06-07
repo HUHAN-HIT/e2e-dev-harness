@@ -9908,6 +9908,59 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("not VERIFIED" in reason for reason in result["blocked_reasons"]))
 
+    def _verify_policy_ledger_result(self, tier: str) -> dict:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = repo / "docs" / "agent-runs" / "run" / "run-state.json"
+            # A missing artifact-registry makes registry_data == {}, so policy
+            # emits BOTH ledger blockers: "requires artifact-registry.json" and
+            # (with lifecycle VERIFIED) "requires requirements archive on
+            # completion". The R1/R2/R3 semantic-review policy reasons fire too
+            # and serve as the genuine non-ledger over-match guard.
+            state = run_state.build_state(
+                "run", "single", [], "docs/agent-runs/run/artifact-registry.json", "VERIFIED"
+            )
+            run_state.set_workflow_tier(state, tier)
+            run_state.write_state(repo, state_path, state)
+            return harness_verify.validate(repo, state_path)
+
+    def test_harness_verify_relaxes_policy_ledger_blockers_for_non_audited_tier(self) -> None:
+        result = self._verify_policy_ledger_result("standard")
+
+        self.assertNotIn(
+            "Policy: Policy requires artifact-registry.json.",
+            result["blocked_reasons"],
+        )
+        self.assertNotIn(
+            "Policy: Policy requires requirements archive on completion.",
+            result["blocked_reasons"],
+        )
+        self.assertIn(
+            "Policy: Policy requires artifact-registry.json.",
+            result["warnings"],
+        )
+        self.assertIn(
+            "Policy: Policy requires requirements archive on completion.",
+            result["warnings"],
+        )
+        # Over-match guard: a genuine non-ledger policy reason still blocks.
+        self.assertIn(
+            "Policy: Policy requires R3 implementation review on completion.",
+            result["blocked_reasons"],
+        )
+
+    def test_harness_verify_keeps_policy_ledger_blockers_for_audited_tier(self) -> None:
+        result = self._verify_policy_ledger_result("audited")
+
+        self.assertIn(
+            "Policy: Policy requires artifact-registry.json.",
+            result["blocked_reasons"],
+        )
+        self.assertIn(
+            "Policy: Policy requires requirements archive on completion.",
+            result["blocked_reasons"],
+        )
+
     def test_harness_verify_stops_when_run_state_cannot_load(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
