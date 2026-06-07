@@ -6774,6 +6774,110 @@ class OrchestrationArtifactTests(unittest.TestCase):
             self.assertTrue((repo / result["handoff_artifacts"]["service_designs_dir"]).exists())
             self.assertTrue((repo / result["handoff_artifacts"]["verification_evidence"]).exists())
 
+    def test_plan_persists_control_plane(self) -> None:
+        from e2e_harness.engine import control_plane
+
+        design_text = textwrap.dedent(
+            """
+            # VNPay
+
+            ## Goal
+            - Add VNPay channel.
+
+            ## Affected services/modules
+            - jeepay-core
+            - jeepay-service
+            - jeepay-payment
+
+            ### jeepay-core
+            jeepay-core adds VNPay constants and params.
+
+            ### jeepay-service
+            jeepay-service registers the VNPay channel config.
+
+            ### jeepay-payment
+            jeepay-payment adds payment and refund services with notify callback handling.
+
+            ## Use Cases
+            - Merchant creates a VNPay QR payment.
+
+            ## Acceptance Criteria
+            - AC-1 VNPay order can be created.
+
+            ## Test Design
+            - Unit test first.
+
+            ## Open Questions
+            None
+            """
+        ).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            repo.joinpath("pom.xml").write_text(
+                textwrap.dedent(
+                    """
+                    <project xmlns="http://maven.apache.org/POM/4.0.0">
+                      <modelVersion>4.0.0</modelVersion>
+                      <modules>
+                        <module>jeepay-core</module>
+                        <module>jeepay-service</module>
+                        <module>jeepay-payment</module>
+                      </modules>
+                    </project>
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+            for module in ("jeepay-core", "jeepay-service", "jeepay-payment"):
+                module_dir = repo / module
+                (module_dir / "src" / "main" / "java").mkdir(parents=True)
+                (module_dir / "pom.xml").write_text("<project />", encoding="utf-8")
+            design = repo / "docs" / "design" / "vnpay.md"
+            design.parent.mkdir(parents=True)
+            design.write_text(design_text, encoding="utf-8")
+
+            # Seed a control plane at CLARIFIED with only the clarify task (T01), the
+            # split-brain precondition: planning must fold the expanded schedule back in.
+            run_dir_rel = "docs/agent-runs/run"
+            run_dir = repo / run_dir_rel
+            run_dir.mkdir(parents=True)
+            control_plane.create(repo, Path(run_dir_rel), run_dir_rel)
+            control_plane.transition_lifecycle(repo, Path(run_dir_rel), "CLARIFIED")
+            control_plane.replace_tasks(
+                repo,
+                Path(run_dir_rel),
+                [{"id": "T01", "agent": "requirements-clarifier", "phase": "clarify", "status": "planned"}],
+            )
+            control_plane_path = run_dir / "control-plane.json"
+            seeded = json.loads(control_plane_path.read_text(encoding="utf-8"))
+            self.assertEqual(["T01"], [task["id"] for task in seeded["tasks"]])
+
+            args = SimpleNamespace(
+                repo=repo,
+                mode="auto",
+                design_doc=design,
+                agent_run_dir=run_dir_rel,
+                run_date="2026-05-23",
+                service_scope="auto",
+                service=None,
+                path=None,
+                dependency_report=None,
+                create_archive=True,
+                write_exec_plan=None,
+                status_file=None,
+            )
+
+            code, result = e2e_dev_harness.plan(args)
+
+            self.assertEqual(0, code)
+            persisted = json.loads(control_plane_path.read_text(encoding="utf-8"))
+            persisted_ids = [task["id"] for task in persisted["tasks"]]
+            # The expanded schedule (service-design and downstream tasks) must now live
+            # in the control plane, not only in legacy agent-schedule.json.
+            self.assertGreater(len(persisted_ids), 1, persisted_ids)
+            schedule_ids = [task["id"] for task in result["agent_schedule"]["tasks"]]
+            self.assertEqual(sorted(schedule_ids), sorted(persisted_ids))
+
     def test_unmatched_requested_services_are_reported(self) -> None:
         facts = {"service_candidates": ["services/order-service"]}
 

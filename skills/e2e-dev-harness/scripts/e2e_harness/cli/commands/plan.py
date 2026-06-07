@@ -9,6 +9,7 @@ from pathlib import Path
 import artifact_registry
 import run_state
 from e2e_harness.cli.status import write_status
+from e2e_harness.engine import control_plane
 
 
 def _legacy_cli():
@@ -82,6 +83,16 @@ def run(
         )
         schedule_path.write_text(json.dumps(result["agent_schedule"], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         result["agent_schedule_written"] = str(schedule_path)
+        # SSOT: fold the expanded schedule into the control plane so the planning
+        # expansion never lives only in the legacy agent-schedule.json. Lifecycle is
+        # committed later in this command (run-state), so persist the task set only.
+        if (run_dir / "control-plane.json").exists():
+            control_plane.replace_tasks(
+                repo,
+                run_dir,
+                result["agent_schedule"].get("tasks", []),
+                lifecycle="",
+            )
         kg_artifact = legacy.write_kg_status_artifact(
             repo,
             Path(result["handoff_artifacts"]["knowledge_graph_status"]),
