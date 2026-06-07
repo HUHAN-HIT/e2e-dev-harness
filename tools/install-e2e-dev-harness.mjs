@@ -7,6 +7,14 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const SKILL_NAME = "e2e-dev-harness";
+const WORKER_SKILL_NAMES = [
+  "e2e-harness-clarification",
+  "e2e-harness-planning",
+  "e2e-harness-tdd-red",
+  "e2e-harness-implementation",
+  "e2e-harness-review",
+  "e2e-harness-completion",
+];
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(SCRIPT_PATH), "..");
 const TARGETS = {
@@ -380,6 +388,14 @@ function executeAction(action, context) {
     for (const target of action.targets) {
       const backup = backupExisting(target.path, context.installRoot, target.target, context.timestamp);
       const copied = copyDirectory(context.sourceSkillDir, target.path);
+      const sourceSkillsParent = path.dirname(context.sourceSkillDir);
+      const targetSkillsParent = path.dirname(target.path);
+      for (const workerName of WORKER_SKILL_NAMES) {
+        const workerSource = path.join(sourceSkillsParent, workerName);
+        if (fs.existsSync(workerSource)) {
+          copyDirectory(workerSource, path.join(targetSkillsParent, workerName));
+        }
+      }
       installed.push({
         target: target.target,
         path: target.path,

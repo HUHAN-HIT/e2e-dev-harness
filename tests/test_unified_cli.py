@@ -31,6 +31,27 @@ from conftest import REVIEW_CHECKLIST, write_command_evidence  # noqa: E402
 import agent_instructions  # noqa: E402
 
 
+PHASE_WORKER_SKILLS = (
+    "e2e-harness-clarification",
+    "e2e-harness-planning",
+    "e2e-harness-tdd-red",
+    "e2e-harness-implementation",
+    "e2e-harness-review",
+    "e2e-harness-completion",
+)
+
+
+class PhaseWorkerSkillPackagingTests(unittest.TestCase):
+    def test_phase_worker_skill_directories_exist(self) -> None:
+        for skill in ("e2e-dev-harness", *PHASE_WORKER_SKILLS):
+            self.assertTrue((ROOT / "skills" / skill / "SKILL.md").exists(), skill)
+
+    def test_installer_packages_phase_worker_skills(self) -> None:
+        installer = (ROOT / "tools" / "install-e2e-dev-harness.mjs").read_text(encoding="utf-8")
+        for skill in PHASE_WORKER_SKILLS:
+            self.assertIn(skill, installer)
+
+
 class UnifiedCliTests(unittest.TestCase):
     REVIEW_CHECKLIST = REVIEW_CHECKLIST
 
@@ -1003,6 +1024,33 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertEqual("ok", event["status"])
         self.assertEqual([], event["blocked_reason_codes"])
         self.assertIn("dispatch-beat", event["next_command"])
+
+    def test_next_cli_missing_run_state_routes_to_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            stdout = io.StringIO()
+            missing_state = Path("docs/agent-runs/new-feature/run-state.json")
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "e2e_dev_harness.py",
+                    "next",
+                    str(repo),
+                    "--state",
+                    str(missing_state),
+                ],
+            ), patch("sys.stdout", stdout):
+                exit_code = e2e_dev_harness.main()
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(2, exit_code)
+        self.assertFalse(payload["ready"])
+        self.assertEqual("missing_run_state", payload["failure_taxonomy"])
+        self.assertEqual(["missing_run_state"], payload["blocked_reason_codes"])
+        self.assertIn(str(missing_state), payload["blocked_reasons"][0])
+        self.assertIn("start", payload["next_single_action"])
+        self.assertNotIn("next . --state", payload["next_single_action"])
 
     def test_command_event_next_command_prefers_navigation_map_single_action(self) -> None:
         result = {
