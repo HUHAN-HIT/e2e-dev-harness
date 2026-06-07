@@ -459,8 +459,11 @@ def _required_worker_skill_section(role: str) -> str:
     """Compact phase-skill capability section appended to a role template.
 
     Returns "" when the role's phase has no mapped worker skill (additive).
+    Unknown roles resolve to the `code-developer` fallback so the rendered body
+    stays identical to that fallback (matching `template_text` behavior).
     """
-    phase = role_to_phase(role)
+    resolved = role if role in ROLE_REGISTRY else "code-developer"
+    phase = role_to_phase(resolved)
     skill = phase_required_skill(phase)
     if not skill:
         return ""
