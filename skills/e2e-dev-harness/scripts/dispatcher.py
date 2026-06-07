@@ -1413,11 +1413,25 @@ def waiting_dispatch_result(
 # strings are run_state.LIFECYCLE. Unmapped lifecycles (WAITING_DISPATCH,
 # REWORK_REQUIRED, VERIFIED, ARCHIVED) fail open so recovery/terminal states are
 # never hard-blocked here.
-_LIFECYCLE_ALLOWED_PHASES: dict[str, set[str]] = {
+# STRICTER dispatch-time gate. This deliberately DIVERGES from the canonical
+# agent_roles.LIFECYCLE_ALLOWED_PHASES (bound above as LIFECYCLE_ALLOWED_PHASES):
+# it is the narrowest phase set that may be *dispatched* at each lifecycle, and
+# is intentionally tighter than the canonical "what phases belong to" map. The
+# divergences below are load-bearing — do NOT "sync" this map to
+# agent_roles.LIFECYCLE_ALLOWED_PHASES or the petalpay split-brain clobber
+# returns. Tightening the canonical map instead is high blast radius and wrong.
+_DISPATCH_PHASE_ALLOWLIST: dict[str, set[str]] = {
     "CREATED": {"clarify"},
+    # intentionally omits 'design': design belongs to SERVICE_DESIGN_REQUIRED/PLANNED,
+    # not CLARIFIED. Permitting it here is the petalpay split-brain clobber. Do NOT
+    # add 'design' or sync to agent_roles.LIFECYCLE_ALLOWED_PHASES.
     "CLARIFIED": {"clarify", "r1-review"},
+    # intentionally omits 'r1-review': design review opens once design lands, not
+    # while service design is still required.
     "SERVICE_DESIGN_REQUIRED": {"service-design", "design"},
     "PLANNED": {"plan", "tdd-red", "r1-review", "r2-review"},
+    # intentionally includes 'implement': once red is ready the only dispatchable
+    # work is implementation.
     "RED_READY": {"implement"},
     "IMPLEMENTED": {"implement", "r3-review", "completion"},
     "REVIEWED": {"completion"},
@@ -1425,7 +1439,7 @@ _LIFECYCLE_ALLOWED_PHASES: dict[str, set[str]] = {
 
 
 def _phase_allowed(phase: str, lifecycle: str) -> bool:
-    allowed = _LIFECYCLE_ALLOWED_PHASES.get(str(lifecycle).strip())
+    allowed = _DISPATCH_PHASE_ALLOWLIST.get(str(lifecycle).strip())
     if allowed is None:
         return True  # unknown lifecycle: do not block (fail-open, logged by diagnostics)
     return str(phase).strip() in allowed
@@ -1459,8 +1473,8 @@ def dispatch_beat(
         else:
             blocked_tasks.append(
                 {
-                    "task_id": str(task.get("id", "")),
-                    "agent": str(task.get("agent", "")),
+                    "task_id": task.get("id", ""),
+                    "agent": task.get("agent", ""),
                     "phase": task.get("phase", ""),
                     "parallel_group": task_parallel_group(task),
                     "blocked_reasons": [

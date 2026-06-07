@@ -11889,6 +11889,14 @@ class DispatchPhaseGuardTests(unittest.TestCase):
         )
         self.assertEqual([], [task.get("id") for task in result.get("claimed_tasks", [])])
 
+    def test_dispatch_phase_guard_pins_clarified_divergence(self) -> None:
+        # Pin the load-bearing divergence from agent_roles.LIFECYCLE_ALLOWED_PHASES:
+        # CLARIFIED must NOT permit 'design' at dispatch time (the petalpay
+        # split-brain clobber). If a future change syncs _DISPATCH_PHASE_ALLOWLIST
+        # to the canonical map, this turns red.
+        self.assertNotIn("design", dispatcher._DISPATCH_PHASE_ALLOWLIST["CLARIFIED"])
+        self.assertIn("clarify", dispatcher._DISPATCH_PHASE_ALLOWLIST["CLARIFIED"])
+
 
 if __name__ == "__main__":
     unittest.main()

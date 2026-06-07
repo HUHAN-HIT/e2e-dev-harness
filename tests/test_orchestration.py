@@ -3938,7 +3938,7 @@ class OrchestrationArtifactTests(unittest.TestCase):
             run_state.write_state(
                 repo,
                 state_path,
-                run_state.build_state("docs/agent-runs/run", "single-review", [], "docs/agent-runs/run/artifact-registry.json", "CLARIFIED"),
+                run_state.build_state("docs/agent-runs/run", "single-review", [], "docs/agent-runs/run/artifact-registry.json", "PLANNED"),
             )
             schedule.parent.mkdir(parents=True, exist_ok=True)
             schedule.write_text(
@@ -3948,10 +3948,13 @@ class OrchestrationArtifactTests(unittest.TestCase):
                         "require_role_templates": True,
                         "tasks": [
                             {
+                                # tdd-red @ PLANNED passes the dispatch phase guard; this
+                                # task is merely the vehicle to reach the context-pack
+                                # budget check below (forced by max_chars=10).
                                 "id": "T02",
                                 "agent": "use-case-designer",
-                                "phase": "design",
-                                "role_group": "design",
+                                "phase": "tdd-red",
+                                "role_group": "tdd",
                                 "inputs": [large_input.as_posix()],
                                 "outputs": ["docs/agent-runs/run/handoffs/02-use-case-designer.md"],
                                 "role_template": role_template.as_posix(),
