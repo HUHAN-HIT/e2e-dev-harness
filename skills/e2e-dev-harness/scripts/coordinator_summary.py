@@ -92,7 +92,9 @@ def _compact_navigation_map(value: dict | None) -> dict:
     status = value.get("status") if isinstance(value.get("status"), dict) else {}
     next_action = value.get("next_single_action") if isinstance(value.get("next_single_action"), dict) else {}
     artifacts = value.get("artifacts") if isinstance(value.get("artifacts"), dict) else {}
-    return {
+    diagnostics = value.get("diagnostics") if isinstance(value.get("diagnostics"), dict) else {}
+    authority = value.get("authority") if isinstance(value.get("authority"), dict) else {}
+    compact = {
         "you_are_here": {
             key: you_are_here[key]
             for key in ("lifecycle", "workflow_stage", "phase")
@@ -119,6 +121,21 @@ def _compact_navigation_map(value: dict | None) -> dict:
             if artifacts.get(key)
         },
     }
+    if value.get("state_confidence"):
+        compact["state_confidence"] = value["state_confidence"]
+    compact_diagnostics = {
+        "primary_blocker_code": diagnostics.get("primary_blocker_code", ""),
+        "checks": _limited(diagnostics.get("checks", []), 8),
+    }
+    compact_diagnostics = {key: item for key, item in compact_diagnostics.items() if item not in ("", [])}
+    if compact_diagnostics:
+        compact["diagnostics"] = compact_diagnostics
+    must_read_paths = _limited(value.get("must_read_paths", []), 8)
+    if must_read_paths:
+        compact["must_read_paths"] = must_read_paths
+    if authority:
+        compact["authority"] = authority
+    return compact
 
 
 def _manual_recovery_events(state_path: Path) -> list:

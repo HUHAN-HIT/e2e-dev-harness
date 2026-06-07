@@ -54,8 +54,25 @@ def transition_lifecycle(
     )
     if result.get("ready"):
         history_event = result.get("history_event", {}) if isinstance(result.get("history_event"), dict) else {}
+        run_dir = _run_dir(repo, state_path)
+        if (run_dir / "control-plane.json").exists():
+            control_plane_result = control_plane.transition_lifecycle(
+                repo,
+                run_dir,
+                target_lifecycle,
+                history_event=history_event,
+                gate=gate or "",
+                gate_status=gate_status or "",
+            )
+            if not control_plane_result.get("ready"):
+                result["ready"] = False
+                result.setdefault("blocked_reasons", []).extend(
+                    "Control-plane transition: " + reason
+                    for reason in control_plane_result.get("blocked_reasons", [])
+                )
+                return result
         event_log.append_state_event(
-            _run_dir(repo, state_path),
+            run_dir,
             "lifecycle_transition",
             {
                 "from": history_event.get("from", ""),
@@ -168,6 +185,15 @@ def complete_task(
 def dispatch_next(repo: Path, schedule_path: Path, state_path: Path | None = None, runtime: str = "claude-code") -> dict:
     result = dispatcher.dispatch_next(repo, schedule_path, state_path, runtime=runtime)
     if result.get("ready"):
+        run_dir = _run_dir(repo, state_path, schedule_path)
+        if (run_dir / "control-plane.json").exists():
+            imported = control_plane.import_legacy(repo, run_dir)
+            if not imported.get("ready"):
+                result["ready"] = False
+                result.setdefault("blocked_reasons", []).extend(
+                    "Control-plane import: " + reason for reason in imported.get("blocked_reasons", [])
+                )
+                return result
         _project(repo, state_path, schedule_path)
     return result
 

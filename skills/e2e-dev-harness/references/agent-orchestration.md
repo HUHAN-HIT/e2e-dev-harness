@@ -111,6 +111,14 @@ Long detail belongs in a dispatched worker's scheduled evidence file, or in a
 checked-in generator/harness command that writes the artifact without echoing
 the full body through coordinator chat.
 
+High-output shell commands are blocked for the coordinator from the first call:
+test runners, build commands, broad scans, recursive PowerShell searches, and
+unbounded `rg` must run through `e2e_dev_harness.py command-evidence --output
+<path>` or through a dispatched worker. The hook writes compact audit records
+under `coordinator-tool-events/` with `tool`, `classification`, command hash,
+paths, `created_at`, and `checkpoint_created_at`; command stdout/stderr tails
+belong only in the command evidence JSON.
+
 By default, one beat dispatches only distinct `parallel_group` values. This keeps
 same-service or same-scope code work serialized while still allowing unrelated
 services, role handoffs, or review tasks to run concurrently when their gates and

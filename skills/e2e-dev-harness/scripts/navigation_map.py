@@ -101,6 +101,26 @@ def _artifacts(
     return artifacts
 
 
+def _diagnostic_checks(diagnostics: dict) -> list[dict]:
+    checks = diagnostics.get("checks", [])
+    if not isinstance(checks, list):
+        return []
+    result: list[dict] = []
+    for item in checks:
+        if not isinstance(item, dict):
+            continue
+        compact = {
+            key: item[key]
+            for key in ("name", "status", "severity")
+            if item.get(key)
+        }
+        if compact:
+            result.append(compact)
+        if len(result) >= MAX_LIST:
+            break
+    return result
+
+
 def build(
     *,
     repo: Path,
@@ -116,7 +136,13 @@ def build(
     execution_packet: dict,
     checkpoint: dict,
     coordinator_summary_path: str = "",
+    diagnostics: dict | None = None,
 ) -> dict:
+    diagnostics = diagnostics or {}
+    authority = diagnostics.get("authority") if isinstance(diagnostics.get("authority"), dict) else {
+        "primary": "run-state.json",
+        "derived": ["agent-schedule.json", ".phase-lock", "coordinator-summary.json"],
+    }
     phase = str(action.get("phase") or execution_packet.get("phase") or "").strip()
     preflight_blockers = _strings(preflight.get("blockers", []))
     return {
@@ -140,6 +166,13 @@ def build(
             + list(action.get("blocked_writes", []))
             + list(execution_packet.get("forbidden_now", []))
         ),
+        "state_confidence": str(diagnostics.get("state_confidence", "unknown")).strip() or "unknown",
+        "diagnostics": {
+            "primary_blocker_code": str(diagnostics.get("primary_blocker_code", "")).strip(),
+            "checks": _diagnostic_checks(diagnostics),
+        },
+        "must_read_paths": _strings(diagnostics.get("must_read_paths", [])),
+        "authority": authority,
         "required_evidence": _strings(execution_packet.get("required_evidence", [])),
         "completion_checks": _strings(execution_packet.get("completion_checks", execution_packet.get("completion_requires", []))),
         "artifacts": _artifacts(repo, state_path, checkpoint, coordinator_summary_path),

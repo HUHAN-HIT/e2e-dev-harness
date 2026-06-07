@@ -267,6 +267,8 @@ def _compact_navigation_map(value: Any) -> dict:
     status = value.get("status") if isinstance(value.get("status"), dict) else {}
     next_action = value.get("next_single_action") if isinstance(value.get("next_single_action"), dict) else {}
     artifacts = value.get("artifacts") if isinstance(value.get("artifacts"), dict) else {}
+    diagnostics = value.get("diagnostics") if isinstance(value.get("diagnostics"), dict) else {}
+    authority = value.get("authority") if isinstance(value.get("authority"), dict) else {}
     result = {
         "you_are_here": {
             key: you_are_here[key]
@@ -290,6 +292,20 @@ def _compact_navigation_map(value: Any) -> dict:
             if artifacts.get(key)
         },
     }
+    if value.get("state_confidence"):
+        result["state_confidence"] = value["state_confidence"]
+    compact_diagnostics = {
+        key: diagnostics[key]
+        for key in ("primary_blocker_code",)
+        if diagnostics.get(key)
+    }
+    if compact_diagnostics:
+        result["diagnostics"] = compact_diagnostics
+    must_read_paths = _limited_strings(value.get("must_read_paths", []), 3)
+    if must_read_paths:
+        result["must_read_paths"] = must_read_paths
+    if authority.get("primary"):
+        result["authority"] = {"primary": authority["primary"]}
     return {key: item for key, item in result.items() if item not in ({}, [])}
 
 
@@ -299,7 +315,7 @@ def _minimal_navigation_map(value: Any) -> dict:
         return {}
     return {
         key: compact[key]
-        for key in ("you_are_here", "status", "next_single_action")
+        for key in ("you_are_here", "status", "next_single_action", "state_confidence", "diagnostics", "must_read_paths", "authority")
         if compact.get(key)
     }
 
@@ -308,11 +324,23 @@ def _tiny_navigation_map(value: Any) -> dict:
     compact = _compact_navigation_map(value)
     if not compact:
         return {}
-    return {
+    result = {
         key: compact[key]
-        for key in ("you_are_here", "next_single_action")
+        for key in ("you_are_here", "next_single_action", "state_confidence", "diagnostics", "authority")
         if compact.get(key)
     }
+    paths = compact.get("must_read_paths")
+    if isinstance(paths, list):
+        tiny_paths: list[str] = []
+        for path in paths:
+            text = str(path)
+            if text and (not tiny_paths or "coordinator-summary" in text):
+                tiny_paths.append(text)
+            if len(tiny_paths) >= 2:
+                break
+        if tiny_paths:
+            result["must_read_paths"] = tiny_paths
+    return result
 
 
 def _navigation_map_source(result: dict) -> Any:

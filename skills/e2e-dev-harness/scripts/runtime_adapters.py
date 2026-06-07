@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
+import agent_roles
 from common import posix
 
 
@@ -118,6 +120,9 @@ MANUAL_CAPABILITIES = {
 }
 
 
+CLAUDE_PORTABLE_TASK_SUBAGENT_TYPE = "general-purpose"
+
+
 def normalize_runtime(runtime: str | None) -> str:
     text = (runtime or "claude-code").strip().lower().replace("_", "-")
     aliases = {
@@ -164,6 +169,62 @@ def _completion_commands(task: dict, schedule_path: Path, state_path: Path | Non
     return ack_command, completion_command
 
 
+def subagent_type_env_for_phase(phase: str) -> str:
+    normalized = str(phase or "").strip().upper().replace("-", "_")
+    return f"E2E_HARNESS_SUBAGENT_TYPE_{normalized}"
+
+
+def runtime_subagent_type(task: dict) -> str:
+    explicit = str(task.get("runtime_subagent_type") or "").strip()
+    if explicit:
+        return explicit
+    phase = str(task.get("phase", "")).strip()
+    declared = agent_roles.phase_runtime_subagent_type(phase)
+    if declared:
+        return declared
+    agent = str(task.get("agent", "")).strip()
+    role_key = agent_roles.resolve_role_key(agent)
+    role_phase = agent_roles.role_to_phase(role_key)
+    declared = agent_roles.phase_runtime_subagent_type(role_phase)
+    return declared or "general-purpose"
+
+
+def _declared_harness_subagent_types() -> set[str]:
+    return {
+        str(role.get("runtime_subagent_type", "")).strip()
+        for role in agent_roles.ROLE_REGISTRY.values()
+        if str(role.get("runtime_subagent_type", "")).strip()
+    }
+
+
+def projected_task_subagent_type(task: dict, capabilities: dict) -> tuple[str, dict]:
+    requested = runtime_subagent_type(task)
+    phase = str(task.get("phase", "")).strip()
+    override = str(os.environ.get(subagent_type_env_for_phase(phase), "") or "").strip()
+    if override:
+        metadata = {"requested_subagent_type": requested}
+        if override != requested:
+            metadata["subagent_type_note"] = (
+                f"Using {subagent_type_env_for_phase(phase)} override '{override}' "
+                f"instead of scheduled '{requested}'."
+            )
+        return override, metadata
+    if (
+        str(capabilities.get("runtime", "")).strip() == "claude-code"
+        and str(capabilities.get("spawn_tool", "")).strip() == "Task"
+        and requested in _declared_harness_subagent_types()
+    ):
+        return CLAUDE_PORTABLE_TASK_SUBAGENT_TYPE, {
+            "requested_subagent_type": requested,
+            "subagent_type_note": (
+                f"Claude Code may not have a project-local '{requested}' Task agent; "
+                f"using portable '{CLAUDE_PORTABLE_TASK_SUBAGENT_TYPE}'. "
+                f"Set {subagent_type_env_for_phase(phase)} to route this phase to a custom agent."
+            ),
+        }
+    return requested, {}
+
+
 @dataclass(frozen=True)
 class RuntimeAdapter:
     name: str
@@ -187,7 +248,7 @@ class RuntimeAdapter:
         task_id = str(task.get("id", ""))
         agent = str(task.get("agent", "")) or "agent"
         ack_command, completion_command = _completion_commands(task, schedule_path, state_path, repo)
-        subagent_type = str(task.get("runtime_subagent_type") or "").strip() or "general-purpose"
+        subagent_type, subagent_metadata = projected_task_subagent_type(task, capabilities)
         if capabilities.get("dispatch_mode") == "opencode-task":
             opencode_agent = str(task.get("opencode_agent") or task.get("opencode_subagent") or "general").strip() or "general"
             return {
@@ -219,6 +280,7 @@ class RuntimeAdapter:
                 "ack_command": ack_command,
                 "completion_command": completion_command,
                 "context_policy": "fresh Claude Code Task only; no inherited coordinator chat beyond this prompt and context pack.",
+                **subagent_metadata,
             }
         if capabilities.get("spawn_tool") == "multi_agent_v1.spawn_agent":
             return {

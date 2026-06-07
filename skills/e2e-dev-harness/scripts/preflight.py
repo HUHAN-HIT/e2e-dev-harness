@@ -202,11 +202,17 @@ def clarification_dispatch_recovery(repo: Path, run_state_path: Path | str | Non
         "ready": False,
         "ready_for_implementation": False,
         "code": "clarification_dispatch_incomplete",
+        "clarification_blocker_kind": "dispatch_completion_proof_missing",
+        "operator_guidance": (
+            "clarification content may already be present, but CREATED lifecycle cannot advance "
+            "until requirements-clarifier dispatch completion proof exists. Spawn or acknowledge "
+            "the generated worker, then finish it through dispatch-finish or dispatch-complete."
+        ),
         "blocked_reasons": blockers,
         "clarification_dispatch": {"ready": False, "blocked_reasons": blockers},
         "interaction_required": True,
         "questions_to_ask_user": [
-            "Run dispatch-beat --max-workers 1, dispatch-ack the requirements-clarifier worker, and relay its returned Restated Intent/Open Questions first."
+            "Do not rerun requirements clarification from scratch if the content is already present; close the requirements-clarifier dispatch proof with dispatch-ack plus dispatch-finish/dispatch-complete, then rerun clarify."
         ],
         **recovery,
     }

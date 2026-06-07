@@ -61,6 +61,8 @@ class ClarificationFlowTests(unittest.TestCase):
         self.assertEqual("primary_completion", result["clarification_transaction"]["stage"])
         self.assertNotIn("missing_sections", result)
         self.assertNotIn("empty_sections", result)
+        self.assertEqual("dispatch_completion_proof_missing", result["clarification_blocker_kind"])
+        self.assertIn("clarification content may already be present", result["operator_guidance"])
 
     def test_primary_complete_repair_pending_blocks_at_repair_barrier(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -493,6 +493,13 @@ def control_plane_consistency_check(repo: Path, run_dir: Path) -> dict:
     )
 
 
+def _repo_display_path(repo: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(repo.resolve()).as_posix()
+    except (OSError, ValueError):
+        return path.as_posix()
+
+
 def run_timeline(run_dir: Path) -> list[dict]:
     timeline: list[dict] = []
     for item in event_log.read_events(run_dir):
@@ -787,6 +794,53 @@ def state_consistency_checks(repo: Path, state: Path) -> list[dict]:
         summary_check,
         event_check,
     ]
+
+
+def state_navigation_summary(repo: Path, state: Path) -> dict:
+    state_path = resolve_repo_path(repo, state)
+    run_dir = state_path.parent
+    checks = state_consistency_checks(repo, state)
+    compact_checks: list[dict] = []
+    primary_blocker_code = ""
+    for item in checks:
+        name = str(item.get("id", item.get("name", ""))).strip()
+        status = str(item.get("status", "")).strip()
+        severity = str(item.get("severity", "")).strip()
+        message = str(item.get("message", "")).strip()
+        compact = {
+            key: value
+            for key, value in {
+                "name": name,
+                "status": status,
+                "severity": severity,
+                "message": message,
+            }.items()
+            if value
+        }
+        compact_checks.append(compact)
+        if not primary_blocker_code and status == "fail":
+            primary_blocker_code = name
+    failed = any(item.get("status") == "fail" for item in compact_checks)
+    warned = any(item.get("status") == "warn" for item in compact_checks)
+    confidence = "blocked" if failed else "degraded" if warned else "ready"
+    return {
+        "state_confidence": confidence,
+        "primary_blocker_code": primary_blocker_code,
+        "checks": compact_checks,
+        "must_read_paths": [
+            _repo_display_path(repo, run_dir / "run-state.json"),
+            _repo_display_path(repo, run_dir / "agent-schedule.json"),
+            _repo_display_path(repo, run_dir / "coordinator-summary.json"),
+            _repo_display_path(repo, run_dir / run_state.PHASE_LOCK),
+            _repo_display_path(repo, run_dir / "dispatch-events"),
+            _repo_display_path(repo, run_dir / "events"),
+        ],
+        "authority": {
+            "primary": "run-state.json",
+            "derived": ["agent-schedule.json", run_state.PHASE_LOCK, "coordinator-summary.json"],
+            "audit": ["dispatch-events", "events", control_plane.CONTROL_PLANE_FILE],
+        },
+    }
 
 
 def bootstrap_guide(repo: Path, state: Path | None = None) -> dict:

@@ -5197,6 +5197,11 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertIn("Ready handoff contract", prompt)
         self.assertIn(".ready.json", prompt)
         self.assertIn("Summary, Facts Used, Decisions Made, Open Questions, Downstream Assumptions, Verification Evidence", prompt)
+        self.assertIn("Do not hand-roll python", prompt)
+        self.assertIn("e2e_dev_harness.py hash", prompt)
+        self.assertIn("handoff --path", prompt)
+        self.assertIn("dispatch-finish --handoff", prompt)
+        self.assertNotIn("Compute SHA-256 hashes", prompt)
 
     def test_task_prompt_routes_missing_inputs_out_of_input_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5253,6 +5258,10 @@ class OrchestrationArtifactTests(unittest.TestCase):
 
         self.assertIn("handoff_completion_requirements", packet)
         self.assertIn("Summary", packet["handoff_completion_requirements"]["required_body_sections"])
+        steps = "\n".join(packet["handoff_completion_requirements"]["required_steps"])
+        self.assertIn("Do not hand-roll python", steps)
+        self.assertIn("e2e_dev_harness.py hash", steps)
+        self.assertNotIn("Compute SHA-256 hashes", steps)
         # The packet must steer the worker to dispatch-finish, which runs handoff
         # finalize before dispatch-complete, with the concrete path.
         self.assertTrue(
@@ -10993,6 +11002,39 @@ class DispatchWaveCheckpointCadenceTest(unittest.TestCase):
 
         self.assertNotIn("dispatch_waves_since_checkpoint", budget["exceeded_limits"])
 
+    def test_context_budget_adds_direct_tool_metrics_without_changing_existing_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path, state = self._state(repo)
+            run_state.write_state(repo, state_path, state)
+            cli_response = state_path.parent / "evidence" / "cli-responses" / "next.json"
+            cli_response.parent.mkdir(parents=True, exist_ok=True)
+            cli_response.write_text("{}", encoding="utf-8")
+            tool_event = state_path.parent / "coordinator-tool-events" / "event.json"
+            tool_event.parent.mkdir(parents=True, exist_ok=True)
+            tool_event.write_text(
+                json.dumps(
+                    {
+                        "tool": "Bash",
+                        "classification": "blocked_high_output_shell",
+                        "command_sha256": "a" * 64,
+                        "paths": [],
+                        "created_at": "2026-06-06T00:01:00Z",
+                        "checkpoint_created_at": "2026-06-06T00:00:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            budget = session_checkpoint.context_budget(state_path, state)
+
+        self.assertEqual(1, budget["metrics"]["tool_calls"])
+        self.assertEqual(1, budget["metrics"]["direct_tool_calls_since_checkpoint"])
+        self.assertEqual(1, budget["metrics"]["coordinator_tool_events"])
+        self.assertEqual(1, budget["metrics"]["high_output_shell_blocks_since_checkpoint"])
+        self.assertNotIn("direct_tool_calls_since_checkpoint", budget["exceeded_limits"])
+        self.assertNotIn("high_output_shell_blocks_since_checkpoint", budget["exceeded_limits"])
+
     def test_update_dispatches_state_increments_wave_counter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -11055,10 +11097,47 @@ class ReviewerSubagentTypeTest(unittest.TestCase):
         self.assertEqual(request["tool"], "Task")
         self.assertEqual(request["arguments"]["subagent_type"], "code-reviewer")
 
-    def test_spawn_request_defaults_subagent_type_to_general_purpose(self) -> None:
+    def test_spawn_request_derives_subagent_type_from_known_phase_when_task_field_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            task = {"id": "T01", "agent": "code-developer", "phase": "implement"}
+            task = {"id": "T01", "agent": "requirements-clarifier", "phase": "clarify"}
+            request = self._spawn(repo, task)
+        self.assertEqual(request["arguments"]["subagent_type"], "general-purpose")
+        self.assertEqual(request["requested_subagent_type"], "requirements-clarifier")
+
+    def test_claude_spawn_request_projects_harness_role_alias_to_portable_task_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            task = {
+                "id": "T01",
+                "agent": "requirements-clarifier",
+                "phase": "clarify",
+                "runtime_subagent_type": "requirements-clarifier",
+            }
+            request = self._spawn(repo, task)
+        self.assertEqual(request["tool"], "Task")
+        self.assertEqual(request["arguments"]["subagent_type"], "general-purpose")
+        self.assertEqual(request["requested_subagent_type"], "requirements-clarifier")
+        self.assertIn("requirements-clarifier", request["subagent_type_note"])
+
+    def test_claude_spawn_request_honors_phase_subagent_env_override_after_schedule_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            task = {
+                "id": "T01",
+                "agent": "requirements-clarifier",
+                "phase": "clarify",
+                "runtime_subagent_type": "requirements-clarifier",
+            }
+            with patch.dict(os.environ, {"E2E_HARNESS_SUBAGENT_TYPE_CLARIFY": "Plan"}, clear=False):
+                request = self._spawn(repo, task)
+        self.assertEqual(request["arguments"]["subagent_type"], "Plan")
+        self.assertEqual(request["requested_subagent_type"], "requirements-clarifier")
+
+    def test_spawn_request_defaults_unknown_phase_subagent_type_to_general_purpose(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            task = {"id": "T99", "agent": "unknown-worker", "phase": "unknown-phase"}
             request = self._spawn(repo, task)
         self.assertEqual(request["arguments"]["subagent_type"], "general-purpose")
 

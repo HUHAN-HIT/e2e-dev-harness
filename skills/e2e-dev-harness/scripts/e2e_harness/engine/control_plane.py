@@ -144,6 +144,95 @@ def _coordinator_projection(data: dict) -> dict:
     return summary
 
 
+def _merge_dispatch_events(data: dict, run_dir: Path) -> dict:
+    dispatch_event_dir = run_dir / "dispatch-events"
+    if not dispatch_event_dir.exists():
+        return data
+
+    status_by_event = {
+        "worker_dispatched": "awaiting_runtime_spawn",
+        "worker_acknowledged": "worker_running",
+        "worker_completed": "worker_completed",
+    }
+    status_rank = {
+        "": 0,
+        "awaiting_runtime_spawn": 1,
+        "worker_dispatched": 1,
+        "dispatched": 1,
+        "waiting_dispatch": 1,
+        "worker_running": 2,
+        "worker_completed": 3,
+    }
+    task_status_by_event = {
+        "worker_dispatched": "claimed",
+        "worker_acknowledged": "claimed",
+        "worker_completed": "completed",
+    }
+    dispatches = dict(data.get("dispatches", {})) if isinstance(data.get("dispatches"), dict) else {}
+    tasks = [dict(task) for task in data.get("tasks", []) if isinstance(task, dict)]
+    task_by_id = {str(task.get("id", "")).strip(): task for task in tasks}
+
+    for path in sorted(dispatch_event_dir.glob("*.json")):
+        event_data = read_json_object(path)
+        event_name = str(event_data.get("event", "")).strip()
+        task_id = str(event_data.get("task_id", "")).strip()
+        if not task_id or event_name not in status_by_event:
+            continue
+        agent = str(event_data.get("agent", "")).strip()
+        current = dict(dispatches.get(task_id, {})) if isinstance(dispatches.get(task_id), dict) else {}
+        event_status = status_by_event[event_name]
+        current_status = str(current.get("status", "")).strip()
+        selected_status = (
+            event_status
+            if status_rank.get(event_status, 0) >= status_rank.get(current_status, 0)
+            else current_status
+        )
+        current.update(
+            {
+                "status": selected_status,
+                "current_task_id": task_id,
+                "current_agent": agent or current.get("current_agent", current.get("agent", "")),
+                "agent": agent or current.get("agent", current.get("current_agent", "")),
+                "projected_from_dispatch_event": posix(path.relative_to(run_dir)),
+            }
+        )
+        if event_data.get("worker_handle"):
+            current["worker_handle"] = event_data.get("worker_handle")
+        if event_data.get("worker_session"):
+            current["worker_session"] = event_data.get("worker_session")
+        if event_data.get("evidence"):
+            current["evidence"] = event_data.get("evidence")
+        if event_data.get("created_at"):
+            if event_name == "worker_dispatched":
+                current["started_at"] = event_data.get("created_at")
+            elif event_name == "worker_acknowledged":
+                current["spawn_acknowledged_at"] = event_data.get("created_at")
+                current["spawn_confirmed_by"] = "dispatch_ack"
+            elif event_name == "worker_completed":
+                current["completed_at"] = event_data.get("created_at")
+        dispatches[task_id] = current
+
+        task = task_by_id.get(task_id)
+        if task is not None:
+            task["status"] = task_status_by_event[event_name]
+            if agent:
+                task["owner"] = agent
+            if event_data.get("created_at"):
+                if event_name == "worker_dispatched":
+                    task["claimed_at"] = event_data.get("created_at")
+                    task["heartbeat_at"] = event_data.get("created_at")
+                elif event_name == "worker_completed":
+                    task["completed_at"] = event_data.get("created_at")
+            if event_data.get("evidence"):
+                task["evidence"] = event_data.get("evidence")
+
+    if dispatches:
+        data["dispatches"] = dispatches
+    if tasks:
+        data["tasks"] = tasks
+    return data
+
+
 def _next_repair_task_id(tasks: list[dict]) -> str:
     existing = {str(task.get("id", "")).strip() for task in tasks}
     for suffix in ("b", "c", "d", "e", "f", "g", "h"):
@@ -251,6 +340,8 @@ def write_legacy_projections(repo: Path, run_dir: Path) -> dict:
             "ready": False,
             "blocked_reasons": [f"Missing {CONTROL_PLANE_FILE} at {posix(path)}."],
         }
+    data = _merge_dispatch_events(data, resolved_run_dir)
+    atomic_write_json(path, data)
 
     projections = {
         "run-state.json": _run_state_projection(data),
@@ -276,6 +367,66 @@ def write_legacy_projections(repo: Path, run_dir: Path) -> dict:
         "control_plane_path": posix(path),
         "projections": data["projections"],
     }
+
+
+def transition_lifecycle(
+    repo: Path,
+    run_dir: Path,
+    target_lifecycle: str,
+    history_event: dict | None = None,
+    gate: str = "",
+    gate_status: str = "",
+) -> dict:
+    resolved_run_dir = _resolve(repo, run_dir)
+    path = control_plane_path(resolved_run_dir)
+    data = read_json_object(path)
+    if not data:
+        return {"ready": False, "blocked_reasons": [f"Missing {CONTROL_PLANE_FILE} at {posix(path)}."]}
+
+    target = str(target_lifecycle or "").strip()
+    if not target:
+        return {"ready": False, "blocked_reasons": ["Target lifecycle is required."]}
+
+    event = dict(history_event or {})
+    if not event:
+        event = {
+            "from": data.get("lifecycle", ""),
+            "to": target,
+            "gate": gate,
+            "gate_status": gate_status,
+            "updated_at": now_iso(),
+        }
+
+    data["lifecycle"] = target
+    gates = dict(data.get("gates", {})) if isinstance(data.get("gates"), dict) else {}
+    selected_gate = str(gate or event.get("gate", "")).strip()
+    if selected_gate:
+        gates[selected_gate] = str(gate_status or event.get("gate_status", "") or "passed")
+    data["gates"] = gates
+
+    history = list(data.get("history", [])) if isinstance(data.get("history"), list) else []
+    if event and event not in history:
+        history.append(event)
+    data["history"] = history
+
+    phase_lock = dict(data.get("phase_lock", {})) if isinstance(data.get("phase_lock"), dict) else {}
+    phase_lock["lifecycle"] = target
+    phase_lock["state"] = (
+        "code-write-open"
+        if target == "IMPLEMENTED"
+        else ("test-write-open" if target in {"PLANNED", "RED_READY"} else "code-write-locked")
+    )
+    phase_lock["updated_at"] = event.get("updated_at", now_iso())
+    data["phase_lock"] = phase_lock
+
+    coordinator = dict(data.get("coordinator", {})) if isinstance(data.get("coordinator"), dict) else {}
+    summary = dict(coordinator.get("summary", {})) if isinstance(coordinator.get("summary"), dict) else {}
+    summary["lifecycle"] = target
+    coordinator["summary"] = summary
+    data["coordinator"] = coordinator
+
+    atomic_write_json(path, data)
+    return {"ready": True, "control_plane_path": posix(path), "lifecycle": target}
 
 
 def repair(repo: Path, run_dir: Path, scope: str) -> dict:

@@ -764,6 +764,45 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertEqual("TEST_READY", payload["navigation_map"]["you_are_here"]["workflow_stage"])
         self.assertIn("dispatch-ack", payload["navigation_map"]["next_single_action"]["command"])
 
+    def test_compact_navigation_map_preserves_confidence_and_must_read_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            full_result_path = repo / "full.json"
+            result = {
+                "ready": False,
+                "lifecycle": "CREATED",
+                "navigation_map": {
+                    "schema": "e2e-dev-harness.navigation-map.v1",
+                    "you_are_here": {
+                        "lifecycle": "CREATED",
+                        "workflow_stage": "CLARIFY",
+                        "phase": "clarify",
+                    },
+                    "status": {"ready": False, "health": "blocked", "blocked_by": ["hook missing"]},
+                    "next_single_action": {"command": "Run install_hooks.py --runtime claude.", "source": "preflight"},
+                    "state_confidence": "blocked",
+                    "diagnostics": {
+                        "primary_blocker_code": "BLK_RUNTIME_HOOK",
+                        "checks": [{"name": "runtime-hook", "status": "fail", "severity": "error"}],
+                    },
+                    "must_read_paths": [
+                        "docs/agent-runs/run/run-state.json",
+                        "docs/agent-runs/run/agent-schedule.json",
+                    ],
+                    "authority": {
+                        "primary": "run-state.json",
+                        "derived": ["agent-schedule.json", ".phase-lock", "coordinator-summary.json"],
+                    },
+                    "artifacts": {"run_state": "docs/agent-runs/run/run-state.json"},
+                },
+            }
+
+            payload = output_contract.compact_payload(repo, "next", result, full_result_path)
+
+        self.assertEqual("blocked", payload["navigation_map"]["state_confidence"])
+        self.assertEqual("BLK_RUNTIME_HOOK", payload["navigation_map"]["diagnostics"]["primary_blocker_code"])
+        self.assertIn("docs/agent-runs/run/run-state.json", payload["navigation_map"]["must_read_paths"])
+
     def test_compact_payload_uses_navigation_map_stage_for_map_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -791,6 +830,70 @@ class UnifiedCliTests(unittest.TestCase):
         self.assertEqual("CLARIFY", payload["summary"]["workflow_stage"])
         self.assertEqual("CREATED", payload["summary"]["lifecycle"])
         self.assertEqual("CLARIFY", payload["navigation_map"]["you_are_here"]["workflow_stage"])
+
+    def test_next_map_reports_degraded_state_when_summary_lifecycle_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            state = e2e_dev_harness.run_state.build_state(
+                "docs/agent-runs/run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "PLANNED",
+            )
+            e2e_dev_harness.run_state.write_state(repo, state_path, state)
+            (run_dir / "agent-schedule.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.agent-schedule.v1",
+                        "completion_mode": "dispatcher-confirmed",
+                        "tasks": [],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "coordinator-summary.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.coordinator-summary.v1",
+                        "lifecycle": "CREATED",
+                        "workflow_stage": "CLARIFY",
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "e2e_dev_harness.py"),
+                    "next",
+                    str(repo),
+                    "--state",
+                    str(state_path),
+                    "--runtime",
+                    "claude-code",
+                ],
+                cwd=str(repo),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(completed.stdout)
+            full_path = Path(payload["full_result_path"])
+            if not full_path.is_absolute():
+                full_path = repo / full_path
+            full = json.loads(full_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertEqual("degraded", payload["navigation_map"]["state_confidence"])
+        self.assertIn("coordinator-summary", json.dumps(payload["navigation_map"]))
+        self.assertIn("state_diagnostics", full)
+        self.assertTrue(any(item["name"] == "state-coordinator-summary" for item in full["state_diagnostics"]["checks"]))
 
     def test_next_cli_quiet_default_writes_structured_command_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
 from pathlib import Path
 
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+HARNESS_CLI = SCRIPT_DIR / "e2e_dev_harness.py"
 
 WRITE_TOOLS = {
     "write",
@@ -121,7 +125,7 @@ CONTROL_PATH_LITERAL_RE = re.compile(
     re.IGNORECASE,
 )
 SHELL_MUTATION_RE = re.compile(
-    r"(?:\bpython(?:3)?(?:\.exe)?\s+(?:-[c]|-)\b|\bnode(?:\.exe)?\s+(?:-[e]|-)\b|\bpowershell(?:\.exe)?\b.*\b-Command\b|"
+    r"(?:\bpython(?:3)?(?:\.exe)?\s+(?:-c\b|-\s*(?:$|[|&;]))|\bnode(?:\.exe)?\s+(?:-e\b|-\s*(?:$|[|&;]))|\bpowershell(?:\.exe)?\b.*\b-Command\b|"
     r"\bwith\s+open\s*\(|\bopen\s*\(|\.write_text\s*\(|\.write_bytes\s*\(|\bjson\.dump\s*\(|\byaml\.dump\s*\(|"
     r"\bshutil\.(?:copy|copyfile|move)\s*\(|\bos\.(?:remove|unlink|rename|replace)\s*\(|"
     r"\b(?:Set-Content|Add-Content|Out-File|New-Item|Remove-Item|Move-Item|Copy-Item)\b|"
@@ -129,6 +133,41 @@ SHELL_MUTATION_RE = re.compile(
     re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
 CONTROL_FILENAME_RE = re.compile(r"(?:\.phase-lock|run-state\.json|artifact-registry\.json|agent-schedule\.json|control-plane\.json)", re.IGNORECASE)
+HARNESS_CONTROL_CLI_RE = re.compile(
+    r"(?:^|\s)(?:\"[^\"]*python(?:3)?(?:\.exe)?\"|python(?:3)?(?:\.exe)?)?\s*"
+    r"\"?(?:[A-Za-z]:)?[A-Za-z0-9_./\\:-]*e2e_dev_harness\.py\"?\s+"
+    r"(?:dispatch-beat|dispatch-next|dispatch-ack|dispatch-complete|dispatch-finish|dispatch-status|next|gate|service-design|agent-task|handoff|hash|doctor|preflight|recover|timeline|gc:run|ac-progress|control-plane)\b",
+    re.IGNORECASE,
+)
+COMMAND_EVIDENCE_CLI_RE = re.compile(
+    r"(?:^|\s)(?:\"[^\"]*python(?:3)?(?:\.exe)?\"|python(?:3)?(?:\.exe)?)?\s*"
+    r"\"?(?:[A-Za-z]:)?[A-Za-z0-9_./\\:-]*(?:e2e_dev_harness|command_evidence)\.py\"?\s+"
+    r"(?:command-evidence\b|[^\r\n]*\s--command\b)",
+    re.IGNORECASE,
+)
+HIGH_OUTPUT_SHELL_PATTERNS = (
+    ("python_unittest", re.compile(r"\bpython(?:3)?(?:\.exe)?\s+-m\s+unittest\b", re.IGNORECASE)),
+    ("pytest", re.compile(r"(?:^|\s)(?:python(?:3)?(?:\.exe)?\s+-m\s+)?pytest\b", re.IGNORECASE)),
+    ("maven_test", re.compile(r"(?:^|\s)(?:mvn|mvn\.cmd|mvnw|mvnw\.cmd)\b[^\r\n]*(?:\btest\b|\bverify\b|\bpackage\b|\binstall\b)", re.IGNORECASE)),
+    ("npm_test", re.compile(r"(?:^|\s)npm(?:\.cmd)?\s+(?:test|run\s+(?:test|build|lint|check))\b", re.IGNORECASE)),
+    ("recursive_powershell_scan", re.compile(r"\bGet-ChildItem\b[^\r\n]*\b-Recurse\b|\bSelect-String\b", re.IGNORECASE)),
+    ("wide_rg", re.compile(r"(?:^|\s)rg(?:\.exe)?\s+(?!(?:--files|-l|--count|-c|--max-count\b))[^\r\n]*", re.IGNORECASE)),
+    ("build_or_scan", re.compile(r"(?:^|\s)(?:gradle|gradlew|npx\s+gitnexus|gitnexus|graphify)\b[^\r\n]*(?:\bbuild\b|\banaly[sz]e\b|\bscan\b|\bupdate\b)", re.IGNORECASE)),
+)
+HARNESS_HOOK_INSTALL_CLI_RE = re.compile(
+    r"(?:^|\s)(?:\"[^\"]*python(?:3)?(?:\.exe)?\"|python(?:3)?(?:\.exe)?)?\s*"
+    r"\"?(?:[A-Za-z]:)?[A-Za-z0-9_./\\:-]*(?:install_hooks|e2e_dev_harness)\.py\"?\b"
+    r"[^\r\n]*(?:--runtime\s+claude|\sinstall\b)",
+    re.IGNORECASE,
+)
+DIRECT_CONTROL_WRITE_RE = re.compile(
+    r"(?:Set-Content|Add-Content|Out-File|New-Item|Remove-Item|Move-Item|Copy-Item|>|>>)\b[^\r\n]*(?:\.phase-lock|run-state\.json|artifact-registry\.json|agent-schedule\.json|control-plane\.json)",
+    re.IGNORECASE,
+)
+DIRECT_HOOK_CONFIG_WRITE_RE = re.compile(
+    r"(?:Set-Content|Add-Content|Out-File|New-Item|Remove-Item|Move-Item|Copy-Item|>|>>)\b[^\r\n]*(?:\.claude[\\/]settings\.json|\.codex[\\/]hooks[\\/]e2e-dev-harness-pre-action\.json|\.gemini[\\/]hooks[\\/]e2e-dev-harness-pre-tool-use\.json|\.opencode[\\/]plugins[\\/]e2e-dev-harness\.js)",
+    re.IGNORECASE,
+)
 HOOK_PATH_KEYS = {
     "file_path",
     "filepath",
@@ -195,6 +234,7 @@ import lifecycle_policy  # noqa: E402
 import dispatcher  # noqa: E402
 import run_state  # noqa: E402
 import session_checkpoint  # noqa: E402
+from common import atomic_write_json, now_iso  # noqa: E402
 
 DISPATCH_TASK_ID_RE = re.compile(r"(?:Task ID|task[_ -]?id)\s*(?::|=)?\s*`?(?P<task>[A-Za-z0-9_.-]+)`?", re.IGNORECASE)
 DISPATCH_CONTEXT_PACK_RE = re.compile(
@@ -242,6 +282,16 @@ def result_path(repo: Path, path: Path) -> str:
 
 def result_paths(repo: Path, paths: list[Path]) -> list[str]:
     return [result_path(repo, path) for path in paths]
+
+
+def command_arg(value: str | Path) -> str:
+    text = str(value)
+    escaped = text.replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def harness_cli_command(*args: str | Path) -> str:
+    return " ".join([command_arg(sys.executable), command_arg(HARNESS_CLI), *(str(arg) for arg in args)])
 
 
 def is_code_path(repo: Path, path: Path) -> bool:
@@ -365,13 +415,11 @@ def pending_dispatch_ack_guidance(repo: Path, lock: Path | None) -> dict:
             continue
         run_id = str(state.get("run_id", "")).strip() or posix_relative(repo, state_path.parent)
         spawn_request = f"{run_id.rstrip('/')}/dispatch-spawn-requests/{task_id}-spawn-request.json"
-        ack_command = (
-            "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-ack . "
-            f"--state {posix_relative(repo, state_path)} --task-id {task_id}"
-        )
+        ack_args = ["dispatch-ack", ".", "--state", posix_relative(repo, state_path), "--task-id", task_id]
         if agent:
-            ack_command += f" --agent {agent}"
-        ack_command += " --worker-handle <runtime-worker-id>"
+            ack_args.extend(["--agent", agent])
+        ack_args.extend(["--worker-handle", "<runtime-worker-id>"])
+        ack_command = harness_cli_command(*ack_args)
         next_valid = (
             f"Spawn or acknowledge Task from {spawn_request} (Task ID: {task_id}; Context Pack: {context_pack}), "
             f"then run {ack_command}"
@@ -404,9 +452,12 @@ def clarification_snapshot_for_lock(repo: Path, lock: Path | None) -> dict:
 def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -> dict:
     state_path = state_path_display(repo, lock)
     todo_list = required_todo_list_for_lifecycle(lifecycle)
+    next_command = harness_cli_command("next", ".", "--state", state_path)
+    gate_command = harness_cli_command("gate", ".", "--phase", "implementation", "--run-state", state_path)
+    service_design_command = harness_cli_command("service-design", ".", "--run-state", state_path)
     base = {
         "not_deadlock": True,
-        "next_valid_command": f"e2e_dev_harness.py next . --state {state_path}",
+        "next_valid_command": next_command,
         "todo_policy": {
             "schema": "e2e-dev-harness.todo-policy.v1",
             "mode": "phase-scoped",
@@ -443,7 +494,7 @@ def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -
                 "run dispatch-beat --max-workers 1 for requirements-clarifier",
                 "record dispatch-ack for the spawned requirements worker",
                 "run dispatch-complete with returned requirements evidence paths",
-                "run e2e_dev_harness.py next . --state " + state_path,
+                "run " + next_command,
             ],
             "phase_guidance": "Current lifecycle is CREATED. Coordinator dispatches requirements-clarifier and relays only returned questions/evidence.",
         },
@@ -452,15 +503,15 @@ def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -
                 "run plan --create-archive only when the full schedule/archive is missing",
                 "run dispatch-beat/dispatch-next for R1 design review",
                 "record dispatch-ack and dispatch-complete for R1 evidence",
-                "run e2e_dev_harness.py next . --state " + state_path,
+                "run " + next_command,
             ],
             "phase_guidance": "Current lifecycle is CLARIFIED. Coordinator dispatches R1/design workers; it does not perform design review locally.",
         },
         "SERVICE_DESIGN_REQUIRED": {
             "allowed_actions": [
                 "run dispatch-beat/dispatch-next for service-design workers",
-                "run e2e_dev_harness.py service-design . --run-state " + state_path,
-                "run e2e_dev_harness.py next . --state " + state_path,
+                "run " + service_design_command,
+                "run " + next_command,
             ],
             "phase_guidance": "Current lifecycle requires dispatched service-design slice evidence before service code agents can proceed.",
         },
@@ -469,14 +520,14 @@ def guidance_for_lifecycle(repo: Path, lock: Path | None, lifecycle: str = "") -
                 "run dispatch-beat/dispatch-next for TDD red and R2 workers",
                 "record dispatch-ack for spawned workers",
                 "run dispatch-complete with scheduled red-test and R2 evidence",
-                "run e2e_dev_harness.py gate . --phase implementation --run-state " + state_path,
+                "run " + gate_command,
             ],
             "phase_guidance": "Current lifecycle is PLANNED. Production code is still locked; complete TDD red and R2 before implementation gate.",
         },
         "RED_READY": {
             "allowed_actions": [
-                "run e2e_dev_harness.py gate . --phase implementation --run-state " + state_path,
-                "run e2e_dev_harness.py next . --state " + state_path,
+                "run " + gate_command,
+                "run " + next_command,
             ],
             "phase_guidance": "Current lifecycle is RED_READY. Open production-code writes only through the implementation gate.",
         },
@@ -1287,6 +1338,65 @@ def shell_mentions_harness_control(command: str) -> bool:
     return bool(CONTROL_FILENAME_RE.search(command or ""))
 
 
+def is_harness_control_cli(command: str) -> bool:
+    text = command or ""
+    return bool(HARNESS_CONTROL_CLI_RE.search(text)) and not bool(DIRECT_CONTROL_WRITE_RE.search(text))
+
+
+def is_harness_hook_install_cli(command: str) -> bool:
+    text = command or ""
+    return bool(HARNESS_HOOK_INSTALL_CLI_RE.search(text)) and not bool(DIRECT_HOOK_CONFIG_WRITE_RE.search(text))
+
+
+def is_command_evidence_cli(command: str) -> bool:
+    return bool(COMMAND_EVIDENCE_CLI_RE.search(command or ""))
+
+
+def high_output_shell_classification(command: str) -> str:
+    if not command or is_harness_control_cli(command) or is_command_evidence_cli(command):
+        return ""
+    for classification, pattern in HIGH_OUTPUT_SHELL_PATTERNS:
+        if pattern.search(command):
+            return classification
+    return ""
+
+
+def run_dir_for_tool_event(repo: Path, run_dir: Path | None, lock: Path | None) -> Path | None:
+    if run_dir:
+        return run_dir if run_dir.is_absolute() else repo / run_dir
+    if lock and lock.exists():
+        return lock.parent
+    return None
+
+
+def write_coordinator_tool_event(
+    repo: Path,
+    run_dir: Path | None,
+    lock: Path | None,
+    tool: str,
+    classification: str,
+    command_text: str,
+    paths: list[Path],
+) -> str:
+    event_run_dir = run_dir_for_tool_event(repo, run_dir, lock)
+    if event_run_dir is None:
+        return ""
+    checkpoint = load_json(event_run_dir / session_checkpoint.FILENAME)
+    event = {
+        "schema": "e2e-dev-harness.coordinator-tool-event.v1",
+        "tool": tool,
+        "classification": classification,
+        "command_sha256": hashlib.sha256((command_text or "").encode("utf-8", errors="replace")).hexdigest(),
+        "paths": result_paths(repo, paths),
+        "created_at": now_iso(),
+        "checkpoint_created_at": str(checkpoint.get("created_at", "")),
+    }
+    stamp = now_iso().replace(":", "").replace("-", "")
+    target = event_run_dir / "coordinator-tool-events" / f"{stamp}-{classification}.json"
+    atomic_write_json(target, event)
+    return str(target)
+
+
 def coordinator_write_budget(
     repo: Path,
     normalized_tool: str,
@@ -1351,8 +1461,44 @@ def _validate_action(
     repo = repo.resolve()
     normalized = normalize_tool(tool)
     shell_mutation = normalized in SHELL_TOOLS and shell_mutates_files(command_text)
+    harness_control_cli = normalized in SHELL_TOOLS and is_harness_control_cli(command_text)
+    harness_hook_install_cli = normalized in SHELL_TOOLS and is_harness_hook_install_cli(command_text)
     warnings: list[str] = []
     lock = discover_lock(repo, lock_path, run_dir)
+    if normalized in SHELL_TOOLS:
+        high_output_classification = high_output_shell_classification(command_text)
+        if high_output_classification:
+            event_path = write_coordinator_tool_event(
+                repo,
+                run_dir,
+                lock,
+                tool,
+                "blocked_high_output_shell",
+                command_text,
+                paths,
+            )
+            budget = {
+                "schema": "e2e-dev-harness.coordinator-tool-budget.v1",
+                "classification": high_output_classification,
+                "policy": "high_output_shell_requires_evidence",
+                "paths": result_paths(repo, paths),
+                "recommended_action": (
+                    "Run this through e2e_dev_harness.py command-evidence . --command \"<cmd>\" "
+                    "--output docs/agent-runs/<run>/evidence/<name>.json, or dispatch a worker and keep only the evidence path in coordinator chat."
+                ),
+            }
+            result = {
+                "ready": False,
+                "blocked_reasons": [
+                    "Coordinator tool budget blocked: high-output shell command must use command-evidence or a dispatched worker; do not stream test, build, scan, or broad search output into coordinator chat."
+                ],
+                "warnings": warnings,
+                "coordinator_tool_budget": budget,
+                **guidance_from_lock(repo, lock),
+            }
+            if event_path:
+                result["coordinator_tool_event_path"] = event_path
+            return result
     outside_repo_paths = [path for path in paths if path.is_absolute() and not is_inside_repo(repo, path)]
     outside_repo_code_paths = [path for path in outside_repo_paths if is_code_like_path(path)]
     if outside_repo_paths and normalized in READ_TOOLS:
@@ -1371,7 +1517,7 @@ def _validate_action(
             "repo": str(repo),
             "outside_repo_paths": [str(path) for path in outside_repo_code_paths],
         }
-    if shell_mutation and shell_mentions_harness_control(command_text):
+    if shell_mutation and shell_mentions_harness_control(command_text) and not harness_control_cli:
         return {
             "ready": False,
             "blocked_reasons": [
@@ -1381,7 +1527,7 @@ def _validate_action(
             **guidance_from_lock(repo, lock),
         }
     protected_paths = [path for path in paths if is_harness_control_path(repo, resolve_for_repo(repo, path))]
-    if normalized in WRITE_TOOLS and protected_paths and (normalized not in SHELL_TOOLS or shell_mutation):
+    if normalized in WRITE_TOOLS and protected_paths and (normalized not in SHELL_TOOLS or shell_mutation) and not harness_control_cli:
         return {
             "ready": False,
             "blocked_reasons": [
@@ -1392,7 +1538,7 @@ def _validate_action(
             **guidance_from_lock(repo, lock),
         }
     hook_config_paths = [path for path in paths if is_hook_config_path(repo, path)]
-    if normalized in WRITE_TOOLS and hook_config_paths and (normalized not in SHELL_TOOLS or shell_mutation):
+    if normalized in WRITE_TOOLS and hook_config_paths and (normalized not in SHELL_TOOLS or shell_mutation) and not harness_hook_install_cli:
         return {
             "ready": False,
             "blocked_reasons": [
@@ -1662,7 +1808,9 @@ def _validate_action(
                 "phase_lock": str(lock),
                 "run_state": str(run_state_path_for_lock(repo, lock)),
                 "checkpoint": checkpoint_result["checkpoint"],
-                "action": "Run e2e_dev_harness.py next --state docs/agent-runs/<run>/run-state.json before continuing.",
+                "action": "Run "
+                + harness_cli_command("next", ".", "--state", "docs/agent-runs/<run>/run-state.json")
+                + " before continuing.",
                 "code_paths": result_paths(repo, code_paths),
                 "test_code_paths": result_paths(repo, test_code_paths),
                 "runtime_code_paths": result_paths(repo, runtime_code_paths),
@@ -1894,7 +2042,7 @@ def compact_guidance_result(result: dict) -> dict:
         compact["guidance_ref"] = "Use pending_dispatch.spawn_request, pending_dispatch.task_id, and pending_dispatch.ack_command."
     else:
         ref = str(result.get("run_state") or result.get("phase_lock") or "docs/agent-runs/<run>/run-state.json")
-        compact["guidance_ref"] = f"Run e2e_dev_harness.py next . --state {ref} for full phase guidance."
+        compact["guidance_ref"] = f"Run {harness_cli_command('next', '.', '--state', ref)} for full phase guidance."
     return compact
 
 

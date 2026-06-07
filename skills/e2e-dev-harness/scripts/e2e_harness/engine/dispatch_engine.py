@@ -6,6 +6,7 @@ from pathlib import Path
 
 import dispatcher
 from e2e_harness.cli.commands import handoff as handoff_command
+from e2e_harness.engine import state_store
 
 
 def runtime_capabilities(runtime: str | None = "claude-code") -> dict:
@@ -38,7 +39,7 @@ def status(
 
 
 def ack(repo: Path, state: Path | None, task_id: str, agent: str, worker_handle: str, worker_session: str = "") -> dict:
-    return dispatcher.dispatch_ack(repo, state, task_id, agent, worker_handle, worker_session)
+    return state_store.dispatch_ack(repo, state, task_id, agent, worker_handle, worker_session)
 
 
 def complete(
@@ -51,7 +52,7 @@ def complete(
     manual_recovery: bool = False,
     recovery_approval: Path | None = None,
 ) -> dict:
-    return dispatcher.dispatch_complete(
+    return state_store.dispatch_complete(
         repo,
         schedule,
         state,
@@ -106,7 +107,7 @@ def finish(
             "dispatch": dispatch,
         }
     else:
-        ack_result = dispatcher.dispatch_ack(repo, state, task_id, agent, worker_handle, worker_session or "")
+        ack_result = state_store.dispatch_ack(repo, state, task_id, agent, worker_handle, worker_session or "")
     result["ack"] = ack_result
     result["warnings"].extend(ack_result.get("warnings", []))
     if not ack_result.get("ready"):
@@ -150,7 +151,7 @@ def finish(
             )
             return result
 
-    complete_result = dispatcher.dispatch_complete(repo, schedule, state, task_id, agent, evidence or [])
+    complete_result = state_store.dispatch_complete(repo, schedule, state, task_id, agent, evidence or [])
     result["complete"] = complete_result
     result["stage"] = "complete"
     result["ready"] = bool(complete_result.get("ready"))

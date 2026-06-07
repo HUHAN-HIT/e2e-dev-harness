@@ -1,0 +1,26 @@
+{
+  "schema": "e2e-dev-harness.command-evidence.v1",
+  "command": "python -m unittest discover -s tests",
+  "argv": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests"
+  ],
+  "cwd": "C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify",
+  "started_at": "2026-06-06T16:34:01Z",
+  "finished_at": "2026-06-06T16:34:39Z",
+  "elapsed_ms": 38063,
+  "exit_code": 1,
+  "stdout_tail": "",
+  "stderr_tail": "...................................................................................................................................................................................................................................................................................................................................................................................................................................................................E.............................................................................................................................................................................................................................................E..................................................................................................................................................................................................................................................................................................................................................................................................................................................E...........................\n======================================================================\nERROR: test_navigation_map_reports_state_confidence_and_must_read_paths (test_enterprise_harness_architecture.CliCommandFacadeContractTests.test_navigation_map_reports_state_confidence_and_must_read_paths)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\\tests\\test_enterprise_harness_architecture.py\", line 1831, in test_navigation_map_reports_state_confidence_and_must_read_paths\n    result = navigation_map.build(\n        repo=Path(\"C:/repo\"),\n    ...<43 lines>...\n        },\n    )\nTypeError: build() got an unexpected keyword argument 'diagnostics'\n\n======================================================================\nERROR: test_state_navigation_summary_projects_confidence_and_paths (test_harness_doctor.HarnessDoctorTests.test_state_navigation_summary_projects_confidence_and_paths)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\\tests\\test_harness_doctor.py\", line 804, in test_state_navigation_summary_projects_confidence_and_paths\n    summary = harness_doctor.state_navigation_summary(repo, state_path)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: module 'harness_doctor' has no attribute 'state_navigation_summary'\n\n======================================================================\nERROR: test_compact_navigation_map_preserves_confidence_and_must_read_paths (test_unified_cli.UnifiedCliTests.test_compact_navigation_map_preserves_confidence_and_must_read_paths)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\\tests\\test_unified_cli.py\", line 802, in test_compact_navigation_map_preserves_confidence_and_must_read_paths\n    self.assertEqual(\"blocked\", payload[\"navigation_map\"][\"state_confidence\"])\n                                ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^\nKeyError: 'state_confidence'\n\n----------------------------------------------------------------------\nRan 1152 tests in 37.616s\n\nFAILED (errors=3)\n",
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "d41eeada676b49c0eddfee5b422262509d9d43d5bd8866e73ec962db259b8d2d",
+  "environment": {
+    "python": "3.13.12",
+    "platform": "win32",
+    "path_entries": 42
+  }
+}

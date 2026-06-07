@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import io
 import sys
 import tempfile
 import unittest
 
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +17,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import command_evidence  # noqa: E402
+import e2e_dev_harness  # noqa: E402
 import tdd_evidence  # noqa: E402
 from common import atomic_write_json, now_iso, read_json_object, split_command  # noqa: E402
 from conftest import write_command_evidence  # noqa: E402
@@ -74,6 +77,44 @@ class CommandEvidenceTests(unittest.TestCase):
 
         self.assertEqual(2, result["exit_code"])
         self.assertIn("Shell control operators", result["stderr_tail"])
+
+    def test_command_evidence_cli_prints_compact_stdout_and_writes_full_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            output = Path("docs/agent-runs/run/evidence/command.json")
+            stdout = io.StringIO()
+            argv = [
+                "e2e_dev_harness.py",
+                "command-evidence",
+                str(repo),
+                "--command",
+                f"{sys.executable} -c \"print('compact-cli-ok')\"",
+                "--output",
+                output.as_posix(),
+            ]
+
+            with patch.object(sys, "argv", argv), patch("sys.stdout", stdout):
+                exit_code = e2e_dev_harness.main()
+
+            compact = json.loads(stdout.getvalue())
+            evidence = json.loads((repo / output).read_text(encoding="utf-8"))
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual(
+            {
+                "ready",
+                "exit_code",
+                "evidence_path",
+                "stdout_sha256",
+                "stderr_sha256",
+                "elapsed_ms",
+            },
+            set(compact),
+        )
+        self.assertTrue(compact["ready"])
+        self.assertEqual(0, compact["exit_code"])
+        self.assertIn("compact-cli-ok", evidence["stdout_tail"])
+        self.assertEqual(compact["stdout_sha256"], evidence["stdout_sha256"])
 
 
 

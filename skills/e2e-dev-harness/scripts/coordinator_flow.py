@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import dispatcher
+import harness_doctor
 import install_hooks
 import lifecycle_policy
 import navigation_map
@@ -877,6 +878,8 @@ def evaluate_navigation_state(args) -> tuple[int, dict]:
     if not checkpoint["ready"]:
         result["ready"] = False
         result["blocked_reasons"].extend("Session checkpoint: " + reason for reason in checkpoint["blocked_reasons"])
+    state_diagnostics = harness_doctor.state_navigation_summary(repo, state_path)
+    result["state_diagnostics"] = state_diagnostics
     result["navigation_map"] = navigation_map.build(
         repo=repo,
         state_path=state_path,
@@ -890,6 +893,7 @@ def evaluate_navigation_state(args) -> tuple[int, dict]:
         preflight=result["preflight"],
         execution_packet=execution_packet,
         checkpoint=checkpoint,
+        diagnostics=state_diagnostics,
     )
     summary = session_checkpoint.create_coordinator_summary(repo, state_path, result)
     result["coordinator_summary_path"] = summary.get("coordinator_summary", "")

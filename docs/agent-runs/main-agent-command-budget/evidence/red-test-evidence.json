@@ -1,0 +1,28 @@
+{
+  "schema": "e2e-dev-harness.command-evidence.v1",
+  "command": "python -m unittest discover -s tests -p test_evidence.py",
+  "argv": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_evidence.py"
+  ],
+  "cwd": "C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify",
+  "started_at": "2026-06-06T16:27:26Z",
+  "finished_at": "2026-06-06T16:27:27Z",
+  "elapsed_ms": 458,
+  "exit_code": 1,
+  "stdout_tail": "",
+  "stderr_tail": " [--version]\n                          {start,prepare,clarify,plan,gate,verify,guard,doctor,install,pre-code,test-impact,service-design,agent-task,runtime-capabilities,dispatch-next,dispatch-beat,dispatch-complete,dispatch-ack,dispatch-finish,dispatch-status,handoff,hash,recover,timeline,gc:run,ac-progress,next,map,preflight,control-plane} ...\ne2e_dev_harness.py: error: argument command: invalid choice: 'command-evidence' (choose from start, prepare, clarify, plan, gate, verify, guard, doctor, install, pre-code, test-impact, service-design, agent-task, runtime-capabilities, dispatch-next, dispatch-beat, dispatch-complete, dispatch-ack, dispatch-finish, dispatch-status, handoff, hash, recover, timeline, gc:run, ac-progress, next, map, preflight, control-plane)\nE..........\n======================================================================\nERROR: test_command_evidence_cli_prints_compact_stdout_and_writes_full_evidence (test_evidence.CommandEvidenceTests.test_command_evidence_cli_prints_compact_stdout_and_writes_full_evidence)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"D:\\SOFTWARE\\anaconda3\\Lib\\argparse.py\", line 1965, in _parse_known_args2\n    namespace, args = self._parse_known_args(args, namespace, intermixed)\n                      ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\SOFTWARE\\anaconda3\\Lib\\argparse.py\", line 2197, in _parse_known_args\n    positionals_end_index = consume_positionals(start_index)\n  File \"D:\\SOFTWARE\\anaconda3\\Lib\\argparse.py\", line 2172, in consume_positionals\n    take_action(action, args)\n    ~~~~~~~~~~~^^^^^^^^^^^^^^\n  File \"D:\\SOFTWARE\\anaconda3\\Lib\\argparse.py\", line 2026, in take_action\n    argument_values = self._get_values(action, argument_strings)\n  File \"D:\\SOFTWARE\\anaconda3\\Lib\\argparse.py\", line 2556, in _get_values\n    self._check_value(action, value[0])\n    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^\n  File \"D:\\SOFTWARE\\anaconda3\\Lib\\argparse.py\", line 2606, in _check_value\n    raise ArgumentError(action, msg % args)\nargparse.ArgumentError: argument command: invalid choice: 'command-evidence' (choose from start, prepare, clarify, plan, gate, verify, guard, doctor, install, pre-code, test-impact, service-design, agent-task, runtime-capabilities, dispatch-next, dispatch-beat, dispatch-complete, dispatch-ack, dispatch-finish, dispatch-status, handoff, hash, recover, timeline, gc:run, ac-progress, next, map, preflight, control-plane)\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\\tests\\test_evidence.py\", line 97, in test_command_evidence_cli_prints_compact_stdout_and_writes_full_evidence\n    exit_code = e2e_dev_harness.main()\n  File \"C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\\skills\\e2e-dev-harness\\scripts\\e2e_dev_harness.py\", line 2107, in main\n    args = parser.parse_args()\n  File \"D:\\SOFTWARE\\anaconda3\\Lib\\argparse.py\", line 1926, in parse_args\n    args, argv = self.parse_known_args(args, namespace)\n                 ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^\n  File \"D:\\SOFTWARE\\anaconda3\\Lib\\argparse.py\", line 1936, in parse_known_args\n    return self._parse_known_args2(args, namespace, intermixed=False)\n           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\SOFTWARE\\anaconda3\\Lib\\argparse.py\", line 1967, in _parse_known_args2\n    self.error(str(err))\n    ~~~~~~~~~~^^^^^^^^^^\n  File \"D:\\SOFTWARE\\anaconda3\\Lib\\argparse.py\", line 2686, in error\n    self.exit(2, _('%(prog)s: error: %(message)s\\n') % args)\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\SOFTWARE\\anaconda3\\Lib\\argparse.py\", line 2673, in exit\n    _sys.exit(status)\n    ~~~~~~~~~^^^^^^^^\nSystemExit: 2\n\n----------------------------------------------------------------------\nRan 12 tests in 0.077s\n\nFAILED (errors=1)\n",
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "98545baeab4712f167cab0a04365e82d1e2fb01e63d0b5b8586ae826e96dcc1c",
+  "environment": {
+    "python": "3.13.12",
+    "platform": "win32",
+    "path_entries": 42
+  }
+}

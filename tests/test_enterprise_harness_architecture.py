@@ -659,6 +659,32 @@ class StateStoreContractTests(unittest.TestCase):
         self.assertEqual("claimed", projected["tasks"][0]["status"])
         self.assertEqual("code-developer-order-service", projected["tasks"][0]["owner"])
 
+    def test_dispatch_engine_ack_updates_control_plane_projection(self) -> None:
+        from e2e_harness.engine import control_plane, dispatch_engine, state_store  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            schedule, state_path = write_dispatch_fixture(repo)
+            imported = control_plane.repair(repo, state_path.parent, "legacy-import")
+            self.assertTrue(imported["ready"], imported.get("blocked_reasons"))
+
+            claim = state_store.dispatch_next(repo, schedule, state_path, runtime="claude-code")
+            self.assertTrue(claim["ready"], claim.get("blocked_reasons"))
+            ack = dispatch_engine.ack(
+                repo,
+                state_path,
+                "T10",
+                "code-developer-order-service",
+                "worker-T10",
+                "session-T10",
+            )
+            control_plane_state = json.loads((state_path.parent / "control-plane.json").read_text(encoding="utf-8"))
+            run_state_projection = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(ack["ready"], ack.get("blocked_reasons"))
+        self.assertEqual("worker_running", control_plane_state["dispatches"]["T10"]["status"])
+        self.assertEqual("worker_running", run_state_projection["dispatches"]["T10"]["status"])
+
     def test_service_design_transition_writes_event_and_projection(self) -> None:
         import e2e_dev_harness  # noqa: PLC0415
         import event_log  # noqa: PLC0415
@@ -691,6 +717,43 @@ class StateStoreContractTests(unittest.TestCase):
         self.assertEqual("service_design", events[-1]["gate"])
         self.assertEqual("PLANNED", projected["lifecycle"])
         self.assertEqual("passed", projected["gates"]["service_design"])
+
+    def test_service_design_transition_updates_control_plane_before_projection(self) -> None:
+        import e2e_dev_harness  # noqa: PLC0415
+        from e2e_harness.engine import control_plane  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            design, state_path, service_design = write_service_design_fixture(repo)
+            run_dir = state_path.parent
+            imported = control_plane.repair(repo, run_dir, "legacy-import")
+            self.assertTrue(imported["ready"], imported.get("blocked_reasons"))
+
+            code, result = e2e_dev_harness.service_design(
+                type(
+                    "Args",
+                    (),
+                    {
+                        "repo": repo,
+                        "global_design": design.relative_to(repo),
+                        "service_design_dir": None,
+                        "service_design": [service_design.relative_to(repo)],
+                        "emit_template": None,
+                        "run_state": state_path.relative_to(repo),
+                        "status_file": None,
+                    },
+                )()
+            )
+            control_plane_state = json.loads((run_dir / "control-plane.json").read_text(encoding="utf-8"))
+            run_state_projection = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code, result)
+        self.assertTrue(result["run_state_transition"]["ready"], result["run_state_transition"]["blocked_reasons"])
+        self.assertEqual("PLANNED", control_plane_state["lifecycle"])
+        self.assertEqual("passed", control_plane_state["gates"]["service_design"])
+        self.assertEqual("PLANNED", run_state_projection["lifecycle"])
+        self.assertEqual("passed", run_state_projection["gates"]["service_design"])
+        self.assertEqual("worker_completed", run_state_projection["dispatches"]["T20"]["status"])
 
     def test_clarify_transition_writes_event_and_projection(self) -> None:
         import e2e_dev_harness  # noqa: PLC0415
@@ -1824,6 +1887,62 @@ class CliCommandFacadeContractTests(unittest.TestCase):
         self.assertIn("do not edit production code", result["forbidden_now"])
         self.assertEqual(["confirmed Restated Intent and closed Open Questions in the design doc"], result["required_evidence"])
         self.assertEqual("docs/agent-runs/run/run-state.json", result["artifacts"]["run_state"])
+
+    def test_navigation_map_reports_state_confidence_and_must_read_paths(self) -> None:
+        import navigation_map  # noqa: PLC0415
+
+        result = navigation_map.build(
+            repo=Path("C:/repo"),
+            state_path=Path("C:/repo/docs/agent-runs/run/run-state.json"),
+            state={"run_id": "run", "lifecycle": "CREATED", "dispatches": {}},
+            lifecycle="CREATED",
+            workflow_stage="CLARIFY",
+            ready=False,
+            blocked_reasons=["Runtime hook is not ready"],
+            warnings=["coordinator-summary lifecycle CREATED does not match run-state lifecycle CLARIFIED"],
+            action={"workflow_stage": "CLARIFY", "phase": "clarify", "command": "dispatch-beat"},
+            preflight={
+                "ready": False,
+                "blockers": [
+                    {
+                        "gate": "clarification",
+                        "code": "BLK_CLARIFY_DISPATCH",
+                        "message": "Clarification gate blocked.",
+                        "minimal_fix": "Run dispatch-beat --max-workers 1.",
+                    }
+                ],
+                "next_single_action": "Run dispatch-beat --max-workers 1.",
+            },
+            execution_packet={
+                "phase": "clarify",
+                "objective": "Clarify before planning.",
+                "required_evidence": ["requirements handoff"],
+                "completion_checks": ["run-state lifecycle becomes CLARIFIED"],
+            },
+            checkpoint={},
+            diagnostics={
+                "state_confidence": "degraded",
+                "primary_blocker_code": "BLK_CLARIFY_DISPATCH",
+                "checks": [
+                    {"name": "state-lifecycle", "status": "pass", "severity": "info"},
+                    {"name": "state-coordinator-summary", "status": "warn", "severity": "warning"},
+                ],
+                "must_read_paths": [
+                    "docs/agent-runs/run/run-state.json",
+                    "docs/agent-runs/run/agent-schedule.json",
+                    "docs/agent-runs/run/coordinator-summary.json",
+                ],
+                "authority": {
+                    "primary": "run-state.json",
+                    "derived": ["agent-schedule.json", ".phase-lock", "coordinator-summary.json"],
+                },
+            },
+        )
+
+        self.assertEqual("degraded", result["state_confidence"])
+        self.assertEqual("BLK_CLARIFY_DISPATCH", result["diagnostics"]["primary_blocker_code"])
+        self.assertIn("docs/agent-runs/run/agent-schedule.json", result["must_read_paths"])
+        self.assertEqual("run-state.json", result["authority"]["primary"])
 
     def test_navigation_map_does_not_show_completed_worker_as_active_work(self) -> None:
         import navigation_map  # noqa: PLC0415

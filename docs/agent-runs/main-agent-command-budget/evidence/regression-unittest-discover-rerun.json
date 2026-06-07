@@ -1,0 +1,26 @@
+{
+  "schema": "e2e-dev-harness.command-evidence.v1",
+  "command": "python -m unittest discover -s tests",
+  "argv": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests"
+  ],
+  "cwd": "C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify",
+  "started_at": "2026-06-06T16:36:50Z",
+  "finished_at": "2026-06-06T16:37:24Z",
+  "elapsed_ms": 34382,
+  "exit_code": 1,
+  "stdout_tail": "",
+  "stderr_tail": ".................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................F..................................................................................................................................................................................................................................................................................................................................................................................................................................................E...........................\n======================================================================\nERROR: test_compact_navigation_map_preserves_confidence_and_must_read_paths (test_unified_cli.UnifiedCliTests.test_compact_navigation_map_preserves_confidence_and_must_read_paths)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\\tests\\test_unified_cli.py\", line 802, in test_compact_navigation_map_preserves_confidence_and_must_read_paths\n    self.assertEqual(\"blocked\", payload[\"navigation_map\"][\"state_confidence\"])\n                                ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^\nKeyError: 'state_confidence'\n\n======================================================================\nFAIL: test_state_navigation_summary_projects_confidence_and_paths (test_harness_doctor.HarnessDoctorTests.test_state_navigation_summary_projects_confidence_and_paths)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\\tests\\test_harness_doctor.py\", line 806, in test_state_navigation_summary_projects_confidence_and_paths\n    self.assertEqual(\"ready\", summary[\"state_confidence\"])\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 'ready' != 'blocked'\n- ready\n+ blocked\n\n\n----------------------------------------------------------------------\nRan 1152 tests in 33.908s\n\nFAILED (failures=1, errors=1)\n",
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "39bbcca73131bd1ce29e68cf585bf9419a7993a060c4704c82715ad993f0be89",
+  "environment": {
+    "python": "3.13.12",
+    "platform": "win32",
+    "path_entries": 42
+  }
+}

@@ -34,7 +34,8 @@ e2e-harness next . \
 CLI stdout is compact. Read `full_result_path` or
 `coordinator_summary_path`; use `--json-full` only for debugging or legacy automation.
 Coordinator minimal reading set: instructions, `next`, active design/slice, paths, blockers; keep full CLI JSON in evidence files.
-Coordinator write budget: long design/plan/handoff bodies must be worker evidence or generator outputs; keep only paths in chat.
+Coordinator write budget: long artifacts must be worker evidence/generator outputs; keep paths.
+High-output shell: `command-evidence --output <path>` or worker; paths only.
 
 Use `next.required_todo_list`; the coordinator stays control-plane only.
 In `CREATED`, dispatch `requirements-clarifier` and relay only returned Restated Intent/Open Questions and evidence paths.

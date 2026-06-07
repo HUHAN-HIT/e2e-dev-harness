@@ -524,6 +524,168 @@ class DispatchAckPhaseGuardTest(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("Worker output write blocked" in reason for reason in result["blocked_reasons"]))
 
+    def test_dispatch_beat_cli_can_tee_response_while_passing_control_paths_as_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            schedule = Path("docs/agent-runs/run/agent-schedule.json")
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            run_state.write_state(repo, state_path, state)
+            (run_dir / ".phase-lock").write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.phase-lock.v1",
+                        "run_id": "run",
+                        "lifecycle": "CREATED",
+                        "state": "code-write-locked",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (repo / schedule).write_text(json.dumps({"tasks": []}), encoding="utf-8")
+
+            command = (
+                "python skills/e2e-dev-harness/scripts/e2e_dev_harness.py dispatch-beat . "
+                "--schedule docs/agent-runs/run/agent-schedule.json "
+                "--state docs/agent-runs/run/run-state.json "
+                "| tee docs/agent-runs/run/cli-responses/dispatch-beat.json"
+            )
+            result = phase_guard.validate_action(
+                repo,
+                "Bash",
+                [
+                    schedule,
+                    Path("docs/agent-runs/run/run-state.json"),
+                    Path("docs/agent-runs/run/cli-responses/dispatch-beat.json"),
+                ],
+                run_dir=Path("docs/agent-runs/run"),
+                command_text=command,
+            )
+
+        self.assertTrue(result["ready"], result.get("blocked_reasons"))
+
+    def test_quoted_harness_cli_can_tee_response_while_passing_control_paths_as_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            schedule = Path("docs/agent-runs/run/agent-schedule.json")
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            run_state.write_state(repo, state_path, state)
+            (run_dir / ".phase-lock").write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.phase-lock.v1",
+                        "run_id": "run",
+                        "lifecycle": "CREATED",
+                        "state": "code-write-locked",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (repo / schedule).write_text(json.dumps({"tasks": []}), encoding="utf-8")
+
+            command = (
+                phase_guard.harness_cli_command(
+                    "dispatch-beat",
+                    ".",
+                    "--schedule",
+                    "docs/agent-runs/run/agent-schedule.json",
+                    "--state",
+                    "docs/agent-runs/run/run-state.json",
+                )
+                + " | tee docs/agent-runs/run/cli-responses/dispatch-beat.json"
+            )
+            result = phase_guard.validate_action(
+                repo,
+                "Bash",
+                [
+                    schedule,
+                    Path("docs/agent-runs/run/run-state.json"),
+                    Path("docs/agent-runs/run/cli-responses/dispatch-beat.json"),
+                ],
+                run_dir=Path("docs/agent-runs/run"),
+                command_text=command,
+            )
+
+        self.assertTrue(result["ready"], result.get("blocked_reasons"))
+
+    def test_install_hooks_cli_can_repair_project_hook_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            run_state.write_state(repo, state_path, state)
+            (run_dir / ".phase-lock").write_text(
+                json.dumps(
+                    {
+                        "schema": "e2e-dev-harness.phase-lock.v1",
+                        "run_id": "run",
+                        "lifecycle": "CREATED",
+                        "state": "code-write-locked",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = Path(".claude/settings.json")
+            command = (
+                "python skills/e2e-dev-harness/scripts/install_hooks.py . --runtime claude --json "
+                "| tee docs/agent-runs/run/cli-responses/install-hooks.json"
+            )
+            result = phase_guard.validate_action(
+                repo,
+                "Bash",
+                [settings, Path("docs/agent-runs/run/cli-responses/install-hooks.json")],
+                run_dir=Path("docs/agent-runs/run"),
+                command_text=command,
+            )
+
+        self.assertTrue(result["ready"], result.get("blocked_reasons"))
+
+    def test_guidance_uses_invocable_harness_script_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+
+            guidance = phase_guard.guidance_for_lifecycle(repo, None, "CREATED")
+
+        expected = str(SCRIPTS / "e2e_dev_harness.py")
+        self.assertIn(sys.executable, guidance["next_valid_command"])
+        self.assertIn(expected, guidance["next_valid_command"])
+        self.assertNotIn("e2e_dev_harness.py next .", guidance["next_valid_command"])
+
+    def test_shell_discovery_command_with_python_module_probe_is_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            command = (
+                "which e2e_dev_harness.py 2>&1; "
+                "which e2e-harness 2>&1; "
+                "python -m e2e_dev_harness --help 2>&1 | head -5"
+            )
+
+            result = phase_guard.validate_action(repo, "Bash", [], command_text=command)
+
+        self.assertTrue(result["ready"], result.get("blocked_reasons"))
+
     def test_manual_dispatch_ack_proof_allows_worker_owned_handoff_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -688,6 +850,42 @@ class DispatchAckPhaseGuardTest(unittest.TestCase):
             )
 
         self.assertTrue(result["ready"], result["blocked_reasons"])
+
+    def test_coordinator_high_output_shell_is_blocked_and_recorded_as_tool_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            state_path = run_dir / "run-state.json"
+            state = run_state.build_state(
+                "run",
+                "single",
+                [],
+                "docs/agent-runs/run/artifact-registry.json",
+                "CREATED",
+            )
+            run_state.write_state(repo, state_path, state)
+            (run_dir / "session-checkpoint.json").write_text(
+                json.dumps({"created_at": "2026-06-06T00:00:00Z"}),
+                encoding="utf-8",
+            )
+
+            result = phase_guard.validate_action(
+                repo,
+                "Bash",
+                [],
+                run_dir=run_dir,
+                command_text="python -m unittest discover -s tests",
+            )
+            event_path = Path(result["coordinator_tool_event_path"])
+            event = json.loads(event_path.read_text(encoding="utf-8"))
+
+        self.assertFalse(result["ready"])
+        self.assertIn("coordinator_tool_budget", result)
+        self.assertIn("command-evidence", " ".join(result["blocked_reasons"]))
+        self.assertEqual("Bash", event["tool"])
+        self.assertEqual("blocked_high_output_shell", event["classification"])
+        self.assertEqual("2026-06-06T00:00:00Z", event["checkpoint_created_at"])
+        self.assertRegex(event["command_sha256"], r"^[0-9a-f]{64}$")
 
 
 class DispatchFinishHandoffContractTest(unittest.TestCase):

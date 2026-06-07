@@ -1,0 +1,28 @@
+{
+  "schema": "e2e-dev-harness.command-evidence.v1",
+  "command": "python -m unittest discover -s tests -p test_dispatch_finish.py",
+  "argv": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_dispatch_finish.py"
+  ],
+  "cwd": "C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify",
+  "started_at": "2026-06-06T16:27:26Z",
+  "finished_at": "2026-06-06T16:27:27Z",
+  "elapsed_ms": 488,
+  "exit_code": 1,
+  "stdout_tail": "",
+  "stderr_tail": "E...........................\n======================================================================\nERROR: test_coordinator_high_output_shell_is_blocked_and_recorded_as_tool_event (test_dispatch_finish.DispatchAckPhaseGuardTest.test_coordinator_high_output_shell_is_blocked_and_recorded_as_tool_event)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\\tests\\test_dispatch_finish.py\", line 879, in test_coordinator_high_output_shell_is_blocked_and_recorded_as_tool_event\n    event_path = Path(result[\"coordinator_tool_event_path\"])\n                      ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nKeyError: 'coordinator_tool_event_path'\n\n----------------------------------------------------------------------\nRan 28 tests in 0.292s\n\nFAILED (errors=1)\n",
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "7107bc4585e767458742d4457016c9ab9728990da56f5f1c4657d454260498e5",
+  "environment": {
+    "python": "3.13.12",
+    "platform": "win32",
+    "path_entries": 42
+  }
+}

@@ -112,6 +112,43 @@ def dispatch_waves_since_checkpoint(state: dict) -> int:
         return 0
 
 
+def file_count_since(root: Path, checkpoint_created_at: str) -> int:
+    if not root.exists():
+        return 0
+    checkpoint_time = parse_time(checkpoint_created_at) if checkpoint_created_at else None
+    count = 0
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        if checkpoint_time:
+            try:
+                modified = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+            except OSError:
+                continue
+            if modified < checkpoint_time:
+                continue
+        count += 1
+    return count
+
+
+def coordinator_tool_event_metrics(run_dir: Path, checkpoint_created_at: str = "") -> tuple[int, int]:
+    events_dir = run_dir / "coordinator-tool-events"
+    if not events_dir.exists():
+        return 0, 0
+    event_count = 0
+    high_output_blocks = 0
+    for path in events_dir.glob("*.json"):
+        if not path.is_file():
+            continue
+        event = load_json(path)
+        if checkpoint_created_at and str(event.get("checkpoint_created_at", "")) != checkpoint_created_at:
+            continue
+        event_count += 1
+        if str(event.get("classification", "")).strip() == "blocked_high_output_shell":
+            high_output_blocks += 1
+    return event_count, high_output_blocks
+
+
 def context_budget(
     state_path: Path,
     state: dict,
@@ -124,6 +161,9 @@ def context_budget(
     evidence_count, evidence_bytes = file_count_and_bytes(run_dir / "evidence")
     cli_response_count, _cli_response_bytes = file_count_and_bytes(run_dir / "evidence" / "cli-responses")
     dispatch_event_count, _dispatch_event_bytes = file_count_and_bytes(run_dir / "dispatch-events")
+    checkpoint_created_at = str(load_json(checkpoint_path(state_path)).get("created_at", ""))
+    direct_tool_calls_since_checkpoint = file_count_since(run_dir / "evidence" / "cli-responses", checkpoint_created_at)
+    coordinator_tool_events, high_output_shell_blocks = coordinator_tool_event_metrics(run_dir, checkpoint_created_at)
     history = state.get("history") if isinstance(state.get("history"), list) else []
     phase_events = len(history) + dispatch_event_count
     waves_since_checkpoint = dispatch_waves_since_checkpoint(state)
@@ -132,6 +172,9 @@ def context_budget(
         "evidence_bytes": evidence_bytes,
         "phase_events": phase_events,
         "tool_calls": cli_response_count,
+        "direct_tool_calls_since_checkpoint": direct_tool_calls_since_checkpoint,
+        "high_output_shell_blocks_since_checkpoint": high_output_shell_blocks,
+        "coordinator_tool_events": coordinator_tool_events,
         "dispatch_events": dispatch_event_count,
         WAVE_FIELD: waves_since_checkpoint,
     }

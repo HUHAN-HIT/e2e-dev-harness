@@ -1,0 +1,28 @@
+{
+  "schema": "e2e-dev-harness.command-evidence.v1",
+  "command": "python -m unittest discover -s tests -p test_orchestration.py",
+  "argv": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_orchestration.py"
+  ],
+  "cwd": "C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify",
+  "started_at": "2026-06-06T16:27:26Z",
+  "finished_at": "2026-06-06T16:27:32Z",
+  "elapsed_ms": 5741,
+  "exit_code": 1,
+  "stdout_tail": "",
+  "stderr_tail": "E............................................................................................................................................................................................................................................................................................................................\n======================================================================\nERROR: test_context_budget_adds_direct_tool_metrics_without_changing_existing_fields (test_orchestration.DispatchWaveCheckpointCadenceTest.test_context_budget_adds_direct_tool_metrics_without_changing_existing_fields)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\\tests\\test_orchestration.py\", line 11032, in test_context_budget_adds_direct_tool_metrics_without_changing_existing_fields\n    self.assertEqual(1, budget[\"metrics\"][\"direct_tool_calls_since_checkpoint\"])\n                        ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nKeyError: 'direct_tool_calls_since_checkpoint'\n\n----------------------------------------------------------------------\nRan 317 tests in 5.363s\n\nFAILED (errors=1)\n",
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "2baf7c6543e667ed4b55ca0da96b5a63e9298057be20fe5f16db0fdee2b9959a",
+  "environment": {
+    "python": "3.13.12",
+    "platform": "win32",
+    "path_entries": 42
+  }
+}

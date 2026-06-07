@@ -20,6 +20,7 @@ import ac_progress_gate  # noqa: E402, F401  # re-export: tests patch e2e_dev_ha
 import agent_instructions  # noqa: E402, F401  # re-export: prepare command uses legacy.agent_instructions
 import agent_scheduler  # noqa: E402
 import clarification_gate  # noqa: E402
+import command_evidence  # noqa: E402
 from common import DEFAULT_SUBPROCESS_TIMEOUT_SECONDS, atomic_write_json, configure_utf8_stdio, posix, read_json_object  # noqa: E402
 import cross_service_dependency_scan  # noqa: E402
 import coordinator_flow  # noqa: E402
@@ -1594,6 +1595,28 @@ def gc_run_command(args) -> tuple[int, dict]:
     )
 
 
+def command_evidence_command(args) -> tuple[int, dict]:
+    repo = as_repo(getattr(args, "repo", Path(".")))
+    output = command_evidence.repo_path(repo, getattr(args, "output", None))
+    result = command_evidence.run_command(
+        repo,
+        getattr(args, "command_text"),
+        getattr(args, "timeout_seconds", DEFAULT_SUBPROCESS_TIMEOUT_SECONDS),
+    )
+    if output:
+        command_evidence.write_evidence(output, result)
+        result["evidence_path"] = str(output)
+    compact = {
+        "ready": result.get("exit_code") == 0,
+        "exit_code": result.get("exit_code", 2),
+        "evidence_path": result.get("evidence_path", ""),
+        "stdout_sha256": result.get("stdout_sha256", ""),
+        "stderr_sha256": result.get("stderr_sha256", ""),
+        "elapsed_ms": result.get("elapsed_ms", 0),
+    }
+    return int(result.get("exit_code", 2)), compact
+
+
 def install_project(args) -> tuple[int, dict]:
     return install_command.run_from_args(args)
 
@@ -1696,6 +1719,12 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="Print JSON output.")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    command_evidence_parser = subparsers.add_parser("command-evidence", help="Run a command and write compact command evidence.")
+    command_evidence_parser.add_argument("repo", nargs="?", default=".", type=Path)
+    command_evidence_parser.add_argument("--command", dest="command_text", required=True)
+    command_evidence_parser.add_argument("--output", required=True, type=Path)
+    command_evidence_parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_SUBPROCESS_TIMEOUT_SECONDS)
 
     start_parser = subparsers.add_parser("start", help="Create a controlled harness run and starter design artifact.")
     start_parser.add_argument("repo", nargs="?", default=".", type=Path)
@@ -2106,7 +2135,9 @@ def main() -> int:
 
     args = parser.parse_args()
     try:
-        if args.command == "start":
+        if args.command == "command-evidence":
+            exit_code, result = command_evidence_command(args)
+        elif args.command == "start":
             exit_code, result = start(args)
         elif args.command == "prepare":
             exit_code, result = prepare(args)
@@ -2169,6 +2200,10 @@ def main() -> int:
     except (FileNotFoundError, ValueError) as error:
         print(f"e2e-dev-harness error: {error}", file=sys.stderr)
         return 2
+
+    if args.command == "command-evidence":
+        print(json.dumps(result, ensure_ascii=False))
+        return exit_code
 
     repo = as_repo(getattr(args, "repo", Path(".")))
     if getattr(args, "json_full", False):

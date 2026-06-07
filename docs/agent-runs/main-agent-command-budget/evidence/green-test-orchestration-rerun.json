@@ -1,0 +1,28 @@
+{
+  "schema": "e2e-dev-harness.command-evidence.v1",
+  "command": "python -m unittest discover -s tests -p test_orchestration.py",
+  "argv": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_orchestration.py"
+  ],
+  "cwd": "C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify",
+  "started_at": "2026-06-06T16:36:32Z",
+  "finished_at": "2026-06-06T16:36:38Z",
+  "elapsed_ms": 5628,
+  "exit_code": 0,
+  "stdout_tail": "",
+  "stderr_tail": ".............................................................................................................................................................................................................................................................................................................................\n----------------------------------------------------------------------\nRan 317 tests in 5.330s\n\nOK\n",
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "53ab255884a86eededb819b8f9255a1141698b09c081aa49265fc0d0906d07b8",
+  "environment": {
+    "python": "3.13.12",
+    "platform": "win32",
+    "path_entries": 42
+  }
+}

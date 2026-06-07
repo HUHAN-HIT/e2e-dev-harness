@@ -1,0 +1,28 @@
+{
+  "schema": "e2e-dev-harness.command-evidence.v1",
+  "command": "python -m unittest discover -s tests -p test_skill_docs.py",
+  "argv": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_skill_docs.py"
+  ],
+  "cwd": "C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify",
+  "started_at": "2026-06-06T16:27:27Z",
+  "finished_at": "2026-06-06T16:27:27Z",
+  "elapsed_ms": 224,
+  "exit_code": 1,
+  "stdout_tail": "",
+  "stderr_tail": "e required for every generated service plan.\\n- Handoffs are file boundaries with ready markers and hashes; do not rely on chat memory.\\n- For multi-service, contract/data-risk, or split-agent work, completion must pass `--require-handoffs` so empty `handoffs/` cannot masquerade as a completed archive.\\n\\nFor role contracts, handoff schema, atomic handoff, and reviewer invocation details, read `references/agent-orchestration.md` and `references/agent-handoff-schema.md`.\\n\\n## Cross-Service Dependencies\\n\\nRun dependency discovery before implementation planning.\\nThe deterministic scanner extracts HTTP/MQ seeds and GitNexus remains authoritative; Graphify enriches docs/architecture semantics only.\\nUnavailable required evidence needs user-approved degradation.\\nRecord `Approval: user-approved`, `Reason:`, and `Fallback Evidence:` and pass the file with `--gitnexus-degradation`.\\n\\nFor changed requirements or code diffs, use GitNexus impact tooling explicitly:\\n\\nWhen multiple repositories are indexed, GitNexus CLI symbol and diff commands must target the current project root with `--repo <repo-root>`; prefer an absolute path.\\n\\n```bash\\ngitnexus detect-changes --repo <repo-root> --scope unstaged\\ngitnexus detect-changes --repo <repo-root> --scope staged\\ngitnexus detect-changes --repo <repo-root> --scope compare --base-ref main\\ngitnexus context \"<ClassName|methodName|ClassName.methodName>\" --repo <repo-root>\\ngitnexus impact \"<changed-symbol-or-file>\" --repo <repo-root> --include-tests\\n```\\n\\n`context` is a 360-degree symbol view; do not pass service directories to it.\\nFor affected-scope analysis use `impact` or `detect-changes`, seeded by changed symbols/files and limited to the services named in the design/service slices.\\nDo not require agents to call GitNexus for every `grep`/`rg` command when local GitNexus search augmentation is already installed. Treat that as exploration help, not completion evidence.\\n\\nWhen service A depends on service B through HTTP or DMQ, freeze the shared contract before parallel implementation.\\nUse `docs/agent-runs/<run>/contracts/<contract-id>.md`.\\nMissing producer/consumer ACKs, contract tests, or DMQ topic/tag/group details block the workflow.\\n\\n## Gates And Rework\\n\\nUse `e2e_dev_harness.py gate` at planning, implementation, and completion phases. \\nUse `verify --strict-workflow` plus `guard` when scripts must be enforceable in pre-push or CI.\\n\\nGate details live in `references/implementation-gates.md`, including:\\n\\n- run-state and artifact registry validation\\n- phase-lock execution control\\n- harness policy and replay verification\\n- run summary reporting\\n- required review/request/invocation fields\\n- review profiles, project discovery, inheritance, and required checklist coverage\\n- completion manifest and coverage matrix rules\\n- final requirements archive rules\\n- unit-test evidence JSON format\\n- dependency report and contract requirements\\n- required handoffs for multi-service/split-agent runs\\n- Spring static checks\\n- strict guard skip approvals\\n- rework item schema and return-phase routing\\n\\nIf a reviewer, test, business review, completion gate, or user review finds missed behavior, create a rework item. Only `Status: verified` or `Status: deferred` with explicit `Approval: user-approved` can pass completion.\\n\\n## Memory And Reporting\\n\\nMemory is context, not authority. Code/tests and fresh graph win.\\n\\nContext packs automatically inject relevant memory:\\n\\n```bash\\ne2e-harness exec memory_capture.py select . \\\\\\n  --phase code \\\\\\n  --service services/<service> \\\\\\n  --format context-pack\\n```\\n\\nAt completion, registry `proposed_memory_updates` are validated automatically. Promote accepted, approved, or verified entries only after validation; promotion refreshes `memory/index/*.json`.\\n\\nFinal reports name instructions, evidence, memory, and risks.\\n'\n\n----------------------------------------------------------------------\nRan 16 tests in 0.055s\n\nFAILED (failures=1)\n",
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "e0e0dc865dc79686edaf1ba4ab3efe10851edbc8a6c7b40a0d6790fa1b398e74",
+  "environment": {
+    "python": "3.13.12",
+    "platform": "win32",
+    "path_entries": 42
+  }
+}

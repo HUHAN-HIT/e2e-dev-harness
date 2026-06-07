@@ -791,6 +791,25 @@ class HarnessDoctorTests(unittest.TestCase):
         self.assertEqual("pass", checks["state-dispatch-tasks"]["status"])
         self.assertEqual("pass", checks["state-phase-lock"]["status"])
 
+    def test_state_navigation_summary_projects_control_plane_drift_and_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            harness_doctor.shutil,
+            "which",
+            return_value="C:/tools/tool.exe",
+        ):
+            repo = Path(tmp)
+            state_path = write_state_doctor_fixture(repo)
+            write_control_plane_doctor_fixture(state_path.parent)
+
+            summary = harness_doctor.state_navigation_summary(repo, state_path)
+
+        self.assertEqual("blocked", summary["state_confidence"])
+        self.assertEqual("state-control-plane", summary["primary_blocker_code"])
+        self.assertEqual("run-state.json", summary["authority"]["primary"])
+        self.assertIn("docs/agent-runs/run/run-state.json", summary["must_read_paths"])
+        self.assertIn("docs/agent-runs/run/agent-schedule.json", summary["must_read_paths"])
+        self.assertTrue(any(item["name"] == "state-lifecycle" for item in summary["checks"]))
+
 
 if __name__ == "__main__":
     unittest.main()
