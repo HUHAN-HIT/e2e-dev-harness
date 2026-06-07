@@ -10255,6 +10255,173 @@ class OrchestrationArtifactTests(unittest.TestCase):
         self.assertTrue(any("not VERIFIED" in reason for reason in written["blocked_reasons"]))
         self.assertIn("# Run Summary: run", markdown_text)
 
+    def _write_completion_run_state(self, repo: Path, tier: str) -> Path:
+        """Write a VERIFIED run-state + minimal registry with no ledger artifacts.
+
+        The registry intentionally omits requirements_archive so the completion
+        gate must decide whether to block based on the workflow tier.
+        """
+        run_dir = repo / "docs" / "agent-runs" / "run"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        registry = artifact_registry.build_registry(
+            repo,
+            "run",
+            {"exec_plan": "docs/agent-runs/run/exec-plan.md"},
+            "single",
+            [],
+        )
+        (run_dir / "exec-plan.md").write_text("plan\n", encoding="utf-8")
+        registry_path = run_dir / "artifact-registry.json"
+        artifact_registry.write_registry(repo, registry_path, registry)
+        state = {
+            "schema": "e2e-dev-harness.run-state.v1",
+            "run_id": "run",
+            "lifecycle": "VERIFIED",
+            "selected_mode": "single",
+            "services": [],
+            "workflow_tier": tier,
+            "artifact_registry": "docs/agent-runs/run/artifact-registry.json",
+        }
+        state_path = run_dir / "run-state.json"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        return state_path
+
+    def test_harness_verify_standard_tier_does_not_gate_requirements_archive(self) -> None:
+        # The completion gate must not auto-require the requirements archive at a
+        # non-audited tier: no "Completion gate" reason mentions requirements
+        # archive (the policy-layer requirement is intentionally out of scope).
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = self._write_completion_run_state(repo, "standard")
+
+            result = harness_verify.validate(repo, state_path, run_completion_gate=True)
+
+        gate_archive_reasons = [
+            reason
+            for reason in result["blocked_reasons"]
+            if reason.startswith("Completion gate: ")
+            and "requirements archive" in reason.lower()
+        ]
+        self.assertFalse(gate_archive_reasons, result["blocked_reasons"])
+
+    def test_harness_verify_audited_tier_gates_requirements_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            state_path = self._write_completion_run_state(repo, "audited")
+
+            result = harness_verify.validate(repo, state_path, run_completion_gate=True)
+
+        gate_archive_reasons = [
+            reason
+            for reason in result["blocked_reasons"]
+            if reason.startswith("Completion gate: ")
+            and "requirements archive" in reason.lower()
+        ]
+        self.assertTrue(gate_archive_reasons, result["blocked_reasons"])
+
+    def test_harness_verify_standard_tier_routes_registry_blocker_to_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            # Registry references an exec-plan artifact whose file does not exist,
+            # so validate_registry (strict) emits an "Artifact registry: " blocker.
+            registry = artifact_registry.build_registry(
+                repo,
+                "run",
+                {"exec_plan": "docs/agent-runs/run/exec-plan.md"},
+                "single",
+                [],
+            )
+            registry_path = run_dir / "artifact-registry.json"
+            artifact_registry.write_registry(repo, registry_path, registry)
+            state = {
+                "schema": "e2e-dev-harness.run-state.v1",
+                "run_id": "run",
+                "lifecycle": "VERIFIED",
+                "selected_mode": "single",
+                "services": [],
+                "workflow_tier": "standard",
+                "artifact_registry": "docs/agent-runs/run/artifact-registry.json",
+            }
+            state_path = run_dir / "run-state.json"
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+
+            result = harness_verify.validate(repo, state_path, strict_artifacts=True)
+
+        registry_warnings = [w for w in result["warnings"] if w.startswith("Artifact registry: ")]
+        registry_blockers = [b for b in result["blocked_reasons"] if b.startswith("Artifact registry: ")]
+        self.assertTrue(registry_warnings, result["warnings"])
+        self.assertFalse(registry_blockers, result["blocked_reasons"])
+
+    def test_harness_verify_audited_tier_keeps_registry_blocker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            registry = artifact_registry.build_registry(
+                repo,
+                "run",
+                {"exec_plan": "docs/agent-runs/run/exec-plan.md"},
+                "single",
+                [],
+            )
+            registry_path = run_dir / "artifact-registry.json"
+            artifact_registry.write_registry(repo, registry_path, registry)
+            state = {
+                "schema": "e2e-dev-harness.run-state.v1",
+                "run_id": "run",
+                "lifecycle": "VERIFIED",
+                "selected_mode": "single",
+                "services": [],
+                "workflow_tier": "audited",
+                "artifact_registry": "docs/agent-runs/run/artifact-registry.json",
+            }
+            state_path = run_dir / "run-state.json"
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+
+            result = harness_verify.validate(repo, state_path, strict_artifacts=True)
+
+        registry_blockers = [b for b in result["blocked_reasons"] if b.startswith("Artifact registry: ")]
+        self.assertTrue(registry_blockers, result["blocked_reasons"])
+
+    def test_harness_verify_standard_tier_keeps_non_ledger_blocker(self) -> None:
+        # A genuine non-ledger blocker (lifecycle not VERIFIED) must stay blocking
+        # at non-audited tiers; reclassification must not over-match.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run_dir = repo / "docs" / "agent-runs" / "run"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            registry = artifact_registry.build_registry(
+                repo,
+                "run",
+                {"exec_plan": "docs/agent-runs/run/exec-plan.md"},
+                "single",
+                [],
+            )
+            (run_dir / "exec-plan.md").write_text("plan\n", encoding="utf-8")
+            registry_path = run_dir / "artifact-registry.json"
+            artifact_registry.write_registry(repo, registry_path, registry)
+            state = {
+                "schema": "e2e-dev-harness.run-state.v1",
+                "run_id": "run",
+                "lifecycle": "IMPLEMENTED",
+                "selected_mode": "single",
+                "services": [],
+                "workflow_tier": "standard",
+                "artifact_registry": "docs/agent-runs/run/artifact-registry.json",
+            }
+            state_path = run_dir / "run-state.json"
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+
+            result = harness_verify.validate(repo, state_path)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(
+            any("not VERIFIED" in reason for reason in result["blocked_reasons"]),
+            result["blocked_reasons"],
+        )
+
     def test_workflow_tier_auto_marks_messaging_cross_service_as_critical(self) -> None:
         design_text = "Publish a DMQ refund callback with topic, tag, group, and payload contract."
         facts = {"service_candidates": ["services/refund-service", "services/ledger-service"], "multi_service": True}

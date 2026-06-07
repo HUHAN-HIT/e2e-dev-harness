@@ -77,6 +77,7 @@ def validate(
             "policy": None,
             "completion_gate": None,
         }
+    tier = run_state.workflow_tier(state_data)
     lifecycle = str(state_data.get("lifecycle", ""))
     if lifecycle != "VERIFIED":
         blocked.append(
@@ -121,7 +122,7 @@ def validate(
                 dependency_report=registry_entry(registry_data, "dependency_report"),
                 implementation_manifest=registry_entry(registry_data, "implementation_manifest"),
                 requirements_archive=registry_entry(registry_data, "requirements_archive"),
-                require_requirements_archive=True,
+                require_requirements_archive=(tier == "audited"),
                 handoff_dirs=[registry_entry(registry_data, "agent_run_dir") / "handoffs"] if registry_entry(registry_data, "agent_run_dir") else None,
                 contract_dirs=[registry_entry(registry_data, "contracts_dir")] if registry_entry(registry_data, "contracts_dir") else None,
                 require_contracts=len(state_data.get("services", [])) > 1,
