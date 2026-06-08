@@ -5,9 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "e2e-dev-harness"
 version = "0.2.0"
-description = "Agent-neutral delivery harness for gated Java/Spring/Maven requirement implementation."
+description = "Agent-neutral multi-agent delivery harness (v2): SSOT run-state, declarative tier-scaled gates, domain adapters, worker subagents."
 readme = "README.md"
 requires-python = ">=3.10"
+dependencies = ["pyyaml>=6"]
 authors = [{ name = "E2E Dev Harness Maintainers" }]
 license = { text = "Proprietary" }
 keywords = ["agent", "harness", "tdd", "java", "spring", "maven", "gitnexus"]
@@ -22,66 +23,13 @@ dev = ["pytest>=8"]
 ast = ["tree_sitter>=0.22", "tree_sitter_java>=0.21"]
 
 [project.scripts]
-e2e-dev-harness = "e2e_dev_harness:main"
-e2e_dev_harness = "e2e_dev_harness:main"
-e2eh = "e2e_dev_harness:main"
+e2e-harness-v2 = "harness_v2.cli.main:main"
+e2e-dev-harness = "harness_v2.cli.main:main"
+e2eh = "harness_v2.cli.main:main"
 
 [tool.setuptools]
-package-dir = { "" = "skills/e2e-dev-harness/scripts" }
-packages = { find = { where = ["skills/e2e-dev-harness/scripts"], include = ["e2e_harness*"] } }
-py-modules = [
-  "ac_progress_gate",
-  "agent_instructions",
-  "agent_scheduler",
-  "artifact_registry",
-  "ask_user_bridge",
-  "auto_transition",
-  "checkpoint_gate",
-  "clarification_gate",
-  "command_evidence",
-  "common",
-  "context_pack",
-  "contract_gate",
-  "coordinator_flow",
-  "coordinator_summary",
-  "coverage_gate",
-  "cross_service_dependency_scan",
-  "dispatcher",
-  "e2e_dev_harness",
-  "event_log",
-  "execution_trace",
-  "handoff_gate",
-  "harness_doctor",
-  "harness_stop_guard",
-  "harness_policy",
-  "harness_verify",
-  "implementation_gate",
-  "implementation_manifest",
-  "install_hooks",
-  "kg_refresh",
-  "lifecycle_policy",
-  "memory_capture",
-  "orchestration_plan",
-  "output_contract",
-  "phase_guard",
-  "plugin_registry",
-  "preflight",
-  "requirements_archive",
-  "reviewer_gate",
-  "rework_gate",
-  "run_state",
-  "run_summary",
-  "runtime_adapters",
-  "session_checkpoint",
-  "service_design_gate",
-  "spring_static_check",
-  "superpowers_probe",
-  "task_alignment_guard",
-  "task_tier",
-  "tdd_evidence",
-  "test_impact_plan",
-  "workflow_guard",
-]
+package-dir = { "" = "skills/e2e-dev-harness-v2/scripts" }
+packages = { find = { where = ["skills/e2e-dev-harness-v2/scripts"], include = ["harness_v2*"] } }
 
 [tool.ruff]
 target-version = "py310"
