@@ -11,6 +11,7 @@
 - **M2 leaf ports** (design §5): `hashing`, `command_evidence`, `task_tier` (M2); **`kg-evidence` + `scanner`** (this session — commits `2138153`, `012c071`). ✅
 - **M2-tail (U1/U2/U3)**: memory leaf port, runtime→`spawn_worker` seam, scanner→tier escalation wiring (commits `ce3a7a7`, `41910be`, `2f44dfa`). ✅
 - **M3 config layer (U4)**: pipelines-as-config (built-in tiers as `pipelines/*.yaml` + loader), `validate-pipeline` verb (I1/I2 preflight) + `start` guard, custom pipelines by name/path with hermetic run-state embed. ✅
+- **M4 frontend `DomainAdapter` (U5)**: config-producer adapter selected at `start` (registry + marker auto-detect, `--adapter`/`--scan` flags), emitting pipeline-spec overrides + a self-describing `domain` block via U4's config layer; backend is the default adapter (byte-identical parity, **zero** core edits — lifecycle/engine/gates/dispatch/navigation/pipeline untouched); `dispatch` surfaces the domain block to workers; a frontend fixture repo is auto-detected and driven `start → VERIFIED`. ✅
 
 ---
 
@@ -22,7 +23,7 @@
 | **U2** | runtime-adapter → `spawn_worker` seam | M2-tail (§5) | **Yes — brainstorm** | — | High |
 | **U3** | scanner → tier escalation wiring | M2-tail follow-on (§11) | No | scanner port ✅ | Small |
 | **U4** | M3 config layer: `pipelines/*.yaml` + `validate-pipeline` (R2) + custom pipelines | M3 (§12, §15) | **Yes — brainstorm schema** | U1–U3 landed (stable spine) | High |
-| **U5** | M4 frontend `DomainAdapter` | M4 (§13) | **Yes — brainstorm interface** | U4 (config overrides) | High |
+| **U5 ✅** | M4 frontend `DomainAdapter` | M4 (§13) | **Yes — brainstorm interface** | U4 (config overrides) | High |
 | **U6** | M5 switchover: v2 default + migration docs + delete legacy | M5 (§14) | No | U1–U5 (no capability loss) | Medium |
 
 **Recommended order:** U3 (quick win) → U1 (last pure port) → U2 (brainstorm+build) → U4 → U5 → U6. U1 and U3 are independently startable today; U2/U4/U5 each open with a brainstorming pass.
