@@ -44,3 +44,22 @@ def test_missing_current_phase_denies():
 def test_current_phase_not_in_spine_denies():
     state = _state("GHOST", ["CREATED", "VERIFIED"])
     assert pipeline.can_write_code(state) is False
+
+
+import pytest
+
+
+@pytest.mark.parametrize("name", ["minimal", "standard", "critical", "audited"])
+def test_builtin_implemented_allows_code_write(name):
+    state = {"current_phase": "IMPLEMENTED", "pipeline": name}
+    assert pipeline.can_write_code(state) is True
+
+
+@pytest.mark.parametrize("name", ["minimal", "standard", "critical", "audited"])
+def test_builtin_nonimplemented_phases_deny(name):
+    spine = pipeline.build_spine(name)
+    for phase in spine:
+        if phase.name == "IMPLEMENTED":
+            continue
+        state = {"current_phase": phase.name, "pipeline": name}
+        assert pipeline.can_write_code(state) is False, f"{name}:{phase.name}"

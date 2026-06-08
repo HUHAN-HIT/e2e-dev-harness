@@ -3,5 +3,6 @@ phases:
   - CREATED
   - CLARIFIED
   - RED
-  - IMPLEMENTED
+  - phase: IMPLEMENTED
+    allows_code_write: true
   - VERIFIED

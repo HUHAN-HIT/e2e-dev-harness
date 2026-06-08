@@ -4,6 +4,7 @@ phases:
   - CLARIFIED
   - PLANNED
   - RED
-  - IMPLEMENTED
+  - phase: IMPLEMENTED
+    allows_code_write: true
   - REVIEWED
   - VERIFIED
