@@ -24,7 +24,8 @@
 | **U3** | scanner → tier escalation wiring | M2-tail follow-on (§11) | No | scanner port ✅ | Small |
 | **U4** | M3 config layer: `pipelines/*.yaml` + `validate-pipeline` (R2) + custom pipelines | M3 (§12, §15) | **Yes — brainstorm schema** | U1–U3 landed (stable spine) | High |
 | **U5 ✅** | M4 frontend `DomainAdapter` | M4 (§13) | **Yes — brainstorm interface** | U4 (config overrides) | High |
-| **U6** | M5 switchover: v2 default + migration docs + delete legacy | M5 (§14) | No | U1–U5 (no capability loss) | Medium |
+| **U7 ✅** | net-new v2 hook layer (PreToolUse phase-lock + Stop) — parity-audit gap | §16 / hook design | **Yes — design doc** | U1–U5 | Medium |
+| **U6** | M5 switchover: v2 default + migration docs + delete legacy | M5 (§14) | No | U1–U5, **U7** (hook parity) | Medium |
 
 **Recommended order:** U3 (quick win) → U1 (last pure port) → U2 (brainstorm+build) → U4 → U5 → U6. U1 and U3 are independently startable today; U2/U4/U5 each open with a brainstorming pass.
 
@@ -127,11 +128,12 @@ First action of the U1 plan: grep `test_memory_capture.py` for every `e2e_dev_ha
 **Goal:** Make v2 the default harness, write migration docs, retire the legacy skill — **only after** U1–U5 prove no capability loss.
 
 **Acceptance criteria:**
-- Parity audit: every capability the legacy skill offered is covered by v2 (or explicitly, documentedly dropped per §16 YAGNI — recover/gc/timeline).
+- Parity audit: every capability the legacy skill offered is covered by v2 (or explicitly, documentedly dropped per §16 YAGNI — recover/gc/timeline). **Legacy tool-layer enforcement (`phase_guard` PreToolUse + `harness_stop_guard` Stop) is now covered by U7's v2 hook layer** — no longer a deletion blocker.
 - v2 set as default entry point; migration/CHANGELOG doc; legacy `skills/e2e-dev-harness/` removed in a dedicated commit.
+- Installer wires the U7 v2 hooks (claude `phase_guard_v2`/`stop_guard_v2`, opencode plugin) — U6 Stage 3.
 - Old harness retired with no functional regression.
 
-**Workflow:** `superpowers:writing-plans` → `superpowers:finishing-a-development-branch`. Gated on all prior units.
+**Workflow:** `superpowers:writing-plans` → `superpowers:finishing-a-development-branch`. Gated on all prior units. **Delete-legacy is now unblocked: U7 (✅) supplied the missing hook-enforcement parity that previously gated retirement.** U6 still needs its own design doc before the writing-plans pass.
 
 ---
 
