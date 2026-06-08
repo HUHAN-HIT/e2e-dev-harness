@@ -1,12 +1,17 @@
-"""Narrow tier classification (ported from legacy task_tier keyword logic, text-only).
+"""Narrow tier classification (ported from legacy task_tier keyword logic).
 
-Multi-service / dependency-report escalation is intentionally omitted until the
-scanner leaf is ported (design §16). Maps request text -> one of
-minimal / standard / critical / audited.
+Maps request text -> one of minimal / standard / critical / audited. When a
+scanner scope (scanner-scope.v1) is supplied, it raises the tier *floor* by
+structural risk (design §11): >=2 services => at least `standard`; >=1
+cross-service dependency edge => `critical`. The scope never downgrades a
+higher text-derived tier — the final tier is the more severe of the two.
 """
 from __future__ import annotations
 
 import re
+
+# Severity order; index = how strict the tier is.
+_ORDER = ["minimal", "standard", "critical", "audited"]
 
 _PAYMENT = {"payment", "refund", "settlement", "ledger", "accounting", "reconcile",
             "chargeback", "支付", "退款", "结算", "账务", "对账"}
@@ -27,8 +32,7 @@ def _hits(text: str, keywords: set[str], label: str) -> list[str]:
     return []
 
 
-def classify_tier(request_text: str) -> tuple[str, list[str]]:
-    text = request_text or ""
+def _classify_text(text: str) -> tuple[str, list[str]]:
     audit = _hits(text, _AUDIT, "audit")
     if audit:
         return "audited", audit
@@ -43,3 +47,30 @@ def classify_tier(request_text: str) -> tuple[str, list[str]]:
     if weak:
         return "standard", ["single-service API surface detected"] + weak
     return "minimal", ["no risk keyword detected"]
+
+
+def _scanner_floor(scope: dict) -> tuple[str, list[str]]:
+    """Lowest tier the scanner scope justifies, with reasons. minimal if none."""
+    services = scope.get("services") or []
+    dependencies = scope.get("dependencies") or []
+    if dependencies:
+        return "critical", [
+            f"scanner: {len(dependencies)} cross-service dependency edge(s) detected"
+        ]
+    if len(services) >= 2:
+        return "standard", [
+            f"scanner: {len(services)} services detected"
+        ]
+    return "minimal", []
+
+
+def classify_tier(request_text: str, scope: dict | None = None) -> tuple[str, list[str]]:
+    text = request_text or ""
+    tier, reasons = _classify_text(text)
+    if scope:
+        floor, floor_reasons = _scanner_floor(scope)
+        if _ORDER.index(floor) > _ORDER.index(tier):
+            tier, reasons = floor, floor_reasons
+        elif floor_reasons and _ORDER.index(floor) == _ORDER.index(tier):
+            reasons = reasons + floor_reasons
+    return tier, reasons
