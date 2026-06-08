@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from harness_v2.core import run_state, dispatch
 from harness_v2 import pipeline
+from harness_v2.adapters import runtime
 
 
 def run(args) -> tuple[int, dict]:
@@ -15,4 +16,10 @@ def run(args) -> tuple[int, dict]:
     rec = state.setdefault("phases", {}).setdefault(name, {})
     rec["dispatch"] = dispatch.DispatchStatus.DISPATCHED.value
     run_state.save(args.state, state)
-    return 0, dispatch.worker_packet(phase, str(args.state))
+    packet = dispatch.worker_packet(phase, str(args.state))
+    # Additive (方案1): translate the pointer packet into a runtime launch
+    # descriptor. The coordinator performs the real tool call; this stays a
+    # pure control plane.
+    packet["worker_descriptor"] = runtime.spawn_worker(
+        packet, getattr(args, "runtime", "claude-code"))
+    return 0, packet

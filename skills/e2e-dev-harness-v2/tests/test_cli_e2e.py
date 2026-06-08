@@ -81,6 +81,32 @@ def test_dispatch_returns_pointer_packet(tmp_path):
     assert dres["expected_outputs"] == ["clarification"]
 
 
+def test_dispatch_emits_worker_descriptor(tmp_path):
+    """方案1 wiring: dispatch additively emits a claude-code launch descriptor."""
+    code, res = _run("start", "--repo", str(tmp_path), "--feature", "demo",
+                     "--request", "do x", cwd=tmp_path)
+    state_path = res["run_state"]
+    _run("next", "--state", state_path, "--repo", str(tmp_path), cwd=tmp_path)
+    code, dres = _run("dispatch", "--state", state_path, "--repo", str(tmp_path), cwd=tmp_path)
+    desc = dres["worker_descriptor"]
+    assert desc["schema"] == "e2e-dev-harness-v2.worker-descriptor.v1"
+    assert desc["runtime"] == "claude-code"
+    assert desc["tool"] == "Task"
+    assert desc["expected_outputs"] == dres["expected_outputs"]
+
+
+def test_dispatch_runtime_manual_yields_manual_descriptor(tmp_path):
+    code, res = _run("start", "--repo", str(tmp_path), "--feature", "demo",
+                     "--request", "do x", cwd=tmp_path)
+    state_path = res["run_state"]
+    _run("next", "--state", state_path, "--repo", str(tmp_path), cwd=tmp_path)
+    code, dres = _run("dispatch", "--state", state_path, "--repo", str(tmp_path),
+                      "--runtime", "manual", cwd=tmp_path)
+    desc = dres["worker_descriptor"]
+    assert desc["runtime"] == "manual"
+    assert desc["tool"] is None
+
+
 def test_gate_verb_rejects_fake_artifact_accepts_real(tmp_path):
     """R1 at the `gate` verb directly: a fake artifact fails the gate (exit 1),
     a real one passes (exit 0)."""

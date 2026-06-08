@@ -21,8 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--feature", required=True); s.add_argument("--request", required=True)
     s.add_argument("--tier", choices=["auto", "minimal", "standard", "critical", "audited"], default="minimal")
 
-    for verb in ("next", "dispatch", "status"):
+    for verb in ("next", "status"):
         sp = sub.add_parser(verb); sp.add_argument("--state", required=True); sp.add_argument("--repo", default=".")
+
+    d = sub.add_parser("dispatch"); d.add_argument("--state", required=True); d.add_argument("--repo", default=".")
+    d.add_argument("--runtime", default="claude-code")
 
     sm = sub.add_parser("submit"); sm.add_argument("--state", required=True); sm.add_argument("--repo", default=".")
     sm.add_argument("--phase", required=True); sm.add_argument("--key", default=None); sm.add_argument("--path", default=None)
