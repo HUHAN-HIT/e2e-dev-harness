@@ -18,6 +18,7 @@ def _stamp(now: str | None = None) -> str:
 def new_run_state(run_id: str, feature: str, request: str,
                   tier: str = "minimal", pipeline: str = "minimal",
                   pipeline_spec: dict | None = None,
+                  domain: dict | None = None,
                   now: str | None = None) -> dict:
     ts = _stamp(now)
     state = {
@@ -34,6 +35,8 @@ def new_run_state(run_id: str, feature: str, request: str,
     }
     if pipeline_spec is not None:
         state["pipeline_spec"] = pipeline_spec
+    if domain is not None:
+        state["domain"] = domain
     return state
 
 

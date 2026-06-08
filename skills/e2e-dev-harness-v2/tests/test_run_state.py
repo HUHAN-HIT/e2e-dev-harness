@@ -54,3 +54,14 @@ def test_save_is_atomic_no_partial_on_replace(tmp_path):
     leftovers = [q.name for q in tmp_path.iterdir() if q.name != "run-state.json"]
     assert leftovers == []
     assert run_state.load(p)["run_id"] == "r1"
+
+
+def test_domain_block_embedded_when_supplied():
+    st = run_state.new_run_state("r", "f", "q",
+        domain={"name": "frontend", "test_runner": "vitest", "review_profile": "frontend-default"})
+    assert st["domain"]["name"] == "frontend"
+
+
+def test_domain_absent_by_default_byte_identical():
+    st = run_state.new_run_state("r", "f", "q")
+    assert "domain" not in st   # parity: backend default adds no key
