@@ -10,7 +10,7 @@ test('pre-merge plan runs status, node tests, python tests, and GitNexus detecti
     [
       ['git', 'status', '--short', '--branch'],
       ['npm', 'test'],
-      ['python', '-m', 'unittest', 'discover', '-s', 'tests'],
+      ['python', '-m', 'pytest', 'skills/e2e-dev-harness-v2/tests', 'tests/test_node_installer.py', '-q'],
       ['npx', 'gitnexus', 'detect-changes', '--scope', 'all', '--repo', 'e2e-dev-workflow'],
     ]
   );

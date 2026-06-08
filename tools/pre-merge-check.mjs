@@ -13,7 +13,7 @@ export function buildPlan(options = {}) {
   const plan = [
     { name: "git-status", command: ["git", "status", "--short", "--branch"] },
     { name: "node-tests", command: ["npm", "test"] },
-    { name: "python-tests", command: ["python", "-m", "unittest", "discover", "-s", "tests"] },
+    { name: "python-tests", command: ["python", "-m", "pytest", "skills/e2e-dev-harness-v2/tests", "tests/test_node_installer.py", "-q"] },
   ];
 
   if (!options.skipGitNexus) {
@@ -94,7 +94,7 @@ function helpText() {
     "Runs the local checks expected before merging a development branch:",
     "  git status --short --branch",
     "  npm test",
-    "  python -m unittest discover -s tests",
+    "  python -m pytest skills/e2e-dev-harness-v2/tests tests/test_node_installer.py -q",
     "  npx gitnexus detect-changes --scope all --repo e2e-dev-workflow",
     "",
     "Options:",

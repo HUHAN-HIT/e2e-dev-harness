@@ -1,9 +1,0 @@
-display_name: E2E Dev Harness
-short_description: End-to-end clarified TDD delivery workflow.
-default_prompt: >-
-  Use this skill to drive governed delivery from clarified requirements to verified code.
-  Run prepare first, load AGENT rules before clarification, use Superpowers for brainstorming
-  and TDD when available, refresh GitNexus-first dependency evidence, choose
-  single/single-review/multi orchestration after affected services are known, keep service
-  plans isolated, enforce R1/R2/R3 independent reviews plus Coverage Reviewer, pass phase
-  gates, close rework, validate memory updates, and verify with Maven evidence.

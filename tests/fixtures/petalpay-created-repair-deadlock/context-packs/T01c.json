@@ -1,8 +1,0 @@
-{
-  "schema": "e2e-dev-harness.context-pack.v1",
-  "task": {
-    "id": "T01c",
-    "agent": "requirements-clarifier"
-  },
-  "schedule": "docs/agent-runs/run/agent-schedule.json"
-}

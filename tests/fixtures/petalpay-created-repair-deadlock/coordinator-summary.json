@@ -1,8 +1,0 @@
-{
-  "schema": "e2e-dev-harness.coordinator-summary.v1",
-  "run_id": "docs/agent-runs/run",
-  "lifecycle": "CREATED",
-  "next_action": {
-    "command": "dispatch-beat"
-  }
-}
