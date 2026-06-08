@@ -3,40 +3,48 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { resolveCommand } = require('../lib/resolve');
 
-const HOME = path.join('C:', 'h', 'e2e-dev-harness');
+const HOME = path.join('C:', 'h', 'e2e-dev-harness-v2');
 const PY = 'python';
 const s = (...p) => path.join(HOME, 'scripts', ...p);
+const ENTRY = 'e2e_dev_harness_v2.py';
 
-test('passthrough subcommand -> e2e_dev_harness.py', () => {
+test('start passes through verbatim to e2e_dev_harness_v2.py', () => {
   assert.deepStrictEqual(
-    resolveCommand(HOME, PY, ['next', '.']),
-    { file: PY, args: [s('e2e_dev_harness.py'), 'next', '.'] });
+    resolveCommand(HOME, PY, ['start', '--repo', '.', '--feature', 'f', '--request', 'q']),
+    { file: PY, args: [s(ENTRY), 'start', '--repo', '.', '--feature', 'f', '--request', 'q'] });
 });
 
-test('status maps to doctor', () => {
+test('next passes through with --state', () => {
   assert.deepStrictEqual(
-    resolveCommand(HOME, PY, ['status', '.', '--json']),
-    { file: PY, args: [s('e2e_dev_harness.py'), 'doctor', '.', '--json'] });
+    resolveCommand(HOME, PY, ['next', '--state', 'rs.json']),
+    { file: PY, args: [s(ENTRY), 'next', '--state', 'rs.json'] });
 });
 
-test('dispatch maps to dispatch-status', () => {
+test('status passes through (no longer maps to doctor)', () => {
   assert.deepStrictEqual(
-    resolveCommand(HOME, PY, ['dispatch', '.']),
-    { file: PY, args: [s('e2e_dev_harness.py'), 'dispatch-status', '.'] });
+    resolveCommand(HOME, PY, ['status', '--state', 'rs.json']),
+    { file: PY, args: [s(ENTRY), 'status', '--state', 'rs.json'] });
 });
 
-test('gc and cleanup map to gc:run', () => {
-  for (const command of ['gc', 'cleanup']) {
-    assert.deepStrictEqual(
-      resolveCommand(HOME, PY, [command, '.', '--json-full']),
-      { file: PY, args: [s('e2e_dev_harness.py'), 'gc:run', '.', '--json-full'] });
-  }
+test('dispatch passes through (no longer maps to dispatch-status)', () => {
+  assert.deepStrictEqual(
+    resolveCommand(HOME, PY, ['dispatch', '--state', 'rs.json', '--runtime', 'claude-code']),
+    { file: PY, args: [s(ENTRY), 'dispatch', '--state', 'rs.json', '--runtime', 'claude-code'] });
 });
 
-test('init -> install_hooks.py', () => {
+test('submit and gate pass through', () => {
   assert.deepStrictEqual(
-    resolveCommand(HOME, PY, ['init', '.', '--runtime', 'claude']),
-    { file: PY, args: [s('install_hooks.py'), '.', '--runtime', 'claude'] });
+    resolveCommand(HOME, PY, ['submit', '--state', 'rs.json', '--phase', 'RED', '--key', 'k', '--path', 'p']),
+    { file: PY, args: [s(ENTRY), 'submit', '--state', 'rs.json', '--phase', 'RED', '--key', 'k', '--path', 'p'] });
+  assert.deepStrictEqual(
+    resolveCommand(HOME, PY, ['gate', '--state', 'rs.json']),
+    { file: PY, args: [s(ENTRY), 'gate', '--state', 'rs.json'] });
+});
+
+test('validate-pipeline passes through', () => {
+  assert.deepStrictEqual(
+    resolveCommand(HOME, PY, ['validate-pipeline', '--pipeline', 'minimal']),
+    { file: PY, args: [s(ENTRY), 'validate-pipeline', '--pipeline', 'minimal'] });
 });
 
 test('exec -> scripts/<name>', () => {

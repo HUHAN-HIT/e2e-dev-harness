@@ -29,13 +29,14 @@ Tool lifecycle (this machine):
   env                  Diagnose node / python / install / link state
   version, -v          Print the package name and version
 
-Project lifecycle (a business repo):
-  init <repo> [--runtime claude]   Install harness hooks into <repo>
-  status <repo>                    Doctor: hooks / index / run-state readiness
-  next <repo>                      Next allowed harness action
-  dispatch <repo>                  Dispatch state + open scheduled tasks
-  gc <repo> [--execute]            Run artifact retention cleanup (dry-run by default)
-  cleanup <repo> [--execute]       Alias for gc
+Run lifecycle (e2e-dev-harness-v2, control-plane verbs):
+  start --repo <r> --feature <f> --request <q> [--tier t] [--pipeline p]
+  next --state <s>                 Advance the spine or return the single blocker
+  dispatch --state <s>             Emit the current phase's worker packet pointer
+  submit --state <s> --phase <P> [--key k] [--path p]   Record worker evidence
+  gate --state <s> [--phase P]     Run the current phase's declarative gates
+  status --state <s>               Human-readable navigation map
+  validate-pipeline --pipeline <p> Validate a built-in or custom pipeline
   exec <script.py> [args]          Run a bundled scripts/<script>.py`;
 
 function skillsDir() {

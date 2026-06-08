@@ -97,7 +97,7 @@ test('readVersion reads name + version from package.json', () => {
 
 test('uninstallFromMachine removes an existing home, idempotent', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-life-'));
-  const home = path.join(tmp, 'e2e-dev-harness');
+  const home = path.join(tmp, 'e2e-dev-harness-v2');
   fs.mkdirSync(home, { recursive: true });
   fs.writeFileSync(path.join(home, 'marker.txt'), 'x');
 

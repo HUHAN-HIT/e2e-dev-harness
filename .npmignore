@@ -1,0 +1,12 @@
+# npm packs the `files` whitelist by on-disk state. Without this, runtime/build
+# residue under skills/** (compiled bytecode, pytest/ruff caches, harness run
+# artifacts) leaks into the published tarball. Bare names match at any depth
+# (gitignore semantics) — keep them unanchored so they catch nested dirs.
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.e2e/
+.tmp-gitnexus-hook-test/
+*.egg-info/

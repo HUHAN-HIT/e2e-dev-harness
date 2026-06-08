@@ -6,7 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-const SKILL_NAME = "e2e-dev-harness";
+const SKILL_NAME = "e2e-dev-harness-v2";
 const WORKER_SKILL_NAMES = [
   "e2e-harness-clarification",
   "e2e-harness-planning",
@@ -229,7 +229,16 @@ function copyDirectory(source, destination) {
   let files = 0;
   let directories = 1;
   for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
-    if (entry.name === "__pycache__" || entry.name.endsWith(".egg-info") || entry.name === ".pytest_cache") {
+    if (
+      entry.name === "__pycache__" ||
+      entry.name.endsWith(".egg-info") ||
+      entry.name === ".pytest_cache" ||
+      entry.name === ".pytest-tmp" ||
+      entry.name === ".ruff_cache" ||
+      entry.name === ".e2e" ||
+      entry.name === ".gitnexus" ||
+      entry.name === ".git"
+    ) {
       continue;
     }
     const sourcePath = path.join(source, entry.name);
