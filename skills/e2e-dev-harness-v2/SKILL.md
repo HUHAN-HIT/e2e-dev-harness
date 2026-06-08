@@ -1,6 +1,6 @@
 ---
 name: e2e-dev-harness-v2
-description: Use when a feature/bugfix/refactor needs a multi-agent dev workflow that reliably runs to completion — clarification, TDD, review, verification — with a single source of truth, declarative tier-scaled gates, and worker subagents that self-load Superpowers skills.
+description: Default canonical delivery harness (replaces the retired e2e-dev-harness). Use when a feature/bugfix/refactor needs a multi-agent dev workflow that reliably runs to completion — clarification, TDD, review, verification — with a single source of truth, declarative tier-scaled gates, and worker subagents that self-load Superpowers skills.
 ---
 
 # E2E Dev Harness v2
