@@ -369,13 +369,17 @@ function actions(options, repo, projectRoot, installRoot, sourceSkillDir, target
     }
   }
   if (options.withHooks && !options.checkOnly) {
-    const hookScript = path.join(sourceSkillDir, "scripts", "install_hooks.py");
+    // v2 hooks are materialized in-process (no legacy install_hooks.py): read the
+    // U7 example config, rewrite __HARNESS_V2_SCRIPTS__ to the installed skill's
+    // scripts dir, and merge into <project-root>/.claude/settings.json.
+    const runtimeTarget = targets.includes(options.runtime) ? options.runtime : targets[0];
+    const installedSkillPath = path.join(installRoot, ...TARGETS[runtimeTarget]);
     planned.push({
       id: "install-hooks",
-      description: `Install ${options.runtime} hook configuration into the project root.`,
-      command: pythonCommand(hookScript, [projectRoot, "--runtime", options.runtime, "--json"]),
-      cwd: repo,
+      description: `Materialize ${options.runtime} v2 hooks (phase_guard_v2 + stop_guard_v2) into the project root.`,
       project_root: projectRoot,
+      scripts_dir: path.join(installedSkillPath, "scripts"),
+      runtime: options.runtime,
     });
   }
   if (options.doctor && !options.checkOnly) {
@@ -414,6 +418,37 @@ function executeAction(action, context) {
       });
     }
     return { action: action.id, exit_code: 0, installed_skills: installed };
+  }
+  if (action.id === "install-hooks") {
+    const examplePath = path.join(context.sourceSkillDir, "hooks", "claude-code-settings.example.json");
+    // Parse first, then replace the placeholder inside string leaves — substituting
+    // a Windows path (with backslashes) into raw JSON text would break JSON.parse.
+    const substitute = (value) =>
+      typeof value === "string"
+        ? value.split("__HARNESS_V2_SCRIPTS__").join(action.scripts_dir)
+        : Array.isArray(value)
+          ? value.map(substitute)
+          : value && typeof value === "object"
+            ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, substitute(v)]))
+            : value;
+    const example = substitute(JSON.parse(fs.readFileSync(examplePath, "utf8")));
+    const settingsPath = path.join(action.project_root, ".claude", "settings.json");
+    let settings = {};
+    if (fs.existsSync(settingsPath)) {
+      try {
+        settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      } catch {
+        settings = {};
+      }
+    }
+    settings.hooks = settings.hooks || {};
+    for (const event of ["PreToolUse", "Stop"]) {
+      const incoming = (example.hooks && example.hooks[event]) || [];
+      settings.hooks[event] = (settings.hooks[event] || []).concat(incoming);
+    }
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+    return { action: action.id, exit_code: 0, settings_path: settingsPath };
   }
   return { action: action.id, ...runCommand(action.command, action.cwd || context.repo) };
 }
