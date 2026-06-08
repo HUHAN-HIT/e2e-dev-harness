@@ -20,4 +20,6 @@ from scanners import java_spring as _java_spring  # noqa: E402
 discover_scope = _generic.discover_scope
 discover_scope_java_spring = _java_spring.discover_scope
 
-__all__ = ["discover_scope", "discover_scope_java_spring"]
+from .frontend import scan_frontend  # noqa: E402
+
+__all__ = ["discover_scope", "discover_scope_java_spring", "scan_frontend"]
