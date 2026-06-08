@@ -79,3 +79,32 @@ def test_dispatch_returns_pointer_packet(tmp_path):
     code, dres = _run("dispatch", "--state", state_path, "--repo", str(tmp_path), cwd=tmp_path)
     assert dres["skill"] == "e2e-harness-clarification"
     assert dres["expected_outputs"] == ["clarification"]
+
+
+def test_gate_verb_rejects_fake_artifact_accepts_real(tmp_path):
+    """R1 at the `gate` verb directly: a fake artifact fails the gate (exit 1),
+    a real one passes (exit 0)."""
+    code, res = _run("start", "--repo", str(tmp_path), "--feature", "demo",
+                     "--request", "do x", cwd=tmp_path)
+    state_path = res["run_state"]
+    _run("next", "--state", state_path, "--repo", str(tmp_path), cwd=tmp_path)  # -> CLARIFIED
+
+    # fake evidence path that is never created
+    _run("submit", "--state", state_path, "--phase", "CLARIFIED",
+         "--key", "clarification", "--path", "CLARIFIED-clarification.md",
+         "--repo", str(tmp_path), cwd=tmp_path)
+    code, gres = _run("gate", "--state", state_path, "--phase", "CLARIFIED",
+                      "--repo", str(tmp_path), cwd=tmp_path)
+    assert code == 1
+    assert gres["passed"] is False
+    assert "clarification" in gres["missing_evidence"]
+
+    # real artifact at the same phase -> gate passes
+    rel = _make_artifact(tmp_path, "CLARIFIED", "clarification")
+    _run("submit", "--state", state_path, "--phase", "CLARIFIED",
+         "--key", "clarification", "--path", rel, "--repo", str(tmp_path), cwd=tmp_path)
+    code, gres = _run("gate", "--state", state_path, "--phase", "CLARIFIED",
+                      "--repo", str(tmp_path), cwd=tmp_path)
+    assert code == 0
+    assert gres["passed"] is True
+    assert gres["missing_evidence"] == []
