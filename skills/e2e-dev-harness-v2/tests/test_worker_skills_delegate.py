@@ -17,8 +17,8 @@ OUTPUTS = {
     "e2e-harness-review": "review",
     "e2e-harness-completion": "verification",
 }
-# the reworked PLANNED/REVIEWED skills must reference the v2 CLI, not the legacy one
-NO_LEGACY_CLI = ("e2e-harness-planning", "e2e-harness-review")
+# every v2 worker skill must reference the v2 CLI, never the legacy one
+NO_LEGACY_CLI = tuple(MAP)
 LEGACY_CLI = "skills/e2e-dev-harness/scripts/e2e_dev_harness.py"
 
 

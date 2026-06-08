@@ -11,8 +11,6 @@ Use only the context pack, allowed inputs, project instructions selected for cla
 
 Write `docs/agent-runs/<run>/handoffs/01-requirements-clarifier.md`.
 
-Run `python skills/e2e-dev-harness/scripts/e2e_dev_harness.py clarify . --design-doc <design-doc>` before returning evidence.
-
 Ask the user only for intent confirmation, unresolved product decisions, or explicit tool-degradation approval.
 
 ## v2 契约 (e2e-dev-harness-v2)
