@@ -74,7 +74,7 @@
 
 ## 新 session 起手 prompt(M2)
 
-> 读 `docs/superpowers/specs/2026-06-07-harness-v2-redesign-design.md` §14 与本文件(尤其"M1 端到端复核结论")。先早期跑 `npx gitnexus analyze`。然后用 superpowers:writing-plans 写 **M2(后端完整)** 计划并执行:standard/critical/audited tier、结构化阶段裁剪、r1/r2/r3 review fan-out、把 scanner/KG/task_tier/memory/runtime-adapters port 到 v2 窄接口。**M2 必须解决复核 R1(门禁校验真实产物)**,并捎带 L1/L2/L4。从 master 开新分支工作。
+> 先读 **`docs/superpowers/specs/2026-06-07-harness-v2-m2-planning-input.md`**(M2 计划输入:R1/R1'出口硬标准 + 功能项 + 验收标准 + 受影响文件,直接喂给 writing-plans)。再读 `docs/superpowers/specs/2026-06-07-harness-v2-redesign-design.md` §14 与本文件(尤其"M1 端到端复核结论")。先早期跑 `npx gitnexus analyze`。然后用 superpowers:writing-plans 写 **M2(后端完整)** 计划并执行:standard/critical/audited tier、结构化阶段裁剪、r1/r2/r3 review fan-out、把 scanner/KG/task_tier/memory/runtime-adapters port 到 v2 窄接口。**M2 必须解决复核 R1(门禁校验真实产物)**,并捎带 L1/L2/L4。从 master 开新分支工作。
 
 ## 成本经验
 上一轮 subagent 驱动执行成本偏高($170+)。建议:实现型 subagent 用批量(把紧耦合小任务合并为一次派发),用测试做每任务门禁,最后一次性总评审;避免每任务两阶段独立 review 的 ~30 次派发。

@@ -305,7 +305,6 @@ Runs a command and returns tamper-evident JSON (exit code + stdout/stderr hashes
 from __future__ import annotations
 
 import hashlib
-import os
 import shlex
 import subprocess
 import sys
@@ -331,7 +330,9 @@ def record_command(repo: str | Path, command: str,
     started = _now_iso()
     started_perf = time.perf_counter()
     try:
-        argv = shlex.split(command, posix=(os.name != "nt"))
+        # posix=True parses our controlled, quoted command strings consistently on
+        # Windows and POSIX (Windows native quoting would leave literal quotes in argv).
+        argv = shlex.split(command, posix=True)
     except ValueError as error:
         return {
             "schema": COMMAND_EVIDENCE_SCHEMA, "command": command, "argv": [],
