@@ -45,6 +45,8 @@ def validate_spec(spec) -> tuple[bool, list[str]]:
                 if k in entry and (not isinstance(entry[k], list)
                                    or any(not isinstance(x, str) or not x for x in entry[k])):
                     errors.append(f"phase '{pname}' field '{k}' must be a list of non-empty strings")
+            if "allows_code_write" in entry and not isinstance(entry["allows_code_write"], bool):
+                errors.append(f"phase '{pname}' field 'allows_code_write' must be a boolean")
         else:
             errors.append(
                 f"invalid phase entry (name string or mapping with 'phase'): {entry!r}")

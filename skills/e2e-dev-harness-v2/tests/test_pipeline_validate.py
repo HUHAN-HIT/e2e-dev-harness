@@ -69,3 +69,24 @@ def test_noncatalog_phase_fully_specified_passes():
 def test_invalid_entry_type_rejected():
     ok, errors = pv.validate_spec({"name": "c", "phases": [123, "VERIFIED"]})
     assert ok is False
+
+
+def test_allows_code_write_bool_accepted():
+    spec = {"name": "c", "phases": [
+        "CREATED",
+        {"phase": "IMPLEMENTED", "allows_code_write": True},
+        "VERIFIED",
+    ]}
+    ok, errors = pv.validate_spec(spec)
+    assert ok is True, errors
+
+
+def test_allows_code_write_nonbool_rejected():
+    spec = {"name": "c", "phases": [
+        "CREATED",
+        {"phase": "IMPLEMENTED", "allows_code_write": "yes"},
+        "VERIFIED",
+    ]}
+    ok, errors = pv.validate_spec(spec)
+    assert ok is False
+    assert any("allows_code_write" in e for e in errors)
