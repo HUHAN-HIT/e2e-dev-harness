@@ -17,7 +17,7 @@ from harness_v2.core import lifecycle
 from harness_v2.core.lifecycle import Phase
 
 _PIPELINES_DIR = Path(__file__).resolve().parents[2] / "pipelines"
-_OVERRIDE_FIELDS = ("worker_role", "worker_skill", "produces", "exit_gate")
+_OVERRIDE_FIELDS = ("worker_role", "worker_skill", "produces", "exit_gate", "allows_code_write")
 
 
 def is_path(name_or_path: str) -> bool:
@@ -70,6 +70,7 @@ def spec_to_spine(spec: dict) -> list[Phase]:
                 produces=overrides["produces"],
                 exit_gate=overrides["exit_gate"],
                 next_phase=nxt,
+                allows_code_write=overrides.get("allows_code_write", False),
             ))
     return spine
 
@@ -88,3 +89,18 @@ def spine_for_state(state: dict) -> list[Phase]:
     if spec:
         return spec_to_spine(spec)
     return build_spine(state.get("pipeline", "minimal"))
+
+
+def can_write_code(state: dict) -> bool:
+    """True iff state['current_phase'] resolves to a spine phase declaring allows_code_write.
+
+    Single source of phase code-write authority — reused by the PreToolUse hook
+    and any CLI that needs the same answer. Conservative: unknown / missing phase → False.
+    """
+    current = state.get("current_phase")
+    if not current:
+        return False
+    for phase in spine_for_state(state):
+        if phase.name == current:
+            return bool(phase.allows_code_write)
+    return False

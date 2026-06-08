@@ -12,6 +12,7 @@ class Phase:
     produces: tuple[str, ...]
     exit_gate: tuple[str, ...]
     next_phase: str | None
+    allows_code_write: bool = False
 
 
 _CATALOG: dict[str, Phase] = {
