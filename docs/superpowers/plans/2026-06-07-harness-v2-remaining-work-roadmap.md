@@ -9,6 +9,8 @@
 - **M1** walking skeleton: SSOT run-state, terminating spine, single dispatch enum, navigation map, minimal tier, pointer packets. ✅
 - **M2 core**: standard/critical/audited tiers, structural phase pruning, r1/r2/r3 review fan-out, R1 artifact-validating gates, R1' planning/review delegators, L1/L2/L5–L7, §4 all-tier gate-closure seed. ✅
 - **M2 leaf ports** (design §5): `hashing`, `command_evidence`, `task_tier` (M2); **`kg-evidence` + `scanner`** (this session — commits `2138153`, `012c071`). ✅
+- **M2-tail (U1/U2/U3)**: memory leaf port, runtime→`spawn_worker` seam, scanner→tier escalation wiring (commits `ce3a7a7`, `41910be`, `2f44dfa`). ✅
+- **M3 config layer (U4)**: pipelines-as-config (built-in tiers as `pipelines/*.yaml` + loader), `validate-pipeline` verb (I1/I2 preflight) + `start` guard, custom pipelines by name/path with hermetic run-state embed. ✅
 
 ---
 
