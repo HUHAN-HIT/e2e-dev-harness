@@ -34,6 +34,10 @@ def test_code_write_denied_in_non_impl_phase(tmp_path):
     d = pg.decide(_hook("Write", file_path=str(tmp_path / "src" / "a.py"), content="x"), tmp_path, sp)
     assert d["decision"] == "deny"
     assert "RED" in d["reason"] and "next" in d["reason"]
+    # actionable: must say WHY it is blocked and HOW to recover
+    assert "WHY:" in d["reason"] and "RECOVER:" in d["reason"]
+    assert "status" in d["reason"] and "submit" in d["reason"]
+    assert "a.py" in d["reason"]
 
 
 def test_code_write_allowed_in_impl_phase(tmp_path):
@@ -60,6 +64,7 @@ def test_direct_run_state_write_denied(tmp_path):
     d = pg.decide(_hook("Edit", file_path=str(target), new_string="{}"), tmp_path, sp)
     assert d["decision"] == "deny"
     assert "run-state.json" in d["reason"]
+    assert "WHY:" in d["reason"] and "RECOVER:" in d["reason"]
 
 
 def test_shell_redirect_into_run_state_denied(tmp_path):

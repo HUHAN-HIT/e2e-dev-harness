@@ -29,11 +29,17 @@ def decide(run_state_path) -> dict:
     phase = state.get("current_phase", "")
     if phase in TERMINAL_PHASES:
         return {"decision": "allow", "reason": ""}
+    run_id = state.get("run_id", "")
     return {
         "decision": "block",
         "reason": (
-            f"Run {state.get('run_id', '')} is at phase {phase}, not VERIFIED. "
-            "Continue advancing the harness (`next` / `gate` / `submit`) instead of stopping."
+            f"Do not stop yet: run '{run_id}' is at phase {phase}, not VERIFIED.\n"
+            "WHY: the harness guarantees every run reaches VERIFIED; stopping now leaves the "
+            "change unverified (tests / review / verification still incomplete).\n"
+            f"CONTINUE: run `e2e-harness-v2 next --state {run_state_path}` for the single next "
+            "action; if it returns a blocker, `dispatch` the worker, `submit` its evidence, then "
+            f"`gate`. Repeat until VERIFIED. Inspect progress: "
+            f"`e2e-harness-v2 status --state {run_state_path}`."
         ),
     }
 

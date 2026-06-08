@@ -59,14 +59,31 @@ def decide(hook_text: str, repo, run_state_path) -> dict:
     for p in paths:
         if hook_paths.is_control_file_path(repo, p):
             return _deny(
-                f"Direct write to control file {p.name} is not allowed; the harness "
-                "CLI owns run-state.json. Use `next` / `gate` / `submit` instead."
+                f"Blocked: direct write to control file '{p.name}'.\n"
+                "WHY: this file is the harness single source of truth (SSOT), owned exclusively "
+                "by the CLI — hand-editing it corrupts run-state and skips gate evidence.\n"
+                f"RECOVER: never edit run-state.json by hand. Inspect the current allowed action "
+                f"with `e2e-harness-v2 status --state {run_state_path}`, then mutate state only "
+                "through `next` / `gate` / `submit`."
             )
         if hook_paths.is_hook_config_path(repo, p):
-            return _deny("Direct edit of hook config is not allowed (would bypass the phase guard).")
+            return _deny(
+                "Blocked: direct edit of hook configuration.\n"
+                "WHY: editing the hook config during a run would disable the phase guard itself "
+                "(enforcement bypass).\n"
+                "RECOVER: change hook wiring via the installer "
+                "(`install-e2e-dev-harness --with-hooks --runtime <claude|opencode>`), not by "
+                "editing .claude/settings.json mid-run."
+            )
     low = command.lower()
     if "run-state.json" in low and any(tok in low for tok in _REDIRECT_TOKENS):
-        return _deny("Shell redirect into run-state.json is not allowed; the harness CLI owns it.")
+        return _deny(
+            "Blocked: shell redirect into run-state.json.\n"
+            "WHY: run-state.json is the CLI-owned SSOT; a raw redirect bypasses its schema and "
+            "the gate evidence trail.\n"
+            "RECOVER: use `submit` to record evidence and `next` / `gate` to advance — never "
+            "redirect into run-state.json."
+        )
 
     code_paths = [p for p in paths if hook_paths.is_code_path(repo, p)]
     if not code_paths:
@@ -79,10 +96,21 @@ def decide(hook_text: str, repo, run_state_path) -> dict:
     if pipeline.can_write_code(state):
         return _allow()
     phase = state.get("current_phase", "<unknown>")
+    run_id = state.get("run_id", "")
+    pipeline_name = state.get("pipeline") or state.get("tier") or "<pipeline>"
+    names = ", ".join(sorted({p.name for p in code_paths}))
     return _deny(
-        f"Code write blocked: phase {phase} does not allow code writes. Advance the run "
-        f"with `python -m harness_v2 next --state {run_state_path}` (then `gate` to satisfy "
-        "the exit gate) until an implementation phase is active."
+        f"Blocked: code write to {names} is phase-locked.\n"
+        f"WHY: run '{run_id}' is at phase {phase} (pipeline '{pipeline_name}'). Production-code "
+        "writes are permitted only in phases declared `allows_code_write` (e.g. IMPLEMENTED); "
+        "the current phase must produce its own evidence first.\n"
+        f"RECOVER: 1) see the whole journey + the single next action: "
+        f"`e2e-harness-v2 status --state {run_state_path}`; "
+        f"2) finish this phase's expected_outputs and record them: "
+        f"`e2e-harness-v2 submit --state {run_state_path} --phase {phase} --key <k> --path <p>`; "
+        f"3) advance with `e2e-harness-v2 next --state {run_state_path}` (and `gate` to clear the "
+        "exit gate) until a code-write phase is active, then retry this edit. "
+        f"If {names} is NOT production code, write it under an allowed path (docs/, test evidence)."
     )
 
 
