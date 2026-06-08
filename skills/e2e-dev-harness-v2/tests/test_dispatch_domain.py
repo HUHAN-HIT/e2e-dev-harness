@@ -1,0 +1,30 @@
+"""cli/commands/dispatch.run surfaces the run-state `domain` block (if any) as
+an extra_context line; a backend run (no domain) is byte-identical to before."""
+from types import SimpleNamespace
+
+from harness_v2.core import run_state
+from harness_v2.cli.commands import dispatch as dispatch_cmd
+
+
+def test_dispatch_surfaces_domain_in_context(tmp_path):
+    st = run_state.new_run_state("r", "f", "q",
+        domain={"name": "frontend", "test_runner": "vitest", "review_profile": "frontend-default"})
+    st["current_phase"] = "CLARIFIED"
+    p = tmp_path / "run-state.json"
+    run_state.save(p, st)
+    args = SimpleNamespace(state=str(p), repo=str(tmp_path), runtime="manual")
+    code, packet = dispatch_cmd.run(args)
+    assert code == 0
+    assert any("domain:frontend" in c and "test_runner:vitest" in c
+               and "review_profile:frontend-default" in c for c in packet["context_paths"])
+
+
+def test_dispatch_backend_no_domain_unchanged(tmp_path):
+    st = run_state.new_run_state("r", "f", "q")  # no domain (backend default)
+    st["current_phase"] = "CLARIFIED"
+    p = tmp_path / "run-state.json"
+    run_state.save(p, st)
+    args = SimpleNamespace(state=str(p), repo=str(tmp_path), runtime="manual")
+    code, packet = dispatch_cmd.run(args)
+    assert code == 0
+    assert packet["context_paths"] == [str(p)]   # only the run-state pointer

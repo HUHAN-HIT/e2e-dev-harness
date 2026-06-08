@@ -16,7 +16,14 @@ def run(args) -> tuple[int, dict]:
     rec = state.setdefault("phases", {}).setdefault(name, {})
     rec["dispatch"] = dispatch.DispatchStatus.DISPATCHED.value
     run_state.save(args.state, state)
-    packet = dispatch.worker_packet(phase, str(args.state))
+    # Surface the self-describing domain block (if any) to the worker. Backend
+    # runs carry no domain block ⇒ extra=[] ⇒ packet is unchanged (parity).
+    extra: list[str] = []
+    dom = state.get("domain")
+    if dom:
+        extra = [f"domain:{dom['name']} test_runner:{dom['test_runner']} "
+                 f"review_profile:{dom['review_profile']}"]
+    packet = dispatch.worker_packet(phase, str(args.state), extra_context=extra)
     # Additive (方案1): translate the pointer packet into a runtime launch
     # descriptor. The coordinator performs the real tool call; this stays a
     # pure control plane.
