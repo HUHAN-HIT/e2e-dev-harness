@@ -1,0 +1,11 @@
+name: critical
+phases:
+  - CREATED
+  - CLARIFIED
+  - PLANNED
+  - RED
+  - IMPLEMENTED
+  - phase: REVIEWED
+    produces: [r1_review, r2_review, r3_review]
+    exit_gate: [r1_review, r2_review, r3_review]
+  - VERIFIED

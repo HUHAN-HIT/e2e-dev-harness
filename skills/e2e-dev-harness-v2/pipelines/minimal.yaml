@@ -1,0 +1,7 @@
+name: minimal
+phases:
+  - CREATED
+  - CLARIFIED
+  - RED
+  - IMPLEMENTED
+  - VERIFIED

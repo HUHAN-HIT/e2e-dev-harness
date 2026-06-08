@@ -1,0 +1,9 @@
+name: standard
+phases:
+  - CREATED
+  - CLARIFIED
+  - PLANNED
+  - RED
+  - IMPLEMENTED
+  - REVIEWED
+  - VERIFIED
