@@ -6,6 +6,7 @@ const { spawnSync } = require('node:child_process');
 const { skillHome, resolvePython, detectPython } = require('../lib/paths');
 const { installToMachine } = require('../lib/install');
 const { resolveCommand } = require('../lib/resolve');
+const { runInit, parseInitArgs } = require('../lib/init');
 const {
   npmBinary,
   npmCommand,
@@ -28,6 +29,13 @@ Tool lifecycle (this machine):
   uninstall            Remove the installed skill from ~/.claude/skills
   env                  Diagnose node / python / install / link state
   version, -v          Print the package name and version
+
+Project setup (run inside the business repo):
+  init [project-dir]   One command: detect runtime, install the skill if missing,
+                       wire phase_guard_v2 + stop_guard_v2 hooks into
+                       .claude/settings.json, then verify. Defaults to the current
+                       directory and executes immediately.
+                       [--runtime auto|claude] [--dry-run] [--no-doctor] [--force]
 
 Run lifecycle (e2e-dev-harness-v2, control-plane verbs):
   start --repo <r> --feature <f> --request <q> [--tier t] [--pipeline p]
@@ -130,6 +138,42 @@ function main() {
     });
     console.log(JSON.stringify(report, null, 2));
     process.exit(report.ok ? 0 : 3);
+  }
+
+  if (cmd === 'init') {
+    let opts;
+    try {
+      opts = parseInitArgs(argv.slice(1));
+    } catch (e) {
+      console.error(e.message);
+      process.exit(2);
+    }
+    const projectRoot = path.resolve(opts.projectDir || process.cwd());
+    let result;
+    try {
+      result = runInit({
+        projectRoot,
+        runtime: opts.runtime,
+        dryRun: opts.dryRun,
+        doctor: opts.doctor,
+        force: opts.force,
+      });
+    } catch (e) {
+      console.error(e.message);
+      process.exit(e.exitCode || 1);
+    }
+    if (result.warning) console.warn(`warning: ${result.warning}`);
+    const h = result.hooks;
+    const tag = result.dryRun ? '[dry-run] ' : '';
+    const skillState = result.skill.installed ? 'installed' : 'ok';
+    const seen = h.alreadyPresent ? ` (${h.alreadyPresent} already present)` : '';
+    const doctorState = result.doctor ? (result.doctor.ok ? 'ok' : 'FAIL') : 'skipped';
+    console.log(
+      `${tag}init: runtime=${result.runtime} skill=${skillState}(${result.skill.home}) `
+      + `python=${result.python || 'MISSING'} hooks=+${h.added}${seen} `
+      + `settings=${h.settingsPath}${h.backup ? '(backup)' : ''} doctor=${doctorState}`
+    );
+    process.exit(result.doctor && !result.doctor.ok ? 3 : 0);
   }
 
   // ---- project lifecycle: passthrough to bundled python scripts ----

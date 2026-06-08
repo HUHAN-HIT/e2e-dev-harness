@@ -33,11 +33,15 @@ U7 v2 hook layer:
 |---|---|
 | `phase_guard.py` | `scripts/harness_v2/adapters/hooks/phase_guard_v2.py` |
 | `harness_stop_guard.py` | `scripts/harness_v2/adapters/hooks/stop_guard_v2.py` |
-| `install_hooks.py` | the Node installer materializes the hooks directly (`--with-hooks --runtime claude`) |
+| `install_hooks.py` | `e2e-harness init` materializes the hooks directly (or `tools/install-e2e-dev-harness.mjs --with-hooks --runtime claude`) |
 
 Example configs ship at `skills/e2e-dev-harness-v2/hooks/` (claude settings + opencode plugin);
 the installer rewrites `__HARNESS_V2_SCRIPTS__` to the installed absolute scripts dir and merges
 the `PreToolUse` / `Stop` entries into `<project>/.claude/settings.json`.
+
+Recommended path: from inside the business repo run `e2e-harness init` — it installs the
+skill if missing, wires both hooks into `.claude/settings.json` (idempotent, with backup), and
+verifies. See the README Quick Start §2.
 
 ### Tiers / pipelines
 `task_tier.py` heuristics → declarative `pipelines/*.yaml` (`minimal` / `standard` / `critical` /

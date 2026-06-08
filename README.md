@@ -48,7 +48,7 @@ tests/
 
 ## Quick Start
 
-The recommended way to install and drive the harness is the **`e2e-harness` Node CLI** (`bin/e2e-harness.js`). It always resolves the canonical skill copy at `~/.claude/skills/e2e-dev-harness`, so the hooks it writes never depend on your current directory or which checkout you ran it from.
+The recommended way to install and drive the harness is the **`e2e-harness` Node CLI** (`bin/e2e-harness.js`). It always resolves the canonical skill copy at `~/.claude/skills/e2e-dev-harness-v2`, so the hooks it writes never depend on your current directory or which checkout you ran it from.
 
 > **Make the command global first.** This package ships *inside this repo* and is **not published to npm**, so `npx e2e-harness …` will 404. Register it once with `npm link`, then call it bare from anywhere — no path, no `npx`:
 >
@@ -64,15 +64,20 @@ The recommended way to install and drive the harness is the **`e2e-harness` Node
 e2e-harness install
 ```
 
-Copies the bundled skill into `~/.claude/skills/e2e-dev-harness`, records the Python interpreter in `.harness-env.json`, and backs up any previous install to `~/.claude/skill-backups/` (outside the skills directory, so the backup is never re-discovered as a duplicate skill).
+Copies the bundled skill into `~/.claude/skills/e2e-dev-harness-v2`, records the Python interpreter in `.harness-env.json`, and backs up any previous install to `~/.claude/skill-backups/` (outside the skills directory, so the backup is never re-discovered as a duplicate skill).
 
-### 2. Wire a business repository's hooks
+### 2. Initialize a business repository (one command)
+
+From inside the business repo (or pass its path), run:
 
 ```bash
-e2e-harness init <business-repo> --runtime claude
+e2e-harness init               # targets the current directory
+e2e-harness init <business-repo>
 ```
 
-Runs the canonical `install_hooks.py`, so the generated `.claude/settings.json` PreToolUse/Stop hooks reference `~/.claude/skills/...` absolute paths — never your checkout. Omit the path to target the current directory.
+`init` does the whole setup with minimal input: it detects the runtime, **installs the skill if it is missing**, materializes the `phase_guard_v2` + `stop_guard_v2` hooks into `<repo>/.claude/settings.json` (rewriting `__HARNESS_V2_SCRIPTS__` to the installed skill's absolute `scripts/` path — never your checkout), then runs a finishing check. It prints a one-line summary and **executes immediately**; an existing `settings.json` is backed up first and the merge is idempotent (re-running adds nothing).
+
+Flags: `--dry-run` (preview without writing), `--runtime auto|claude`, `--no-doctor`, `--force` (wire hooks even if no Python interpreter is found).
 
 ### 3. Day-to-day commands
 

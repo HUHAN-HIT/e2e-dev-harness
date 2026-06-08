@@ -1,0 +1,139 @@
+const { test } = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { runInit, detectRuntime } = require('../lib/init');
+
+function tmp() { return fs.mkdtempSync(path.join(os.tmpdir(), 'e2eh-init-')); }
+
+function baseDeps(overrides = {}) {
+  return {
+    skillHome: () => '/fake/skill/home',
+    resolvePython: () => 'python3',
+    ensureSkillInstalled: () => ({ home: '/fake/skill/home', installed: false }),
+    materializeHooks: () => ({ added: 2, alreadyPresent: 0, settingsPath: '/p/.claude/settings.json', backup: null, scriptsDir: '/fake/skill/home/scripts' }),
+    selfCheck: () => ({ ok: true }),
+    ...overrides,
+  };
+}
+
+test('detectRuntime: explicit runtime wins over detection', () => {
+  const r = detectRuntime({ projectRoot: tmp(), runtime: 'claude' });
+  assert.strictEqual(r.runtime, 'claude');
+  assert.strictEqual(r.warning, null);
+});
+
+test('detectRuntime: .claude present resolves claude with no warning', () => {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, '.claude'));
+  const r = detectRuntime({ projectRoot: root, runtime: 'auto' });
+  assert.strictEqual(r.runtime, 'claude');
+  assert.strictEqual(r.warning, null);
+});
+
+test('detectRuntime: .codex-only warns about claude-format hooks but still targets claude', () => {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, '.codex'));
+  const r = detectRuntime({ projectRoot: root, runtime: 'auto' });
+  assert.strictEqual(r.runtime, 'claude');
+  assert.ok(r.warning && /opencode/i.test(r.warning));
+});
+
+test('runInit fails fast (exit 3) when python is missing and not forced', () => {
+  const root = tmp();
+  assert.throws(
+    () => runInit({ projectRoot: root, deps: baseDeps({ resolvePython: () => null }) }),
+    (err) => {
+      assert.strictEqual(err.exitCode, 3);
+      assert.ok(/python/i.test(err.message));
+      return true;
+    }
+  );
+});
+
+test('runInit proceeds when python missing but --force is set', () => {
+  const root = tmp();
+  let merged = false;
+  const res = runInit({
+    projectRoot: root,
+    force: true,
+    deps: baseDeps({ resolvePython: () => null, materializeHooks: () => { merged = true; return { added: 2, alreadyPresent: 0, settingsPath: 'x', backup: null, scriptsDir: 'y' }; } }),
+  });
+  assert.ok(merged);
+  assert.strictEqual(res.python, null);
+});
+
+test('runInit fails (exit 2) when project root is not a directory', () => {
+  assert.throws(
+    () => runInit({ projectRoot: path.join(tmp(), 'does-not-exist'), deps: baseDeps() }),
+    (err) => {
+      assert.strictEqual(err.exitCode, 2);
+      return true;
+    }
+  );
+});
+
+test('runInit happy path materializes hooks and runs doctor', () => {
+  const root = tmp();
+  const calls = { hooks: null, doctor: 0 };
+  const res = runInit({
+    projectRoot: root,
+    deps: baseDeps({
+      materializeHooks: (args) => { calls.hooks = args; return { added: 2, alreadyPresent: 0, settingsPath: 's', backup: null, scriptsDir: 'sc' }; },
+      selfCheck: () => { calls.doctor += 1; return { ok: true }; },
+    }),
+  });
+  assert.strictEqual(res.hooks.added, 2);
+  assert.strictEqual(calls.hooks.projectRoot, root);
+  assert.strictEqual(calls.hooks.skillHome, '/fake/skill/home');
+  assert.strictEqual(calls.doctor, 1);
+  assert.ok(res.doctor && res.doctor.ok);
+});
+
+test('runInit skips doctor when doctor:false', () => {
+  const root = tmp();
+  let doctorCalls = 0;
+  const res = runInit({
+    projectRoot: root,
+    doctor: false,
+    deps: baseDeps({ selfCheck: () => { doctorCalls += 1; return { ok: true }; } }),
+  });
+  assert.strictEqual(doctorCalls, 0);
+  assert.strictEqual(res.doctor, null);
+});
+
+test('runInit dryRun passes dryRun through to materializeHooks', () => {
+  const root = tmp();
+  let seenDryRun = null;
+  runInit({
+    projectRoot: root,
+    dryRun: true,
+    deps: baseDeps({ materializeHooks: (args) => { seenDryRun = args.dryRun; return { added: 2, alreadyPresent: 0, settingsPath: 's', backup: null, scriptsDir: 'sc' }; } }),
+  });
+  assert.strictEqual(seenDryRun, true);
+});
+
+const { parseInitArgs } = require('../lib/init');
+
+test('parseInitArgs defaults: cwd project, auto runtime, doctor on, execute', () => {
+  const a = parseInitArgs([]);
+  assert.strictEqual(a.projectDir, null);
+  assert.strictEqual(a.runtime, 'auto');
+  assert.strictEqual(a.dryRun, false);
+  assert.strictEqual(a.doctor, true);
+  assert.strictEqual(a.force, false);
+});
+
+test('parseInitArgs reads positional project dir and all flags', () => {
+  const a = parseInitArgs(['./repo', '--runtime', 'claude', '--dry-run', '--no-doctor', '--force']);
+  assert.strictEqual(a.projectDir, './repo');
+  assert.strictEqual(a.runtime, 'claude');
+  assert.strictEqual(a.dryRun, true);
+  assert.strictEqual(a.doctor, false);
+  assert.strictEqual(a.force, true);
+});
+
+test('parseInitArgs rejects an unknown flag', () => {
+  assert.throws(() => parseInitArgs(['--nope']), /unknown/i);
+});
