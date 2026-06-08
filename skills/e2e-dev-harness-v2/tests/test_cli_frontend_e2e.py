@@ -1,0 +1,62 @@
+"""End-to-end: a frontend fixture repo is auto-detected and driven to VERIFIED
+via the same CLI verbs as backend, proving the DomainAdapter seam carries a
+non-backend domain through start -> next -> submit with no core changes."""
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness_v2.py"
+FIX = Path(__file__).resolve().parent / "fixtures" / "frontend_app"
+
+
+def _run(*a, cwd):
+    p = subprocess.run([sys.executable, str(ENTRY), *a], cwd=cwd, capture_output=True, text=True)
+    return p.returncode, json.loads(p.stdout or "{}")
+
+
+def _artifact(repo: Path, phase: str, key: str) -> str:
+    from harness_v2.adapters.evidence import command_evidence as ce
+    base = repo / "docs" / "agent-runs" / "art"
+    base.mkdir(parents=True, exist_ok=True)
+    if key in ("failing_tests", "passing_tests"):
+        code = 1 if key == "failing_tests" else 0
+        ev = ce.record_command(repo, f'"{sys.executable}" -c "import sys; sys.exit({code})"')
+        f = base / f"{phase}-{key}.json"
+        f.write_text(json.dumps(ev), encoding="utf-8")
+    else:
+        f = base / f"{phase}-{key}.md"
+        f.write_text("real\n", encoding="utf-8")
+    return str(f.relative_to(repo))
+
+
+def test_frontend_repo_drives_to_verified(tmp_path):
+    for item in FIX.iterdir():
+        dst = tmp_path / item.name
+        shutil.copytree(item, dst) if item.is_dir() else shutil.copy(item, dst)
+
+    code, res = _run("start", "--repo", str(tmp_path), "--feature", "demo",
+                     "--request", "do x", cwd=tmp_path)
+    assert code == 0 and res["domain"] == "frontend"
+
+    state = res["run_state"]
+    # the non-backend domain block is embedded in run-state (Task 4 embed)
+    embedded = json.loads(Path(state).read_text(encoding="utf-8"))
+    assert embedded["domain"]["name"] == "frontend"
+    assert embedded["domain"]["test_runner"] == "vitest"
+
+    steps = 0
+    nres = {"complete": False}
+    while steps < 50:
+        steps += 1
+        _, nres = _run("next", "--state", state, "--repo", str(tmp_path), cwd=tmp_path)
+        if nres["complete"]:
+            break
+        phase = nres["blocked_phase"]
+        for key in nres["next_action"]["expected_outputs"]:
+            _run("submit", "--state", state, "--phase", phase, "--key", key,
+                 "--path", _artifact(tmp_path, phase, key), "--repo", str(tmp_path), cwd=tmp_path)
+    assert nres["complete"] is True
+    assert nres["navigation_map"]["you_are_here"] == "VERIFIED"
+    assert steps <= 6
