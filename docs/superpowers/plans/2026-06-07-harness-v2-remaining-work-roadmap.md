@@ -25,7 +25,7 @@
 | **U4** | M3 config layer: `pipelines/*.yaml` + `validate-pipeline` (R2) + custom pipelines | M3 (§12, §15) | **Yes — brainstorm schema** | U1–U3 landed (stable spine) | High |
 | **U5 ✅** | M4 frontend `DomainAdapter` | M4 (§13) | **Yes — brainstorm interface** | U4 (config overrides) | High |
 | **U7 ✅** | net-new v2 hook layer (PreToolUse phase-lock + Stop) — parity-audit gap | §16 / hook design | **Yes — design doc** | U1–U5 | Medium |
-| **U6** | M5 switchover: v2 default + migration docs + delete legacy | M5 (§14) | No | U1–U5, **U7** (hook parity) | Medium |
+| **U6 ✅** | M5 switchover: v2 default + migration docs + delete legacy | M5 (§14) | No | U1–U5, **U7** (hook parity) | Medium |
 
 **Recommended order:** U3 (quick win) → U1 (last pure port) → U2 (brainstorm+build) → U4 → U5 → U6. U1 and U3 are independently startable today; U2/U4/U5 each open with a brainstorming pass.
 
@@ -123,7 +123,9 @@ First action of the U1 plan: grep `test_memory_capture.py` for every `e2e_dev_ha
 
 ---
 
-## U6 — M5 switchover (§14)
+## U6 — M5 switchover (§14) ✅ DONE 2026-06-08
+
+**Milestone M5 delivered:** v2 is the default harness; npm + pyproject entry points cut to v2; U7 hooks wired by the installer; MIGRATION.md + CHANGELOG 0.2.0 shipped; legacy `skills/e2e-dev-harness/` + its test suite deleted (207 files, 80762 lines). v2 suite 228 green, node suite 28 green post-delete. Design doc: `docs/superpowers/specs/2026-06-08-harness-v2-u6-cutover-design.md`; plan: `docs/superpowers/plans/2026-06-08-harness-v2-u6-cutover.md`. **harness-v2-m2 complete (M1–M5 + U7).**
 
 **Goal:** Make v2 the default harness, write migration docs, retire the legacy skill — **only after** U1–U5 prove no capability loss.
 
