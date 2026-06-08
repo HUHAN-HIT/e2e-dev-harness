@@ -17,9 +17,10 @@ def _stamp(now: str | None = None) -> str:
 
 def new_run_state(run_id: str, feature: str, request: str,
                   tier: str = "minimal", pipeline: str = "minimal",
+                  pipeline_spec: dict | None = None,
                   now: str | None = None) -> dict:
     ts = _stamp(now)
-    return {
+    state = {
         "schema": SCHEMA,
         "run_id": run_id,
         "feature": feature,
@@ -31,6 +32,9 @@ def new_run_state(run_id: str, feature: str, request: str,
         "created_at": ts,
         "updated_at": ts,
     }
+    if pipeline_spec is not None:
+        state["pipeline_spec"] = pipeline_spec
+    return state
 
 
 def load(path: str | Path) -> dict:

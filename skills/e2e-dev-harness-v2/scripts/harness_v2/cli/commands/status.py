@@ -9,5 +9,5 @@ from harness_v2 import pipeline
 
 def run(args) -> tuple[int, dict]:
     state = run_state.load(args.state)
-    spine = pipeline.build_spine(state.get("pipeline", "minimal"))
+    spine = pipeline.spine_for_state(state)
     return 0, {"navigation_map": navigation.navigation_map(spine, state, Path(args.repo).resolve())}

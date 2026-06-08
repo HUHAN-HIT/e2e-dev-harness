@@ -22,6 +22,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("start"); s.add_argument("--repo", default=".")
     s.add_argument("--feature", required=True); s.add_argument("--request", required=True)
     s.add_argument("--tier", choices=["auto", "minimal", "standard", "critical", "audited"], default="minimal")
+    s.add_argument("--pipeline", default=None,
+                   help="built-in name or path to a custom pipeline yaml (overrides --tier's spine)")
 
     for verb in ("next", "status"):
         sp = sub.add_parser(verb); sp.add_argument("--state", required=True); sp.add_argument("--repo", default=".")

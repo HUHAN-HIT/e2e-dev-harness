@@ -8,7 +8,7 @@ from harness_v2.adapters import runtime
 
 def run(args) -> tuple[int, dict]:
     state = run_state.load(args.state)
-    spine = pipeline.build_spine(state.get("pipeline", "minimal"))
+    spine = pipeline.spine_for_state(state)
     name = state.get("current_phase")
     phase = next((p for p in spine if p.name == name), None)
     if phase is None or not phase.worker_skill:

@@ -11,7 +11,7 @@ def run(args) -> tuple[int, dict]:
     repo = Path(args.repo).resolve()
     state = run_state.load(args.state)
     state["_run_state_path"] = str(args.state)
-    spine = pipeline.build_spine(state.get("pipeline", "minimal"))
+    spine = pipeline.spine_for_state(state)
     res = engine.evaluate(spine, state, repo)
     state.pop("_run_state_path", None)
     run_state.save(args.state, state)
