@@ -5,11 +5,13 @@ import argparse
 import json
 import sys
 
-from harness_v2.cli.commands import start, next as next_cmd, dispatch, submit, gate, status
+from harness_v2.cli.commands import start, next as next_cmd, dispatch, submit, gate, status, validate_pipeline
 
 _COMMANDS = {
     "start": start.run, "next": next_cmd.run, "dispatch": dispatch.run,
     "submit": submit.run, "gate": gate.run, "status": status.run,
+    # 7th verb — deliberate design §6 exception for the M3 config layer (U4).
+    "validate-pipeline": validate_pipeline.run,
 }
 
 
@@ -34,6 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = sub.add_parser("gate"); g.add_argument("--state", required=True); g.add_argument("--repo", default=".")
     g.add_argument("--phase", default=None)
+
+    vp = sub.add_parser("validate-pipeline"); vp.add_argument("--pipeline", required=True)
     return p
 
 
