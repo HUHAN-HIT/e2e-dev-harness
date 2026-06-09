@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "e2e-dev-harness"
 version = "0.2.0"
-description = "Agent-neutral multi-agent delivery harness (v2): SSOT run-state, declarative tier-scaled gates, domain adapters, worker subagents."
+description = "Agent-neutral multi-agent delivery harness: SSOT run-state, declarative tier-scaled gates, domain adapters, worker subagents."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["pyyaml>=6"]
@@ -23,13 +23,12 @@ dev = ["pytest>=8"]
 ast = ["tree_sitter>=0.22", "tree_sitter_java>=0.21"]
 
 [project.scripts]
-e2e-harness-v2 = "harness_v2.cli.main:main"
-e2e-dev-harness = "harness_v2.cli.main:main"
-e2eh = "harness_v2.cli.main:main"
+e2e-dev-harness = "e2e_harness.cli.main:main"
+e2eh = "e2e_harness.cli.main:main"
 
 [tool.setuptools]
-package-dir = { "" = "skills/e2e-dev-harness-v2/scripts" }
-packages = { find = { where = ["skills/e2e-dev-harness-v2/scripts"], include = ["harness_v2*"] } }
+package-dir = { "" = "skills/e2e-dev-harness/scripts" }
+packages = { find = { where = ["skills/e2e-dev-harness/scripts"], include = ["e2e_harness*"] } }
 
 [tool.ruff]
 target-version = "py310"
