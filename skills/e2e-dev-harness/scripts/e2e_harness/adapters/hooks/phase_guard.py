@@ -1,4 +1,4 @@
-"""v2 PreToolUse hook: phase-lock code writes (thin shell over run-state).
+"""PreToolUse hook: phase-lock code writes (thin shell over run-state).
 
 Reuses ported path logic (adapters.hooks.paths) and the declarative
 pipeline.can_write_code gate. Stdlib only. See design §3.2.

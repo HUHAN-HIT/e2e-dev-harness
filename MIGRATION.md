@@ -1,6 +1,6 @@
 # Migration: legacy skill → e2e-dev-harness (0.2.0)
 
-v2 is now the **default, canonical** delivery harness. The legacy `skills/e2e-dev-harness/`
+The current implementation is the **default, canonical** delivery harness. The legacy `skills/e2e-dev-harness/`
 skill has been retired and deleted. This guide covers what changed and how to recover any
 intentionally-deferred legacy capability.
 
@@ -9,7 +9,7 @@ intentionally-deferred legacy capability.
 ### CLI: 35 verbs → 6 (+1)
 The sprawling legacy command surface collapses to a terminating spine. Mapping (design §6):
 
-| v2 verb | replaces | purpose |
+| current verb | replaces | purpose |
 |---|---|---|
 | `start` | start / prepare / install | create the single run-state |
 | `next` | next / map / doctor / preflight / ac-progress | advance the spine or return one blocker |
@@ -21,15 +21,15 @@ The sprawling legacy command surface collapses to a terminating spine. Mapping (
 
 ### Entry points
 - **Python console scripts** now target `e2e_harness.cli.main:main`:
-  `e2e-dev-harness` / `e2eh` (canonical; the former v2-suffixed console script was dropped in the rename).
-- **Node CLI** (`e2e-harness`, `bin/e2e-harness.js`) dispatches v2 verbs to `scripts/e2e_dev_harness.py`.
+  `e2e-dev-harness` / `e2eh` (canonical; the former suffixed console script was dropped in the rename).
+- **Node CLI** (`e2e-harness`, `bin/e2e-harness.js`) dispatches current verbs to `scripts/e2e_dev_harness.py`.
 - New runtime dependency declared: **PyYAML** (`pyyaml>=6`) — pipelines are YAML.
 
 ### Hooks (tool-layer enforcement)
 The legacy `phase_guard.py` (PreToolUse) and `harness_stop_guard.py` (Stop) are replaced by the
-U7 v2 hook layer:
+U7 hook layer:
 
-| legacy | v2 |
+| legacy | current |
 |---|---|
 | `phase_guard.py` | `scripts/e2e_harness/adapters/hooks/phase_guard.py` |
 | `harness_stop_guard.py` | `scripts/e2e_harness/adapters/hooks/stop_guard.py` |
@@ -50,7 +50,7 @@ verifies. See the README Quick Start §2.
 ## Parity
 
 Every capability the legacy skill offered is **covered**, **deferred** (recorded below, recoverable),
-or **dropped** per design §16. Full table: `docs/superpowers/specs/2026-06-08-harness-v2-u6-cutover-design.md` §2.
+or **dropped** per design §16. Full table: `docs/superpowers/specs/2026-06-08-e2e-dev-harness-u6-cutover-design.md` §2.
 
 ## Deferred / recoverable
 
@@ -74,4 +74,4 @@ git show <sha>^:skills/e2e-dev-harness/scripts/session_checkpoint.py
 
 ## Dropped (not recoverable as designed)
 - legacy state aliases and the `worker_running_unverified` compatibility shim — superseded by the
-  single v2 state enum (design §5). v2 does not reintroduce them.
+  single current state enum (design §5). The canonical harness does not reintroduce them.

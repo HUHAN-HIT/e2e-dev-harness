@@ -1,6 +1,6 @@
 """Path-agnostic classification ported from legacy phase_guard.
 
-v2 收敛 (design §3.2): 控制文件集 = {run-state.json}(无 .phase-lock);
+Canonical harness convergence: control files = {run-state.json} (no .phase-lock);
 hook-config 仅 claude + opencode。除 `discover_run_state` 外皆为纯函数。
 """
 from __future__ import annotations

@@ -1,33 +1,33 @@
-# e2e-dev-harness v2 — M1 走骨架 Implementation Plan
+# e2e-dev-harness e2e-dev-harness �?M1 走骨�?Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在新包 `skills/e2e-dev-harness-v2/` 建立一个能从 `start` 跑到 `VERIFIED` 并**保证终止**的最小多 agent 编排骨架(minimal tier)。
+**Goal:** 在新�?`skills/e2e-dev-harness/` 建立一个能�?`start` 跑到 `VERIFIED` �?*保证终止**的最小多 agent 编排骨架(minimal tier)�?
 
-**Architecture:** 单一事实源 `run-state.json` + 声明式阶段状态机(可终止主干)+ 单一 dispatch 状态枚举 + 派生导航地图 + 指针式 worker packet(子 agent 自加载 Superpowers skill)。核心领域无关,后端为默认 adapter。
+**Architecture:** 单一事实�?`run-state.json` + 声明式阶段状态机(可终止主�?+ 单一 dispatch 状态枚�?+ 派生导航地图 + 指针�?worker packet(�?agent 自加�?Superpowers skill)。核心领域无�?后端为默�?adapter�?
 
-**Tech Stack:** Python 3.13、stdlib only(`dataclasses`/`enum`/`json`/`argparse`/`pathlib`)、pytest。
+**Tech Stack:** Python 3.13、stdlib only(`dataclasses`/`enum`/`json`/`argparse`/`pathlib`)、pytest�?
 
-**Spec:** `docs/superpowers/specs/2026-06-07-harness-v2-redesign-design.md`(本计划仅实现 §14 的 M1)。
+**Spec:** `docs/superpowers/specs/2026-06-07-e2e-dev-harness-redesign-design.md`(本计划仅实现 §14 �?M1)�?
 
 ---
 
 ## 文件结构 (M1)
 
 ```
-skills/e2e-dev-harness-v2/
+skills/e2e-dev-harness/
   scripts/
-    harness_v2/
+    e2e_harness/
       __init__.py
       core/
         __init__.py
         run_state.py      # SSOT: schema + new/load/save
         lifecycle.py      # Phase 记录 + 阶段目录 + build_spine
         gates.py          # gate_passes (证据满足) + gate_closure_ok (I2)
-        dispatch.py       # DispatchStatus 枚举 + worker_packet 构造
-        navigation.py     # 由 spine+state 派生导航地图
-        engine.py         # evaluate(): 推进主干 (I1 可终止) + submit_evidence()
-      pipeline.py         # tier -> 活跃阶段名 (minimal)
+        dispatch.py       # DispatchStatus 枚举 + worker_packet 构�?
+        navigation.py     # �?spine+state 派生导航地图
+        engine.py         # evaluate(): 推进主干 (I1 可终�? + submit_evidence()
+      pipeline.py         # tier -> 活跃阶段�?(minimal)
       cli/
         __init__.py
         main.py           # argparse, 6 动词
@@ -39,9 +39,9 @@ skills/e2e-dev-harness-v2/
           submit.py
           gate.py
           status.py
-    e2e_dev_harness_v2.py # 入口 shim -> harness_v2.cli.main:main
+    e2e_dev_harness.py # 入口 shim -> e2e_harness.cli.main:main
   tests/
-    conftest.py           # 将 scripts/ 注入 sys.path
+    conftest.py           # �?scripts/ 注入 sys.path
     test_run_state.py
     test_lifecycle_spine.py
     test_gate_closure.py      # I2
@@ -55,16 +55,16 @@ skills/e2e-dev-harness-v2/
   SKILL.md
 ```
 
-每个文件单一职责;`core/` 领域无关;`pipeline.py` 持 tier→阶段映射;`cli/` 只做编排不含业务逻辑。
+每个文件单一职责;`core/` 领域无关;`pipeline.py` �?tier→阶段映�?`cli/` 只做编排不含业务逻辑�?
 
 ---
 
-## 关键数据契约 (跨任务一致,务必照抄签名)
+## 关键数据契约 (跨任务一�?务必照抄签名)
 
-**run-state.json**(schema `e2e-dev-harness-v2.run-state.v1`):
+**run-state.json**(schema `e2e-dev-harness.run-state.v1`):
 ```json
 {
-  "schema": "e2e-dev-harness-v2.run-state.v1",
+  "schema": "e2e-dev-harness.run-state.v1",
   "run_id": "20260607T120000Z-demo",
   "feature": "demo", "request": "do x", "tier": "minimal", "pipeline": "minimal",
   "current_phase": "CREATED",
@@ -76,25 +76,25 @@ skills/e2e-dev-harness-v2/
 **Phase**(`core/lifecycle.py`,frozen dataclass):
 `Phase(name:str, worker_role:str, worker_skill:str, produces:tuple[str,...], exit_gate:tuple[str,...], next_phase:str|None)`
 
-**DispatchStatus**(`core/dispatch.py`,str Enum): `PENDING="pending"`, `DISPATCHED="dispatched"`, `RUNNING="running"`, `DONE="done"`, `FAILED="failed"`。
+**DispatchStatus**(`core/dispatch.py`,str Enum): `PENDING="pending"`, `DISPATCHED="dispatched"`, `RUNNING="running"`, `DONE="done"`, `FAILED="failed"`�?
 
-**minimal 活跃阶段顺序**: `("CREATED","CLARIFIED","RED","IMPLEMENTED","VERIFIED")`。
+**minimal 活跃阶段顺序**: `("CREATED","CLARIFIED","RED","IMPLEMENTED","VERIFIED")`�?
 
 ---
 
 ### Task 1: 包脚手架 + 入口 shim
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/__init__.py`
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/__init__.py`
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/__init__.py`
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/commands/__init__.py`
-- Create: `skills/e2e-dev-harness-v2/tests/conftest.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_run_state.py`(占位 import smoke)
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/__init__.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/core/__init__.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/cli/__init__.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/__init__.py`
+- Create: `skills/e2e-dev-harness/tests/conftest.py`
+- Test: `skills/e2e-dev-harness/tests/test_run_state.py`(占位 import smoke)
 
-- [ ] **Step 1: 写 conftest 注入 sys.path**
+- [ ] **Step 1: �?conftest 注入 sys.path**
 
-`skills/e2e-dev-harness-v2/tests/conftest.py`:
+`skills/e2e-dev-harness/tests/conftest.py`:
 ```python
 import sys
 from pathlib import Path
@@ -106,37 +106,37 @@ if str(SCRIPTS) not in sys.path:
 
 - [ ] **Step 2: 写失败的 import smoke 测试**
 
-`skills/e2e-dev-harness-v2/tests/test_run_state.py`:
+`skills/e2e-dev-harness/tests/test_run_state.py`:
 ```python
 def test_package_imports():
-    import harness_v2
-    import harness_v2.core
-    assert harness_v2 is not None
+    import e2e_harness
+    import e2e_harness.core
+    assert e2e_harness is not None
 ```
 
 - [ ] **Step 3: 运行,确认失败**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_run_state.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'harness_v2'`
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_run_state.py -v`
+Expected: FAIL �?`ModuleNotFoundError: No module named 'e2e_harness'`
 
-- [ ] **Step 4: 建空 `__init__.py`(4 个)**
+- [ ] **Step 4: 建空 `__init__.py`(4 �?**
 
 四个文件内容均为单行注释:
 ```python
-"""e2e-dev-harness v2 package."""
+"""e2e-dev-harness e2e-dev-harness package."""
 ```
 (`cli/commands/__init__.py` 同样)
 
 - [ ] **Step 5: 运行,确认通过**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_run_state.py -v`
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_run_state.py -v`
 Expected: PASS
 
 - [ ] **Step 6: 提交**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2 skills/e2e-dev-harness-v2/tests
-git commit -m "feat(harness-v2): scaffold package + test path"
+git add skills/e2e-dev-harness/scripts/e2e_harness skills/e2e-dev-harness/tests
+git commit -m "feat(e2e-dev-harness): scaffold package + test path"
 ```
 
 ---
@@ -144,19 +144,19 @@ git commit -m "feat(harness-v2): scaffold package + test path"
 ### Task 2: SSOT run-state
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/run_state.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_run_state.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/core/run_state.py`
+- Test: `skills/e2e-dev-harness/tests/test_run_state.py`
 
 - [ ] **Step 1: 追加失败测试**
 
-在 `test_run_state.py` 追加:
+�?`test_run_state.py` 追加:
 ```python
-from harness_v2.core import run_state
+from e2e_harness.core import run_state
 
 
 def test_new_run_state_shape():
     st = run_state.new_run_state("r1", "feat", "req")
-    assert st["schema"] == "e2e-dev-harness-v2.run-state.v1"
+    assert st["schema"] == "e2e-dev-harness.run-state.v1"
     assert st["current_phase"] == "CREATED"
     assert st["tier"] == "minimal"
     assert st["pipeline"] == "minimal"
@@ -181,8 +181,8 @@ def test_save_refreshes_updated_at(tmp_path):
 
 - [ ] **Step 2: 运行,确认失败**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_run_state.py -v`
-Expected: FAIL — `ModuleNotFoundError`/`AttributeError`
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_run_state.py -v`
+Expected: FAIL �?`ModuleNotFoundError`/`AttributeError`
 
 - [ ] **Step 3: 实现 run_state.py**
 
@@ -194,7 +194,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA = "e2e-dev-harness-v2.run-state.v1"
+SCHEMA = "e2e-dev-harness.run-state.v1"
 
 
 def _stamp(now: str | None = None) -> str:
@@ -235,14 +235,14 @@ def save(path: str | Path, state: dict, now: str | None = None) -> None:
 
 - [ ] **Step 4: 运行,确认通过**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_run_state.py -v`
-Expected: PASS(4 项)
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_run_state.py -v`
+Expected: PASS(4 �?
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/core/run_state.py skills/e2e-dev-harness-v2/tests/test_run_state.py
-git commit -m "feat(harness-v2): SSOT run-state load/save"
+git add skills/e2e-dev-harness/scripts/e2e_harness/core/run_state.py skills/e2e-dev-harness/tests/test_run_state.py
+git commit -m "feat(e2e-dev-harness): SSOT run-state load/save"
 ```
 
 ---
@@ -250,16 +250,16 @@ git commit -m "feat(harness-v2): SSOT run-state load/save"
 ### Task 3: 阶段目录 + build_spine + minimal pipeline
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/lifecycle.py`
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/pipeline.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_lifecycle_spine.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/core/lifecycle.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/pipeline.py`
+- Test: `skills/e2e-dev-harness/tests/test_lifecycle_spine.py`
 
-- [ ] **Step 1: 写失败测试**
+- [ ] **Step 1: 写失败测�?*
 
 `test_lifecycle_spine.py`:
 ```python
-from harness_v2.core import lifecycle
-from harness_v2 import pipeline
+from e2e_harness.core import lifecycle
+from e2e_harness import pipeline
 
 
 def test_minimal_spine_order_and_links():
@@ -267,7 +267,7 @@ def test_minimal_spine_order_and_links():
     names = [p.name for p in spine]
     assert names == ["CREATED", "CLARIFIED", "RED", "IMPLEMENTED", "VERIFIED"]
     assert spine[0].next_phase == "CLARIFIED"
-    assert spine[-1].next_phase is None  # VERIFIED 终态
+    assert spine[-1].next_phase is None  # VERIFIED 终�?
 
 
 def test_created_phase_has_empty_gate():
@@ -286,8 +286,8 @@ def test_clarified_phase_binds_worker_skill():
 
 - [ ] **Step 2: 运行,确认失败**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_lifecycle_spine.py -v`
-Expected: FAIL — `ModuleNotFoundError`
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_lifecycle_spine.py -v`
+Expected: FAIL �?`ModuleNotFoundError`
 
 - [ ] **Step 3: 实现 lifecycle.py**
 
@@ -308,7 +308,7 @@ class Phase:
     next_phase: str | None
 
 
-# 全量阶段目录 (最长主干);tier 从中选子集 (M2/§11)。
+# 全量阶段目录 (最长主�?;tier 从中选子�?(M2/§11)�?
 _CATALOG: dict[str, Phase] = {
     "CREATED":     Phase("CREATED", "", "", (), (), None),
     "CLARIFIED":   Phase("CLARIFIED", "requirements-clarifier", "e2e-harness-clarification", ("clarification",), ("clarification",), None),
@@ -352,30 +352,30 @@ def active_phase_names(pipeline: str) -> list[str]:
 
 - [ ] **Step 5: 运行,确认通过**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_lifecycle_spine.py -v`
-Expected: PASS(3 项)
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_lifecycle_spine.py -v`
+Expected: PASS(3 �?
 
 - [ ] **Step 6: 提交**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/core/lifecycle.py skills/e2e-dev-harness-v2/scripts/harness_v2/pipeline.py skills/e2e-dev-harness-v2/tests/test_lifecycle_spine.py
-git commit -m "feat(harness-v2): phase catalog + minimal pipeline spine"
+git add skills/e2e-dev-harness/scripts/e2e_harness/core/lifecycle.py skills/e2e-dev-harness/scripts/e2e_harness/pipeline.py skills/e2e-dev-harness/tests/test_lifecycle_spine.py
+git commit -m "feat(e2e-dev-harness): phase catalog + minimal pipeline spine"
 ```
 
 ---
 
-### Task 4: 门禁 + 闭包不变量 I2
+### Task 4: 门禁 + 闭包不变�?I2
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/gates.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_gates.py`, `skills/e2e-dev-harness-v2/tests/test_gate_closure.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/core/gates.py`
+- Test: `skills/e2e-dev-harness/tests/test_gates.py`, `skills/e2e-dev-harness/tests/test_gate_closure.py`
 
-- [ ] **Step 1: 写失败测试 (gate_passes)**
+- [ ] **Step 1: 写失败测�?(gate_passes)**
 
 `test_gates.py`:
 ```python
-from harness_v2.core import lifecycle, gates
-from harness_v2 import pipeline
+from e2e_harness.core import lifecycle, gates
+from e2e_harness import pipeline
 
 
 def _phase(name):
@@ -401,14 +401,14 @@ def test_empty_gate_always_passes():
     assert missing == []
 ```
 
-- [ ] **Step 2: 写失败测试 (I2 闭包)**
+- [ ] **Step 2: 写失败测�?(I2 闭包)**
 
 `test_gate_closure.py`:
 ```python
 from dataclasses import replace
 
-from harness_v2.core import lifecycle, gates
-from harness_v2 import pipeline
+from e2e_harness.core import lifecycle, gates
+from e2e_harness import pipeline
 
 
 def test_minimal_pipeline_is_gate_closed():
@@ -428,8 +428,8 @@ def test_closure_detects_unproduced_evidence():
 
 - [ ] **Step 3: 运行,确认失败**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_gates.py skills/e2e-dev-harness-v2/tests/test_gate_closure.py -v`
-Expected: FAIL — `ModuleNotFoundError`
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_gates.py skills/e2e-dev-harness/tests/test_gate_closure.py -v`
+Expected: FAIL �?`ModuleNotFoundError`
 
 - [ ] **Step 4: 实现 gates.py**
 
@@ -437,7 +437,7 @@ Expected: FAIL — `ModuleNotFoundError`
 """Declarative gate evaluation + closure invariant (I2)."""
 from __future__ import annotations
 
-from harness_v2.core.lifecycle import Phase
+from e2e_harness.core.lifecycle import Phase
 
 
 def gate_passes(phase: Phase, phase_record: dict | None) -> tuple[bool, list[str]]:
@@ -458,30 +458,30 @@ def gate_closure_ok(spine: list[Phase]) -> tuple[bool, list[str]]:
 
 - [ ] **Step 5: 运行,确认通过**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_gates.py skills/e2e-dev-harness-v2/tests/test_gate_closure.py -v`
-Expected: PASS(5 项)
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_gates.py skills/e2e-dev-harness/tests/test_gate_closure.py -v`
+Expected: PASS(5 �?
 
 - [ ] **Step 6: 提交**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/core/gates.py skills/e2e-dev-harness-v2/tests/test_gates.py skills/e2e-dev-harness-v2/tests/test_gate_closure.py
-git commit -m "feat(harness-v2): declarative gates + I2 closure invariant"
+git add skills/e2e-dev-harness/scripts/e2e_harness/core/gates.py skills/e2e-dev-harness/tests/test_gates.py skills/e2e-dev-harness/tests/test_gate_closure.py
+git commit -m "feat(e2e-dev-harness): declarative gates + I2 closure invariant"
 ```
 
 ---
 
-### Task 5: dispatch 状态枚举 + worker packet (指针)
+### Task 5: dispatch 状态枚�?+ worker packet (指针)
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/dispatch.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_dispatch.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/core/dispatch.py`
+- Test: `skills/e2e-dev-harness/tests/test_dispatch.py`
 
-- [ ] **Step 1: 写失败测试**
+- [ ] **Step 1: 写失败测�?*
 
 `test_dispatch.py`:
 ```python
-from harness_v2.core import lifecycle, dispatch
-from harness_v2 import pipeline
+from e2e_harness.core import lifecycle, dispatch
+from e2e_harness import pipeline
 
 
 def test_status_values():
@@ -499,14 +499,14 @@ def test_worker_packet_is_pointer_only():
     assert packet["skill"] == "e2e-harness-clarification"
     assert packet["expected_outputs"] == ["clarification"]
     assert "docs/agent-runs/r1/run-state.json" in packet["context_paths"]
-    # 指针包不得内联指令文本
+    # 指针包不得内联指令文�?
     assert "instructions" not in packet
 ```
 
 - [ ] **Step 2: 运行,确认失败**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_dispatch.py -v`
-Expected: FAIL — `ModuleNotFoundError`
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_dispatch.py -v`
+Expected: FAIL �?`ModuleNotFoundError`
 
 - [ ] **Step 3: 实现 dispatch.py**
 
@@ -516,9 +516,9 @@ from __future__ import annotations
 
 from enum import Enum
 
-from harness_v2.core.lifecycle import Phase
+from e2e_harness.core.lifecycle import Phase
 
-PACKET_SCHEMA = "e2e-dev-harness-v2.worker-packet.v1"
+PACKET_SCHEMA = "e2e-dev-harness.worker-packet.v1"
 
 
 class DispatchStatus(str, Enum):
@@ -542,30 +542,30 @@ def worker_packet(phase: Phase, run_state_path: str,
 
 - [ ] **Step 4: 运行,确认通过**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_dispatch.py -v`
-Expected: PASS(2 项)
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_dispatch.py -v`
+Expected: PASS(2 �?
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/core/dispatch.py skills/e2e-dev-harness-v2/tests/test_dispatch.py
-git commit -m "feat(harness-v2): single dispatch enum + pointer worker packet"
+git add skills/e2e-dev-harness/scripts/e2e_harness/core/dispatch.py skills/e2e-dev-harness/tests/test_dispatch.py
+git commit -m "feat(e2e-dev-harness): single dispatch enum + pointer worker packet"
 ```
 
 ---
 
-### Task 6: 引擎 — evaluate (I1 可终止) + submit_evidence
+### Task 6: 引擎 �?evaluate (I1 可终�? + submit_evidence
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/engine.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_engine_termination.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/core/engine.py`
+- Test: `skills/e2e-dev-harness/tests/test_engine_termination.py`
 
-- [ ] **Step 1: 写失败测试 (I1 + submit)**
+- [ ] **Step 1: 写失败测�?(I1 + submit)**
 
 `test_engine_termination.py`:
 ```python
-from harness_v2.core import lifecycle, engine, run_state
-from harness_v2 import pipeline
+from e2e_harness.core import lifecycle, engine, run_state
+from e2e_harness import pipeline
 
 
 def _spine():
@@ -575,7 +575,7 @@ def _spine():
 def test_evaluate_auto_advances_created_then_blocks_on_clarified():
     st = run_state.new_run_state("r1", "f", "r")
     res = engine.evaluate(_spine(), st)
-    assert st["current_phase"] == "CLARIFIED"   # CREATED 空门禁自动越过
+    assert st["current_phase"] == "CLARIFIED"   # CREATED 空门禁自动越�?
     assert res["complete"] is False
     assert res["blocked_phase"] == "CLARIFIED"
     assert res["next_action"]["skill"] == "e2e-harness-clarification"
@@ -618,13 +618,13 @@ def test_evaluate_idempotent_after_complete():
             engine.submit_evidence(st, st["current_phase"], key, "e.md")
     res = engine.evaluate(spine, st)
     assert res["complete"] is True
-    assert engine.evaluate(spine, st)["complete"] is True  # 再调用不回退/不报错
+    assert engine.evaluate(spine, st)["complete"] is True  # 再调用不回退/不报�?
 ```
 
 - [ ] **Step 2: 运行,确认失败**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_engine_termination.py -v`
-Expected: FAIL — `ModuleNotFoundError`
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_engine_termination.py -v`
+Expected: FAIL �?`ModuleNotFoundError`
 
 - [ ] **Step 3: 实现 engine.py**
 
@@ -632,8 +632,8 @@ Expected: FAIL — `ModuleNotFoundError`
 """Engine: terminating advance (I1) + evidence submission."""
 from __future__ import annotations
 
-from harness_v2.core import gates, dispatch
-from harness_v2.core.lifecycle import Phase
+from e2e_harness.core import gates, dispatch
+from e2e_harness.core.lifecycle import Phase
 
 
 def _phase_record(state: dict, name: str) -> dict:
@@ -674,34 +674,34 @@ def evaluate(spine: list[Phase], state: dict) -> dict:
         name = phase.next_phase
 ```
 
-> 说明: `CREATED` 空门禁 → 立即越过;终态 `VERIFIED` 门禁满足 → `complete`。循环沿有限 spine 单向推进,必然在 ≤len(spine) 次内返回。
+> 说明: `CREATED` 空门�?�?立即越过;终�?`VERIFIED` 门禁满足 �?`complete`。循环沿有限 spine 单向推进,必然�?≤len(spine) 次内返回�?
 
 - [ ] **Step 4: 运行,确认通过**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_engine_termination.py -v`
-Expected: PASS(4 项)
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_engine_termination.py -v`
+Expected: PASS(4 �?
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/core/engine.py skills/e2e-dev-harness-v2/tests/test_engine_termination.py
-git commit -m "feat(harness-v2): terminating engine (I1) + evidence submit"
+git add skills/e2e-dev-harness/scripts/e2e_harness/core/engine.py skills/e2e-dev-harness/tests/test_engine_termination.py
+git commit -m "feat(e2e-dev-harness): terminating engine (I1) + evidence submit"
 ```
 
 ---
 
-### Task 7: 导航地图 (整段旅程,避免局部最优)
+### Task 7: 导航地图 (整段旅程,避免局部最�?
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/navigation.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_navigation.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/core/navigation.py`
+- Test: `skills/e2e-dev-harness/tests/test_navigation.py`
 
-- [ ] **Step 1: 写失败测试**
+- [ ] **Step 1: 写失败测�?*
 
 `test_navigation.py`:
 ```python
-from harness_v2.core import lifecycle, navigation, run_state, engine
-from harness_v2 import pipeline
+from e2e_harness.core import lifecycle, navigation, run_state, engine
+from e2e_harness import pipeline
 
 
 def _spine():
@@ -738,8 +738,8 @@ def test_map_marks_skipped_phases():
 
 - [ ] **Step 2: 运行,确认失败**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_navigation.py -v`
-Expected: FAIL — `ModuleNotFoundError`
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_navigation.py -v`
+Expected: FAIL �?`ModuleNotFoundError`
 
 - [ ] **Step 3: 实现 navigation.py**
 
@@ -747,8 +747,8 @@ Expected: FAIL — `ModuleNotFoundError`
 """Derived whole-journey navigation map (no hand-maintained state)."""
 from __future__ import annotations
 
-from harness_v2.core import gates
-from harness_v2.core.lifecycle import Phase, catalog
+from e2e_harness.core import gates
+from e2e_harness.core.lifecycle import Phase, catalog
 
 GOAL = "VERIFIED"
 
@@ -765,7 +765,7 @@ def _phase_status(spine: list[Phase], state: dict, idx: int) -> str:
         ok, _ = gates.gate_passes(phase, rec)
         if phase.next_phase is None and ok:
             return "done"
-        return "current"   # 当前阶段即"你该做这步";blocked 细分留给 M2
+        return "current"   # 当前阶段�?你该做这�?;blocked 细分留给 M2
     return "pending"
 
 
@@ -782,7 +782,7 @@ def navigation_map(spine: list[Phase], state: dict) -> dict:
         full.append({"name": name, "status": st})
     done = sum(1 for p in phases if p["status"] == "done")
     return {
-        "schema": "e2e-dev-harness-v2.navigation-map.v1",
+        "schema": "e2e-dev-harness.navigation-map.v1",
         "goal": GOAL,
         "you_are_here": state.get("current_phase", spine[0].name),
         "phases": phases,
@@ -793,14 +793,14 @@ def navigation_map(spine: list[Phase], state: dict) -> dict:
 
 - [ ] **Step 4: 运行,确认通过**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_navigation.py -v`
-Expected: PASS(3 项)
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_navigation.py -v`
+Expected: PASS(3 �?
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/core/navigation.py skills/e2e-dev-harness-v2/tests/test_navigation.py
-git commit -m "feat(harness-v2): derived whole-journey navigation map"
+git add skills/e2e-dev-harness/scripts/e2e_harness/core/navigation.py skills/e2e-dev-harness/tests/test_navigation.py
+git commit -m "feat(e2e-dev-harness): derived whole-journey navigation map"
 ```
 
 ---
@@ -808,10 +808,10 @@ git commit -m "feat(harness-v2): derived whole-journey navigation map"
 ### Task 8: CLI 6 动词 + 入口 shim
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/main.py`
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/commands/{start,next,dispatch,submit,gate,status}.py`
-- Create: `skills/e2e-dev-harness-v2/scripts/e2e_dev_harness_v2.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_cli_e2e.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/cli/main.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/{start,next,dispatch,submit,gate,status}.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_dev_harness.py`
+- Test: `skills/e2e-dev-harness/tests/test_cli_e2e.py`
 
 - [ ] **Step 1: 写失败的 e2e 终止测试**
 
@@ -822,7 +822,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness_v2.py"
+ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness.py"
 
 
 def _run(*args, cwd):
@@ -865,8 +865,8 @@ def test_dispatch_returns_pointer_packet(tmp_path):
 
 - [ ] **Step 2: 运行,确认失败**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_cli_e2e.py -v`
-Expected: FAIL — entry 不存在 / JSON 解析失败
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_cli_e2e.py -v`
+Expected: FAIL �?entry 不存�?/ JSON 解析失败
 
 - [ ] **Step 3: 实现 commands/start.py**
 
@@ -877,7 +877,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from harness_v2.core import run_state
+from e2e_harness.core import run_state
 
 
 def run(args) -> tuple[int, dict]:
@@ -887,7 +887,7 @@ def run(args) -> tuple[int, dict]:
     path = repo / rel
     st = run_state.new_run_state(run_id, args.feature, args.request)
     run_state.save(path, st)
-    return 0, {"schema": "e2e-dev-harness-v2.start.v1", "run_id": run_id,
+    return 0, {"schema": "e2e-dev-harness.start.v1", "run_id": run_id,
                "run_state": str(path), "current_phase": "CREATED"}
 ```
 
@@ -897,8 +897,8 @@ def run(args) -> tuple[int, dict]:
 """next: advance spine or return single blocker + navigation map."""
 from __future__ import annotations
 
-from harness_v2.core import run_state, lifecycle, engine, navigation
-from harness_v2 import pipeline
+from e2e_harness.core import run_state, lifecycle, engine, navigation
+from e2e_harness import pipeline
 
 
 def run(args) -> tuple[int, dict]:
@@ -919,8 +919,8 @@ def run(args) -> tuple[int, dict]:
 """dispatch: emit one pointer worker packet for the current phase."""
 from __future__ import annotations
 
-from harness_v2.core import run_state, lifecycle, dispatch
-from harness_v2 import pipeline
+from e2e_harness.core import run_state, lifecycle, dispatch
+from e2e_harness import pipeline
 
 
 def run(args) -> tuple[int, dict]:
@@ -942,14 +942,14 @@ def run(args) -> tuple[int, dict]:
 """submit: record worker evidence and mark dispatch done."""
 from __future__ import annotations
 
-from harness_v2.core import run_state, engine
+from e2e_harness.core import run_state, engine
 
 
 def run(args) -> tuple[int, dict]:
     state = run_state.load(args.state)
     engine.submit_evidence(state, args.phase, args.key, args.path)
     run_state.save(args.state, state)
-    return 0, {"schema": "e2e-dev-harness-v2.submit.v1", "phase": args.phase,
+    return 0, {"schema": "e2e-dev-harness.submit.v1", "phase": args.phase,
                "key": args.key, "recorded": args.path}
 ```
 
@@ -959,8 +959,8 @@ def run(args) -> tuple[int, dict]:
 """gate: run a phase's declarative exit_gate."""
 from __future__ import annotations
 
-from harness_v2.core import run_state, lifecycle, gates
-from harness_v2 import pipeline
+from e2e_harness.core import run_state, lifecycle, gates
+from e2e_harness import pipeline
 
 
 def run(args) -> tuple[int, dict]:
@@ -981,8 +981,8 @@ def run(args) -> tuple[int, dict]:
 """status: human-readable navigation map (same source as next)."""
 from __future__ import annotations
 
-from harness_v2.core import run_state, lifecycle, navigation
-from harness_v2 import pipeline
+from e2e_harness.core import run_state, lifecycle, navigation
+from e2e_harness import pipeline
 
 
 def run(args) -> tuple[int, dict]:
@@ -994,14 +994,14 @@ def run(args) -> tuple[int, dict]:
 - [ ] **Step 9: 实现 cli/main.py**
 
 ```python
-"""Unified v2 CLI: 6 verbs."""
+"""Unified e2e-dev-harness CLI: 6 verbs."""
 from __future__ import annotations
 
 import argparse
 import json
 import sys
 
-from harness_v2.cli.commands import start, next as next_cmd, dispatch, submit, gate, status
+from e2e_harness.cli.commands import start, next as next_cmd, dispatch, submit, gate, status
 
 _COMMANDS = {
     "start": start.run, "next": next_cmd.run, "dispatch": dispatch.run,
@@ -1010,7 +1010,7 @@ _COMMANDS = {
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="e2e-harness-v2")
+    p = argparse.ArgumentParser(prog="e2e-dev-harness")
     sub = p.add_subparsers(dest="command", required=True)
 
     s = sub.add_parser("start"); s.add_argument("--repo", default=".")
@@ -1038,17 +1038,17 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 10: 实现入口 shim e2e_dev_harness_v2.py**
+- [ ] **Step 10: 实现入口 shim e2e_dev_harness.py**
 
 ```python
 #!/usr/bin/env python3
-"""Entry shim -> harness_v2.cli.main."""
+"""Entry shim -> e2e_harness.cli.main."""
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from harness_v2.cli.main import main  # noqa: E402
+from e2e_harness.cli.main import main  # noqa: E402
 
 if __name__ == "__main__":
     raise SystemExit(main())
@@ -1056,30 +1056,30 @@ if __name__ == "__main__":
 
 - [ ] **Step 11: 运行,确认通过**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_cli_e2e.py -v`
-Expected: PASS(2 项)——`start → VERIFIED` 在 ≤6 步内终止
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_cli_e2e.py -v`
+Expected: PASS(2 �?——`start �?VERIFIED` �?�? 步内终止
 
 - [ ] **Step 12: 提交**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts skills/e2e-dev-harness-v2/tests/test_cli_e2e.py
-git commit -m "feat(harness-v2): 6-verb CLI + e2e start->VERIFIED terminates"
+git add skills/e2e-dev-harness/scripts skills/e2e-dev-harness/tests/test_cli_e2e.py
+git commit -m "feat(e2e-dev-harness): 6-verb CLI + e2e start->VERIFIED terminates"
 ```
 
 ---
 
-### Task 9: worker skills 改造为 Superpowers 委派器 (minimal 路径 4 个)
+### Task 9: worker skills 改造为 Superpowers 委派�?(minimal 路径 4 �?
 
 **Files:**
-- Modify: `skills/e2e-harness-clarification/SKILL.md`(追加于文件末尾)
-- Modify: `skills/e2e-harness-tdd-red/SKILL.md`(追加于文件末尾)
-- Modify: `skills/e2e-harness-implementation/SKILL.md`(追加于文件末尾)
-- Modify: `skills/e2e-harness-completion/SKILL.md`(追加于文件末尾)
-- Test: `skills/e2e-dev-harness-v2/tests/test_worker_skills_delegate.py`
+- Modify: `skills/e2e-harness-clarification/SKILL.md`(追加于文件末�?
+- Modify: `skills/e2e-harness-tdd-red/SKILL.md`(追加于文件末�?
+- Modify: `skills/e2e-harness-implementation/SKILL.md`(追加于文件末�?
+- Modify: `skills/e2e-harness-completion/SKILL.md`(追加于文件末�?
+- Test: `skills/e2e-dev-harness/tests/test_worker_skills_delegate.py`
 
-> 说明: 这些 skill 是 markdown(非代码 symbol),改动仅**新增** Superpowers 委派段与 v2 产物契约,不删旧 CLI 行(避免破坏旧 skill,spec §16)。
+> 说明: 这些 skill �?markdown(非代�?symbol),改动�?*新增** Superpowers 委派段与 e2e-dev-harness 产物契约,不删�?CLI �?避免破坏�?skill,spec §16)�?
 
-- [ ] **Step 1: 写失败测试 (校验委派 + 产物契约存在)**
+- [ ] **Step 1: 写失败测�?(校验委派 + 产物契约存在)**
 
 `test_worker_skills_delegate.py`:
 ```python
@@ -1103,89 +1103,89 @@ OUTPUTS = {
 def test_worker_skills_delegate_and_declare_outputs():
     for skill, sp in MAP.items():
         text = (ROOT / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
-        assert sp in text, f"{skill} 未委派 {sp}"
-        assert OUTPUTS[skill] in text, f"{skill} 未声明产物 {OUTPUTS[skill]}"
+        assert sp in text, f"{skill} 未委�?{sp}"
+        assert OUTPUTS[skill] in text, f"{skill} 未声明产�?{OUTPUTS[skill]}"
         assert "expected_outputs" in text, f"{skill} 缺产物契约段"
 ```
 
 - [ ] **Step 2: 运行,确认失败**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_worker_skills_delegate.py -v`
-Expected: FAIL — 现有 skill 未含 Superpowers 委派/产物契约
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_worker_skills_delegate.py -v`
+Expected: FAIL �?现有 skill 未含 Superpowers 委派/产物契约
 
-- [ ] **Step 3: 改 e2e-harness-clarification/SKILL.md**
+- [ ] **Step 3: �?e2e-harness-clarification/SKILL.md**
 
-在文件末尾(现第 16 行之后)追加:
+在文件末�?现第 16 行之�?追加:
 ```markdown
 
-## v2 契约 (e2e-dev-harness-v2)
+## e2e-dev-harness 契约 (e2e-dev-harness)
 
-- **方法委派**: 用 `superpowers:brainstorming` 完成澄清(意图、验收标准、影响、开放问题)。本 skill 只持 harness 专属胶水,不重造方法。
-- **expected_outputs**: 产出证据键 `clarification` —— 写 `docs/agent-runs/<run>/handoffs/01-requirements-clarifier.md`,然后:
-  `python skills/e2e-dev-harness-v2/scripts/e2e_dev_harness_v2.py submit --state <run-state> --phase CLARIFIED --key clarification --path <handoff-path>`
-- **上下文**: 不继承 coordinator 对话;只用 packet 的 `context_paths`。
+- **方法委派**: �?`superpowers:brainstorming` 完成澄清(意图、验收标准、影响、开放问�?。本 skill 只持 harness 专属胶水,不重造方法�?
+- **expected_outputs**: 产出证据�?`clarification` —�?�?`docs/agent-runs/<run>/handoffs/01-requirements-clarifier.md`,然后:
+  `python skills/e2e-dev-harness/scripts/e2e_dev_harness.py submit --state <run-state> --phase CLARIFIED --key clarification --path <handoff-path>`
+- **上下�?*: 不继�?coordinator 对话;只用 packet �?`context_paths`�?
 ```
 
-- [ ] **Step 4: 改 e2e-harness-tdd-red/SKILL.md**
+- [ ] **Step 4: �?e2e-harness-tdd-red/SKILL.md**
 
 文件末尾追加:
 ```markdown
 
-## v2 契约 (e2e-dev-harness-v2)
+## e2e-dev-harness 契约 (e2e-dev-harness)
 
-- **方法委派**: 用 `superpowers:test-driven-development`(红阶段)写出证明验收标准的失败测试。
-- **expected_outputs**: 产出证据键 `failing_tests` —— 提交失败测试证据后:
-  `python skills/e2e-dev-harness-v2/scripts/e2e_dev_harness_v2.py submit --state <run-state> --phase RED --key failing_tests --path <evidence-path>`
-- **上下文**: 不继承 coordinator 对话;只用 packet 的 `context_paths`。
+- **方法委派**: �?`superpowers:test-driven-development`(红阶�?写出证明验收标准的失败测试�?
+- **expected_outputs**: 产出证据�?`failing_tests` —�?提交失败测试证据�?
+  `python skills/e2e-dev-harness/scripts/e2e_dev_harness.py submit --state <run-state> --phase RED --key failing_tests --path <evidence-path>`
+- **上下�?*: 不继�?coordinator 对话;只用 packet �?`context_paths`�?
 ```
 
-- [ ] **Step 5: 改 e2e-harness-implementation/SKILL.md**
+- [ ] **Step 5: �?e2e-harness-implementation/SKILL.md**
 
 文件末尾追加:
 ```markdown
 
-## v2 契约 (e2e-dev-harness-v2)
+## e2e-dev-harness 契约 (e2e-dev-harness)
 
-- **方法委派**: 用 `superpowers:test-driven-development`(绿阶段)写最小实现让红测转绿;遇阻用 `superpowers:systematic-debugging`。
-- **expected_outputs**: 产出证据键 `passing_tests` —— 测试转绿后:
-  `python skills/e2e-dev-harness-v2/scripts/e2e_dev_harness_v2.py submit --state <run-state> --phase IMPLEMENTED --key passing_tests --path <evidence-path>`
-- **上下文**: 不继承 coordinator 对话;只用 packet 的 `context_paths`。
+- **方法委派**: �?`superpowers:test-driven-development`(绿阶�?写最小实现让红测转绿;遇阻�?`superpowers:systematic-debugging`�?
+- **expected_outputs**: 产出证据�?`passing_tests` —�?测试转绿�?
+  `python skills/e2e-dev-harness/scripts/e2e_dev_harness.py submit --state <run-state> --phase IMPLEMENTED --key passing_tests --path <evidence-path>`
+- **上下�?*: 不继�?coordinator 对话;只用 packet �?`context_paths`�?
 ```
 
-- [ ] **Step 6: 改 e2e-harness-completion/SKILL.md**
+- [ ] **Step 6: �?e2e-harness-completion/SKILL.md**
 
 文件末尾追加:
 ```markdown
 
-## v2 契约 (e2e-dev-harness-v2)
+## e2e-dev-harness 契约 (e2e-dev-harness)
 
-- **方法委派**: 用 `superpowers:verification-before-completion` 做完成前验证(全测通过、验收对齐)。
-- **expected_outputs**: 产出证据键 `verification` —— 验证通过后:
-  `python skills/e2e-dev-harness-v2/scripts/e2e_dev_harness_v2.py submit --state <run-state> --phase VERIFIED --key verification --path <evidence-path>`
-- **上下文**: 不继承 coordinator 对话;只用 packet 的 `context_paths`。
+- **方法委派**: �?`superpowers:verification-before-completion` 做完成前验证(全测通过、验收对�?�?
+- **expected_outputs**: 产出证据�?`verification` —�?验证通过�?
+  `python skills/e2e-dev-harness/scripts/e2e_dev_harness.py submit --state <run-state> --phase VERIFIED --key verification --path <evidence-path>`
+- **上下�?*: 不继�?coordinator 对话;只用 packet �?`context_paths`�?
 ```
 
 - [ ] **Step 7: 运行,确认通过**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_worker_skills_delegate.py -v`
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_worker_skills_delegate.py -v`
 Expected: PASS
 
 - [ ] **Step 8: 提交**
 
 ```bash
-git add skills/e2e-harness-clarification/SKILL.md skills/e2e-harness-tdd-red/SKILL.md skills/e2e-harness-implementation/SKILL.md skills/e2e-harness-completion/SKILL.md skills/e2e-dev-harness-v2/tests/test_worker_skills_delegate.py
-git commit -m "feat(harness-v2): worker skills delegate to Superpowers + v2 output contract"
+git add skills/e2e-harness-clarification/SKILL.md skills/e2e-harness-tdd-red/SKILL.md skills/e2e-harness-implementation/SKILL.md skills/e2e-harness-completion/SKILL.md skills/e2e-dev-harness/tests/test_worker_skills_delegate.py
+git commit -m "feat(e2e-dev-harness): worker skills delegate to Superpowers + e2e-dev-harness output contract"
 ```
 
 ---
 
-### Task 10: v2 SKILL.md (coordinator 控制面入口) + 全量回归
+### Task 10: e2e-dev-harness SKILL.md (coordinator 控制面入�? + 全量回归
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/SKILL.md`
-- Test: `skills/e2e-dev-harness-v2/tests/test_skill_md.py`
+- Create: `skills/e2e-dev-harness/SKILL.md`
+- Test: `skills/e2e-dev-harness/tests/test_skill_md.py`
 
-- [ ] **Step 1: 写失败测试**
+- [ ] **Step 1: 写失败测�?*
 
 `test_skill_md.py`:
 ```python
@@ -1197,43 +1197,43 @@ SKILL = Path(__file__).resolve().parents[1] / "SKILL.md"
 def test_skill_md_has_frontmatter_and_verbs():
     text = SKILL.read_text(encoding="utf-8")
     assert text.startswith("---")
-    assert "name: e2e-dev-harness-v2" in text
+    assert "name: e2e-dev-harness" in text
     for verb in ("start", "next", "dispatch", "submit", "gate", "status"):
         assert verb in text
-    assert "指针" in text or "pointer" in text   # coordinator 控制面纪律
+    assert "指针" in text or "pointer" in text   # coordinator 控制面纪�?
     assert "VERIFIED" in text
 ```
 
 - [ ] **Step 2: 运行,确认失败**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_skill_md.py -v`
-Expected: FAIL — SKILL.md 不存在
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_skill_md.py -v`
+Expected: FAIL �?SKILL.md 不存�?
 
-- [ ] **Step 3: 写 SKILL.md**
+- [ ] **Step 3: �?SKILL.md**
 
 ```markdown
 ---
-name: e2e-dev-harness-v2
-description: Use when a feature/bugfix/refactor needs a multi-agent dev workflow that reliably runs to completion — clarification, TDD, review, verification — with a single source of truth, declarative tier-scaled gates, and worker subagents that self-load Superpowers skills.
+name: e2e-dev-harness
+description: Use when a feature/bugfix/refactor needs a multi-agent dev workflow that reliably runs to completion �?clarification, TDD, review, verification �?with a single source of truth, declarative tier-scaled gates, and worker subagents that self-load Superpowers skills.
 ---
 
-# E2E Dev Harness v2
+# E2E Dev Harness e2e-dev-harness
 
-把需求变成"澄清→TDD→实现→(审查)→验证"的多 agent 流程,**保证跑到 VERIFIED**。
+把需求变�?澄清→TDD→实现→(审查)→验�?的多 agent 流程,**保证跑到 VERIFIED**�?
 
-## Coordinator 纪律 (控制面 only)
+## Coordinator 纪律 (控制�?only)
 
-- 你只读 run-state、发 worker packet、记证据、推进主干。**不**做本地代码探索/设计/TDD/审查/实现。
-- worker packet 是**指针**(role + skill + context_paths + expected_outputs),worker 子 agent **首动作是 invoke 自己的 skill**,方法委派给 Superpowers。
-- 每步看 `navigation_map`:全旅程 `CREATED→…→VERIFIED`,始终对照终点目标,避免局部最优。
+- 你只�?run-state、发 worker packet、记证据、推进主干�?*�?*做本地代码探�?设计/TDD/审查/实现�?
+- worker packet �?*指针**(role + skill + context_paths + expected_outputs),worker �?agent **首动作是 invoke 自己�?skill**,方法委派�?Superpowers�?
+- 每步�?`navigation_map`:全旅�?`CREATED→…→VERIFIED`,始终对照终点目标,避免局部最优�?
 
 ## 6 动词
 
 ```bash
-S=skills/e2e-dev-harness-v2/scripts/e2e_dev_harness_v2.py
-python $S start --repo . --feature "<feat>" --request "<原始需求>"   # 创建唯一 run-state
+S=skills/e2e-dev-harness/scripts/e2e_dev_harness.py
+python $S start --repo . --feature "<feat>" --request "<原始需�?"   # 创建唯一 run-state
 python $S next   --state <run-state>     # 推进主干或返回单一 blocker + navigation_map
-python $S dispatch --state <run-state>   # 产出当前阶段的指针 worker packet
+python $S dispatch --state <run-state>   # 产出当前阶段的指�?worker packet
 python $S submit --state <run-state> --phase <P> --key <k> --path <p>  # 记录 worker 证据
 python $S gate   --state <run-state>     # 跑当前阶段声明式门禁
 python $S status --state <run-state>     # 人读导航地图
@@ -1241,48 +1241,48 @@ python $S status --state <run-state>     # 人读导航地图
 
 ## 循环
 
-`start` → 循环{ `next` → 若 `complete` 收尾;否则 `dispatch` 当前阶段 → spawn worker 子 agent(自加载 `next_action.skill`)→ worker `submit` 证据 → 回到 `next` } 直到 `VERIFIED`。
+`start` �?循环{ `next` �?�?`complete` 收尾;否则 `dispatch` 当前阶段 �?spawn worker �?agent(自加�?`next_action.skill`)�?worker `submit` 证据 �?回到 `next` } 直到 `VERIFIED`�?
 
 ## tier (M1: minimal)
 
-`minimal` = CREATED→CLARIFIED→RED→IMPLEMENTED→VERIFIED(跳过 PLANNED/REVIEWED)。更高 tier 与用户自定义流水线见后续里程碑。
+`minimal` = CREATED→CLARIFIED→RED→IMPLEMENTED→VERIFIED(跳过 PLANNED/REVIEWED)。更�?tier 与用户自定义流水线见后续里程碑�?
 ```
 
 - [ ] **Step 4: 运行,确认通过**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/test_skill_md.py -v`
+Run: `python -m pytest skills/e2e-dev-harness/tests/test_skill_md.py -v`
 Expected: PASS
 
-- [ ] **Step 5: 全量回归 (v2 + 旧套件)**
+- [ ] **Step 5: 全量回归 (e2e-dev-harness + 旧套�?**
 
-Run: `python -m pytest skills/e2e-dev-harness-v2/tests/ -v`
-Expected: 全绿(本计划全部测试)
+Run: `python -m pytest skills/e2e-dev-harness/tests/ -v`
+Expected: 全绿(本计划全部测�?
 
 Run: `python -m pytest tests/ -q`
-Expected: 旧 1266 项不受影响,仍全绿
+Expected: �?1266 项不受影�?仍全�?
 
 - [ ] **Step 6: 提交**
 
 ```bash
-git add skills/e2e-dev-harness-v2/SKILL.md skills/e2e-dev-harness-v2/tests/test_skill_md.py
-git commit -m "feat(harness-v2): coordinator SKILL.md + M1 green"
+git add skills/e2e-dev-harness/SKILL.md skills/e2e-dev-harness/tests/test_skill_md.py
+git commit -m "feat(e2e-dev-harness): coordinator SKILL.md + M1 green"
 ```
 
 ---
 
 ## 验收 (M1 出口)
 
-- [ ] `python -m pytest skills/e2e-dev-harness-v2/tests/ -v` 全绿。
-- [ ] I1: `test_engine_termination.py` 证明任意路径 ≤len(spine)+1 步终止。
-- [ ] I2: `test_gate_closure.py` 证明 minimal 流水线门禁闭包,且能检出不可满足。
-- [ ] e2e: `test_cli_e2e.py` 证明 `start → VERIFIED` 在 ≤6 步内 `complete`(旧 harness 过不了的那条)。
-- [ ] 旧 `tests/` 1266 项不受影响: `python -m pytest tests/ -q` 仍全绿。
-- [ ] worker packet 为指针(无内联指令);4 个 minimal worker skill 委派 Superpowers。
+- [ ] `python -m pytest skills/e2e-dev-harness/tests/ -v` 全绿�?
+- [ ] I1: `test_engine_termination.py` 证明任意路径 ≤len(spine)+1 步终止�?
+- [ ] I2: `test_gate_closure.py` 证明 minimal 流水线门禁闭�?且能检出不可满足�?
+- [ ] e2e: `test_cli_e2e.py` 证明 `start �?VERIFIED` �?�? 步内 `complete`(�?harness 过不了的那条)�?
+- [ ] �?`tests/` 1266 项不受影�? `python -m pytest tests/ -q` 仍全绿�?
+- [ ] worker packet 为指�?无内联指�?;4 �?minimal worker skill 委派 Superpowers�?
 
-## 后续里程碑 (各自独立计划)
+## 后续里程�?(各自独立计划)
 
-- **M2 后端完整**: standard/critical/audited tier + 阶段裁剪结构化 + r1/r2/r3 review fan-out + port scanner/KG/task_tier/memory 至窄接口。
-- **M3 配置层**: `pipelines/*.yaml` + `validate-pipeline`(对任意配置跑 I1/I2)+ 用户自定义流水线。
-- **M4 前端适配**: `DomainAdapter` 前端实现(scanner + test_runner + review_profile)。
-- **M5 切换**: v2 设默认、迁移文档、删旧 skill(无能力损失)。
+- **M2 后端完整**: standard/critical/audited tier + 阶段裁剪结构�?+ r1/r2/r3 review fan-out + port scanner/KG/task_tier/memory 至窄接口�?
+- **M3 配置�?*: `pipelines/*.yaml` + `validate-pipeline`(对任意配置跑 I1/I2)+ 用户自定义流水线�?
+- **M4 前端适配**: `DomainAdapter` 前端实现(scanner + test_runner + review_profile)�?
+- **M5 切换**: e2e-dev-harness 设默认、迁移文档、删�?skill(无能力损�?�?
 ```

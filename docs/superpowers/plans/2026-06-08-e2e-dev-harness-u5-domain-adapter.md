@@ -1,14 +1,14 @@
-# U5 — DomainAdapter seam (M4 frontend) Implementation Plan (condensed)
+# U5 �?DomainAdapter seam (M4 frontend) Implementation Plan (condensed)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans`. Steps use `- [ ]`. TDD throughout. Run before build: `npx gitnexus analyze` (index stale). All paths relative to repo root; harness pkg root is `skills/e2e-dev-harness-v2/`.
+> **For agentic workers:** REQUIRED SUB-SKILL: `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans`. Steps use `- [ ]`. TDD throughout. Run before build: `npx gitnexus analyze` (index stale). All paths relative to repo root; harness pkg root is `skills/e2e-dev-harness/`.
 
 **Goal:** Add a config-producer `DomainAdapter` seam so the untouched core drives a frontend fixture repo to `VERIFIED`, backend as the default adapter (byte-identical parity).
 
 **Architecture:** Adapter selected at `start`; emits scope + pipeline-spec overrides via U4's config layer; embeds a self-describing `domain` block in run-state (omitted for backend default). Core `lifecycle/engine/gates/dispatch/navigation/pipeline_validate/pipeline.py` get **zero** edits.
 
-**Tech Stack:** Python 3, pytest, pyyaml. Spec: `docs/superpowers/specs/2026-06-08-harness-v2-u5-domain-adapter-design.md`.
+**Tech Stack:** Python 3, pytest, pyyaml. Spec: `docs/superpowers/specs/2026-06-08-e2e-dev-harness-u5-domain-adapter-design.md`.
 
-**Test command (from pkg root):** `cd skills/e2e-dev-harness-v2 && python -m pytest tests/ -q`
+**Test command (from pkg root):** `cd skills/e2e-dev-harness && python -m pytest tests/ -q`
 
 ---
 
@@ -16,18 +16,18 @@
 
 | File | Responsibility |
 |---|---|
-| `scripts/harness_v2/adapters/domain/base.py` | `DomainAdapter` Protocol + `domain_block()` helper |
-| `scripts/harness_v2/adapters/domain/registry.py` | `select(repo, explicit)` + `_REGISTRY`/default |
-| `scripts/harness_v2/adapters/domain/backend.py` | backend adapter (overrides `{}`) |
-| `scripts/harness_v2/adapters/domain/frontend.py` | frontend adapter |
-| `scripts/harness_v2/adapters/domain/__init__.py` | re-export `select`, `DomainAdapter` |
-| `scripts/harness_v2/adapters/scanner/frontend.py` | `scan_frontend(repo)->scanner-scope.v1` |
-| `scripts/harness_v2/adapters/scanner/__init__.py` (mod) | re-export `scan_frontend` |
-| `scripts/harness_v2/core/run_state.py` (mod) | additive `domain` kwarg, omitted when `None` |
-| `scripts/harness_v2/pipeline.py` — **NO EDIT** | merge lives in start.py to keep core untouched |
-| `scripts/harness_v2/cli/commands/start.py` (mod) | select adapter, merge overrides, embed domain |
-| `scripts/harness_v2/cli/commands/dispatch.py` (mod) | read domain block → `extra_context` |
-| `scripts/harness_v2/cli/main.py` (mod) | `--adapter`, `--scan` on `start` |
+| `scripts/e2e_harness/adapters/domain/base.py` | `DomainAdapter` Protocol + `domain_block()` helper |
+| `scripts/e2e_harness/adapters/domain/registry.py` | `select(repo, explicit)` + `_REGISTRY`/default |
+| `scripts/e2e_harness/adapters/domain/backend.py` | backend adapter (overrides `{}`) |
+| `scripts/e2e_harness/adapters/domain/frontend.py` | frontend adapter |
+| `scripts/e2e_harness/adapters/domain/__init__.py` | re-export `select`, `DomainAdapter` |
+| `scripts/e2e_harness/adapters/scanner/frontend.py` | `scan_frontend(repo)->scanner-scope.v1` |
+| `scripts/e2e_harness/adapters/scanner/__init__.py` (mod) | re-export `scan_frontend` |
+| `scripts/e2e_harness/core/run_state.py` (mod) | additive `domain` kwarg, omitted when `None` |
+| `scripts/e2e_harness/pipeline.py` �?**NO EDIT** | merge lives in start.py to keep core untouched |
+| `scripts/e2e_harness/cli/commands/start.py` (mod) | select adapter, merge overrides, embed domain |
+| `scripts/e2e_harness/cli/commands/dispatch.py` (mod) | read domain block �?`extra_context` |
+| `scripts/e2e_harness/cli/main.py` (mod) | `--adapter`, `--scan` on `start` |
 | `tests/test_domain_adapter.py` | detect/select/unknown |
 | `tests/test_domain_backend_parity.py` | byte-identical parity |
 | `tests/test_domain_overrides_merge.py` | override channel |
@@ -41,13 +41,13 @@
 
 ## Task 1: DomainAdapter Protocol + merge helper
 
-**Files:** Create `scripts/harness_v2/adapters/domain/base.py`, `scripts/harness_v2/adapters/domain/__init__.py`; Test `tests/test_domain_overrides_merge.py`
+**Files:** Create `scripts/e2e_harness/adapters/domain/base.py`, `scripts/e2e_harness/adapters/domain/__init__.py`; Test `tests/test_domain_overrides_merge.py`
 
 - [ ] **Step 1: Failing test** (`tests/test_domain_overrides_merge.py`)
 ```python
-from harness_v2.adapters.domain import base
-from harness_v2 import pipeline
-from harness_v2.core import pipeline_validate
+from e2e_harness.adapters.domain import base
+from e2e_harness import pipeline
+from e2e_harness.core import pipeline_validate
 
 def test_merge_applies_overrides_and_stays_valid():
     spec = pipeline.load_spec("standard")  # phases: CREATED..VERIFIED (bare strings)
@@ -64,7 +64,7 @@ def test_merge_empty_overrides_is_identity():
     assert base.merge_overrides(spec, {}) == spec
 ```
 
-- [ ] **Step 2: Run** `python -m pytest tests/test_domain_overrides_merge.py -q` → FAIL (no module).
+- [ ] **Step 2: Run** `python -m pytest tests/test_domain_overrides_merge.py -q` �?FAIL (no module).
 
 - [ ] **Step 3: Implement** `base.py`
 ```python
@@ -115,13 +115,13 @@ def domain_block(adapter: "DomainAdapter") -> dict:
 ```
 `__init__.py`:
 ```python
-from harness_v2.adapters.domain.base import DomainAdapter, merge_overrides, domain_block
-from harness_v2.adapters.domain.registry import select
+from e2e_harness.adapters.domain.base import DomainAdapter, merge_overrides, domain_block
+from e2e_harness.adapters.domain.registry import select
 __all__ = ["DomainAdapter", "merge_overrides", "domain_block", "select"]
 ```
-> NOTE: `__init__` imports `registry` (Task 2) — create Task 2 file before running Task 1 Step 4, or temporarily import only from `base` until Task 2 lands. Recommended: do Task 1 + Task 2 then run both.
+> NOTE: `__init__` imports `registry` (Task 2) �?create Task 2 file before running Task 1 Step 4, or temporarily import only from `base` until Task 2 lands. Recommended: do Task 1 + Task 2 then run both.
 
-- [ ] **Step 4: Run** the merge test → PASS. **Commit:** `feat(harness-v2): U5 DomainAdapter protocol + spec-merge helper`
+- [ ] **Step 4: Run** the merge test �?PASS. **Commit:** `feat(e2e-dev-harness): U5 DomainAdapter protocol + spec-merge helper`
 
 ---
 
@@ -133,8 +133,8 @@ __all__ = ["DomainAdapter", "merge_overrides", "domain_block", "select"]
 ```python
 from pathlib import Path
 import pytest
-from harness_v2.adapters.domain import select
-from harness_v2.adapters.domain import backend, frontend
+from e2e_harness.adapters.domain import select
+from e2e_harness.adapters.domain import backend, frontend
 
 def _mk(p: Path, name: str, body: str = "{}"):
     f = p / name; f.parent.mkdir(parents=True, exist_ok=True); f.write_text(body); return f
@@ -164,7 +164,7 @@ def test_fullstack_frontend_wins_by_order(tmp_path):
 ```
 (`tests/test_domain_frontend_scan.py`)
 ```python
-from harness_v2.adapters.scanner import scan_frontend
+from e2e_harness.adapters.scanner import scan_frontend
 
 def test_frontend_scan_lists_components(tmp_path):
     (tmp_path / "src").mkdir()
@@ -175,7 +175,7 @@ def test_frontend_scan_lists_components(tmp_path):
     assert scope["dependencies"] == []
 ```
 
-- [ ] **Step 2: Run** both → FAIL.
+- [ ] **Step 2: Run** both �?FAIL.
 
 - [ ] **Step 3: Implement.** `adapters/scanner/frontend.py`:
 ```python
@@ -203,7 +203,7 @@ __all__ = ["discover_scope", "discover_scope_java_spring", "scan_frontend"]
 ```python
 from __future__ import annotations
 from pathlib import Path
-from harness_v2.adapters import scanner
+from e2e_harness.adapters import scanner
 
 _MARKERS = ("pom.xml", "build.gradle", "build.gradle.kts", "pyproject.toml", "setup.py", "go.mod")
 _JAVA = ("pom.xml", "build.gradle", "build.gradle.kts")
@@ -227,7 +227,7 @@ class BackendAdapter:
     def pipeline_overrides(self) -> dict:
         return {}
 ```
-> SIMPLIFY during build: `test_runner` as a marker-derived property needs the repo. Cleaner: make adapters carry the repo. Recommended concrete shape — construct adapters with the repo in `select`:
+> SIMPLIFY during build: `test_runner` as a marker-derived property needs the repo. Cleaner: make adapters carry the repo. Recommended concrete shape �?construct adapters with the repo in `select`:
 ```python
 # backend.py (preferred final form)
 class BackendAdapter:
@@ -246,7 +246,7 @@ class BackendAdapter:
 from __future__ import annotations
 import json
 from pathlib import Path
-from harness_v2.adapters import scanner
+from e2e_harness.adapters import scanner
 
 _FW = ("react", "vue", "svelte", "@angular/core")
 
@@ -273,8 +273,8 @@ class FrontendAdapter:
 ```python
 from __future__ import annotations
 from pathlib import Path
-from harness_v2.adapters.domain.frontend import FrontendAdapter
-from harness_v2.adapters.domain.backend import BackendAdapter
+from e2e_harness.adapters.domain.frontend import FrontendAdapter
+from e2e_harness.adapters.domain.backend import BackendAdapter
 
 _ORDER = [FrontendAdapter, BackendAdapter]   # frontend first (more specific)
 _BY_NAME = {c.name: c for c in _ORDER}
@@ -291,9 +291,9 @@ def select(repo, explicit: str | None = None):
             return cls(repo)
     return _DEFAULT(repo)
 ```
-> Adjust Task 1 `__init__.py`: `merge_overrides`/`domain_block` from `base`, `select` from `registry`. `domain_block` reads `adapter.name/.test_runner/.review_profile` — all present.
+> Adjust Task 1 `__init__.py`: `merge_overrides`/`domain_block` from `base`, `select` from `registry`. `domain_block` reads `adapter.name/.test_runner/.review_profile` �?all present.
 
-- [ ] **Step 4: Run** Task 1 + Task 2 tests → PASS. **Commit:** `feat(harness-v2): U5 domain registry + backend/frontend adapters + frontend scanner`
+- [ ] **Step 4: Run** Task 1 + Task 2 tests �?PASS. **Commit:** `feat(e2e-dev-harness): U5 domain registry + backend/frontend adapters + frontend scanner`
 
 ---
 
@@ -313,15 +313,15 @@ def test_domain_absent_by_default_byte_identical():
     assert "domain" not in st   # parity: backend default adds no key
 ```
 
-- [ ] **Step 2: Run** → FAIL (unexpected kwarg).
+- [ ] **Step 2: Run** �?FAIL (unexpected kwarg).
 
-- [ ] **Step 3: Implement** — add param to `new_run_state` signature `..., domain: dict | None = None, now=None)` and after the `pipeline_spec` block:
+- [ ] **Step 3: Implement** �?add param to `new_run_state` signature `..., domain: dict | None = None, now=None)` and after the `pipeline_spec` block:
 ```python
     if domain is not None:
         state["domain"] = domain
 ```
 
-- [ ] **Step 4: Run** `tests/test_run_state.py` → PASS (existing tests untouched). **Commit:** `feat(harness-v2): U5 run_state additive domain block`
+- [ ] **Step 4: Run** `tests/test_run_state.py` �?PASS (existing tests untouched). **Commit:** `feat(e2e-dev-harness): U5 run_state additive domain block`
 
 ---
 
@@ -336,11 +336,11 @@ def test_domain_absent_by_default_byte_identical():
 ```
 - [ ] **Step 2:** Rewrite `start.run` body (after `repo`/`run_id`):
 ```python
-    from harness_v2.adapters.domain import select, merge_overrides, domain_block
+    from e2e_harness.adapters.domain import select, merge_overrides, domain_block
     adapter = select(repo, explicit=getattr(args, "adapter", None))   # KeyError -> main.py exit 2
     tier = args.tier; reasons: list[str] = []
     if tier == "auto":
-        from harness_v2.adapters.tier import classify
+        from e2e_harness.adapters.tier import classify
         scope = adapter.scan(repo, args.request) if getattr(args, "scan", False) else None
         tier, reasons = classify.classify_tier(args.request, scope)
     pipeline_ref = getattr(args, "pipeline", None) or tier
@@ -356,15 +356,15 @@ def test_domain_absent_by_default_byte_identical():
     st = run_state.new_run_state(run_id, args.feature, args.request, tier=tier,
         pipeline=pipeline_ref, pipeline_spec=merged if non_default else None, domain=dom)
     run_state.save(path, st)
-    return 0, {"schema": "e2e-dev-harness-v2.start.v1", "run_id": run_id,
+    return 0, {"schema": "e2e-dev-harness.start.v1", "run_id": run_id,
                "run_state": str(path), "current_phase": "CREATED", "tier": tier,
                "pipeline": pipeline_ref, "tier_reasons": reasons, "domain": adapter.name}
 ```
-- [ ] **Step 3: Run** full suite → existing `test_cli_e2e.py`, `test_cli_custom_pipeline_e2e.py` PASS (backend parity: `domain`/`pipeline_spec` absent for backend). Confirm `start.v1` now has `"domain":"backend"` in output only (not state). **Commit:** `feat(harness-v2): U5 start adapter selection + merge + domain embed`
+- [ ] **Step 3: Run** full suite �?existing `test_cli_e2e.py`, `test_cli_custom_pipeline_e2e.py` PASS (backend parity: `domain`/`pipeline_spec` absent for backend). Confirm `start.v1` now has `"domain":"backend"` in output only (not state). **Commit:** `feat(e2e-dev-harness): U5 start adapter selection + merge + domain embed`
 
 ---
 
-## Task 5: dispatch reads domain block → extra_context
+## Task 5: dispatch reads domain block �?extra_context
 
 **Files:** Modify `cli/commands/dispatch.py`
 
@@ -376,7 +376,7 @@ def test_domain_absent_by_default_byte_identical():
         extra = [f"domain:{dom['name']} test_runner:{dom['test_runner']} review_profile:{dom['review_profile']}"]
     packet = dispatch.worker_packet(phase, str(args.state), extra_context=extra)
 ```
-- [ ] **Step 2: Run** `tests/test_cli_e2e.py::test_dispatch_returns_pointer_packet` → PASS (backend: no domain ⇒ `extra=[]` ⇒ unchanged `context_paths`). **Commit:** `feat(harness-v2): U5 dispatch surfaces domain metadata via extra_context`
+- [ ] **Step 2: Run** `tests/test_cli_e2e.py::test_dispatch_returns_pointer_packet` �?PASS (backend: no domain �?`extra=[]` �?unchanged `context_paths`). **Commit:** `feat(e2e-dev-harness): U5 dispatch surfaces domain metadata via extra_context`
 
 ---
 
@@ -387,8 +387,8 @@ def test_domain_absent_by_default_byte_identical():
 - [ ] **Step 1: Parity test** (`tests/test_domain_backend_parity.py`)
 ```python
 from pathlib import Path
-from harness_v2.adapters.domain import select, merge_overrides
-from harness_v2 import pipeline
+from e2e_harness.adapters.domain import select, merge_overrides
+from e2e_harness import pipeline
 
 def test_backend_overrides_empty_and_spec_identity():
     a = select(Path("."), explicit="backend")
@@ -398,14 +398,14 @@ def test_backend_overrides_empty_and_spec_identity():
         assert merge_overrides(spec, a.pipeline_overrides()) == spec
 ```
 - [ ] **Step 2: Fixture.** Create:
-  - `tests/fixtures/frontend_app/package.json` → `{"name":"fx","dependencies":{"react":"^18"}}`
-  - `tests/fixtures/frontend_app/src/App.tsx` → `export default function App(){return null}`
-  - `tests/fixtures/frontend_app/src/App.test.tsx` → `import App from "./App"; it("renders", ()=>{})` (data only)
-- [ ] **Step 3: Frontend e2e** (`tests/test_cli_frontend_e2e.py`) — mirror `test_cli_e2e.py`, but copy the fixture into `tmp_path` first and assert domain:
+  - `tests/fixtures/frontend_app/package.json` �?`{"name":"fx","dependencies":{"react":"^18"}}`
+  - `tests/fixtures/frontend_app/src/App.tsx` �?`export default function App(){return null}`
+  - `tests/fixtures/frontend_app/src/App.test.tsx` �?`import App from "./App"; it("renders", ()=>{})` (data only)
+- [ ] **Step 3: Frontend e2e** (`tests/test_cli_frontend_e2e.py`) �?mirror `test_cli_e2e.py`, but copy the fixture into `tmp_path` first and assert domain:
 ```python
 import json, shutil, subprocess, sys
 from pathlib import Path
-ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness_v2.py"
+ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness.py"
 FIX = Path(__file__).resolve().parent / "fixtures" / "frontend_app"
 
 def _run(*a, cwd):
@@ -413,7 +413,7 @@ def _run(*a, cwd):
     return p.returncode, json.loads(p.stdout or "{}")
 
 def _artifact(repo: Path, phase: str, key: str) -> str:
-    from harness_v2.adapters.evidence import command_evidence as ce
+    from e2e_harness.adapters.evidence import command_evidence as ce
     base = repo / "docs" / "agent-runs" / "art"; base.mkdir(parents=True, exist_ok=True)
     if key in ("failing_tests", "passing_tests"):
         ev = ce.record_command(repo, f'"{sys.executable}" -c "import sys;sys.exit({1 if key=="failing_tests" else 0})"')
@@ -441,20 +441,20 @@ def test_frontend_repo_drives_to_verified(tmp_path):
     assert nres["navigation_map"]["you_are_here"] == "VERIFIED"
     assert steps <= 6
 ```
-> Frontend default tier is `minimal` (text-only, no `--scan`), so spine = CREATED→CLARIFIED→RED→IMPLEMENTED→VERIFIED; ≤6 steps holds. Verify run-state has `domain.name == "frontend"`.
-- [ ] **Step 4: Run** full suite `python -m pytest tests/ -q` → all green. **Commit:** `feat(harness-v2): U5 backend parity + frontend fixture + frontend e2e`
+> Frontend default tier is `minimal` (text-only, no `--scan`), so spine = CREATED→CLARIFIED→RED→IMPLEMENTED→VERIFIED; �? steps holds. Verify run-state has `domain.name == "frontend"`.
+- [ ] **Step 4: Run** full suite `python -m pytest tests/ -q` �?all green. **Commit:** `feat(e2e-dev-harness): U5 backend parity + frontend fixture + frontend e2e`
 
 ---
 
 ## Task 7: roadmap update + final verification
 
-- [ ] **Step 1:** Mark U5 ✅ in `docs/superpowers/plans/2026-06-07-harness-v2-remaining-work-roadmap.md` "Done so far" + the U5 row.
-- [ ] **Step 2:** `npx gitnexus analyze` then `gitnexus_detect_changes()` — confirm only U5 symbols/flows affected.
-- [ ] **Step 3:** Full suite green; **Commit:** `docs(harness-v2): mark U5 (M4 DomainAdapter) done in roadmap`.
+- [ ] **Step 1:** Mark U5 �?in `docs/superpowers/plans/2026-06-07-e2e-dev-harness-remaining-work-roadmap.md` "Done so far" + the U5 row.
+- [ ] **Step 2:** `npx gitnexus analyze` then `gitnexus_detect_changes()` �?confirm only U5 symbols/flows affected.
+- [ ] **Step 3:** Full suite green; **Commit:** `docs(e2e-dev-harness): mark U5 (M4 DomainAdapter) done in roadmap`.
 
 ---
 
 ## Self-Review notes
 - **Spec coverage:** §5.1 Protocol→T1; §5.2 registry→T2; §5.3 backend (`{}` + marker detect)→T2/T6; §5.4 frontend + override-channel test→T1(merge)/T2; §5.5 frontend scanner→T2; §6 data flow (select/merge/embed/dispatch)→T4/T5; §7 errors (unknown adapter via `KeyError`→main exit 2; fullstack order; scan-safe)→T2; §8 all 5 test files→T1/T2/T3/T6; §10 byte-identical parity→T3/T6.
-- **Open build-time simplification:** adapters take `repo` in `__init__` (final form shown) so `test_runner` resolves without globals — use that form, ignore the first backend sketch.
-- **Risk:** subagent dispatch broken → run via `executing-plans` inline; review with `/code-review` after.
+- **Open build-time simplification:** adapters take `repo` in `__init__` (final form shown) so `test_runner` resolves without globals �?use that form, ignore the first backend sketch.
+- **Risk:** subagent dispatch broken �?run via `executing-plans` inline; review with `/code-review` after.

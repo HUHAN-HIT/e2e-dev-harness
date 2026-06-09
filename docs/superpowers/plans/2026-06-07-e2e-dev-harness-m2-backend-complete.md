@@ -1,20 +1,20 @@
-# Harness v2 — M2 Backend-Complete Implementation Plan
+# Harness e2e-dev-harness �?M2 Backend-Complete Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (chosen) to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the v2 harness gates validate real artifacts, finish the two remaining worker-skill delegators, and add tier-scaled pipelines (standard/critical/audited) with r1/r2/r3 review fan-out — plus cheap SSOT-robustness and navigation/dispatch enrichments.
+**Goal:** Make the e2e-dev-harness harness gates validate real artifacts, finish the two remaining worker-skill delegators, and add tier-scaled pipelines (standard/critical/audited) with r1/r2/r3 review fan-out �?plus cheap SSOT-robustness and navigation/dispatch enrichments.
 
 **Architecture:** Keep the SSOT single `run-state.json` + declarative spine. Gates gain a `repo_root` so they can verify the artifact a worker actually produced (exists + non-empty + hash + command-evidence for test keys). Pipelines become a small structured map (phase list + per-phase gate overrides) keyed by tier; the navigation map and dispatch packet derive everything from that. Clean leaves (`sha256`, `command_evidence`, `task_tier` classification) are ported behind narrow `adapters/` interfaces with their tests; heavy leaves (scanner/KG/memory/runtime) are explicitly deferred per design §16.
 
 **Tech Stack:** Python 3 (stdlib only), pytest. No new third-party deps.
 
-**Scope (confirmed):** R1, R1', L1, L2, L5–L7, tier pipelines + review fan-out, §4 all-tier closure seed, ports required by R1 (`hashing`, `command_evidence`) + `task_tier` classification. **Out of scope (deferred):** porting scanner / KG-evidence / memory / runtime-adapter leaves (design §16 "不整体搬运").
+**Scope (confirmed):** R1, R1', L1, L2, L5–L7, tier pipelines + review fan-out, §4 all-tier closure seed, ports required by R1 (`hashing`, `command_evidence`) + `task_tier` classification. **Out of scope (deferred):** porting scanner / KG-evidence / memory / runtime-adapter leaves (design §16 "不整体搬�?).
 
 **Shared contracts (keep identical across tasks):**
 - Evidence entry stored by `submit`: `{"path": str, "sha256": str | None, "bytes": int | None}` (legacy bare-string entries still accepted by validators).
-- `harness_v2.adapters.evidence.hashing.sha256_file(path: Path) -> str`
-- `harness_v2.adapters.evidence.command_evidence.record_command(repo: Path, command: str, timeout: int = 600) -> dict`; `COMMAND_EVIDENCE_SCHEMA = "e2e-dev-harness-v2.command-evidence.v1"`; `is_command_evidence(obj) -> bool`
-- `harness_v2.adapters.evidence.validate.validate_evidence(repo_root, key, entry) -> tuple[bool, str | None]`; `COMMAND_KEYS = {"failing_tests": "nonzero", "passing_tests": "zero"}`
+- `e2e_harness.adapters.evidence.hashing.sha256_file(path: Path) -> str`
+- `e2e_harness.adapters.evidence.command_evidence.record_command(repo: Path, command: str, timeout: int = 600) -> dict`; `COMMAND_EVIDENCE_SCHEMA = "e2e-dev-harness.command-evidence.v1"`; `is_command_evidence(obj) -> bool`
+- `e2e_harness.adapters.evidence.validate.validate_evidence(repo_root, key, entry) -> tuple[bool, str | None]`; `COMMAND_KEYS = {"failing_tests": "nonzero", "passing_tests": "zero"}`
 - `gates.gate_passes(phase, phase_record, repo_root=None) -> tuple[bool, list[str]]`
 - `engine.submit_evidence(state, phase_name, key, path, *, repo_root=None, status="done", reason=None) -> None`
 - `engine.evaluate(spine, state, repo_root=None) -> dict`
@@ -23,13 +23,13 @@
 - `pipeline.build_spine(name) -> list[Phase]`, `pipeline.active_phase_names(name)`, `pipeline.PIPELINES`
 - `dispatch.DispatchStatus.FAILED` (already exists)
 
-**Conventions:** All paths below are relative to repo root `skill-skill-superpowers-skill-tdd-graphify`. The harness package lives under `skills/e2e-dev-harness-v2/scripts/harness_v2/`; tests under `skills/e2e-dev-harness-v2/tests/`. Run tests from the harness dir:
+**Conventions:** All paths below are relative to repo root `skill-skill-superpowers-skill-tdd-graphify`. The harness package lives under `skills/e2e-dev-harness/scripts/e2e_harness/`; tests under `skills/e2e-dev-harness/tests/`. Run tests from the harness dir:
 
 ```bash
-cd skills/e2e-dev-harness-v2 && python -m pytest -q
+cd skills/e2e-dev-harness && python -m pytest -q
 ```
 
-**Per-CLAUDE.md:** the v2 package is a new tree the GitNexus index (`e2e-dev-workflow`, 8562 symbols) does not cover; `gitnexus_impact` will not resolve v2 symbols. The only edits to *indexed legacy* symbols are read-only ports (copy logic into new files) — we never modify `skills/e2e-dev-harness/scripts/*`. Before each task that ports legacy logic, run `gitnexus_impact({target:"<symbol>", direction:"upstream"})` on the **legacy source symbol** (`sha256`, `run_command`, `gates_for`) to confirm no in-place edit is implied; report the blast radius. Run `gitnexus_detect_changes()` before the final commit of each task that touches code.
+**Per-CLAUDE.md:** the e2e-dev-harness package is a new tree the GitNexus index (`e2e-dev-workflow`, 8562 symbols) does not cover; `gitnexus_impact` will not resolve e2e-dev-harness symbols. The only edits to *indexed legacy* symbols are read-only ports (copy logic into new files) �?we never modify `skills/e2e-dev-harness/scripts/*`. Before each task that ports legacy logic, run `gitnexus_impact({target:"<symbol>", direction:"upstream"})` on the **legacy source symbol** (`sha256`, `run_command`, `gates_for`) to confirm no in-place edit is implied; report the blast radius. Run `gitnexus_detect_changes()` before the final commit of each task that touches code.
 
 ---
 
@@ -37,8 +37,8 @@ cd skills/e2e-dev-harness-v2 && python -m pytest -q
 
 - [ ] **Step 0: Confirm green baseline (25 passed)**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest -q`
-Expected: all tests pass (spec says 25). If not, stop and report — do not build on red.
+Run: `cd skills/e2e-dev-harness && python -m pytest -q`
+Expected: all tests pass (spec says 25). If not, stop and report �?do not build on red.
 
 ---
 
@@ -47,10 +47,10 @@ Expected: all tests pass (spec says 25). If not, stop and report — do not buil
 Smallest, highest-leverage; protects the single source of truth. Do first.
 
 **Files:**
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/run_state.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/main.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_run_state.py` (extend)
-- Test: `skills/e2e-dev-harness-v2/tests/test_cli_error_json.py` (new)
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/core/run_state.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/main.py`
+- Test: `skills/e2e-dev-harness/tests/test_run_state.py` (extend)
+- Test: `skills/e2e-dev-harness/tests/test_cli_error_json.py` (new)
 
 - [ ] **Step 1: Write failing tests for run_state L5/L6**
 
@@ -63,7 +63,7 @@ from pathlib import Path
 
 
 def test_load_rejects_schema_mismatch(tmp_path):
-    from harness_v2.core import run_state
+    from e2e_harness.core import run_state
     p = tmp_path / "bad.json"
     p.write_text(json.dumps({"schema": "wrong", "run_id": "x"}), encoding="utf-8")
     with pytest.raises(ValueError) as ei:
@@ -72,7 +72,7 @@ def test_load_rejects_schema_mismatch(tmp_path):
 
 
 def test_save_is_atomic_no_partial_on_replace(tmp_path):
-    from harness_v2.core import run_state
+    from e2e_harness.core import run_state
     st = run_state.new_run_state("r1", "feat", "req")
     p = tmp_path / "run-state.json"
     run_state.save(p, st)
@@ -84,8 +84,8 @@ def test_save_is_atomic_no_partial_on_replace(tmp_path):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_run_state.py -q`
-Expected: FAIL — `test_load_rejects_schema_mismatch` (no ValueError raised). The atomic test may already pass; the load test must fail.
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_run_state.py -q`
+Expected: FAIL �?`test_load_rejects_schema_mismatch` (no ValueError raised). The atomic test may already pass; the load test must fail.
 
 - [ ] **Step 3: Implement L5 + L6 in `run_state.py`**
 
@@ -100,7 +100,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA = "e2e-dev-harness-v2.run-state.v1"
+SCHEMA = "e2e-dev-harness.run-state.v1"
 
 
 def _stamp(now: str | None = None) -> str:
@@ -150,7 +150,7 @@ def save(path: str | Path, state: dict, now: str | None = None) -> None:
 
 - [ ] **Step 4: Run run_state tests to verify pass**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_run_state.py -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_run_state.py -q`
 Expected: PASS (all, including new).
 
 - [ ] **Step 5: Write failing test for L7 (CLI always emits JSON)**
@@ -163,12 +163,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness_v2.py"
+ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness.py"
 
 
 def test_unknown_pipeline_emits_json_not_traceback(tmp_path):
     # craft a valid-schema state whose pipeline does not exist
-    from harness_v2.core import run_state
+    from e2e_harness.core import run_state
     st = run_state.new_run_state("r1", "f", "r", tier="bogus", pipeline="bogus")
     p = tmp_path / "run-state.json"
     run_state.save(p, st)
@@ -177,7 +177,7 @@ def test_unknown_pipeline_emits_json_not_traceback(tmp_path):
         capture_output=True, text=True,
     )
     assert proc.returncode != 0
-    # stdout must still be parseable JSON carrying an error — the "every command emits JSON" contract
+    # stdout must still be parseable JSON carrying an error �?the "every command emits JSON" contract
     payload = json.loads(proc.stdout or "{}")
     assert "error" in payload
     assert "bogus" in payload["error"]
@@ -185,8 +185,8 @@ def test_unknown_pipeline_emits_json_not_traceback(tmp_path):
 
 - [ ] **Step 6: Run to verify it fails**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_cli_error_json.py -q`
-Expected: FAIL — `json.loads` raises because stdout is an uncaught traceback (empty stdout).
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_cli_error_json.py -q`
+Expected: FAIL �?`json.loads` raises because stdout is an uncaught traceback (empty stdout).
 
 - [ ] **Step 7: Implement L7 guard in `cli/main.py`**
 
@@ -197,7 +197,7 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     try:
         code, result = _COMMANDS[args.command](args)
-    except Exception as exc:  # noqa: BLE001 — contract: every command emits JSON
+    except Exception as exc:  # noqa: BLE001 �?contract: every command emits JSON
         sys.stdout.write(json.dumps({"error": str(exc)}, ensure_ascii=False))
         return 2
     sys.stdout.write(json.dumps(result, ensure_ascii=False))
@@ -206,35 +206,35 @@ def main(argv=None) -> int:
 
 - [ ] **Step 8: Run full suite to verify green**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest -q`
 Expected: PASS (baseline + new tests).
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/core/run_state.py \
-        skills/e2e-dev-harness-v2/scripts/harness_v2/cli/main.py \
-        skills/e2e-dev-harness-v2/tests/test_run_state.py \
-        skills/e2e-dev-harness-v2/tests/test_cli_error_json.py
-git commit -m "feat(harness-v2): SSOT robustness — schema check, atomic save, CLI JSON guard (L5-L7)
+git add skills/e2e-dev-harness/scripts/e2e_harness/core/run_state.py \
+        skills/e2e-dev-harness/scripts/e2e_harness/cli/main.py \
+        skills/e2e-dev-harness/tests/test_run_state.py \
+        skills/e2e-dev-harness/tests/test_cli_error_json.py
+git commit -m "feat(e2e-dev-harness): SSOT robustness �?schema check, atomic save, CLI JSON guard (L5-L7)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 2: Port evidence leaves — `hashing` + `command_evidence` (R1 prerequisite)
+## Task 2: Port evidence leaves �?`hashing` + `command_evidence` (R1 prerequisite)
 
-Copy clean logic from legacy `artifact_registry.sha256` and `command_evidence.run_command` into narrow v2 adapters, with their own tests. No legacy file is modified.
+Copy clean logic from legacy `artifact_registry.sha256` and `command_evidence.run_command` into narrow e2e-dev-harness adapters, with their own tests. No legacy file is modified.
 
-**Pre-task KG:** run `gitnexus_impact({target:"sha256", direction:"upstream"})` and `gitnexus_impact({target:"run_command", direction:"upstream"})` on the legacy source; report blast radius. (We are copying, not editing — expect legacy callers unaffected.)
+**Pre-task KG:** run `gitnexus_impact({target:"sha256", direction:"upstream"})` and `gitnexus_impact({target:"run_command", direction:"upstream"})` on the legacy source; report blast radius. (We are copying, not editing �?expect legacy callers unaffected.)
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/__init__.py`
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/evidence/__init__.py`
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/evidence/hashing.py`
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/evidence/command_evidence.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_evidence_adapters.py` (new)
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/adapters/__init__.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/adapters/evidence/__init__.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/adapters/evidence/hashing.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/adapters/evidence/command_evidence.py`
+- Test: `skills/e2e-dev-harness/tests/test_evidence_adapters.py` (new)
 
 - [ ] **Step 1: Write failing tests**
 
@@ -247,7 +247,7 @@ from pathlib import Path
 
 
 def test_sha256_file_matches_hashlib(tmp_path):
-    from harness_v2.adapters.evidence import hashing
+    from e2e_harness.adapters.evidence import hashing
     f = tmp_path / "a.txt"
     f.write_text("hello", encoding="utf-8")
     import hashlib
@@ -255,7 +255,7 @@ def test_sha256_file_matches_hashlib(tmp_path):
 
 
 def test_record_command_captures_exit_code_and_hashes(tmp_path):
-    from harness_v2.adapters.evidence import command_evidence as ce
+    from e2e_harness.adapters.evidence import command_evidence as ce
     ev = ce.record_command(tmp_path, f'"{sys.executable}" -c "import sys; sys.exit(3)"')
     assert ev["schema"] == ce.COMMAND_EVIDENCE_SCHEMA
     assert ev["exit_code"] == 3
@@ -264,14 +264,14 @@ def test_record_command_captures_exit_code_and_hashes(tmp_path):
 
 
 def test_is_command_evidence_rejects_plain_dict():
-    from harness_v2.adapters.evidence import command_evidence as ce
+    from e2e_harness.adapters.evidence import command_evidence as ce
     assert ce.is_command_evidence({"foo": "bar"}) is False
 ```
 
 - [ ] **Step 2: Run to verify fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_evidence_adapters.py -q`
-Expected: FAIL — `ModuleNotFoundError: harness_v2.adapters`.
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_evidence_adapters.py -q`
+Expected: FAIL �?`ModuleNotFoundError: e2e_harness.adapters`.
 
 - [ ] **Step 3: Create the adapter package + hashing module**
 
@@ -312,7 +312,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-COMMAND_EVIDENCE_SCHEMA = "e2e-dev-harness-v2.command-evidence.v1"
+COMMAND_EVIDENCE_SCHEMA = "e2e-dev-harness.command-evidence.v1"
 DEFAULT_TIMEOUT_SECONDS = 600
 
 
@@ -371,42 +371,42 @@ def is_command_evidence(obj) -> bool:
 
 - [ ] **Step 5: Run to verify pass**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_evidence_adapters.py -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_evidence_adapters.py -q`
 Expected: PASS.
 
 - [ ] **Step 6: Run full suite (no regression)**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest -q`
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/adapters \
-        skills/e2e-dev-harness-v2/tests/test_evidence_adapters.py
-git commit -m "feat(harness-v2): port hashing + command-evidence leaves behind narrow adapters (R1 prereq)
+git add skills/e2e-dev-harness/scripts/e2e_harness/adapters \
+        skills/e2e-dev-harness/tests/test_evidence_adapters.py
+git commit -m "feat(e2e-dev-harness): port hashing + command-evidence leaves behind narrow adapters (R1 prereq)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 3: R1 — gates validate real artifacts (highest priority)
+## Task 3: R1 �?gates validate real artifacts (highest priority)
 
 Wire artifact validation into `gate_passes` via a `repo_root` param; enrich `submit_evidence`; thread `repo_root` through `evaluate`, `navigation_map`, and the CLI; rewrite the e2e test to land real artifacts; add a negative artifact test.
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/evidence/validate.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/gates.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/engine.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/navigation.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/commands/submit.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/commands/gate.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/commands/next.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/commands/status.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/main.py` (submit args)
-- Test: `skills/e2e-dev-harness-v2/tests/test_gate_artifact_validation.py` (new)
-- Test: `skills/e2e-dev-harness-v2/tests/test_cli_e2e.py` (rewrite)
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/adapters/evidence/validate.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/core/gates.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/core/engine.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/core/navigation.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/submit.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/gate.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/next.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/status.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/main.py` (submit args)
+- Test: `skills/e2e-dev-harness/tests/test_gate_artifact_validation.py` (new)
+- Test: `skills/e2e-dev-harness/tests/test_cli_e2e.py` (rewrite)
 
 - [ ] **Step 1: Write failing unit tests for the validator**
 
@@ -417,8 +417,8 @@ import json
 import sys
 from pathlib import Path
 
-from harness_v2.core import lifecycle, gates
-from harness_v2 import pipeline
+from e2e_harness.core import lifecycle, gates
+from e2e_harness import pipeline
 
 
 def _phase(name):
@@ -426,14 +426,14 @@ def _phase(name):
 
 
 def test_validate_missing_file_fails(tmp_path):
-    from harness_v2.adapters.evidence import validate
+    from e2e_harness.adapters.evidence import validate
     ok, reason = validate.validate_evidence(tmp_path, "clarification", {"path": "nope.md"})
     assert ok is False
     assert reason == "file-not-found"
 
 
 def test_validate_empty_file_fails(tmp_path):
-    from harness_v2.adapters.evidence import validate
+    from e2e_harness.adapters.evidence import validate
     (tmp_path / "e.md").write_text("", encoding="utf-8")
     ok, reason = validate.validate_evidence(tmp_path, "clarification", {"path": "e.md"})
     assert ok is False
@@ -441,14 +441,14 @@ def test_validate_empty_file_fails(tmp_path):
 
 
 def test_validate_nonempty_doc_passes(tmp_path):
-    from harness_v2.adapters.evidence import validate
+    from e2e_harness.adapters.evidence import validate
     (tmp_path / "c.md").write_text("real", encoding="utf-8")
     ok, reason = validate.validate_evidence(tmp_path, "clarification", {"path": "c.md"})
     assert ok is True and reason is None
 
 
 def test_validate_passing_tests_requires_zero_exit(tmp_path):
-    from harness_v2.adapters.evidence import command_evidence as ce, validate
+    from e2e_harness.adapters.evidence import command_evidence as ce, validate
     ev = ce.record_command(tmp_path, f'"{sys.executable}" -c "import sys; sys.exit(1)"')
     (tmp_path / "t.json").write_text(json.dumps(ev), encoding="utf-8")
     ok, reason = validate.validate_evidence(tmp_path, "passing_tests", {"path": "t.json"})
@@ -456,7 +456,7 @@ def test_validate_passing_tests_requires_zero_exit(tmp_path):
 
 
 def test_validate_failing_tests_requires_nonzero_exit(tmp_path):
-    from harness_v2.adapters.evidence import command_evidence as ce, validate
+    from e2e_harness.adapters.evidence import command_evidence as ce, validate
     ev = ce.record_command(tmp_path, f'"{sys.executable}" -c "import sys; sys.exit(0)"')
     (tmp_path / "t.json").write_text(json.dumps(ev), encoding="utf-8")
     ok, reason = validate.validate_evidence(tmp_path, "failing_tests", {"path": "t.json"})
@@ -480,8 +480,8 @@ def test_gate_passes_presence_only_without_repo_root():
 
 - [ ] **Step 2: Run to verify fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_gate_artifact_validation.py -q`
-Expected: FAIL — `harness_v2.adapters.evidence.validate` missing; `gate_passes` rejects nothing.
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_gate_artifact_validation.py -q`
+Expected: FAIL �?`e2e_harness.adapters.evidence.validate` missing; `gate_passes` rejects nothing.
 
 - [ ] **Step 3: Create the validator**
 
@@ -494,7 +494,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from harness_v2.adapters.evidence import command_evidence, hashing
+from e2e_harness.adapters.evidence import command_evidence, hashing
 
 # Evidence keys whose artifact must be command-evidence JSON with a specific exit code.
 COMMAND_KEYS = {"failing_tests": "nonzero", "passing_tests": "zero"}
@@ -541,8 +541,8 @@ Replace `core/gates.py` with:
 """Declarative gate evaluation + closure invariant (I2)."""
 from __future__ import annotations
 
-from harness_v2.adapters.evidence import validate
-from harness_v2.core.lifecycle import Phase
+from e2e_harness.adapters.evidence import validate
+from e2e_harness.core.lifecycle import Phase
 
 
 def gate_passes(phase: Phase, phase_record: dict | None,
@@ -572,8 +572,8 @@ def gate_closure_ok(spine: list[Phase]) -> tuple[bool, list[str]]:
 
 - [ ] **Step 5: Run validator + gate unit tests to verify pass**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_gate_artifact_validation.py tests/test_gates.py tests/test_gate_closure.py -q`
-Expected: PASS (existing `test_gates.py` uses presence-only path — still green).
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_gate_artifact_validation.py tests/test_gates.py tests/test_gate_closure.py -q`
+Expected: PASS (existing `test_gates.py` uses presence-only path �?still green).
 
 - [ ] **Step 6: Enrich `submit_evidence` and thread `repo_root` through engine**
 
@@ -585,9 +585,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness_v2.adapters.evidence import hashing
-from harness_v2.core import gates, dispatch
-from harness_v2.core.lifecycle import Phase
+from e2e_harness.adapters.evidence import hashing
+from e2e_harness.core import gates, dispatch
+from e2e_harness.core.lifecycle import Phase
 
 
 def _phase_record(state: dict, name: str) -> dict:
@@ -680,7 +680,7 @@ def navigation_map(spine: list[Phase], state: dict, repo_root=None) -> dict:
         full.append({"name": name, "status": st})
     done = sum(1 for p in phases if p["status"] == "done")
     return {
-        "schema": "e2e-dev-harness-v2.navigation-map.v1",
+        "schema": "e2e-dev-harness.navigation-map.v1",
         "goal": GOAL,
         "you_are_here": state.get("current_phase", spine[0].name),
         "phases": phases,
@@ -691,7 +691,7 @@ def navigation_map(spine: list[Phase], state: dict, repo_root=None) -> dict:
 
 - [ ] **Step 8: Thread `--repo` through the CLI commands**
 
-`cli/commands/submit.py` — pass repo and support status/reason:
+`cli/commands/submit.py` �?pass repo and support status/reason:
 
 ```python
 """submit: record worker evidence (or mark failed) and update dispatch."""
@@ -699,7 +699,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness_v2.core import run_state, engine
+from e2e_harness.core import run_state, engine
 
 
 def run(args) -> tuple[int, dict]:
@@ -711,12 +711,12 @@ def run(args) -> tuple[int, dict]:
         reason=getattr(args, "reason", None),
     )
     run_state.save(args.state, state)
-    return 0, {"schema": "e2e-dev-harness-v2.submit.v1", "phase": args.phase,
+    return 0, {"schema": "e2e-dev-harness.submit.v1", "phase": args.phase,
                "key": args.key, "recorded": args.path,
                "status": getattr(args, "status", "done")}
 ```
 
-`cli/commands/gate.py` — pass repo into `gate_passes` (add `from pathlib import Path` at top, replace the `gate_passes` call lines):
+`cli/commands/gate.py` �?pass repo into `gate_passes` (add `from pathlib import Path` at top, replace the `gate_passes` call lines):
 
 ```python
     rec = state.get("phases", {}).get(name, {})
@@ -724,7 +724,7 @@ def run(args) -> tuple[int, dict]:
     return (0 if ok else 1), {"phase": name, "passed": ok, "missing_evidence": missing}
 ```
 
-`cli/commands/next.py` — pass repo into `evaluate` and `navigation_map`:
+`cli/commands/next.py` �?pass repo into `evaluate` and `navigation_map`:
 
 ```python
 """next: advance spine or return single blocker + navigation map."""
@@ -732,8 +732,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness_v2.core import run_state, lifecycle, engine, navigation
-from harness_v2 import pipeline
+from e2e_harness.core import run_state, lifecycle, engine, navigation
+from e2e_harness import pipeline
 
 
 def run(args) -> tuple[int, dict]:
@@ -749,7 +749,7 @@ def run(args) -> tuple[int, dict]:
     return 0, res
 ```
 
-`cli/commands/status.py` — pass repo into `navigation_map`:
+`cli/commands/status.py` �?pass repo into `navigation_map`:
 
 ```python
 """status: human-readable navigation map (same source as next)."""
@@ -757,8 +757,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness_v2.core import run_state, lifecycle, navigation
-from harness_v2 import pipeline
+from e2e_harness.core import run_state, lifecycle, navigation
+from e2e_harness import pipeline
 
 
 def run(args) -> tuple[int, dict]:
@@ -778,7 +778,7 @@ In `cli/main.py` `build_parser`, change the `submit` arg lines so `--key`/`--pat
 
 - [ ] **Step 9: Run engine/navigation/gate suites to verify no regression**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_engine_termination.py tests/test_navigation.py tests/test_gates.py -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_engine_termination.py tests/test_navigation.py tests/test_gates.py -q`
 Expected: PASS (these call the core functions without `repo_root`, so presence-only behavior is preserved).
 
 - [ ] **Step 10: Rewrite the e2e test to land REAL artifacts (R1 #4)**
@@ -791,7 +791,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness_v2.py"
+ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness.py"
 
 
 def _run(*args, cwd):
@@ -802,7 +802,7 @@ def _run(*args, cwd):
 
 def _make_artifact(repo: Path, phase: str, key: str) -> str:
     """Produce a REAL artifact for `key`; return its repo-relative path."""
-    from harness_v2.adapters.evidence import command_evidence as ce
+    from e2e_harness.adapters.evidence import command_evidence as ce
     base = repo / "docs" / "agent-runs" / "art"
     base.mkdir(parents=True, exist_ok=True)
     if key in ("failing_tests", "passing_tests"):
@@ -871,36 +871,36 @@ def test_dispatch_returns_pointer_packet(tmp_path):
 
 - [ ] **Step 11: Run e2e + full suite**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest -q`
-Expected: PASS — including the rewritten e2e (real artifacts reach VERIFIED) and the new negative test (fake paths never do).
+Run: `cd skills/e2e-dev-harness && python -m pytest -q`
+Expected: PASS �?including the rewritten e2e (real artifacts reach VERIFIED) and the new negative test (fake paths never do).
 
 - [ ] **Step 12: KG change check + commit**
 
-Run `gitnexus_detect_changes({scope:"unstaged"})`; confirm only v2 files changed. Then:
+Run `gitnexus_detect_changes({scope:"unstaged"})`; confirm only e2e-dev-harness files changed. Then:
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/evidence/validate.py \
-        skills/e2e-dev-harness-v2/scripts/harness_v2/core/gates.py \
-        skills/e2e-dev-harness-v2/scripts/harness_v2/core/engine.py \
-        skills/e2e-dev-harness-v2/scripts/harness_v2/core/navigation.py \
-        skills/e2e-dev-harness-v2/scripts/harness_v2/cli \
-        skills/e2e-dev-harness-v2/tests/test_gate_artifact_validation.py \
-        skills/e2e-dev-harness-v2/tests/test_cli_e2e.py
-git commit -m "feat(harness-v2): R1 — gates validate real artifacts (exists+nonempty+hash+command-evidence)
+git add skills/e2e-dev-harness/scripts/e2e_harness/adapters/evidence/validate.py \
+        skills/e2e-dev-harness/scripts/e2e_harness/core/gates.py \
+        skills/e2e-dev-harness/scripts/e2e_harness/core/engine.py \
+        skills/e2e-dev-harness/scripts/e2e_harness/core/navigation.py \
+        skills/e2e-dev-harness/scripts/e2e_harness/cli \
+        skills/e2e-dev-harness/tests/test_gate_artifact_validation.py \
+        skills/e2e-dev-harness/tests/test_cli_e2e.py
+git commit -m "feat(e2e-dev-harness): R1 �?gates validate real artifacts (exists+nonempty+hash+command-evidence)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 4: R1' — finish PLANNED + REVIEWED worker-skill delegators (= L4)
+## Task 4: R1' �?finish PLANNED + REVIEWED worker-skill delegators (= L4)
 
-Rework the two stub skills into v2 delegators that reference the **v2** CLI and delegate method to Superpowers; extend the delegate test to 6 skills and assert the old CLI path is gone from the two reworked skills.
+Rework the two stub skills into e2e-dev-harness delegators that reference the **e2e-dev-harness** CLI and delegate method to Superpowers; extend the delegate test to 6 skills and assert the old CLI path is gone from the two reworked skills.
 
 **Files:**
 - Modify: `skills/e2e-harness-planning/SKILL.md`
 - Modify: `skills/e2e-harness-review/SKILL.md`
-- Test: `skills/e2e-dev-harness-v2/tests/test_worker_skills_delegate.py` (extend)
+- Test: `skills/e2e-dev-harness/tests/test_worker_skills_delegate.py` (extend)
 
 - [ ] **Step 1: Write failing test extension**
 
@@ -926,7 +926,7 @@ OUTPUTS = {
     "e2e-harness-review": "review",
     "e2e-harness-completion": "verification",
 }
-# the reworked PLANNED/REVIEWED skills must reference the v2 CLI, not the legacy one
+# the reworked PLANNED/REVIEWED skills must reference the e2e-dev-harness CLI, not the legacy one
 NO_LEGACY_CLI = ("e2e-harness-planning", "e2e-harness-review")
 LEGACY_CLI = "skills/e2e-dev-harness/scripts/e2e_dev_harness.py"
 
@@ -943,13 +943,13 @@ def test_reworked_skills_drop_legacy_cli():
     for skill in NO_LEGACY_CLI:
         text = (ROOT / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
         assert LEGACY_CLI not in text, f"{skill} still references legacy CLI"
-        assert "e2e_dev_harness_v2.py" in text, f"{skill} missing v2 CLI reference"
+        assert "e2e_dev_harness.py" in text, f"{skill} missing e2e-dev-harness CLI reference"
 ```
 
 - [ ] **Step 2: Run to verify fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_worker_skills_delegate.py -q`
-Expected: FAIL — planning/review lack delegation, still reference legacy CLI.
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_worker_skills_delegate.py -q`
+Expected: FAIL �?planning/review lack delegation, still reference legacy CLI.
 
 - [ ] **Step 3: Rework `skills/e2e-harness-planning/SKILL.md`**
 
@@ -965,14 +965,11 @@ description: Use for e2e-dev-harness implementation-planner worker tasks that tu
 
 Do not inherit coordinator chat context. Use only the packet `context_paths` (run-state, requirements handoff, any R1 review, service-scope inputs).
 
-## v2 契约 (e2e-dev-harness-v2)
+## e2e-dev-harness 契约 (e2e-dev-harness)
 
-- **方法委派**: 用 `superpowers:writing-plans` 把澄清后的需求转成服务切片实现计划与调度。本 skill 只持 harness 专属胶水,不重造规划方法。
-- **expected_outputs**: 产出证据键 `plan` —— 写实现计划到 `docs/agent-runs/<run>/handoffs/02-implementation-planner.md`,然后:
-  `python skills/e2e-dev-harness-v2/scripts/e2e_dev_harness_v2.py submit --state <run-state> --phase PLANNED --key plan --path <plan-path>`
-- **上下文**: 不继承 coordinator 对话;只用 packet 的 `context_paths`。
-- 仅就需求 handoff 未解决的范围/排序决策向用户提问。
-```
+- **方法委派**: �?`superpowers:writing-plans` 把澄清后的需求转成服务切片实现计划与调度。本 skill 只持 harness 专属胶水,不重造规划方法�?- **expected_outputs**: 产出证据�?`plan` —�?写实现计划到 `docs/agent-runs/<run>/handoffs/02-implementation-planner.md`,然后:
+  `python skills/e2e-dev-harness/scripts/e2e_dev_harness.py submit --state <run-state> --phase PLANNED --key plan --path <plan-path>`
+- **上下�?*: 不继�?coordinator 对话;只用 packet �?`context_paths`�?- 仅就需�?handoff 未解决的范围/排序决策向用户提问�?```
 
 - [ ] **Step 4: Rework `skills/e2e-harness-review/SKILL.md`**
 
@@ -988,26 +985,23 @@ description: Use for e2e-dev-harness r1/r2/r3 reviewer worker tasks that indepen
 
 Do not inherit coordinator chat context. Use only the packet `context_paths` (run-state, the review request, relevant handoffs).
 
-## v2 契约 (e2e-dev-harness-v2)
+## e2e-dev-harness 契约 (e2e-dev-harness)
 
-- **方法委派**: 用 `superpowers:requesting-code-review` 发起审查、`superpowers:receiving-code-review` 消化反馈。本 skill 只持 harness 专属胶水。
-- **expected_outputs**: 产出证据键 `review` —— 写审查报告到 `docs/agent-runs/<run>/handoffs/<reviewer>-review.md`,然后:
-  `python skills/e2e-dev-harness-v2/scripts/e2e_dev_harness_v2.py submit --state <run-state> --phase REVIEWED --key <review-key> --path <report-path>`
-- **review fan-out (critical tier)**: REVIEWED 在 critical/audited tier 要求三份独立证据 `r1_review` / `r2_review` / `r3_review`。每个 reviewer 在**全新隔离上下文**运行,**绝不 review 自己写过的实现**;coordinator 为三个键各 spawn 一个独立子 agent。
-- **上下文**: 不继承 coordinator 对话;只用 packet 的 `context_paths`。写完报告即停,不改实现文件。
-```
+- **方法委派**: �?`superpowers:requesting-code-review` 发起审查、`superpowers:receiving-code-review` 消化反馈。本 skill 只持 harness 专属胶水�?- **expected_outputs**: 产出证据�?`review` —�?写审查报告到 `docs/agent-runs/<run>/handoffs/<reviewer>-review.md`,然后:
+  `python skills/e2e-dev-harness/scripts/e2e_dev_harness.py submit --state <run-state> --phase REVIEWED --key <review-key> --path <report-path>`
+- **review fan-out (critical tier)**: REVIEWED �?critical/audited tier 要求三份独立证据 `r1_review` / `r2_review` / `r3_review`。每�?reviewer �?*全新隔离上下�?*运行,**绝不 review 自己写过的实�?*;coordinator 为三个键�?spawn 一个独立子 agent�?- **上下�?*: 不继�?coordinator 对话;只用 packet �?`context_paths`。写完报告即�?不改实现文件�?```
 
 - [ ] **Step 5: Run to verify pass + full suite**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_worker_skills_delegate.py -q && python -m pytest -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_worker_skills_delegate.py -q && python -m pytest -q`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add skills/e2e-harness-planning/SKILL.md skills/e2e-harness-review/SKILL.md \
-        skills/e2e-dev-harness-v2/tests/test_worker_skills_delegate.py
-git commit -m "feat(harness-v2): R1' — PLANNED/REVIEWED worker skills delegate to Superpowers, v2 CLI (L4)
+        skills/e2e-dev-harness/tests/test_worker_skills_delegate.py
+git commit -m "feat(e2e-dev-harness): R1' �?PLANNED/REVIEWED worker skills delegate to Superpowers, e2e-dev-harness CLI (L4)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -1016,23 +1010,23 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ## Task 5: Tier-scaled pipelines (standard / critical / audited) + structured phase pruning
 
-Evolve `lifecycle.build_spine` to accept per-phase overrides; make `pipeline.py` the structured tier→(phases + overrides) map and add `pipeline.build_spine(name)`; let `start` pick a tier. Centralize spine building in the CLI.
+Evolve `lifecycle.build_spine` to accept per-phase overrides; make `pipeline.py` the structured tier�?phases + overrides) map and add `pipeline.build_spine(name)`; let `start` pick a tier. Centralize spine building in the CLI.
 
 **Files:**
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/lifecycle.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/pipeline.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/commands/start.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/main.py` (add `--tier` to `start`)
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/core/lifecycle.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/pipeline.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/start.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/main.py` (add `--tier` to `start`)
 - Modify (spine call sites): `cli/commands/next.py`, `status.py`, `dispatch.py`, `gate.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_pipeline_tiers.py` (new)
+- Test: `skills/e2e-dev-harness/tests/test_pipeline_tiers.py` (new)
 
 - [ ] **Step 1: Write failing tests**
 
 Create `tests/test_pipeline_tiers.py`:
 
 ```python
-from harness_v2 import pipeline
-from harness_v2.core import lifecycle
+from e2e_harness import pipeline
+from e2e_harness.core import lifecycle
 
 
 def test_minimal_skips_planned_and_reviewed():
@@ -1077,8 +1071,8 @@ def test_unknown_pipeline_raises():
 
 - [ ] **Step 2: Run to verify fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_pipeline_tiers.py -q`
-Expected: FAIL — only `minimal` exists; `build_spine` missing.
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_pipeline_tiers.py -q`
+Expected: FAIL �?only `minimal` exists; `build_spine` missing.
 
 - [ ] **Step 3: Add `overrides` to `lifecycle.build_spine`**
 
@@ -1106,7 +1100,7 @@ Replace `pipeline.py` with:
 """Pipeline config: tier -> (active phases + per-phase gate overrides)."""
 from __future__ import annotations
 
-from harness_v2.core import lifecycle
+from e2e_harness.core import lifecycle
 
 _FULL = ("CREATED", "CLARIFIED", "PLANNED", "RED", "IMPLEMENTED", "REVIEWED", "VERIFIED")
 _REVIEW_FANOUT = ("r1_review", "r2_review", "r3_review")
@@ -1157,7 +1151,7 @@ In each of `cli/commands/next.py`, `status.py`, `dispatch.py`, `gate.py`, replac
 `spine = lifecycle.build_spine(pipeline.active_phase_names(state.get("pipeline", "minimal")))`
 with
 `spine = pipeline.build_spine(state.get("pipeline", "minimal"))`.
-In `next.py`/`status.py` the `lifecycle` import is no longer used — remove `lifecycle` from their `from harness_v2.core import ...` line. In `dispatch.py`/`gate.py`, `lifecycle` is also only used for that call — remove it from their imports too. Verify with the test run in Step 7 (an unused-import won't fail tests, but keep it clean).
+In `next.py`/`status.py` the `lifecycle` import is no longer used �?remove `lifecycle` from their `from e2e_harness.core import ...` line. In `dispatch.py`/`gate.py`, `lifecycle` is also only used for that call �?remove it from their imports too. Verify with the test run in Step 7 (an unused-import won't fail tests, but keep it clean).
 
 - [ ] **Step 6: Add `--tier` to `start`**
 
@@ -1173,23 +1167,23 @@ Replace the `new_run_state(...)` + return in `cli/commands/start.py` so tier dri
     st = run_state.new_run_state(run_id, args.feature, args.request,
                                  tier=args.tier, pipeline=args.tier)
     run_state.save(path, st)
-    return 0, {"schema": "e2e-dev-harness-v2.start.v1", "run_id": run_id,
+    return 0, {"schema": "e2e-dev-harness.start.v1", "run_id": run_id,
                "run_state": str(path), "current_phase": "CREATED", "tier": args.tier}
 ```
 
 - [ ] **Step 7: Run pipeline + full suite**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest -q`
 Expected: PASS (existing `test_lifecycle_spine.py` / `test_navigation.py` use `pipeline.active_phase_names("minimal")` which is unchanged).
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/core/lifecycle.py \
-        skills/e2e-dev-harness-v2/scripts/harness_v2/pipeline.py \
-        skills/e2e-dev-harness-v2/scripts/harness_v2/cli \
-        skills/e2e-dev-harness-v2/tests/test_pipeline_tiers.py
-git commit -m "feat(harness-v2): tier-scaled pipelines + structured phase pruning (standard/critical/audited)
+git add skills/e2e-dev-harness/scripts/e2e_harness/core/lifecycle.py \
+        skills/e2e-dev-harness/scripts/e2e_harness/pipeline.py \
+        skills/e2e-dev-harness/scripts/e2e_harness/cli \
+        skills/e2e-dev-harness/tests/test_pipeline_tiers.py
+git commit -m "feat(e2e-dev-harness): tier-scaled pipelines + structured phase pruning (standard/critical/audited)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -1201,10 +1195,10 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 Verify the critical-tier REVIEWED gate requires three independent reviews end-to-end, the dispatch packet advertises all three outputs, and **every built-in tier is gate-closed** (the M3/R2 seed test).
 
 **Files:**
-- Test: `skills/e2e-dev-harness-v2/tests/test_review_fanout.py` (new)
-- Test: `skills/e2e-dev-harness-v2/tests/test_gate_closure.py` (extend)
+- Test: `skills/e2e-dev-harness/tests/test_review_fanout.py` (new)
+- Test: `skills/e2e-dev-harness/tests/test_gate_closure.py` (extend)
 
-(No new production code expected — Task 5 already encodes the fan-out gate. If a test fails it reveals a real gap to fix minimally.)
+(No new production code expected �?Task 5 already encodes the fan-out gate. If a test fails it reveals a real gap to fix minimally.)
 
 - [ ] **Step 1: Write the fan-out tests**
 
@@ -1213,8 +1207,8 @@ Create `tests/test_review_fanout.py`:
 ```python
 from pathlib import Path
 
-from harness_v2 import pipeline
-from harness_v2.core import run_state, engine, dispatch, gates
+from e2e_harness import pipeline
+from e2e_harness.core import run_state, engine, dispatch, gates
 
 
 def _drive_to(state, repo, target, spine):
@@ -1267,7 +1261,7 @@ Append to `tests/test_gate_closure.py`:
 
 ```python
 def test_all_builtin_tiers_gate_closed():
-    from harness_v2 import pipeline
+    from e2e_harness import pipeline
     for tier in ("minimal", "standard", "critical", "audited"):
         spine = pipeline.build_spine(tier)
         ok, unmet = gates.gate_closure_ok(spine)
@@ -1276,31 +1270,31 @@ def test_all_builtin_tiers_gate_closed():
 
 - [ ] **Step 3: Run to verify (and fix only if a real gap surfaces)**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_review_fanout.py tests/test_gate_closure.py -q`
-Expected: PASS. If `test_all_builtin_tiers_gate_closed` fails for a tier, the override produces/exit_gate sets disagree — fix the offending entry in `pipeline.py` so every `exit_gate` key is in some phase's `produces`.
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_review_fanout.py tests/test_gate_closure.py -q`
+Expected: PASS. If `test_all_builtin_tiers_gate_closed` fails for a tier, the override produces/exit_gate sets disagree �?fix the offending entry in `pipeline.py` so every `exit_gate` key is in some phase's `produces`.
 
 - [ ] **Step 4: Full suite + commit**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest -q`
 Expected: PASS.
 
 ```bash
-git add skills/e2e-dev-harness-v2/tests/test_review_fanout.py \
-        skills/e2e-dev-harness-v2/tests/test_gate_closure.py
-git commit -m "test(harness-v2): r1/r2/r3 review fan-out + all-builtin-tier gate-closure seed (M2 fan-out, M3/R2 seed)
+git add skills/e2e-dev-harness/tests/test_review_fanout.py \
+        skills/e2e-dev-harness/tests/test_gate_closure.py
+git commit -m "test(e2e-dev-harness): r1/r2/r3 review fan-out + all-builtin-tier gate-closure seed (M2 fan-out, M3/R2 seed)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 7: L2 — DispatchStatus FAILED path (worker failure + re-dispatch)
+## Task 7: L2 �?DispatchStatus FAILED path (worker failure + re-dispatch)
 
 Surface worker failure in the run-state and navigation so the coordinator can see a blocked phase and re-dispatch. (Engine/submit/CLI support landed in Task 3; this task proves the path and adds the navigation `blocked` render.)
 
 **Files:**
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/navigation.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_dispatch_failure.py` (new)
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/core/navigation.py`
+- Test: `skills/e2e-dev-harness/tests/test_dispatch_failure.py` (new)
 
 - [ ] **Step 1: Write proving tests**
 
@@ -1312,10 +1306,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from harness_v2.core import run_state, engine, dispatch
-from harness_v2 import pipeline
+from e2e_harness.core import run_state, engine, dispatch
+from e2e_harness import pipeline
 
-ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness_v2.py"
+ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness.py"
 
 
 def _run(*args, cwd):
@@ -1368,12 +1362,12 @@ def test_cli_submit_failed_then_status_shows_blocked(tmp_path):
 
 - [ ] **Step 2: Run to verify fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_dispatch_failure.py -q`
-Expected: the first three pass (Task 3 support), `test_cli_submit_failed_then_status_shows_blocked` FAILS — navigation renders `current`, not `blocked`.
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_dispatch_failure.py -q`
+Expected: the first three pass (Task 3 support), `test_cli_submit_failed_then_status_shows_blocked` FAILS �?navigation renders `current`, not `blocked`.
 
 - [ ] **Step 3: Render `blocked` in navigation for FAILED current phase**
 
-In `core/navigation.py`, add the `dispatch` import (alongside the existing `from harness_v2.core import gates` — change it to `from harness_v2.core import gates, dispatch`), and inside `_phase_status`, in the `idx == cur_idx` branch, immediately before `return "current"`:
+In `core/navigation.py`, add the `dispatch` import (alongside the existing `from e2e_harness.core import gates` �?change it to `from e2e_harness.core import gates, dispatch`), and inside `_phase_status`, in the `idx == cur_idx` branch, immediately before `return "current"`:
 
 ```python
         if rec.get("dispatch") == dispatch.DispatchStatus.FAILED.value:
@@ -1382,28 +1376,28 @@ In `core/navigation.py`, add the `dispatch` import (alongside the existing `from
 
 - [ ] **Step 4: Run to verify pass + full suite**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest -q`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/core/navigation.py \
-        skills/e2e-dev-harness-v2/tests/test_dispatch_failure.py
-git commit -m "feat(harness-v2): L2 — DispatchStatus FAILED path (worker failure -> blocked -> re-dispatch)
+git add skills/e2e-dev-harness/scripts/e2e_harness/core/navigation.py \
+        skills/e2e-dev-harness/tests/test_dispatch_failure.py
+git commit -m "feat(e2e-dev-harness): L2 �?DispatchStatus FAILED path (worker failure -> blocked -> re-dispatch)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 8: L1 — richer navigation map (per-phase gate summary, remaining gates, next-in-map)
+## Task 8: L1 �?richer navigation map (per-phase gate summary, remaining gates, next-in-map)
 
 The `blocked` state already lands in Task 7. Add the remaining L1 items: per-phase gate evidence summary, distance-to-goal gate count, and the next action framed inside the map.
 
 **Files:**
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/navigation.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_navigation.py` (extend)
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/core/navigation.py`
+- Test: `skills/e2e-dev-harness/tests/test_navigation.py` (extend)
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1438,7 +1432,7 @@ def test_map_frames_next_action_inside_map():
 
 def test_map_next_is_null_when_complete(tmp_path):
     import json, sys
-    from harness_v2.adapters.evidence import command_evidence as ce
+    from e2e_harness.adapters.evidence import command_evidence as ce
     st = run_state.new_run_state("r1", "f", "r")
     spine = _spine()
     base = tmp_path / "art"; base.mkdir(parents=True, exist_ok=True)
@@ -1461,8 +1455,8 @@ def test_map_next_is_null_when_complete(tmp_path):
 
 - [ ] **Step 2: Run to verify fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_navigation.py -q`
-Expected: FAIL — `gate`/`remaining_gates`/`next` keys absent.
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_navigation.py -q`
+Expected: FAIL �?`gate`/`remaining_gates`/`next` keys absent.
 
 - [ ] **Step 3: Implement the enriched map**
 
@@ -1503,7 +1497,7 @@ def navigation_map(spine: list[Phase], state: dict, repo_root=None) -> dict:
         nxt = {"phase": cur_phase.name, "action": f"dispatch {cur_phase.worker_skill}"}
 
     return {
-        "schema": "e2e-dev-harness-v2.navigation-map.v1",
+        "schema": "e2e-dev-harness.navigation-map.v1",
         "goal": GOAL,
         "you_are_here": cur,
         "phases": phases,
@@ -1516,15 +1510,15 @@ def navigation_map(spine: list[Phase], state: dict, repo_root=None) -> dict:
 
 - [ ] **Step 4: Run to verify pass + full suite**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest -q`
 Expected: PASS (original three navigation tests still hold: phases entries keep `name`/`status`, plus the new `gate` key).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/core/navigation.py \
-        skills/e2e-dev-harness-v2/tests/test_navigation.py
-git commit -m "feat(harness-v2): L1 — navigation map gate summary, remaining-gates, next-in-map
+git add skills/e2e-dev-harness/scripts/e2e_harness/core/navigation.py \
+        skills/e2e-dev-harness/tests/test_navigation.py
+git commit -m "feat(e2e-dev-harness): L1 �?navigation map gate summary, remaining-gates, next-in-map
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -1538,18 +1532,18 @@ Narrow port of the legacy keyword classifier (text-only; multi-service/dependenc
 **Pre-task KG:** run `gitnexus_impact({target:"gates_for", direction:"upstream"})` on the legacy source; report blast radius. We copy the keyword logic, not the legacy gate-name vocabulary.
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/tier/__init__.py`
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/tier/classify.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/commands/start.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/main.py` (add `auto` to `--tier` choices)
-- Test: `skills/e2e-dev-harness-v2/tests/test_tier_classify.py` (new)
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/adapters/tier/__init__.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/adapters/tier/classify.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/start.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/main.py` (add `auto` to `--tier` choices)
+- Test: `skills/e2e-dev-harness/tests/test_tier_classify.py` (new)
 
 - [ ] **Step 1: Write failing tests**
 
 Create `tests/test_tier_classify.py`:
 
 ```python
-from harness_v2.adapters.tier import classify
+from e2e_harness.adapters.tier import classify
 
 
 def test_plain_request_is_minimal():
@@ -1575,8 +1569,8 @@ def test_single_service_api_surface_is_standard():
 
 - [ ] **Step 2: Run to verify fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_tier_classify.py -q`
-Expected: FAIL — module missing.
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_tier_classify.py -q`
+Expected: FAIL �?module missing.
 
 - [ ] **Step 3: Create the classifier (text-only port)**
 
@@ -1594,13 +1588,13 @@ from __future__ import annotations
 import re
 
 _PAYMENT = {"payment", "refund", "settlement", "ledger", "accounting", "reconcile",
-            "chargeback", "支付", "退款", "结算", "账务", "对账"}
+            "chargeback", "支付", "退�?, "结算", "账务", "对账"}
 _CONTRACT = {"contract", "compatibility", "接口", "契约", "兼容"}
 _WEAK_CONTRACT = {"api", "http", "rest", "client", "endpoint"}
 _DATA = {"database", "db", "sql", "migration", "transaction", "audit",
          "数据", "迁移", "事务", "审计"}
 _MESSAGING = {"mq", "kafka", "rocketmq", "rabbitmq", "topic", "producer", "consumer",
-              "payload", "消息", "队列", "生产者", "消费者"}
+              "payload", "消息", "队列", "生产�?, "消费�?}
 _AUDIT = {"audit", "compliance", "incident", "regulatory", "合规", "审计", "事故"}
 
 
@@ -1644,7 +1638,7 @@ In `cli/commands/start.py`, resolve `auto` before creating the state (insert aft
     tier = args.tier
     reasons: list[str] = []
     if tier == "auto":
-        from harness_v2.adapters.tier import classify
+        from e2e_harness.adapters.tier import classify
         tier, reasons = classify.classify_tier(args.request)
 ```
 
@@ -1653,38 +1647,38 @@ then use `tier` (not `args.tier`) in `new_run_state(...)` and include it plus `r
 ```python
     st = run_state.new_run_state(run_id, args.feature, args.request, tier=tier, pipeline=tier)
     run_state.save(path, st)
-    return 0, {"schema": "e2e-dev-harness-v2.start.v1", "run_id": run_id,
+    return 0, {"schema": "e2e-dev-harness.start.v1", "run_id": run_id,
                "run_state": str(path), "current_phase": "CREATED",
                "tier": tier, "tier_reasons": reasons}
 ```
 
 - [ ] **Step 5: Run tier tests + full suite**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest -q`
 Expected: PASS.
 
 - [ ] **Step 6: KG change check + commit**
 
-Run `gitnexus_detect_changes({scope:"unstaged"})`; confirm only v2 files changed.
+Run `gitnexus_detect_changes({scope:"unstaged"})`; confirm only e2e-dev-harness files changed.
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/tier \
-        skills/e2e-dev-harness-v2/scripts/harness_v2/cli \
-        skills/e2e-dev-harness-v2/tests/test_tier_classify.py
-git commit -m "feat(harness-v2): port task_tier classification leaf + start --tier auto
+git add skills/e2e-dev-harness/scripts/e2e_harness/adapters/tier \
+        skills/e2e-dev-harness/scripts/e2e_harness/cli \
+        skills/e2e-dev-harness/tests/test_tier_classify.py
+git commit -m "feat(e2e-dev-harness): port task_tier classification leaf + start --tier auto
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 10: Update v2 coordinator SKILL.md for tiers + final verification
+## Task 10: Update e2e-dev-harness coordinator SKILL.md for tiers + final verification
 
 Bring the coordinator doc in line with the new tier behavior and run the whole suite once more.
 
 **Files:**
-- Modify: `skills/e2e-dev-harness-v2/SKILL.md`
-- Test: `skills/e2e-dev-harness-v2/tests/test_skill_md.py` (extend)
+- Modify: `skills/e2e-dev-harness/SKILL.md`
+- Test: `skills/e2e-dev-harness/tests/test_skill_md.py` (extend)
 
 - [ ] **Step 1: Write failing test extension**
 
@@ -1701,38 +1695,37 @@ def test_skill_md_documents_tiers_and_review_fanout():
 
 - [ ] **Step 2: Run to verify fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_skill_md.py -q`
-Expected: FAIL — current SKILL.md mentions only `minimal`.
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_skill_md.py -q`
+Expected: FAIL �?current SKILL.md mentions only `minimal`.
 
-- [ ] **Step 3: Update the `## tier` section of `skills/e2e-dev-harness-v2/SKILL.md`**
+- [ ] **Step 3: Update the `## tier` section of `skills/e2e-dev-harness/SKILL.md`**
 
 Replace the final `## tier (M1: minimal)` section with:
 
 ```markdown
 ## tier 与流水线 (M2)
 
-`start --tier <t>` 选择流水线(默认 `minimal`,`auto` 由请求文本分类):
+`start --tier <t>` 选择流水�?默认 `minimal`,`auto` 由请求文本分�?:
 
 | tier | 活跃阶段 | 说明 |
 |---|---|---|
 | `minimal` | CREATED→CLARIFIED→RED→IMPLEMENTED→VERIFIED | 跳过 PLANNED/REVIEWED |
-| `standard` | 全主干 | 单 reviewer |
-| `critical` | 全主干 | REVIEWED 派 r1/r2/r3 三份独立 review(隔离上下文,不 review 自己实现) |
-| `audited` | 全主干 | r1/r2/r3 + VERIFIED 增 audit_replay 证据 |
+| `standard` | 全主�?| �?reviewer |
+| `critical` | 全主�?| REVIEWED �?r1/r2/r3 三份独立 review(隔离上下�?�?review 自己实现) |
+| `audited` | 全主�?| r1/r2/r3 + VERIFIED �?audit_replay 证据 |
 
-裁剪是结构性的:被跳阶段从计算出的 spine 移除,`next` 越过、导航地图渲染 `– skipped`。每个内建 tier 都过 I2 门禁闭包(`gate_closure_ok`)。门禁校验**真实产物**(文件存在+非空+哈希;`failing_tests`/`passing_tests` 须为命令证据且退出码正确)。
-```
+裁剪是结构性的:被跳阶段从计算出�?spine 移除,`next` 越过、导航地图渲�?`�?skipped`。每个内�?tier 都过 I2 门禁闭包(`gate_closure_ok`)。门禁校�?*真实产物**(文件存在+非空+哈希;`failing_tests`/`passing_tests` 须为命令证据且退出码正确)�?```
 
 - [ ] **Step 4: Run full suite (final green gate)**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest -q`
-Expected: PASS — full suite green (baseline 25 + all new tests).
+Run: `cd skills/e2e-dev-harness && python -m pytest -q`
+Expected: PASS �?full suite green (baseline 25 + all new tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/SKILL.md skills/e2e-dev-harness-v2/tests/test_skill_md.py
-git commit -m "docs(harness-v2): coordinator SKILL.md documents M2 tiers + review fan-out + artifact gates
+git add skills/e2e-dev-harness/SKILL.md skills/e2e-dev-harness/tests/test_skill_md.py
+git commit -m "docs(e2e-dev-harness): coordinator SKILL.md documents M2 tiers + review fan-out + artifact gates
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -1741,17 +1734,17 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ## Exit checklist (M2 done?)
 
-- [ ] **R1**: fake-path / empty-file evidence does NOT pass the gate; test-keys require valid command-evidence with correct exit code; e2e test lands real artifacts to reach VERIFIED; `test_fake_path_evidence_never_reaches_verified` is green. ✅ hard standard
-- [ ] **R1' (L4)**: `e2e-harness-planning` delegates to `superpowers:writing-plans` (output `plan`); `e2e-harness-review` delegates to `superpowers:requesting-code-review`/`receiving-code-review` (output `review`); both reference the v2 CLI and not the legacy one. ✅ hard standard
+- [ ] **R1**: fake-path / empty-file evidence does NOT pass the gate; test-keys require valid command-evidence with correct exit code; e2e test lands real artifacts to reach VERIFIED; `test_fake_path_evidence_never_reaches_verified` is green. �?hard standard
+- [ ] **R1' (L4)**: `e2e-harness-planning` delegates to `superpowers:writing-plans` (output `plan`); `e2e-harness-review` delegates to `superpowers:requesting-code-review`/`receiving-code-review` (output `review`); both reference the e2e-dev-harness CLI and not the legacy one. �?hard standard
 - [ ] **Tier scaling**: standard/critical/audited pipelines exist; each tier's exit_gate sets are assertable.
-- [ ] **Phase pruning**: structural — skipped phases removed from spine, rendered `– skipped`; pruned spines pass I2.
-- [ ] **Review fan-out**: critical REVIEWED requires ≥3 independent reviews; packet advertises all three.
+- [ ] **Phase pruning**: structural �?skipped phases removed from spine, rendered `�?skipped`; pruned spines pass I2.
+- [ ] **Review fan-out**: critical REVIEWED requires �? independent reviews; packet advertises all three.
 - [ ] **L1/L2/L5–L7**: navigation enrichment, FAILED path, schema check, atomic save, CLI JSON guard.
 - [ ] **§4 seed**: `test_all_builtin_tiers_gate_closed` green for all built-in tiers.
-- [ ] Full suite green; `gitnexus_detect_changes` shows only `skills/e2e-dev-harness-v2/` + the two reworked skill files changed.
+- [ ] Full suite green; `gitnexus_detect_changes` shows only `skills/e2e-dev-harness/` + the two reworked skill files changed.
 
 ## Deferred (NOT in this plan, per design §16 + user scope choice)
 
 - Port of scanner / KG-evidence / memory / runtime-adapter leaves with their legacy tests.
-- M3 config layer (`pipelines/*.yaml` + `validate-pipeline`) and R2 runtime enforcement (only its seed test — all-tier closure — is pre-landed here).
+- M3 config layer (`pipelines/*.yaml` + `validate-pipeline`) and R2 runtime enforcement (only its seed test �?all-tier closure �?is pre-landed here).
 - M4 frontend adapter, M5 switchover.

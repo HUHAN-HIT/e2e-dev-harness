@@ -1,75 +1,65 @@
-# U7 — v2 Hook 强制层 Implementation Plan
+# U7 �?e2e-dev-harness Hook 强制�?Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 给 v2 一个工具层 PreToolUse + Stop hook 强制层,使非实现 phase 阻止 code write,补回 legacy `phase_guard` 的核心 TDD/phase 纪律。
-
-**Architecture:** 声明式判定 (`Phase.allows_code_write` + `pipeline.can_write_code`) 作单一真相源;两个薄 hook (`phase_guard_v2` / `stop_guard_v2`) 读 v2 run-state 并复用从 legacy port 的路径无关逻辑 (`adapters/hooks/paths.py`);claude + opencode 两 runtime 的 example config 随 skill 提供 (installer 安装落在 U6)。
-
-**Tech Stack:** Python 3 (stdlib only: `json`/`pathlib`/`argparse`), pytest, PyYAML (既有), Claude Code PreToolUse/Stop hook 协议, opencode plugin (`tool.execute.before`)。
-
-**Design source:** [docs/superpowers/specs/2026-06-08-harness-v2-u7-hook-enforcement-design.md](../specs/2026-06-08-harness-v2-u7-hook-enforcement-design.md)
+**Goal:** �?e2e-dev-harness 一个工具层 PreToolUse + Stop hook 强制�?使非实现 phase 阻止 code write,补回 legacy `phase_guard` 的核�?TDD/phase 纪律�?
+**Architecture:** 声明式判�?(`Phase.allows_code_write` + `pipeline.can_write_code`) 作单一真相�?两个�?hook (`phase_guard` / `stop_guard`) �?e2e-dev-harness run-state 并复用从 legacy port 的路径无关逻辑 (`adapters/hooks/paths.py`);claude + opencode �?runtime �?example config �?skill 提供 (installer 安装落在 U6)�?
+**Tech Stack:** Python 3 (stdlib only: `json`/`pathlib`/`argparse`), pytest, PyYAML (既有), Claude Code PreToolUse/Stop hook 协议, opencode plugin (`tool.execute.before`)�?
+**Design source:** [docs/superpowers/specs/2026-06-08-e2e-dev-harness-u7-hook-enforcement-design.md](../specs/2026-06-08-e2e-dev-harness-u7-hook-enforcement-design.md)
 
 ---
 
 ## 执行约定 (per CLAUDE.md / 分支约束)
 
-- **测试命令:** `cd skills/e2e-dev-harness-v2 && python -m pytest tests/ -q`
-- **单文件测试:** `cd skills/e2e-dev-harness-v2 && python -m pytest tests/<file>::<test> -v`
-- **修改既有 v2 symbol 前 (Task 1/2/3 触及 `lifecycle.Phase`/`pipeline`/`pipeline_validate`):** 先 `cd skills/e2e-dev-harness-v2 && npx gitnexus analyze`(当前索引 stale),再 `gitnexus_impact({target, direction:"upstream", repo:"e2e-dev-workflow"})`,HIGH/CRITICAL 风险须先报告。新建文件 (Task 4–8 主体) 无既有 symbol,免 impact。
-- **dispatch 损坏** → 全程内联落地,不走 subagent 两阶段;每完成一个 Task commit,全 plan 完成后 `/code-review`。
-- **完成前** `gitnexus_detect_changes({scope:"unstaged"})` 校验影响面。
-- **installer 装 hook 不在本 plan** — 属 U6 Stage 2/3(design §6/§8),本 plan 只产出 example 模板。
-
+- **测试命令:** `cd skills/e2e-dev-harness && python -m pytest tests/ -q`
+- **单文件测�?** `cd skills/e2e-dev-harness && python -m pytest tests/<file>::<test> -v`
+- **修改既有 e2e-dev-harness symbol �?(Task 1/2/3 触及 `lifecycle.Phase`/`pipeline`/`pipeline_validate`):** �?`cd skills/e2e-dev-harness && npx gitnexus analyze`(当前索引 stale),�?`gitnexus_impact({target, direction:"upstream", repo:"e2e-dev-workflow"})`,HIGH/CRITICAL 风险须先报告。新建文�?(Task 4�? 主体) 无既�?symbol,�?impact�?- **dispatch 损坏** �?全程内联落地,不走 subagent 两阶�?每完成一�?Task commit,�?plan 完成�?`/code-review`�?- **完成�?* `gitnexus_detect_changes({scope:"unstaged"})` 校验影响面�?- **installer �?hook 不在�?plan** �?�?U6 Stage 2/3(design §6/§8),�?plan 只产�?example 模板�?
 ---
 
 ## File Structure
 
 **新建:**
-- `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/__init__.py` — 包标记
-- `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/paths.py` — 路径无关分类 + run-state 发现 (port 自 legacy,纯逻辑)
-- `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/phase_guard_v2.py` — PreToolUse 薄壳
-- `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/stop_guard_v2.py` — Stop 薄壳
-- `skills/e2e-dev-harness-v2/hooks/claude-code-settings.example.json` — claude hook 模板
-- `skills/e2e-dev-harness-v2/hooks/opencode-plugin.example.js` — opencode plugin 模板
-- `skills/e2e-dev-harness-v2/tests/test_can_write_code.py`
-- `skills/e2e-dev-harness-v2/tests/test_hook_paths.py`
-- `skills/e2e-dev-harness-v2/tests/test_phase_guard_v2.py`
-- `skills/e2e-dev-harness-v2/tests/test_stop_guard_v2.py`
-- `skills/e2e-dev-harness-v2/tests/test_hook_examples.py`
-- `skills/e2e-dev-harness-v2/tests/test_phase_guard_e2e.py`
+- `skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/__init__.py` �?包标�?- `skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/paths.py` �?路径无关分类 + run-state 发现 (port �?legacy,纯逻辑)
+- `skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/phase_guard.py` �?PreToolUse 薄壳
+- `skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/stop_guard.py` �?Stop 薄壳
+- `skills/e2e-dev-harness/hooks/claude-code-settings.example.json` �?claude hook 模板
+- `skills/e2e-dev-harness/hooks/opencode-plugin.example.js` �?opencode plugin 模板
+- `skills/e2e-dev-harness/tests/test_can_write_code.py`
+- `skills/e2e-dev-harness/tests/test_hook_paths.py`
+- `skills/e2e-dev-harness/tests/test_phase_guard.py`
+- `skills/e2e-dev-harness/tests/test_stop_guard.py`
+- `skills/e2e-dev-harness/tests/test_hook_examples.py`
+- `skills/e2e-dev-harness/tests/test_phase_guard_e2e.py`
 
 **修改:**
-- `skills/e2e-dev-harness-v2/scripts/harness_v2/core/lifecycle.py` — `Phase` 加 `allows_code_write: bool = False`
-- `skills/e2e-dev-harness-v2/scripts/harness_v2/pipeline.py` — `_OVERRIDE_FIELDS` 加 `allows_code_write`;`_entry_name_and_overrides` 收集它;非catalog `Phase(...)` 传它;新增 `can_write_code(state)`
-- `skills/e2e-dev-harness-v2/scripts/harness_v2/core/pipeline_validate.py` — 接受可选 `allows_code_write` (bool 校验)
-- `skills/e2e-dev-harness-v2/pipelines/minimal.yaml` — `IMPLEMENTED` 升级 mapping `allows_code_write: true`
-- `skills/e2e-dev-harness-v2/pipelines/standard.yaml` — 同上
-- `skills/e2e-dev-harness-v2/pipelines/critical.yaml` — 同上
-- `skills/e2e-dev-harness-v2/pipelines/audited.yaml` — 同上
+- `skills/e2e-dev-harness/scripts/e2e_harness/core/lifecycle.py` �?`Phase` �?`allows_code_write: bool = False`
+- `skills/e2e-dev-harness/scripts/e2e_harness/pipeline.py` �?`_OVERRIDE_FIELDS` �?`allows_code_write`;`_entry_name_and_overrides` 收集�?非catalog `Phase(...)` 传它;新增 `can_write_code(state)`
+- `skills/e2e-dev-harness/scripts/e2e_harness/core/pipeline_validate.py` �?接受可�?`allows_code_write` (bool 校验)
+- `skills/e2e-dev-harness/pipelines/minimal.yaml` �?`IMPLEMENTED` 升级 mapping `allows_code_write: true`
+- `skills/e2e-dev-harness/pipelines/standard.yaml` �?同上
+- `skills/e2e-dev-harness/pipelines/critical.yaml` �?同上
+- `skills/e2e-dev-harness/pipelines/audited.yaml` �?同上
 
-**关键设计点 (避循环依赖):** `can_write_code` 放 `pipeline.py`(已 import `lifecycle` 且有 `spine_for_state`),而非 design §3.1 字面的 `core/lifecycle`。`lifecycle.py` 仍是 phase **字段** 真相源,`pipeline.py` 是 spine **组装** 真相源。`phase_guard_v2` import `pipeline` + `run_state` + `paths`,无环。
-
+**关键设计�?(避循环依�?:** `can_write_code` �?`pipeline.py`(�?import `lifecycle` 且有 `spine_for_state`),而非 design §3.1 字面�?`core/lifecycle`。`lifecycle.py` 仍是 phase **字段** 真相�?`pipeline.py` �?spine **组装** 真相源。`phase_guard` import `pipeline` + `run_state` + `paths`,无环�?
 ---
 
 ## Task 1: `Phase.allows_code_write` 字段 + `can_write_code` 判定
 
 **Files:**
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/lifecycle.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/pipeline.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_can_write_code.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/core/lifecycle.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/pipeline.py`
+- Test: `skills/e2e-dev-harness/tests/test_can_write_code.py`
 
 - [ ] **Step 0: impact (CLAUDE.md)**
 
-Run: `cd skills/e2e-dev-harness-v2 && npx gitnexus analyze` 然后 `gitnexus_impact({target:"Phase", direction:"upstream", repo:"e2e-dev-workflow"})` 与 `gitnexus_impact({target:"spec_to_spine", direction:"upstream", repo:"e2e-dev-workflow"})`。报告 blast radius;HIGH/CRITICAL 先告知用户。
+Run: `cd skills/e2e-dev-harness && npx gitnexus analyze` 然后 `gitnexus_impact({target:"Phase", direction:"upstream", repo:"e2e-dev-workflow"})` �?`gitnexus_impact({target:"spec_to_spine", direction:"upstream", repo:"e2e-dev-workflow"})`。报�?blast radius;HIGH/CRITICAL 先告知用户�?
+- [ ] **Step 1: 写失败测�?*
 
-- [ ] **Step 1: 写失败测试**
-
-Create `skills/e2e-dev-harness-v2/tests/test_can_write_code.py`:
+Create `skills/e2e-dev-harness/tests/test_can_write_code.py`:
 
 ```python
-from harness_v2 import pipeline
-from harness_v2.core import lifecycle
+from e2e_harness import pipeline
+from e2e_harness.core import lifecycle
 
 
 def test_phase_defaults_to_no_code_write():
@@ -101,7 +91,7 @@ def test_bare_string_phase_denies():
 
 
 def test_bare_string_implemented_denies_without_flag():
-    # bare-string inherits catalog default (False) — only an explicit flag opens it.
+    # bare-string inherits catalog default (False) �?only an explicit flag opens it.
     state = _state("IMPLEMENTED", ["CREATED", "CLARIFIED", "RED", "IMPLEMENTED", "VERIFIED"])
     assert pipeline.can_write_code(state) is False
 
@@ -116,14 +106,14 @@ def test_current_phase_not_in_spine_denies():
     assert pipeline.can_write_code(state) is False
 ```
 
-- [ ] **Step 2: 跑测试确认 fail**
+- [ ] **Step 2: 跑测试确�?fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_can_write_code.py -q`
-Expected: FAIL (`AttributeError: ... 'allows_code_write'` 及 `can_write_code` 不存在)
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_can_write_code.py -q`
+Expected: FAIL (`AttributeError: ... 'allows_code_write'` �?`can_write_code` 不存�?
 
-- [ ] **Step 3: 给 `Phase` 加字段**
+- [ ] **Step 3: �?`Phase` 加字�?*
 
-Modify `skills/e2e-dev-harness-v2/scripts/harness_v2/core/lifecycle.py` — `Phase` dataclass 加末位带默认字段:
+Modify `skills/e2e-dev-harness/scripts/e2e_harness/core/lifecycle.py` �?`Phase` dataclass 加末位带默认字段:
 
 ```python
 @dataclass(frozen=True)
@@ -137,19 +127,19 @@ class Phase:
     allows_code_write: bool = False
 ```
 
-(`_CATALOG` 的 6-位置构造不变;新字段默认 False。)
+(`_CATALOG` �?6-位置构造不�?新字段默�?False�?
 
 - [ ] **Step 4: `pipeline.py` 收集 override + 新增 `can_write_code`**
 
-Modify `skills/e2e-dev-harness-v2/scripts/harness_v2/pipeline.py`:
+Modify `skills/e2e-dev-harness/scripts/e2e_harness/pipeline.py`:
 
-4a. `_OVERRIDE_FIELDS` 加 `allows_code_write`:
+4a. `_OVERRIDE_FIELDS` �?`allows_code_write`:
 
 ```python
 _OVERRIDE_FIELDS = ("worker_role", "worker_skill", "produces", "exit_gate", "allows_code_write")
 ```
 
-4b. `_entry_name_and_overrides` 的 override 收集循环保持通用(`allows_code_write` 是 bool,不走 `produces`/`exit_gate` 的 tuple 分支,落入 else 原样取值)——当前实现已满足:
+4b. `_entry_name_and_overrides` �?override 收集循环保持通用(`allows_code_write` �?bool,不走 `produces`/`exit_gate` �?tuple 分支,落入 else 原样取�?——当前实现已满足:
 
 ```python
 def _entry_name_and_overrides(entry) -> tuple[str, dict]:
@@ -164,7 +154,7 @@ def _entry_name_and_overrides(entry) -> tuple[str, dict]:
     return entry["phase"], overrides
 ```
 
-4c. `spec_to_spine` 的非catalog 分支显式传 `allows_code_write`(默认 False):
+4c. `spec_to_spine` 的非catalog 分支显式�?`allows_code_write`(默认 False):
 
 ```python
         else:  # non-catalog phase: must be fully specified (validation enforces)
@@ -185,8 +175,8 @@ def _entry_name_and_overrides(entry) -> tuple[str, dict]:
 def can_write_code(state: dict) -> bool:
     """True iff state['current_phase'] resolves to a spine phase declaring allows_code_write.
 
-    Single source of phase code-write authority — reused by the PreToolUse hook
-    and any CLI that needs the same answer. Conservative: unknown / missing phase → False.
+    Single source of phase code-write authority �?reused by the PreToolUse hook
+    and any CLI that needs the same answer. Conservative: unknown / missing phase �?False.
     """
     current = state.get("current_phase")
     if not current:
@@ -197,35 +187,34 @@ def can_write_code(state: dict) -> bool:
     return False
 ```
 
-- [ ] **Step 5: 跑测试确认 pass + 回归**
+- [ ] **Step 5: 跑测试确�?pass + 回归**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_can_write_code.py tests/test_lifecycle_spine.py tests/test_pipeline_yaml_load.py tests/test_pipeline_tiers.py -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_can_write_code.py tests/test_lifecycle_spine.py tests/test_pipeline_yaml_load.py tests/test_pipeline_tiers.py -q`
 Expected: PASS (新测试绿;既有 spine/yaml/tier 测试未破)
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/core/lifecycle.py \
-        skills/e2e-dev-harness-v2/scripts/harness_v2/pipeline.py \
-        skills/e2e-dev-harness-v2/tests/test_can_write_code.py
-git commit -m "feat(harness-v2): U7 Phase.allows_code_write + can_write_code declarative gate"
+git add skills/e2e-dev-harness/scripts/e2e_harness/core/lifecycle.py \
+        skills/e2e-dev-harness/scripts/e2e_harness/pipeline.py \
+        skills/e2e-dev-harness/tests/test_can_write_code.py
+git commit -m "feat(e2e-dev-harness): U7 Phase.allows_code_write + can_write_code declarative gate"
 ```
 
 ---
 
-## Task 2: `pipeline_validate` 接受可选 `allows_code_write`
+## Task 2: `pipeline_validate` 接受可�?`allows_code_write`
 
 **Files:**
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/pipeline_validate.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_pipeline_validate.py` (追加)
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/core/pipeline_validate.py`
+- Test: `skills/e2e-dev-harness/tests/test_pipeline_validate.py` (追加)
 
 - [ ] **Step 0: impact**
 
-Run: `gitnexus_impact({target:"validate_spec", direction:"upstream", repo:"e2e-dev-workflow"})`。报告 blast radius。
-
+Run: `gitnexus_impact({target:"validate_spec", direction:"upstream", repo:"e2e-dev-workflow"})`。报�?blast radius�?
 - [ ] **Step 1: 追加失败测试**
 
-Append to `skills/e2e-dev-harness-v2/tests/test_pipeline_validate.py`:
+Append to `skills/e2e-dev-harness/tests/test_pipeline_validate.py`:
 
 ```python
 def test_allows_code_write_bool_accepted():
@@ -249,31 +238,31 @@ def test_allows_code_write_nonbool_rejected():
     assert any("allows_code_write" in e for e in errors)
 ```
 
-- [ ] **Step 2: 跑测试确认 fail**
+- [ ] **Step 2: 跑测试确�?fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_pipeline_validate.py::test_allows_code_write_nonbool_rejected -v`
-Expected: FAIL (非bool 当前未被拒,无 error 含 `allows_code_write`)
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_pipeline_validate.py::test_allows_code_write_nonbool_rejected -v`
+Expected: FAIL (非bool 当前未被�?�?error �?`allows_code_write`)
 
-- [ ] **Step 3: validate 加 bool 校验**
+- [ ] **Step 3: validate �?bool 校验**
 
-Modify `skills/e2e-dev-harness-v2/scripts/harness_v2/core/pipeline_validate.py` — 在 mapping-entry 分支的 `for k in ("produces", "exit_gate")` 校验之后、`if pname in seen` 之前,插入:
+Modify `skills/e2e-dev-harness/scripts/e2e_harness/core/pipeline_validate.py` �?�?mapping-entry 分支�?`for k in ("produces", "exit_gate")` 校验之后、`if pname in seen` 之前,插入:
 
 ```python
             if "allows_code_write" in entry and not isinstance(entry["allows_code_write"], bool):
                 errors.append(f"phase '{pname}' field 'allows_code_write' must be a boolean")
 ```
 
-- [ ] **Step 4: 跑测试确认 pass + 回归**
+- [ ] **Step 4: 跑测试确�?pass + 回归**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_pipeline_validate.py -q`
-Expected: PASS (含既有 10 测试)
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_pipeline_validate.py -q`
+Expected: PASS (含既�?10 测试)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/core/pipeline_validate.py \
-        skills/e2e-dev-harness-v2/tests/test_pipeline_validate.py
-git commit -m "feat(harness-v2): U7 pipeline_validate accepts optional allows_code_write bool"
+git add skills/e2e-dev-harness/scripts/e2e_harness/core/pipeline_validate.py \
+        skills/e2e-dev-harness/tests/test_pipeline_validate.py
+git commit -m "feat(e2e-dev-harness): U7 pipeline_validate accepts optional allows_code_write bool"
 ```
 
 ---
@@ -281,15 +270,15 @@ git commit -m "feat(harness-v2): U7 pipeline_validate accepts optional allows_co
 ## Task 3: 内建 pipeline 升级 `IMPLEMENTED` 写码 phase
 
 **Files:**
-- Modify: `skills/e2e-dev-harness-v2/pipelines/minimal.yaml`
-- Modify: `skills/e2e-dev-harness-v2/pipelines/standard.yaml`
-- Modify: `skills/e2e-dev-harness-v2/pipelines/critical.yaml`
-- Modify: `skills/e2e-dev-harness-v2/pipelines/audited.yaml`
-- Test: `skills/e2e-dev-harness-v2/tests/test_can_write_code.py` (追加)
+- Modify: `skills/e2e-dev-harness/pipelines/minimal.yaml`
+- Modify: `skills/e2e-dev-harness/pipelines/standard.yaml`
+- Modify: `skills/e2e-dev-harness/pipelines/critical.yaml`
+- Modify: `skills/e2e-dev-harness/pipelines/audited.yaml`
+- Test: `skills/e2e-dev-harness/tests/test_can_write_code.py` (追加)
 
 - [ ] **Step 1: 追加失败测试**
 
-Append to `skills/e2e-dev-harness-v2/tests/test_can_write_code.py`:
+Append to `skills/e2e-dev-harness/tests/test_can_write_code.py`:
 
 ```python
 import pytest
@@ -311,16 +300,15 @@ def test_builtin_nonimplemented_phases_deny(name):
         assert pipeline.can_write_code(state) is False, f"{name}:{phase.name}"
 ```
 
-- [ ] **Step 2: 跑测试确认 fail**
+- [ ] **Step 2: 跑测试确�?fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_can_write_code.py::test_builtin_implemented_allows_code_write -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_can_write_code.py::test_builtin_implemented_allows_code_write -q`
 Expected: FAIL (bare-string `IMPLEMENTED` 继承 catalog 默认 False)
 
-- [ ] **Step 3: 4 个 yaml 升级 `IMPLEMENTED`**
+- [ ] **Step 3: 4 �?yaml 升级 `IMPLEMENTED`**
 
-将每个文件中 bare-string `  - IMPLEMENTED` 这一行替换为 mapping。
-
-`skills/e2e-dev-harness-v2/pipelines/minimal.yaml` 全文:
+将每个文件中 bare-string `  - IMPLEMENTED` 这一行替换为 mapping�?
+`skills/e2e-dev-harness/pipelines/minimal.yaml` 全文:
 
 ```yaml
 name: minimal
@@ -333,7 +321,7 @@ phases:
   - VERIFIED
 ```
 
-`skills/e2e-dev-harness-v2/pipelines/standard.yaml` 全文:
+`skills/e2e-dev-harness/pipelines/standard.yaml` 全文:
 
 ```yaml
 name: standard
@@ -348,7 +336,7 @@ phases:
   - VERIFIED
 ```
 
-`skills/e2e-dev-harness-v2/pipelines/critical.yaml` 全文:
+`skills/e2e-dev-harness/pipelines/critical.yaml` 全文:
 
 ```yaml
 name: critical
@@ -365,7 +353,7 @@ phases:
   - VERIFIED
 ```
 
-`skills/e2e-dev-harness-v2/pipelines/audited.yaml` 全文:
+`skills/e2e-dev-harness/pipelines/audited.yaml` 全文:
 
 ```yaml
 name: audited
@@ -384,39 +372,39 @@ phases:
     exit_gate: [verification, audit_replay]
 ```
 
-- [ ] **Step 4: 跑测试确认 pass + spec 校验回归**
+- [ ] **Step 4: 跑测试确�?pass + spec 校验回归**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_can_write_code.py tests/test_pipeline_validate.py tests/test_pipeline_yaml_load.py -q`
-Expected: PASS (内建 spec 仍 valid;IMPLEMENTED 各 tier 放行,其余拒)
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_can_write_code.py tests/test_pipeline_validate.py tests/test_pipeline_yaml_load.py -q`
+Expected: PASS (内建 spec �?valid;IMPLEMENTED �?tier 放行,其余�?
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/pipelines/minimal.yaml \
-        skills/e2e-dev-harness-v2/pipelines/standard.yaml \
-        skills/e2e-dev-harness-v2/pipelines/critical.yaml \
-        skills/e2e-dev-harness-v2/pipelines/audited.yaml \
-        skills/e2e-dev-harness-v2/tests/test_can_write_code.py
-git commit -m "feat(harness-v2): U7 builtin pipelines mark IMPLEMENTED allows_code_write"
+git add skills/e2e-dev-harness/pipelines/minimal.yaml \
+        skills/e2e-dev-harness/pipelines/standard.yaml \
+        skills/e2e-dev-harness/pipelines/critical.yaml \
+        skills/e2e-dev-harness/pipelines/audited.yaml \
+        skills/e2e-dev-harness/tests/test_can_write_code.py
+git commit -m "feat(e2e-dev-harness): U7 builtin pipelines mark IMPLEMENTED allows_code_write"
 ```
 
 ---
 
-## Task 4: `adapters/hooks/paths.py` — 路径无关逻辑 port
+## Task 4: `adapters/hooks/paths.py` �?路径无关逻辑 port
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/__init__.py`
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/paths.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_hook_paths.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/__init__.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/paths.py`
+- Test: `skills/e2e-dev-harness/tests/test_hook_paths.py`
 
-- [ ] **Step 1: 写失败测试**
+- [ ] **Step 1: 写失败测�?*
 
-Create `skills/e2e-dev-harness-v2/tests/test_hook_paths.py`:
+Create `skills/e2e-dev-harness/tests/test_hook_paths.py`:
 
 ```python
 from pathlib import Path
 
-from harness_v2.adapters.hooks import paths as hp
+from e2e_harness.adapters.hooks import paths as hp
 
 
 def test_code_path_by_suffix(tmp_path):
@@ -473,26 +461,25 @@ def test_discover_run_state_none_when_absent(tmp_path):
     assert hp.discover_run_state(tmp_path) is None
 ```
 
-- [ ] **Step 2: 跑测试确认 fail**
+- [ ] **Step 2: 跑测试确�?fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_hook_paths.py -q`
-Expected: FAIL (`ModuleNotFoundError: harness_v2.adapters.hooks`)
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_hook_paths.py -q`
+Expected: FAIL (`ModuleNotFoundError: e2e_harness.adapters.hooks`)
 
 - [ ] **Step 3: 建包 + 实现**
 
-Create `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/__init__.py` (空文件):
+Create `skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/__init__.py` (空文�?:
 
 ```python
 ```
 
-Create `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/paths.py`:
+Create `skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/paths.py`:
 
 ```python
 """Path-agnostic classification ported from legacy phase_guard.
 
-v2 收敛 (design §3.2): 控制文件集 = {run-state.json}(无 .phase-lock);
-hook-config 仅 claude + opencode。除 `discover_run_state` 外皆为纯函数。
-"""
+e2e-dev-harness 收敛 (design §3.2): 控制文件�?= {run-state.json}(�?.phase-lock);
+hook-config �?claude + opencode。除 `discover_run_state` 外皆为纯函数�?"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -571,38 +558,38 @@ def discover_run_state(repo: Path) -> Path | None:
     return matches[0] if matches else None
 ```
 
-- [ ] **Step 4: 跑测试确认 pass**
+- [ ] **Step 4: 跑测试确�?pass**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_hook_paths.py -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_hook_paths.py -q`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/__init__.py \
-        skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/paths.py \
-        skills/e2e-dev-harness-v2/tests/test_hook_paths.py
-git commit -m "feat(harness-v2): U7 hook path classification ported from legacy phase_guard"
+git add skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/__init__.py \
+        skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/paths.py \
+        skills/e2e-dev-harness/tests/test_hook_paths.py
+git commit -m "feat(e2e-dev-harness): U7 hook path classification ported from legacy phase_guard"
 ```
 
 ---
 
-## Task 5: `phase_guard_v2.py` — PreToolUse 薄壳
+## Task 5: `phase_guard.py` �?PreToolUse 薄壳
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/phase_guard_v2.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_phase_guard_v2.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/phase_guard.py`
+- Test: `skills/e2e-dev-harness/tests/test_phase_guard.py`
 
-- [ ] **Step 1: 写失败测试**
+- [ ] **Step 1: 写失败测�?*
 
-Create `skills/e2e-dev-harness-v2/tests/test_phase_guard_v2.py`:
+Create `skills/e2e-dev-harness/tests/test_phase_guard.py`:
 
 ```python
 import json
 from pathlib import Path
 
-from harness_v2.adapters.hooks import phase_guard_v2 as pg
-from harness_v2.core import run_state
+from e2e_harness.adapters.hooks import phase_guard as pg
+from e2e_harness.core import run_state
 
 
 def _write_state(tmp_path, current_phase, pipeline="minimal"):
@@ -675,7 +662,7 @@ def test_settings_json_write_denied(tmp_path):
 
 
 def test_no_active_run_allows_code_write(tmp_path):
-    # require-active-run is deferred (design §7): no run-state → allow.
+    # require-active-run is deferred (design §7): no run-state �?allow.
     d = pg.decide(_hook("Write", file_path=str(tmp_path / "src" / "a.py"), content="x"), tmp_path, None)
     assert d["decision"] == "allow"
 
@@ -689,17 +676,17 @@ def test_emit_pretooluse_protocol(capsys):
     assert hso["permissionDecisionReason"] == "nope"
 ```
 
-- [ ] **Step 2: 跑测试确认 fail**
+- [ ] **Step 2: 跑测试确�?fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_phase_guard_v2.py -q`
-Expected: FAIL (`ModuleNotFoundError: ... phase_guard_v2`)
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_phase_guard.py -q`
+Expected: FAIL (`ModuleNotFoundError: ... phase_guard`)
 
 - [ ] **Step 3: 实现**
 
-Create `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/phase_guard_v2.py`:
+Create `skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/phase_guard.py`:
 
 ```python
-"""v2 PreToolUse hook: phase-lock code writes (thin shell over run-state).
+"""e2e-dev-harness PreToolUse hook: phase-lock code writes (thin shell over run-state).
 
 Reuses ported path logic (adapters.hooks.paths) and the declarative
 pipeline.can_write_code gate. Stdlib only. See design §3.2.
@@ -714,9 +701,9 @@ _SCRIPTS = Path(__file__).resolve().parents[3]  # .../scripts
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from harness_v2 import pipeline                       # noqa: E402
-from harness_v2.core import run_state                 # noqa: E402
-from harness_v2.adapters.hooks import paths as hook_paths  # noqa: E402
+from e2e_harness import pipeline                       # noqa: E402
+from e2e_harness.core import run_state                 # noqa: E402
+from e2e_harness.adapters.hooks import paths as hook_paths  # noqa: E402
 
 _REDIRECT_TOKENS = (">", ">>", "tee", "set-content", "add-content", "out-file")
 
@@ -774,7 +761,7 @@ def decide(hook_text: str, repo, run_state_path) -> dict:
         return _allow()
 
     if run_state_path is None or not Path(run_state_path).is_file():
-        return _allow()  # no active run — require-active-run deferred (design §7)
+        return _allow()  # no active run �?require-active-run deferred (design §7)
 
     state = run_state.load(run_state_path)
     if pipeline.can_write_code(state):
@@ -782,7 +769,7 @@ def decide(hook_text: str, repo, run_state_path) -> dict:
     phase = state.get("current_phase", "<unknown>")
     return _deny(
         f"Code write blocked: phase {phase} does not allow code writes. Advance the run "
-        f"with `python -m harness_v2 next --state {run_state_path}` (then `gate` to satisfy "
+        f"with `python -m e2e_harness next --state {run_state_path}` (then `gate` to satisfy "
         "the exit gate) until an implementation phase is active."
     )
 
@@ -815,37 +802,37 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 4: 跑测试确认 pass**
+- [ ] **Step 4: 跑测试确�?pass**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_phase_guard_v2.py -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_phase_guard.py -q`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/phase_guard_v2.py \
-        skills/e2e-dev-harness-v2/tests/test_phase_guard_v2.py
-git commit -m "feat(harness-v2): U7 phase_guard_v2 PreToolUse hook (phase-lock code writes)"
+git add skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/phase_guard.py \
+        skills/e2e-dev-harness/tests/test_phase_guard.py
+git commit -m "feat(e2e-dev-harness): U7 phase_guard PreToolUse hook (phase-lock code writes)"
 ```
 
 ---
 
-## Task 6: `stop_guard_v2.py` — Stop 薄壳
+## Task 6: `stop_guard.py` �?Stop 薄壳
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/stop_guard_v2.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_stop_guard_v2.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/stop_guard.py`
+- Test: `skills/e2e-dev-harness/tests/test_stop_guard.py`
 
-- [ ] **Step 1: 写失败测试**
+- [ ] **Step 1: 写失败测�?*
 
-Create `skills/e2e-dev-harness-v2/tests/test_stop_guard_v2.py`:
+Create `skills/e2e-dev-harness/tests/test_stop_guard.py`:
 
 ```python
 import json
 from pathlib import Path
 
-from harness_v2.adapters.hooks import stop_guard_v2 as sg
-from harness_v2.core import run_state
+from e2e_harness.adapters.hooks import stop_guard as sg
+from e2e_harness.core import run_state
 
 
 def _write_state(tmp_path, current_phase):
@@ -890,19 +877,19 @@ def test_emit_allow_is_empty(capsys):
     assert json.loads(capsys.readouterr().out) == {}
 ```
 
-- [ ] **Step 2: 跑测试确认 fail**
+- [ ] **Step 2: 跑测试确�?fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_stop_guard_v2.py -q`
-Expected: FAIL (`ModuleNotFoundError: ... stop_guard_v2`)
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_stop_guard.py -q`
+Expected: FAIL (`ModuleNotFoundError: ... stop_guard`)
 
 - [ ] **Step 3: 实现**
 
-Create `skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/stop_guard_v2.py`:
+Create `skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/stop_guard.py`:
 
 ```python
-"""v2 Stop hook: keep going while a run is active and not VERIFIED.
+"""e2e-dev-harness Stop hook: keep going while a run is active and not VERIFIED.
 
-Thin version of legacy harness_stop_guard — reads only run-state.current_phase.
+Thin version of legacy harness_stop_guard �?reads only run-state.current_phase.
 Stdlib only. See design §3.3.
 """
 from __future__ import annotations
@@ -915,8 +902,8 @@ _SCRIPTS = Path(__file__).resolve().parents[3]  # .../scripts
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from harness_v2.core import run_state                 # noqa: E402
-from harness_v2.adapters.hooks import paths as hook_paths  # noqa: E402
+from e2e_harness.core import run_state                 # noqa: E402
+from e2e_harness.adapters.hooks import paths as hook_paths  # noqa: E402
 
 TERMINAL_PHASES = {"VERIFIED"}
 
@@ -969,17 +956,17 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 4: 跑测试确认 pass**
+- [ ] **Step 4: 跑测试确�?pass**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_stop_guard_v2.py -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_stop_guard.py -q`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/adapters/hooks/stop_guard_v2.py \
-        skills/e2e-dev-harness-v2/tests/test_stop_guard_v2.py
-git commit -m "feat(harness-v2): U7 stop_guard_v2 Stop hook (continue until VERIFIED)"
+git add skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/stop_guard.py \
+        skills/e2e-dev-harness/tests/test_stop_guard.py
+git commit -m "feat(e2e-dev-harness): U7 stop_guard Stop hook (continue until VERIFIED)"
 ```
 
 ---
@@ -987,13 +974,13 @@ git commit -m "feat(harness-v2): U7 stop_guard_v2 Stop hook (continue until VERI
 ## Task 7: runtime example configs (claude + opencode)
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/hooks/claude-code-settings.example.json`
-- Create: `skills/e2e-dev-harness-v2/hooks/opencode-plugin.example.js`
-- Test: `skills/e2e-dev-harness-v2/tests/test_hook_examples.py`
+- Create: `skills/e2e-dev-harness/hooks/claude-code-settings.example.json`
+- Create: `skills/e2e-dev-harness/hooks/opencode-plugin.example.js`
+- Test: `skills/e2e-dev-harness/tests/test_hook_examples.py`
 
-- [ ] **Step 1: 写失败测试**
+- [ ] **Step 1: 写失败测�?*
 
-Create `skills/e2e-dev-harness-v2/tests/test_hook_examples.py`:
+Create `skills/e2e-dev-harness/tests/test_hook_examples.py`:
 
 ```python
 import json
@@ -1007,9 +994,9 @@ def test_claude_settings_registers_both_hooks():
     hooks = data["hooks"]
     pre = json.dumps(hooks["PreToolUse"])
     stop = json.dumps(hooks["Stop"])
-    assert "phase_guard_v2.py" in pre
-    assert "stop_guard_v2.py" in stop
-    assert "__HARNESS_V2_SCRIPTS__" in pre and "__HARNESS_V2_SCRIPTS__" in stop
+    assert "phase_guard.py" in pre
+    assert "stop_guard.py" in stop
+    assert "__e2e_harness_SCRIPTS__" in pre and "__e2e_harness_SCRIPTS__" in stop
 
 
 def test_claude_pretooluse_matches_write_tools():
@@ -1021,24 +1008,24 @@ def test_claude_pretooluse_matches_write_tools():
 
 def test_opencode_plugin_calls_phase_guard():
     text = (HOOKS_DIR / "opencode-plugin.example.js").read_text(encoding="utf-8")
-    assert "phase_guard_v2.py" in text
+    assert "phase_guard.py" in text
     assert "tool.execute.before" in text
     assert "permissionDecision" in text
-    assert "__HARNESS_V2_SCRIPTS__" in text
+    assert "__e2e_harness_SCRIPTS__" in text
 ```
 
-- [ ] **Step 2: 跑测试确认 fail**
+- [ ] **Step 2: 跑测试确�?fail**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_hook_examples.py -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_hook_examples.py -q`
 Expected: FAIL (`FileNotFoundError`)
 
-- [ ] **Step 3: 写两个 example**
+- [ ] **Step 3: 写两�?example**
 
-Create `skills/e2e-dev-harness-v2/hooks/claude-code-settings.example.json`:
+Create `skills/e2e-dev-harness/hooks/claude-code-settings.example.json`:
 
 ```json
 {
-  "_comment": "e2e-dev-harness-v2 hook template. U6 installer rewrites __HARNESS_V2_SCRIPTS__ to the installed absolute scripts dir.",
+  "_comment": "e2e-dev-harness hook template. U6 installer rewrites __e2e_harness_SCRIPTS__ to the installed absolute scripts dir.",
   "hooks": {
     "PreToolUse": [
       {
@@ -1046,7 +1033,7 @@ Create `skills/e2e-dev-harness-v2/hooks/claude-code-settings.example.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "python __HARNESS_V2_SCRIPTS__/harness_v2/adapters/hooks/phase_guard_v2.py --repo . --hook-input -"
+            "command": "python __e2e_harness_SCRIPTS__/e2e_harness/adapters/hooks/phase_guard.py --repo . --hook-input -"
           }
         ]
       }
@@ -1056,7 +1043,7 @@ Create `skills/e2e-dev-harness-v2/hooks/claude-code-settings.example.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "python __HARNESS_V2_SCRIPTS__/harness_v2/adapters/hooks/stop_guard_v2.py --repo . --hook-input -"
+            "command": "python __e2e_harness_SCRIPTS__/e2e_harness/adapters/hooks/stop_guard.py --repo . --hook-input -"
           }
         ]
       }
@@ -1065,14 +1052,14 @@ Create `skills/e2e-dev-harness-v2/hooks/claude-code-settings.example.json`:
 }
 ```
 
-Create `skills/e2e-dev-harness-v2/hooks/opencode-plugin.example.js`:
+Create `skills/e2e-dev-harness/hooks/opencode-plugin.example.js`:
 
 ```javascript
-// e2e-dev-harness-v2 opencode plugin (example template).
-// U6 installer rewrites __HARNESS_V2_SCRIPTS__ to the installed absolute scripts dir.
+// e2e-dev-harness opencode plugin (example template).
+// U6 installer rewrites __e2e_harness_SCRIPTS__ to the installed absolute scripts dir.
 const { spawnSync } = require("child_process");
 
-const PHASE_GUARD = "__HARNESS_V2_SCRIPTS__/harness_v2/adapters/hooks/phase_guard_v2.py";
+const PHASE_GUARD = "__e2e_harness_SCRIPTS__/e2e_harness/adapters/hooks/phase_guard.py";
 
 module.exports = {
   "tool.execute.before": async (input, output) => {
@@ -1089,36 +1076,36 @@ module.exports = {
     }
     const decision = (parsed.hookSpecificOutput || {}).permissionDecision;
     if (decision === "deny") {
-      throw new Error((parsed.hookSpecificOutput || {}).permissionDecisionReason || "phase_guard_v2 denied this write");
+      throw new Error((parsed.hookSpecificOutput || {}).permissionDecisionReason || "phase_guard denied this write");
     }
   },
 };
 ```
 
-- [ ] **Step 4: 跑测试确认 pass**
+- [ ] **Step 4: 跑测试确�?pass**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_hook_examples.py -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_hook_examples.py -q`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/hooks/claude-code-settings.example.json \
-        skills/e2e-dev-harness-v2/hooks/opencode-plugin.example.js \
-        skills/e2e-dev-harness-v2/tests/test_hook_examples.py
-git commit -m "feat(harness-v2): U7 claude + opencode hook example configs"
+git add skills/e2e-dev-harness/hooks/claude-code-settings.example.json \
+        skills/e2e-dev-harness/hooks/opencode-plugin.example.js \
+        skills/e2e-dev-harness/tests/test_hook_examples.py
+git commit -m "feat(e2e-dev-harness): U7 claude + opencode hook example configs"
 ```
 
 ---
 
-## Task 8: e2e — start → 越界拦 → gate 推进 → 放行
+## Task 8: e2e �?start �?越界�?�?gate 推进 �?放行
 
 **Files:**
-- Test: `skills/e2e-dev-harness-v2/tests/test_phase_guard_e2e.py`
+- Test: `skills/e2e-dev-harness/tests/test_phase_guard_e2e.py`
 
-- [ ] **Step 1: 写 e2e 测试**
+- [ ] **Step 1: �?e2e 测试**
 
-Create `skills/e2e-dev-harness-v2/tests/test_phase_guard_e2e.py`:
+Create `skills/e2e-dev-harness/tests/test_phase_guard_e2e.py`:
 
 ```python
 import json
@@ -1126,10 +1113,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from harness_v2.adapters.hooks import phase_guard_v2 as pg
-from harness_v2.adapters.evidence import command_evidence as ce
+from e2e_harness.adapters.hooks import phase_guard as pg
+from e2e_harness.adapters.evidence import command_evidence as ce
 
-ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness_v2.py"
+ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness.py"
 
 
 def _run(*args, cwd):
@@ -1171,7 +1158,7 @@ def test_phase_guard_blocks_early_then_allows_at_implemented(tmp_path):
     # 2) Drive the run via real gates until current_phase == IMPLEMENTED.
     reached_impl = False
     for _ in range(50):
-        from harness_v2.core import run_state
+        from e2e_harness.core import run_state
         if run_state.load(state_path)["current_phase"] == "IMPLEMENTED":
             reached_impl = True
             break
@@ -1190,40 +1177,36 @@ def test_phase_guard_blocks_early_then_allows_at_implemented(tmp_path):
     assert d["decision"] == "allow", d
 ```
 
-- [ ] **Step 2: 跑 e2e 确认 pass**
+- [ ] **Step 2: �?e2e 确认 pass**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/test_phase_guard_e2e.py -q`
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/test_phase_guard_e2e.py -q`
 Expected: PASS
 
-> 若 `current_phase` 在 `next` 推进语义下不直接等于 `IMPLEMENTED`(例如 CLI 用中间态命名),改判据为 `pipeline.can_write_code(run_state.load(state_path))` 为真即 break,并据此断言放行 —— 判定真相源始终是 `can_write_code`,非字符串。
-
+> �?`current_phase` �?`next` 推进语义下不直接等于 `IMPLEMENTED`(例如 CLI 用中间态命�?,改判据为 `pipeline.can_write_code(run_state.load(state_path))` 为真�?break,并据此断言放行 —�?判定真相源始终是 `can_write_code`,非字符串�?
 - [ ] **Step 3: 全套回归**
 
-Run: `cd skills/e2e-dev-harness-v2 && python -m pytest tests/ -q`
-Expected: PASS (原 176 + 本 plan 新增,全绿)
+Run: `cd skills/e2e-dev-harness && python -m pytest tests/ -q`
+Expected: PASS (�?176 + �?plan 新增,全绿)
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/tests/test_phase_guard_e2e.py
-git commit -m "test(harness-v2): U7 e2e phase-lock blocks then allows at IMPLEMENTED"
+git add skills/e2e-dev-harness/tests/test_phase_guard_e2e.py
+git commit -m "test(e2e-dev-harness): U7 e2e phase-lock blocks then allows at IMPLEMENTED"
 ```
 
 ---
 
-## 收尾 (plan 完成后)
+## 收尾 (plan 完成�?
 
-- [ ] `cd skills/e2e-dev-harness-v2 && python -m pytest tests/ -q` 全绿
-- [ ] `gitnexus_detect_changes({scope:"unstaged"})` 校验影响面仅限预期 symbol/flow
-- [ ] `/code-review`(dispatch 坏,用内联 review 替代 subagent 两阶段)
-- [ ] 更新 roadmap [2026-06-07-harness-v2-remaining-work-roadmap.md](2026-06-07-harness-v2-remaining-work-roadmap.md):标 U7 done;U6 "删 legacy" 注 gated on U7 → 现已解锁;U6 hook 能力 "deferred to U7" → "covered by U7"
-- [ ] **不**碰 installer / 入口切换 / 删 legacy — 全属 U6
+- [ ] `cd skills/e2e-dev-harness && python -m pytest tests/ -q` 全绿
+- [ ] `gitnexus_detect_changes({scope:"unstaged"})` 校验影响面仅限预�?symbol/flow
+- [ ] `/code-review`(dispatch �?用内�?review 替代 subagent 两阶�?
+- [ ] 更新 roadmap [2026-06-07-e2e-dev-harness-remaining-work-roadmap.md](2026-06-07-e2e-dev-harness-remaining-work-roadmap.md):�?U7 done;U6 "�?legacy" �?gated on U7 �?现已解锁;U6 hook 能力 "deferred to U7" �?"covered by U7"
+- [ ] **�?*�?installer / 入口切换 / �?legacy �?全属 U6
 
 ---
 
 ## Self-Review 记录
 
-- **Spec 覆盖:** §3.1 can_write_code+字段→T1;§3.1 内建标注→T3;validate 新字段→T2;§3.2 phase_guard_v2(路径复用 T4 / 薄壳 T5)→T4+T5;§3.3 stop_guard_v2→T6;§3.4 example configs→T7;§5 测试策略(can_write_code/phase_guard/stop_guard/installer-example/e2e)→T1/T5/T6/T7/T8。installer 真正安装 = U6,本 plan 只到 example(§6/§8 一致)。
-- **YAGNI (§7):** require-active-run / session-checkpoint / codex+gemini / 冲突事实强制 — 均不实现;`decide` 在无 active run 时放行(显式落在 T5 `test_no_active_run_allows_code_write`)。
-- **类型一致:** `decide(hook_text, repo, run_state_path) -> {"decision","reason"}`、`parse_hook_input -> (tool, paths, command)`、`can_write_code(state) -> bool`、`Phase.allows_code_write: bool` 跨 T1/T5/T6/T8 一致;`_emit` 在 phase_guard 输出 PreToolUse 协议、在 stop_guard 输出 Stop 协议,两者签名 `(_emit(result: dict))` 一致但协议不同(各自测试锚定)。
-- **循环依赖:** can_write_code 落 pipeline.py(非 lifecycle.py),已在 File Structure 标注理由。
+- **Spec 覆盖:** §3.1 can_write_code+字段→T1;§3.1 内建标注→T3;validate 新字段→T2;§3.2 phase_guard(路径复用 T4 / 薄壳 T5)→T4+T5;§3.3 stop_guard→T6;§3.4 example configs→T7;§5 测试策略(can_write_code/phase_guard/stop_guard/installer-example/e2e)→T1/T5/T6/T7/T8。installer 真正安装 = U6,�?plan 只到 example(§6/§8 一�?�?- **YAGNI (§7):** require-active-run / session-checkpoint / codex+gemini / 冲突事实强制 �?均不实现;`decide` 在无 active run 时放�?显式落在 T5 `test_no_active_run_allows_code_write`)�?- **类型一�?** `decide(hook_text, repo, run_state_path) -> {"decision","reason"}`、`parse_hook_input -> (tool, paths, command)`、`can_write_code(state) -> bool`、`Phase.allows_code_write: bool` �?T1/T5/T6/T8 一�?`_emit` �?phase_guard 输出 PreToolUse 协议、在 stop_guard 输出 Stop 协议,两者签�?`(_emit(result: dict))` 一致但协议不同(各自测试锚定)�?- **循环依赖:** can_write_code �?pipeline.py(�?lifecycle.py),已在 File Structure 标注理由�?

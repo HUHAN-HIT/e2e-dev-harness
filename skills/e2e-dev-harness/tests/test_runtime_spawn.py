@@ -53,7 +53,7 @@ def test_subagent_type_defaults_to_general_purpose():
 
 
 def test_env_override_sets_subagent_type(monkeypatch):
-    monkeypatch.setenv("E2E_HARNESS_V2_SUBAGENT_TYPE_CLARIFIER", "my-clarifier-agent")
+    monkeypatch.setenv("E2E_HARNESS_SUBAGENT_TYPE_CLARIFIER", "my-clarifier-agent")
     d = runtime.spawn_worker(_packet(role="clarifier"), runtime="claude-code")
     assert d["arguments"]["subagent_type"] == "my-clarifier-agent"
 
@@ -99,7 +99,7 @@ def test_opencode_prompt_mentions_skill_and_expected_outputs():
 
 
 def test_opencode_env_override_sets_subagent_type(monkeypatch):
-    monkeypatch.setenv("E2E_HARNESS_V2_SUBAGENT_TYPE_CLARIFIER", "oc-clarifier")
+    monkeypatch.setenv("E2E_HARNESS_SUBAGENT_TYPE_CLARIFIER", "oc-clarifier")
     d = runtime.spawn_worker(_packet(role="clarifier"), runtime="opencode")
     assert d["arguments"]["subagent_type"] == "oc-clarifier"
 

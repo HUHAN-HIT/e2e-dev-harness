@@ -3,19 +3,19 @@
 ## Unreleased
 
 **Rename: the harness is promoted to its canonical name `e2e-dev-harness`.** The interim
-`-v2`-suffixed skill directory, entry script, hook scripts, and Python console script drop the
+Suffixed skill directory, entry script, hook scripts, and Python console script drop the
 suffix; the internal Python package is renamed to `e2e_harness` and the hook placeholder to
 `__HARNESS_SCRIPTS__`. Persisted run-state / worker-packet / descriptor schema identifiers also
-drop the `-v2` segment and are strictly validated on read, so run-states created before this
+drop the suffix segment and are strictly validated on read, so run-states created before this
 change are not loadable and must be restarted. The Node CLI name (`e2e-harness`), env vars
 (`E2E_HARNESS_HOME` / `E2E_HARNESS_PYTHON`), and `.harness-env.json` are unchanged.
 
 ## 0.2.0 - 2026-06-08
 
-**v2 cutover (M5): e2e-dev-harness is now the default; legacy skill retired.** See `MIGRATION.md`.
+**Canonical cutover (M5): e2e-dev-harness is now the default; legacy skill retired.** See `MIGRATION.md`.
 
 ### Added
-- v2 harness as default canonical skill: SSOT `run-state.json`, terminating spine, declarative
+- e2e-dev-harness as default canonical skill: SSOT `run-state.json`, terminating spine, declarative
   tier-scaled gates, `DomainAdapter` (backend + frontend), worker subagents self-loading Superpowers.
 - Declarative tier pipelines `pipelines/*.yaml` (`minimal`/`standard`/`critical`/`audited`) +
   `validate-pipeline` invariant check + user-custom pipelines.
@@ -26,8 +26,8 @@ change are not loadable and must be restarted. The Node CLI name (`e2e-harness`)
 ### Changed
 - CLI surface 35 verbs → 6 (`start`/`next`/`dispatch`/`submit`/`gate`/`status`) + `validate-pipeline`.
 - Python console scripts retarget to `e2e_harness.cli.main:main` (canonical:
-  `e2e-dev-harness`/`e2eh` aliases retained). Node CLI dispatches v2 verbs to `e2e_dev_harness.py`.
-- Installer copies the v2 skill (skips test/cache artifacts) and wires v2 hooks instead of the
+  `e2e-dev-harness`/`e2eh` aliases retained). Node CLI dispatches current verbs to `e2e_dev_harness.py`.
+- Installer copies the canonical skill (skips test/cache artifacts) and wires current hooks instead of the
   legacy `install_hooks.py`.
 
 ### Removed

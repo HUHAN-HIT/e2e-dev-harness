@@ -232,7 +232,7 @@ class NodeInstallerTests(unittest.TestCase):
             self.assertTrue(payload["skip_skill_copy"])
             self.assertEqual(["doctor"], [action["id"] for action in payload["actions"]])
 
-    def test_yes_installs_v2_phase_and_stop_hooks_to_project_root(self) -> None:
+    def test_yes_installs_phase_and_stop_hooks_to_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             install_root = Path(tmp) / "home"
             project = Path(tmp) / "business-project"
@@ -264,7 +264,7 @@ class NodeInstallerTests(unittest.TestCase):
             self.assertIn("phase_guard.py", pre)
             self.assertIn("stop_guard.py", stop)
             self.assertNotIn("__HARNESS_SCRIPTS__", pre + stop)
-            # hooks must point at the installed v2 skill scripts dir
+            # hooks must point at the installed skill scripts dir
             self.assertIn("e2e-dev-harness", pre)
             # installer must not touch the dev repo's own settings
             root_settings_after = root_settings.read_bytes() if root_settings.exists() else None

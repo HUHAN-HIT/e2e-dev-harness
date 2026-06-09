@@ -374,14 +374,14 @@ function actions(options, repo, projectRoot, installRoot, sourceSkillDir, target
     }
   }
   if (options.withHooks && !options.checkOnly) {
-    // v2 hooks are materialized in-process (no legacy install_hooks.py): read the
+    // Hooks are materialized in-process (no legacy install_hooks.py): read the
     // U7 example config, rewrite __HARNESS_SCRIPTS__ to the installed skill's
     // scripts dir, and merge into <project-root>/.claude/settings.json.
     const runtimeTarget = targets.includes(options.runtime) ? options.runtime : targets[0];
     const installedSkillPath = path.join(installRoot, ...TARGETS[runtimeTarget]);
     planned.push({
       id: "install-hooks",
-      description: `Materialize ${options.runtime} v2 hooks (phase_guard + stop_guard) into the project root.`,
+      description: `Materialize ${options.runtime} hooks (phase_guard + stop_guard) into the project root.`,
       project_root: projectRoot,
       scripts_dir: path.join(installedSkillPath, "scripts"),
       runtime: options.runtime,

@@ -1,4 +1,4 @@
-"""v2 Stop hook: keep going while a run is active and not VERIFIED.
+"""Stop hook: keep going while a run is active and not VERIFIED.
 
 Thin version of legacy harness_stop_guard — reads only run-state.current_phase.
 Stdlib only. See design §3.3.

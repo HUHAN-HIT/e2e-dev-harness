@@ -1,4 +1,4 @@
-"""Unified v2 CLI: 6 verbs."""
+"""Unified e2e-dev-harness CLI: 6 verbs."""
 from __future__ import annotations
 
 import argparse

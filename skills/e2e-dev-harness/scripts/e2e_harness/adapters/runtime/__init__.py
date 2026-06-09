@@ -14,7 +14,7 @@ PORTABLE_SUBAGENT_TYPE = "general-purpose"
 
 
 def _subagent_type(role: str) -> str:
-    key = "E2E_HARNESS_V2_SUBAGENT_TYPE_" + str(role).strip().upper().replace("-", "_")
+    key = "E2E_HARNESS_SUBAGENT_TYPE_" + str(role).strip().upper().replace("-", "_")
     override = os.environ.get(key, "").strip()
     return override or PORTABLE_SUBAGENT_TYPE
 

@@ -7,7 +7,7 @@ const { materializeHooks, substituteScriptsDir, toShellScriptsDir } = require('.
 
 function tmp() { return fs.mkdtempSync(path.join(os.tmpdir(), 'e2eh-hooks-')); }
 
-// A fake installed skill home carrying the v2 hook template with the placeholder.
+// A fake installed skill home carrying the hook template with the placeholder.
 function fakeSkillHome() {
   const home = tmp();
   const hooksDir = path.join(home, 'hooks');

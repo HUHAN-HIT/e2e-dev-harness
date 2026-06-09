@@ -1,4 +1,4 @@
-# Harness v2 — U4 M3 Config Layer Implementation Plan
+# Harness e2e-dev-harness �?U4 M3 Config Layer Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -6,15 +6,15 @@
 
 **Architecture:** `pipeline.py` becomes a YAML loader + interpreter (hybrid schema: a phase entry is a bare catalog name or an override/inline mapping) while preserving its public API. A pure `core/pipeline_validate.validate_spec` enforces the two invariants. A 7th CLI verb `validate-pipeline` exposes preflight; `start` runs the same validation as a guard and embeds the resolved spec into run-state for custom pipelines so the run is hermetic.
 
-**Tech Stack:** Python 3.13, PyYAML 6.0.3 (already installed), pytest. All work is inside `skills/e2e-dev-harness-v2/`; no legacy edits (design §15).
+**Tech Stack:** Python 3.13, PyYAML 6.0.3 (already installed), pytest. All work is inside `skills/e2e-dev-harness/`; no legacy edits (design §15).
 
-**Spec:** [2026-06-07-harness-v2-u4-config-layer-design.md](../specs/2026-06-07-harness-v2-u4-config-layer-design.md)
+**Spec:** [2026-06-07-e2e-dev-harness-u4-config-layer-design.md](../specs/2026-06-07-e2e-dev-harness-u4-config-layer-design.md)
 
-**Test command (run from `skills/e2e-dev-harness-v2/`):** `python -m pytest -q`
+**Test command (run from `skills/e2e-dev-harness/`):** `python -m pytest -q`
 
 ---
 
-## Task 0: Preflight — refresh index + impact baseline
+## Task 0: Preflight �?refresh index + impact baseline
 
 CLAUDE.md mandates `gitnexus_impact` before editing existing symbols and `gitnexus_detect_changes` before committing. This task edits existing symbols (`pipeline.build_spine`, `run_state.new_run_state`, the four CLI `run` functions).
 
@@ -25,24 +25,24 @@ Expected: index rebuilt; no "stale" warnings on subsequent MCP calls.
 
 - [ ] **Step 2: Confirm green baseline**
 
-Run (from `skills/e2e-dev-harness-v2/`): `python -m pytest -q`
+Run (from `skills/e2e-dev-harness/`): `python -m pytest -q`
 Expected: `136 passed`.
 
 - [ ] **Step 3: Impact check the symbols this plan edits**
 
-Run `gitnexus_impact({target: "build_spine", direction: "upstream"})` and `gitnexus_impact({target: "new_run_state", direction: "upstream"})`. Report blast radius. Expected: callers are the four CLI commands + `start`; risk LOW–MEDIUM (all v2-internal). If HIGH/CRITICAL, warn before proceeding.
+Run `gitnexus_impact({target: "build_spine", direction: "upstream"})` and `gitnexus_impact({target: "new_run_state", direction: "upstream"})`. Report blast radius. Expected: callers are the four CLI commands + `start`; risk LOW–MEDIUM (all e2e-dev-harness-internal). If HIGH/CRITICAL, warn before proceeding.
 
 ---
 
 ## Task 1: Built-in YAML files + `pipeline.py` loader/interpreter
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/pipelines/minimal.yaml`
-- Create: `skills/e2e-dev-harness-v2/pipelines/standard.yaml`
-- Create: `skills/e2e-dev-harness-v2/pipelines/critical.yaml`
-- Create: `skills/e2e-dev-harness-v2/pipelines/audited.yaml`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/pipeline.py` (full rewrite)
-- Test: `skills/e2e-dev-harness-v2/tests/test_pipeline_yaml_load.py`
+- Create: `skills/e2e-dev-harness/pipelines/minimal.yaml`
+- Create: `skills/e2e-dev-harness/pipelines/standard.yaml`
+- Create: `skills/e2e-dev-harness/pipelines/critical.yaml`
+- Create: `skills/e2e-dev-harness/pipelines/audited.yaml`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/pipeline.py` (full rewrite)
+- Test: `skills/e2e-dev-harness/tests/test_pipeline_yaml_load.py`
 
 - [ ] **Step 1: Write the four built-in YAML files**
 
@@ -108,7 +108,7 @@ phases:
 ```python
 import pytest
 
-from harness_v2 import pipeline
+from e2e_harness import pipeline
 
 
 def test_minimal_loads_from_yaml_and_skips_planned_reviewed():
@@ -179,15 +179,15 @@ def test_spine_for_state_falls_back_to_named_builtin():
 - [ ] **Step 3: Run the test to verify it fails**
 
 Run: `python -m pytest tests/test_pipeline_yaml_load.py -q`
-Expected: FAIL — `AttributeError: module 'harness_v2.pipeline' has no attribute 'load_spec'` (and `spec_to_spine`/`is_path`/`spine_for_state`).
+Expected: FAIL �?`AttributeError: module 'e2e_harness.pipeline' has no attribute 'load_spec'` (and `spec_to_spine`/`is_path`/`spine_for_state`).
 
 - [ ] **Step 4: Rewrite `pipeline.py`**
 
-Replace the entire contents of `scripts/harness_v2/pipeline.py` with:
+Replace the entire contents of `scripts/e2e_harness/pipeline.py` with:
 ```python
 """Pipeline config: declarative pipelines loaded from `pipelines/*.yaml`.
 
-Hybrid schema — each `phases` entry is either a bare catalog phase name
+Hybrid schema �?each `phases` entry is either a bare catalog phase name
 (inherits `lifecycle._CATALOG` defaults) or a mapping `{phase, ...overrides}`.
 Public API (`build_spine`, `active_phase_names`) is preserved; built-in tier
 names resolve to shipped yaml with no special privilege.
@@ -200,8 +200,8 @@ from pathlib import Path
 
 import yaml
 
-from harness_v2.core import lifecycle
-from harness_v2.core.lifecycle import Phase
+from e2e_harness.core import lifecycle
+from e2e_harness.core.lifecycle import Phase
 
 _PIPELINES_DIR = Path(__file__).resolve().parents[2] / "pipelines"
 _OVERRIDE_FIELDS = ("worker_role", "worker_skill", "produces", "exit_gate")
@@ -285,34 +285,34 @@ Expected: PASS (10 tests).
 - [ ] **Step 6: Run the back-compat suites**
 
 Run: `python -m pytest tests/test_pipeline_tiers.py tests/test_gate_closure.py -q`
-Expected: PASS (existing tier/closure tests unchanged and green — parity).
+Expected: PASS (existing tier/closure tests unchanged and green �?parity).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/pipelines skills/e2e-dev-harness-v2/scripts/harness_v2/pipeline.py skills/e2e-dev-harness-v2/tests/test_pipeline_yaml_load.py
-git commit -m "feat(harness-v2): U4 pipelines-as-config — built-in tiers as yaml + loader/interpreter
+git add skills/e2e-dev-harness/pipelines skills/e2e-dev-harness/scripts/e2e_harness/pipeline.py skills/e2e-dev-harness/tests/test_pipeline_yaml_load.py
+git commit -m "feat(e2e-dev-harness): U4 pipelines-as-config �?built-in tiers as yaml + loader/interpreter
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 2: `validate_spec` — schema + I1 + I2
+## Task 2: `validate_spec` �?schema + I1 + I2
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/pipeline_validate.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_pipeline_validate.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/core/pipeline_validate.py`
+- Test: `skills/e2e-dev-harness/tests/test_pipeline_validate.py`
 
 - [ ] **Step 1: Write the failing test**
 
 `tests/test_pipeline_validate.py`:
 ```python
-from harness_v2.core import pipeline_validate as pv
+from e2e_harness.core import pipeline_validate as pv
 
 
 def test_builtin_specs_are_valid():
-    from harness_v2 import pipeline
+    from e2e_harness import pipeline
     for name in ("minimal", "standard", "critical", "audited"):
         ok, errors = pv.validate_spec(pipeline.load_spec(name))
         assert ok is True, f"{name}: {errors}"
@@ -384,7 +384,7 @@ def test_invalid_entry_type_rejected():
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `python -m pytest tests/test_pipeline_validate.py -q`
-Expected: FAIL — `ModuleNotFoundError: No module named 'harness_v2.core.pipeline_validate'`.
+Expected: FAIL �?`ModuleNotFoundError: No module named 'e2e_harness.core.pipeline_validate'`.
 
 - [ ] **Step 3: Write `core/pipeline_validate.py`**
 
@@ -395,8 +395,8 @@ Pure (no I/O). Built-in and custom specs alike must pass before they may run.
 """
 from __future__ import annotations
 
-from harness_v2 import pipeline
-from harness_v2.core import lifecycle, gates
+from e2e_harness import pipeline
+from e2e_harness.core import lifecycle, gates
 
 _REQUIRED_FOR_CUSTOM = ("worker_role", "worker_skill", "produces", "exit_gate")
 
@@ -449,7 +449,7 @@ def validate_spec(spec) -> tuple[bool, list[str]]:
 
     try:
         spine = pipeline.spec_to_spine(spec)
-    except Exception as exc:  # noqa: BLE001 — surface as a validation error
+    except Exception as exc:  # noqa: BLE001 �?surface as a validation error
         return False, [f"spec not buildable: {exc}"]
 
     # I1 termination: linear chain with a single terminal, every next resolvable.
@@ -477,8 +477,8 @@ Expected: PASS (10 tests).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/core/pipeline_validate.py skills/e2e-dev-harness-v2/tests/test_pipeline_validate.py
-git commit -m "feat(harness-v2): U4 validate_spec — schema + I1 termination + I2 gate-closure
+git add skills/e2e-dev-harness/scripts/e2e_harness/core/pipeline_validate.py skills/e2e-dev-harness/tests/test_pipeline_validate.py
+git commit -m "feat(e2e-dev-harness): U4 validate_spec �?schema + I1 termination + I2 gate-closure
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -488,9 +488,9 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Task 3: `validate-pipeline` CLI verb
 
 **Files:**
-- Create: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/commands/validate_pipeline.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/main.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_cli_validate_pipeline.py`
+- Create: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/validate_pipeline.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/main.py`
+- Test: `skills/e2e-dev-harness/tests/test_cli_validate_pipeline.py`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -501,7 +501,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness_v2.py"
+ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness.py"
 
 
 def _run(*args, cwd):
@@ -538,24 +538,24 @@ def test_validate_unsatisfiable_custom_path_is_rejected(tmp_path):
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `python -m pytest tests/test_cli_validate_pipeline.py -q`
-Expected: FAIL — argparse error (`invalid choice: 'validate-pipeline'`) → non-JSON stderr → `json.loads("{}")` then `KeyError`/assert fails.
+Expected: FAIL �?argparse error (`invalid choice: 'validate-pipeline'`) �?non-JSON stderr �?`json.loads("{}")` then `KeyError`/assert fails.
 
 - [ ] **Step 3: Write the command**
 
-`scripts/harness_v2/cli/commands/validate_pipeline.py`:
+`scripts/e2e_harness/cli/commands/validate_pipeline.py`:
 ```python
 """validate-pipeline: preflight I1/I2 check on a pipeline (name or path)."""
 from __future__ import annotations
 
-from harness_v2 import pipeline
-from harness_v2.core import pipeline_validate
+from e2e_harness import pipeline
+from e2e_harness.core import pipeline_validate
 
 
 def run(args) -> tuple[int, dict]:
     spec = pipeline.load_spec(args.pipeline)  # load/parse error -> main.py emits error JSON (exit 2)
     ok, errors = pipeline_validate.validate_spec(spec)
     return (0 if ok else 1), {
-        "schema": "e2e-dev-harness-v2.validate-pipeline.v1",
+        "schema": "e2e-dev-harness.validate-pipeline.v1",
         "ok": ok,
         "pipeline": args.pipeline,
         "errors": errors,
@@ -564,9 +564,9 @@ def run(args) -> tuple[int, dict]:
 
 - [ ] **Step 4: Wire it into `main.py`**
 
-In `scripts/harness_v2/cli/main.py`, update the import line to add `validate_pipeline`:
+In `scripts/e2e_harness/cli/main.py`, update the import line to add `validate_pipeline`:
 ```python
-from harness_v2.cli.commands import start, next as next_cmd, dispatch, submit, gate, status, validate_pipeline
+from e2e_harness.cli.commands import start, next as next_cmd, dispatch, submit, gate, status, validate_pipeline
 ```
 
 Add to the `_COMMANDS` dict (note: comment marks the deliberate §6 exception):
@@ -574,7 +574,7 @@ Add to the `_COMMANDS` dict (note: comment marks the deliberate §6 exception):
 _COMMANDS = {
     "start": start.run, "next": next_cmd.run, "dispatch": dispatch.run,
     "submit": submit.run, "gate": gate.run, "status": status.run,
-    # 7th verb — deliberate design §6 exception for the M3 config layer (U4).
+    # 7th verb �?deliberate design §6 exception for the M3 config layer (U4).
     "validate-pipeline": validate_pipeline.run,
 }
 ```
@@ -592,8 +592,8 @@ Expected: PASS (3 tests).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/cli/commands/validate_pipeline.py skills/e2e-dev-harness-v2/scripts/harness_v2/cli/main.py skills/e2e-dev-harness-v2/tests/test_cli_validate_pipeline.py
-git commit -m "feat(harness-v2): U4 validate-pipeline CLI verb (7th verb, M3 exception)
+git add skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/validate_pipeline.py skills/e2e-dev-harness/scripts/e2e_harness/cli/main.py skills/e2e-dev-harness/tests/test_cli_validate_pipeline.py
+git commit -m "feat(e2e-dev-harness): U4 validate-pipeline CLI verb (7th verb, M3 exception)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -603,14 +603,14 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Task 4: `start` guard + `--pipeline` + run-state embed + `spine_for_state` wiring
 
 **Files:**
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/core/run_state.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/commands/start.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/main.py` (add `start --pipeline`)
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/commands/next.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/commands/dispatch.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/commands/gate.py`
-- Modify: `skills/e2e-dev-harness-v2/scripts/harness_v2/cli/commands/status.py`
-- Test: `skills/e2e-dev-harness-v2/tests/test_cli_custom_pipeline_e2e.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/core/run_state.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/start.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/main.py` (add `start --pipeline`)
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/next.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/dispatch.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/gate.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/status.py`
+- Test: `skills/e2e-dev-harness/tests/test_cli_custom_pipeline_e2e.py`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -621,7 +621,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness_v2.py"
+ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness.py"
 
 
 def _run(*args, cwd):
@@ -631,7 +631,7 @@ def _run(*args, cwd):
 
 
 def _make_artifact(repo: Path, phase: str, key: str) -> str:
-    from harness_v2.adapters.evidence import command_evidence as ce
+    from e2e_harness.adapters.evidence import command_evidence as ce
     base = repo / "docs" / "agent-runs" / "art"
     base.mkdir(parents=True, exist_ok=True)
     if key in ("failing_tests", "passing_tests"):
@@ -698,11 +698,11 @@ def test_builtin_start_records_name_not_spec(tmp_path):
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `python -m pytest tests/test_cli_custom_pipeline_e2e.py -q`
-Expected: FAIL — argparse rejects unknown `--pipeline` on `start` (no JSON) → assertion failure.
+Expected: FAIL �?argparse rejects unknown `--pipeline` on `start` (no JSON) �?assertion failure.
 
 - [ ] **Step 3: Add the optional `pipeline_spec` field to `run_state.new_run_state`**
 
-In `scripts/harness_v2/core/run_state.py`, replace the `new_run_state` function with:
+In `scripts/e2e_harness/core/run_state.py`, replace the `new_run_state` function with:
 ```python
 def new_run_state(run_id: str, feature: str, request: str,
                   tier: str = "minimal", pipeline: str = "minimal",
@@ -728,7 +728,7 @@ def new_run_state(run_id: str, feature: str, request: str,
 
 - [ ] **Step 4: Add `start --pipeline` to `main.py`**
 
-In `scripts/harness_v2/cli/main.py`, in the `start` subparser block, add the optional argument after the `--tier` line:
+In `scripts/e2e_harness/cli/main.py`, in the `start` subparser block, add the optional argument after the `--tier` line:
 ```python
     s.add_argument("--pipeline", default=None,
                    help="built-in name or path to a custom pipeline yaml (overrides --tier's spine)")
@@ -736,7 +736,7 @@ In `scripts/harness_v2/cli/main.py`, in the `start` subparser block, add the opt
 
 - [ ] **Step 5: Rewrite `start.py` with the resolution + validation guard + embed**
 
-Replace the entire body of `scripts/harness_v2/cli/commands/start.py` with:
+Replace the entire body of `scripts/e2e_harness/cli/commands/start.py` with:
 ```python
 """start: create the one run-state (after validating its pipeline)."""
 from __future__ import annotations
@@ -744,8 +744,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from harness_v2.core import run_state, pipeline_validate
-from harness_v2 import pipeline
+from e2e_harness.core import run_state, pipeline_validate
+from e2e_harness import pipeline
 
 
 def run(args) -> tuple[int, dict]:
@@ -754,7 +754,7 @@ def run(args) -> tuple[int, dict]:
     tier = args.tier
     reasons: list[str] = []
     if tier == "auto":
-        from harness_v2.adapters.tier import classify
+        from e2e_harness.adapters.tier import classify
         tier, reasons = classify.classify_tier(args.request)
 
     pipeline_ref = getattr(args, "pipeline", None) or tier
@@ -770,7 +770,7 @@ def run(args) -> tuple[int, dict]:
         run_id, args.feature, args.request, tier=tier, pipeline=pipeline_ref,
         pipeline_spec=spec if custom else None)
     run_state.save(path, st)
-    return 0, {"schema": "e2e-dev-harness-v2.start.v1", "run_id": run_id,
+    return 0, {"schema": "e2e-dev-harness.start.v1", "run_id": run_id,
                "run_state": str(path), "current_phase": "CREATED",
                "tier": tier, "pipeline": pipeline_ref, "tier_reasons": reasons}
 ```
@@ -782,7 +782,7 @@ In each of `next.py`, `dispatch.py`, `gate.py`, `status.py`, replace the line
 with:
 `spine = pipeline.spine_for_state(state)`
 
-(`next.py` line 14, `dispatch.py` line 11, `gate.py` line 12, `status.py` line 12 — all identical text.)
+(`next.py` line 14, `dispatch.py` line 11, `gate.py` line 12, `status.py` line 12 �?all identical text.)
 
 - [ ] **Step 7: Run the new e2e test to verify it passes**
 
@@ -797,9 +797,9 @@ Expected: PASS (default-tier start, drive-to-VERIFIED, dispatch, gate all unchan
 - [ ] **Step 9: Commit**
 
 ```bash
-git add skills/e2e-dev-harness-v2/scripts/harness_v2/core/run_state.py skills/e2e-dev-harness-v2/scripts/harness_v2/cli
-git add skills/e2e-dev-harness-v2/tests/test_cli_custom_pipeline_e2e.py
-git commit -m "feat(harness-v2): U4 start validates+embeds pipeline; CLI rebuilds spine via spine_for_state
+git add skills/e2e-dev-harness/scripts/e2e_harness/core/run_state.py skills/e2e-dev-harness/scripts/e2e_harness/cli
+git add skills/e2e-dev-harness/tests/test_cli_custom_pipeline_e2e.py
+git commit -m "feat(e2e-dev-harness): U4 start validates+embeds pipeline; CLI rebuilds spine via spine_for_state
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -808,10 +808,10 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ## Task 5: Full-suite verification + change scope
 
-- [ ] **Step 1: Run the full v2 suite**
+- [ ] **Step 1: Run the full e2e-dev-harness suite**
 
-Run (from `skills/e2e-dev-harness-v2/`): `python -m pytest -q`
-Expected: all green — `136` prior + new tests (10 + 10 + 3 + 3 = 26) ≈ `162 passed`. No failures, no skips.
+Run (from `skills/e2e-dev-harness/`): `python -m pytest -q`
+Expected: all green �?`136` prior + new tests (10 + 10 + 3 + 3 = 26) �?`162 passed`. No failures, no skips.
 
 - [ ] **Step 2: Confirm change scope**
 
@@ -820,14 +820,14 @@ Run `gitnexus_detect_changes()`. Expected: only U4 symbols/files affected (pipel
 - [ ] **Step 3: Confirm no legacy edits**
 
 Run (from repo root): `git diff --name-only ce3a7a7..HEAD -- skills/e2e-dev-harness/`
-Expected: empty output (design §15 — legacy frozen until M5).
+Expected: empty output (design §15 �?legacy frozen until M5).
 
 - [ ] **Step 4: Update the roadmap status**
 
-In `docs/superpowers/plans/2026-06-07-harness-v2-remaining-work-roadmap.md`, add a bullet to the "Done so far" section: "**M3 config layer (U4)**: pipelines-as-config + validate-pipeline + custom pipelines. ✅". Commit:
+In `docs/superpowers/plans/2026-06-07-e2e-dev-harness-remaining-work-roadmap.md`, add a bullet to the "Done so far" section: "**M3 config layer (U4)**: pipelines-as-config + validate-pipeline + custom pipelines. �?. Commit:
 ```bash
-git add docs/superpowers/plans/2026-06-07-harness-v2-remaining-work-roadmap.md
-git commit -m "docs(harness-v2): mark U4 (M3 config layer) done in roadmap
+git add docs/superpowers/plans/2026-06-07-e2e-dev-harness-remaining-work-roadmap.md
+git commit -m "docs(e2e-dev-harness): mark U4 (M3 config layer) done in roadmap
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -836,7 +836,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ## Self-Review (completed by plan author)
 
-- **Spec coverage:** §3 schema → Task 1 yaml + `_entry_name_and_overrides`/`spec_to_spine`. §4 loader → Task 1. §5 validation → Task 2. §6 verb → Task 3. §7 start guard + embed + run_state field → Task 4. §8 tests → all four test files across Tasks 1–4. §9 affected files → all covered. §10 YAGNI → no inheritance/interpolation/auto-discovery/DAG in any task.
-- **Placeholder scan:** none — every code step shows full content.
-- **Type consistency:** `load_spec`/`spec_to_spine`/`is_path`/`spine_for_state` signatures used identically in Tasks 1–4; `validate_spec(spec)->(bool, list[str])` consistent across Tasks 2–4; `new_run_state(..., pipeline_spec=None)` matches its caller in `start.py`; run-state key `pipeline_spec` consistent in builder, `spine_for_state`, and the e2e test.
-- **I1 note:** with a linear builder, termination is structural; the testable I1 rejection is the duplicate-phase-name hazard (corrupts the engine's name-keyed walk) — covered by `test_i1_duplicate_phase_name_rejected`.
+- **Spec coverage:** §3 schema �?Task 1 yaml + `_entry_name_and_overrides`/`spec_to_spine`. §4 loader �?Task 1. §5 validation �?Task 2. §6 verb �?Task 3. §7 start guard + embed + run_state field �?Task 4. §8 tests �?all four test files across Tasks 1�?. §9 affected files �?all covered. §10 YAGNI �?no inheritance/interpolation/auto-discovery/DAG in any task.
+- **Placeholder scan:** none �?every code step shows full content.
+- **Type consistency:** `load_spec`/`spec_to_spine`/`is_path`/`spine_for_state` signatures used identically in Tasks 1�?; `validate_spec(spec)->(bool, list[str])` consistent across Tasks 2�?; `new_run_state(..., pipeline_spec=None)` matches its caller in `start.py`; run-state key `pipeline_spec` consistent in builder, `spine_for_state`, and the e2e test.
+- **I1 note:** with a linear builder, termination is structural; the testable I1 rejection is the duplicate-phase-name hazard (corrupts the engine's name-keyed walk) �?covered by `test_i1_duplicate_phase_name_rejected`.
