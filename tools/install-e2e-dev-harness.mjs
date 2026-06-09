@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+
+// Single source of truth for hook materialization, shared with `e2e-harness init`.
+const require = createRequire(import.meta.url);
+const { materializeHooks } = require("../lib/hooks.js");
 
 const SKILL_NAME = "e2e-dev-harness-v2";
 const WORKER_SKILL_NAMES = [
@@ -420,35 +425,21 @@ function executeAction(action, context) {
     return { action: action.id, exit_code: 0, installed_skills: installed };
   }
   if (action.id === "install-hooks") {
-    const examplePath = path.join(context.sourceSkillDir, "hooks", "claude-code-settings.example.json");
-    // Parse first, then replace the placeholder inside string leaves — substituting
-    // a Windows path (with backslashes) into raw JSON text would break JSON.parse.
-    const substitute = (value) =>
-      typeof value === "string"
-        ? value.split("__HARNESS_V2_SCRIPTS__").join(action.scripts_dir)
-        : Array.isArray(value)
-          ? value.map(substitute)
-          : value && typeof value === "object"
-            ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, substitute(v)]))
-            : value;
-    const example = substitute(JSON.parse(fs.readFileSync(examplePath, "utf8")));
-    const settingsPath = path.join(action.project_root, ".claude", "settings.json");
-    let settings = {};
-    if (fs.existsSync(settingsPath)) {
-      try {
-        settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-      } catch {
-        settings = {};
-      }
-    }
-    settings.hooks = settings.hooks || {};
-    for (const event of ["PreToolUse", "Stop"]) {
-      const incoming = (example.hooks && example.hooks[event]) || [];
-      settings.hooks[event] = (settings.hooks[event] || []).concat(incoming);
-    }
-    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-    fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
-    return { action: action.id, exit_code: 0, settings_path: settingsPath };
+    // Delegate to the shared materializer (lib/hooks.js). scripts_dir is
+    // <installedSkillHome>/scripts, so its parent is the installed skill home
+    // from which the hook template and substitution path are derived. This adds
+    // idempotent merging and a settings.json backup over the old inline concat.
+    const res = materializeHooks({
+      skillHome: path.dirname(action.scripts_dir),
+      projectRoot: action.project_root,
+    });
+    return {
+      action: action.id,
+      exit_code: 0,
+      settings_path: res.settingsPath,
+      hooks_added: res.added,
+      hooks_already_present: res.alreadyPresent,
+    };
   }
   return { action: action.id, ...runCommand(action.command, action.cwd || context.repo) };
 }
