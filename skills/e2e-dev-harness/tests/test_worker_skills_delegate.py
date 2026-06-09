@@ -17,9 +17,8 @@ OUTPUTS = {
     "e2e-harness-review": "review",
     "e2e-harness-completion": "verification",
 }
-# every v2 worker skill must reference the v2 CLI, never the legacy one
+# every worker skill must reference the canonical harness CLI (retired v1 path no longer exists)
 NO_LEGACY_CLI = tuple(MAP)
-LEGACY_CLI = "skills/e2e-dev-harness/scripts/e2e_dev_harness.py"
 
 
 def test_worker_skills_delegate_and_declare_outputs():
@@ -33,5 +32,4 @@ def test_worker_skills_delegate_and_declare_outputs():
 def test_reworked_skills_drop_legacy_cli():
     for skill in NO_LEGACY_CLI:
         text = (ROOT / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
-        assert LEGACY_CLI not in text, f"{skill} still references legacy CLI"
-        assert "e2e_dev_harness.py" in text, f"{skill} missing v2 CLI reference"
+        assert "e2e_dev_harness.py" in text, f"{skill} missing canonical CLI reference"
