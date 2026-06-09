@@ -22,6 +22,25 @@ test('copies skill tree and writes env', () => {
   assert.strictEqual(res.home, path.join(skillsDir, 'e2e-dev-harness-v2'));
 });
 
+test('skips transient cache directories while copying the skill tree', () => {
+  const pkgRoot = tmp();
+  const skillRoot = path.join(pkgRoot, 'skills', 'e2e-dev-harness-v2');
+  fs.mkdirSync(path.join(skillRoot, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(skillRoot, '.pytest-tmp'), { recursive: true });
+  fs.mkdirSync(path.join(skillRoot, 'scripts', '__pycache__'), { recursive: true });
+  fs.writeFileSync(path.join(skillRoot, 'SKILL.md'), 'skill');
+  fs.writeFileSync(path.join(skillRoot, '.pytest-tmp', 'leftover.txt'), 'cache');
+  fs.writeFileSync(path.join(skillRoot, 'scripts', '__pycache__', 'mod.pyc'), 'cache');
+
+  const skillsDir = tmp();
+  installToMachine({ pkgRoot, skillsDir, python: null });
+  const installed = path.join(skillsDir, 'e2e-dev-harness-v2');
+
+  assert.ok(fs.existsSync(path.join(installed, 'SKILL.md')));
+  assert.ok(!fs.existsSync(path.join(installed, '.pytest-tmp')));
+  assert.ok(!fs.existsSync(path.join(installed, 'scripts', '__pycache__')));
+});
+
 test('backs up existing install OUTSIDE skillsDir', () => {
   const pkgRoot = tmp();
   fs.mkdirSync(path.join(pkgRoot, 'skills', 'e2e-dev-harness-v2'), { recursive: true });
