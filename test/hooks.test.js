@@ -18,14 +18,14 @@ function fakeSkillHome() {
         {
           matcher: 'Edit|Write|MultiEdit|NotebookEdit|Bash',
           hooks: [
-            { type: 'command', command: 'python __HARNESS_V2_SCRIPTS__/harness_v2/adapters/hooks/phase_guard_v2.py --repo . --hook-input -' },
+            { type: 'command', command: 'python __HARNESS_SCRIPTS__/e2e_harness/adapters/hooks/phase_guard.py --repo . --hook-input -' },
           ],
         },
       ],
       Stop: [
         {
           hooks: [
-            { type: 'command', command: 'python __HARNESS_V2_SCRIPTS__/harness_v2/adapters/hooks/stop_guard_v2.py --repo . --hook-input -' },
+            { type: 'command', command: 'python __HARNESS_SCRIPTS__/e2e_harness/adapters/hooks/stop_guard.py --repo . --hook-input -' },
           ],
         },
       ],
@@ -37,7 +37,7 @@ function fakeSkillHome() {
 
 test('substituteScriptsDir replaces placeholder only inside string leaves', () => {
   const out = substituteScriptsDir(
-    { a: 'x __HARNESS_V2_SCRIPTS__ y', b: ['__HARNESS_V2_SCRIPTS__', 1], c: { d: 2 } },
+    { a: 'x __HARNESS_SCRIPTS__ y', b: ['__HARNESS_SCRIPTS__', 1], c: { d: 2 } },
     'C:\\skills\\scripts'
   );
   assert.strictEqual(out.a, 'x C:\\skills\\scripts y');
@@ -47,14 +47,14 @@ test('substituteScriptsDir replaces placeholder only inside string leaves', () =
 });
 
 test('toShellScriptsDir converts a Windows backslash path to forward slashes so bash will not strip the separators', () => {
-  const win = 'C:\\Users\\14907\\.claude\\skills\\e2e-dev-harness-v2\\scripts';
+  const win = 'C:\\Users\\14907\\.claude\\skills\\e2e-dev-harness\\scripts';
   const out = toShellScriptsDir(win);
-  assert.strictEqual(out, 'C:/Users/14907/.claude/skills/e2e-dev-harness-v2/scripts');
+  assert.strictEqual(out, 'C:/Users/14907/.claude/skills/e2e-dev-harness/scripts');
   assert.ok(!out.includes('\\'), 'shell-embedded scripts dir must not contain backslashes');
 });
 
 test('toShellScriptsDir leaves a POSIX path unchanged', () => {
-  assert.strictEqual(toShellScriptsDir('/home/u/.claude/skills/e2e-dev-harness-v2/scripts'), '/home/u/.claude/skills/e2e-dev-harness-v2/scripts');
+  assert.strictEqual(toShellScriptsDir('/home/u/.claude/skills/e2e-dev-harness/scripts'), '/home/u/.claude/skills/e2e-dev-harness/scripts');
 });
 
 test('materializeHooks emits hook commands with no backslashes (bash-safe on Windows)', () => {
@@ -68,7 +68,7 @@ test('materializeHooks emits hook commands with no backslashes (bash-safe on Win
   assert.ok(!pre.includes('\\'), `PreToolUse command must not contain backslashes: ${pre}`);
   assert.ok(!stop.includes('\\'), `Stop command must not contain backslashes: ${stop}`);
   const posixScripts = path.join(home, 'scripts').replace(/\\/g, '/');
-  assert.ok(pre.includes(`${posixScripts}/harness_v2/adapters/hooks/phase_guard_v2.py`));
+  assert.ok(pre.includes(`${posixScripts}/e2e_harness/adapters/hooks/phase_guard.py`));
 });
 
 test('materializeHooks writes both hooks into a fresh settings.json with scripts dir substituted', () => {
@@ -83,9 +83,9 @@ test('materializeHooks writes both hooks into a fresh settings.json with scripts
   const settings = JSON.parse(fs.readFileSync(path.join(projectRoot, '.claude', 'settings.json'), 'utf8'));
   const pre = settings.hooks.PreToolUse[0].hooks[0].command;
   const stop = settings.hooks.Stop[0].hooks[0].command;
-  assert.ok(pre.includes(`${toShellScriptsDir(path.join(home, 'scripts'))}/harness_v2/adapters/hooks/phase_guard_v2.py`));
-  assert.ok(!pre.includes('__HARNESS_V2_SCRIPTS__'));
-  assert.ok(stop.includes('stop_guard_v2.py'));
+  assert.ok(pre.includes(`${toShellScriptsDir(path.join(home, 'scripts'))}/e2e_harness/adapters/hooks/phase_guard.py`));
+  assert.ok(!pre.includes('__HARNESS_SCRIPTS__'));
+  assert.ok(stop.includes('stop_guard.py'));
 });
 
 test('materializeHooks is idempotent: second run adds nothing', () => {
@@ -117,7 +117,7 @@ test('materializeHooks backs up an existing settings.json before merging', () =>
   // existing unrelated keys are preserved through the merge
   const merged = JSON.parse(fs.readFileSync(path.join(claudeDir, 'settings.json'), 'utf8'));
   assert.strictEqual(merged.env.KEEP, '1');
-  assert.strictEqual(merged.hooks.PreToolUse[0].hooks[0].command.includes('phase_guard_v2.py'), true);
+  assert.strictEqual(merged.hooks.PreToolUse[0].hooks[0].command.includes('phase_guard.py'), true);
   // backup holds the original content
   const backup = JSON.parse(fs.readFileSync(res.backup, 'utf8'));
   assert.strictEqual(backup.env.KEEP, '1');

@@ -11,7 +11,7 @@ def test_claude_settings_registers_both_hooks():
     stop = json.dumps(hooks["Stop"])
     assert "phase_guard.py" in pre
     assert "stop_guard.py" in stop
-    assert "__HARNESS_V2_SCRIPTS__" in pre and "__HARNESS_V2_SCRIPTS__" in stop
+    assert "__HARNESS_SCRIPTS__" in pre and "__HARNESS_SCRIPTS__" in stop
 
 
 def test_claude_pretooluse_matches_write_tools():
@@ -31,7 +31,7 @@ def test_claude_commands_quote_placeholder_path():
     ]
     assert commands
     for command in commands:
-        assert 'python "__HARNESS_V2_SCRIPTS__/' in command
+        assert 'python "__HARNESS_SCRIPTS__/' in command
 
 
 def test_opencode_plugin_calls_phase_guard():
@@ -39,4 +39,4 @@ def test_opencode_plugin_calls_phase_guard():
     assert "phase_guard.py" in text
     assert "tool.execute.before" in text
     assert "permissionDecision" in text
-    assert "__HARNESS_V2_SCRIPTS__" in text
+    assert "__HARNESS_SCRIPTS__" in text

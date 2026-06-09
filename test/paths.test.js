@@ -4,11 +4,11 @@ const path = require('node:path');
 const os = require('node:os');
 const { skillHome } = require('../lib/paths');
 
-test('skillHome defaults to ~/.claude/skills/e2e-dev-harness-v2', () => {
+test('skillHome defaults to ~/.claude/skills/e2e-dev-harness', () => {
   delete process.env.E2E_HARNESS_HOME;
   assert.strictEqual(
     skillHome(),
-    path.join(os.homedir(), '.claude', 'skills', 'e2e-dev-harness-v2')
+    path.join(os.homedir(), '.claude', 'skills', 'e2e-dev-harness')
   );
 });
 

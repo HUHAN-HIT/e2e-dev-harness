@@ -3,12 +3,12 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { resolveCommand } = require('../lib/resolve');
 
-const HOME = path.join('C:', 'h', 'e2e-dev-harness-v2');
+const HOME = path.join('C:', 'h', 'e2e-dev-harness');
 const PY = 'python';
 const s = (...p) => path.join(HOME, 'scripts', ...p);
-const ENTRY = 'e2e_dev_harness_v2.py';
+const ENTRY = 'e2e_dev_harness.py';
 
-test('start passes through verbatim to e2e_dev_harness_v2.py', () => {
+test('start passes through verbatim to e2e_dev_harness.py', () => {
   assert.deepStrictEqual(
     resolveCommand(HOME, PY, ['start', '--repo', '.', '--feature', 'f', '--request', 'q']),
     { file: PY, args: [s(ENTRY), 'start', '--repo', '.', '--feature', 'f', '--request', 'q'] });

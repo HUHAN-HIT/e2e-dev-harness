@@ -1,8 +1,8 @@
 // e2e-dev-harness opencode plugin (example template).
-// U6 installer rewrites __HARNESS_V2_SCRIPTS__ to the installed absolute scripts dir.
+// U6 installer rewrites __HARNESS_SCRIPTS__ to the installed absolute scripts dir.
 const { spawnSync } = require("child_process");
 
-const PHASE_GUARD = "__HARNESS_V2_SCRIPTS__/e2e_harness/adapters/hooks/phase_guard.py";
+const PHASE_GUARD = "__HARNESS_SCRIPTS__/e2e_harness/adapters/hooks/phase_guard.py";
 
 module.exports = {
   "tool.execute.before": async (input, output) => {

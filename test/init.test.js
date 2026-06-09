@@ -94,7 +94,7 @@ test('runInit happy path materializes hooks and runs doctor', () => {
 test('runInit repairs stale installed skill before materializing hooks', () => {
   const root = tmp();
   const skillsDir = tmp();
-  const staleHome = path.join(skillsDir, 'e2e-dev-harness-v2');
+  const staleHome = path.join(skillsDir, 'e2e-dev-harness');
   fs.mkdirSync(staleHome, { recursive: true });
   fs.writeFileSync(path.join(staleHome, 'SKILL.md'), 'old install without hooks');
 

@@ -50,7 +50,7 @@ class NodeInstallerTests(unittest.TestCase):
             self.assertFalse(payload["executed"])
             self.assertEqual(["codex"], payload["targets"])
             self.assertEqual("dry-run", payload["mode"])
-            self.assertFalse((target / ".codex" / "skills" / "e2e-dev-harness-v2").exists())
+            self.assertFalse((target / ".codex" / "skills" / "e2e-dev-harness").exists())
             self.assertIn("copy-skill", [action["id"] for action in payload["actions"]])
 
     def test_yes_copies_skill_and_writes_manifest(self) -> None:
@@ -67,7 +67,7 @@ class NodeInstallerTests(unittest.TestCase):
                 "--yes",
             )
 
-            skill_dir = target / ".codex" / "skills" / "e2e-dev-harness-v2"
+            skill_dir = target / ".codex" / "skills" / "e2e-dev-harness"
             manifest = target / ".e2e-dev-harness-install.json"
             self.assertEqual(0, code, payload)
             self.assertTrue(payload["executed"])
@@ -126,10 +126,9 @@ class NodeInstallerTests(unittest.TestCase):
             self.assertIn("install-hooks", actions)
             self.assertIn("doctor", actions)
             self.assertEqual(str(project.resolve()), actions["install-hooks"]["project_root"])
-            self.assertIn("e2e-dev-harness-v2", actions["install-hooks"]["scripts_dir"])
+            self.assertIn("e2e-dev-harness", actions["install-hooks"]["scripts_dir"])
             self.assertIn(str(project.resolve()), actions["doctor"]["command"])
-            self.assertIn("e2e_dev_harness_v2.py", actions["doctor"]["command"])
-            self.assertNotIn("e2e_dev_harness.py", actions["doctor"]["command"])
+            self.assertIn("e2e_dev_harness.py", actions["doctor"]["command"])
 
     def test_full_preset_keeps_common_setup_short(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -262,11 +261,11 @@ class NodeInstallerTests(unittest.TestCase):
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
             pre = json.dumps(settings["hooks"]["PreToolUse"])
             stop = json.dumps(settings["hooks"]["Stop"])
-            self.assertIn("phase_guard_v2.py", pre)
-            self.assertIn("stop_guard_v2.py", stop)
-            self.assertNotIn("__HARNESS_V2_SCRIPTS__", pre + stop)
+            self.assertIn("phase_guard.py", pre)
+            self.assertIn("stop_guard.py", stop)
+            self.assertNotIn("__HARNESS_SCRIPTS__", pre + stop)
             # hooks must point at the installed v2 skill scripts dir
-            self.assertIn("e2e-dev-harness-v2", pre)
+            self.assertIn("e2e-dev-harness", pre)
             # installer must not touch the dev repo's own settings
             root_settings_after = root_settings.read_bytes() if root_settings.exists() else None
             self.assertEqual(root_settings_before, root_settings_after)
