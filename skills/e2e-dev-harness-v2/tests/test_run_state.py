@@ -65,3 +65,36 @@ def test_domain_block_embedded_when_supplied():
 def test_domain_absent_by_default_byte_identical():
     st = run_state.new_run_state("r", "f", "q")
     assert "domain" not in st   # parity: backend default adds no key
+
+
+import threading
+
+
+def test_mutate_atomic_under_concurrency(tmp_path):
+    p = tmp_path / "run-state.json"
+    st = run_state.new_run_state("r1", "feat", "req")
+    st["phases"] = {"REVIEWED": {"evidence": {}}}
+    run_state.save(p, st)
+
+    def add_key(k):
+        run_state.mutate(
+            p, lambda s: s["phases"]["REVIEWED"]["evidence"].__setitem__(k, {"path": k})
+        )
+
+    keys = [f"r{i}_review" for i in range(20)]
+    threads = [threading.Thread(target=add_key, args=(k,)) for k in keys]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    ev = run_state.load(p)["phases"]["REVIEWED"]["evidence"]
+    assert sorted(ev) == sorted(keys)  # zero lost updates
+
+
+def test_mutate_releases_lock_and_persists(tmp_path):
+    p = tmp_path / "run-state.json"
+    run_state.save(p, run_state.new_run_state("r1", "feat", "req"))
+    run_state.mutate(p, lambda s: s.__setitem__("feature", "feat2"))
+    assert not (tmp_path / "run-state.json.lock").exists()
+    assert run_state.load(p)["feature"] == "feat2"

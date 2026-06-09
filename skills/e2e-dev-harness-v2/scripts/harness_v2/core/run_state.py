@@ -1,8 +1,10 @@
 """SSOT run-state: one JSON file, versioned schema, atomic writes."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -56,6 +58,47 @@ def save(path: str | Path, state: dict, now: str | None = None) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(state, indent=2, ensure_ascii=False)
-    tmp = p.with_name(p.name + ".tmp")
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, p)
+
+
+_LOCK_TIMEOUT_S = 10.0
+_LOCK_POLL_S = 0.02
+
+
+@contextlib.contextmanager
+def _lock(path):
+    """Exclusive advisory lock via an O_EXCL sidecar file. Cross-platform,
+    stdlib only. Serializes the load->mutate->save critical section so that
+    concurrent writers (e.g. parallel r1/r2/r3 reviewers calling `submit`)
+    cannot clobber each other's evidence."""
+    lock = Path(str(path) + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + _LOCK_TIMEOUT_S
+    fd = None
+    while True:
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"run-state lock busy: {lock}")
+            time.sleep(_LOCK_POLL_S)
+    try:
+        yield
+    finally:
+        os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(str(lock))
+
+
+def mutate(path: str | Path, fn, now: str | None = None) -> dict:
+    """Concurrency-safe load -> fn(state) (mutated in place) -> save, under an
+    exclusive lock. Returns the saved state. Every mutating verb must go through
+    this so parallel workers cannot lose updates (last-os.replace-wins)."""
+    with _lock(path):
+        state = load(path)
+        fn(state)
+        save(path, state, now=now)
+        return state
