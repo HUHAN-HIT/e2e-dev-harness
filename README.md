@@ -7,30 +7,30 @@ The harness is not just process documentation. It provides machine-checkable gat
 ## Layout
 
 ```text
-skills/e2e-dev-harness-v2/
+skills/e2e-dev-harness/
   SKILL.md
   hooks/
-    claude-code-settings.example.json   # PreToolUse phase_guard_v2 + Stop stop_guard_v2
+    claude-code-settings.example.json   # PreToolUse phase_guard + Stop stop_guard
     opencode-plugin.example.js
   pipelines/
   scripts/
-    e2e_dev_harness_v2.py               # CLI passthrough entry
-    harness_v2/
+    e2e_dev_harness.py               # CLI passthrough entry
+    e2e_harness/
       __init__.py
       pipeline.py
       cli/                              # argument parsing / verbs
       core/                             # run-state, gates, evidence
       adapters/
         hooks/
-          phase_guard_v2.py            # PreToolUse guard
-          stop_guard_v2.py             # Stop guard
+          phase_guard.py            # PreToolUse guard
+          stop_guard.py             # Stop guard
         runtime/                       # claude / opencode / manual spawn
   tests/
 ```
 
 ## Quick Start
 
-The recommended way to install and drive the harness is the **`e2e-harness` Node CLI** (`bin/e2e-harness.js`). It always resolves the canonical skill copy at `~/.claude/skills/e2e-dev-harness-v2`, so the hooks it writes never depend on your current directory or which checkout you ran it from.
+The recommended way to install and drive the harness is the **`e2e-harness` Node CLI** (`bin/e2e-harness.js`). It always resolves the canonical skill copy at `~/.claude/skills/e2e-dev-harness`, so the hooks it writes never depend on your current directory or which checkout you ran it from.
 
 > **Make the command global first.** This package ships *inside this repo* and is **not published to npm**, so `npx e2e-harness …` will 404. Register it once with `npm link`, then call it bare from anywhere — no path, no `npx`:
 >
@@ -46,7 +46,7 @@ The recommended way to install and drive the harness is the **`e2e-harness` Node
 e2e-harness install
 ```
 
-Copies the bundled skill into `~/.claude/skills/e2e-dev-harness-v2`, records the Python interpreter in `.harness-env.json`, and backs up any previous install to `~/.claude/skill-backups/` (outside the skills directory, so the backup is never re-discovered as a duplicate skill).
+Copies the bundled skill into `~/.claude/skills/e2e-dev-harness`, records the Python interpreter in `.harness-env.json`, and backs up any previous install to `~/.claude/skill-backups/` (outside the skills directory, so the backup is never re-discovered as a duplicate skill).
 
 ### 2. Initialize a business repository (one command)
 
@@ -57,7 +57,7 @@ e2e-harness init               # targets the current directory
 e2e-harness init <business-repo>
 ```
 
-`init` does the whole setup with minimal input: it detects the runtime, **installs the skill if it is missing**, materializes the `phase_guard_v2` + `stop_guard_v2` hooks into `<repo>/.claude/settings.json` (rewriting `__HARNESS_V2_SCRIPTS__` to the installed skill's absolute `scripts/` path — never your checkout), then runs a finishing check. It prints a one-line summary and **executes immediately**; an existing `settings.json` is backed up first and the merge is idempotent (re-running adds nothing).
+`init` does the whole setup with minimal input: it detects the runtime, **installs the skill if it is missing**, materializes the `phase_guard` + `stop_guard` hooks into `<repo>/.claude/settings.json` (rewriting `__HARNESS_SCRIPTS__` to the installed skill's absolute `scripts/` path — never your checkout), then runs a finishing check. It prints a one-line summary and **executes immediately**; an existing `settings.json` is backed up first and the merge is idempotent (re-running adds nothing).
 
 Flags: `--dry-run` (preview without writing), `--runtime auto|claude`, `--no-doctor`, `--force` (wire hooks even if no Python interpreter is found).
 
@@ -73,13 +73,13 @@ e2e-harness cleanup  <repo> --execute # apply artifact-retention cleanup
 e2e-harness exec <script.py> <args>   # run any bundled scripts/<script>.py
 ```
 
-`gc` and `cleanup` forward to `gc:run`, which is dry-run by default and deletes only with `--execute`. `exec` forwards to `~/.claude/skills/e2e-dev-harness-v2/scripts/<script.py>`; any other subcommand is passed through to `e2e_dev_harness_v2.py`. Override the skill location with `E2E_HARNESS_HOME` and the interpreter with `E2E_HARNESS_PYTHON`.
+`gc` and `cleanup` forward to `gc:run`, which is dry-run by default and deletes only with `--execute`. `exec` forwards to `~/.claude/skills/e2e-dev-harness/scripts/<script.py>`; any other subcommand is passed through to `e2e_dev_harness.py`. Override the skill location with `E2E_HARNESS_HOME` and the interpreter with `E2E_HARNESS_PYTHON`.
 
 ### 4. Tool maintenance (this machine)
 
 ```bash
 e2e-harness update      # re-copy the bundled skill (backs up the previous one)
-e2e-harness uninstall   # remove ~/.claude/skills/e2e-dev-harness-v2
+e2e-harness uninstall   # remove ~/.claude/skills/e2e-dev-harness
 e2e-harness env         # JSON diagnostics: node / python / install / link state
 e2e-harness version     # print name and version
 e2e-harness link        # (re)register the global command

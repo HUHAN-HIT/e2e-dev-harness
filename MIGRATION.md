@@ -1,4 +1,4 @@
-# Migration: e2e-dev-harness → e2e-dev-harness-v2 (0.2.0)
+# Migration: legacy skill → e2e-dev-harness (0.2.0)
 
 v2 is now the **default, canonical** delivery harness. The legacy `skills/e2e-dev-harness/`
 skill has been retired and deleted. This guide covers what changed and how to recover any
@@ -20,9 +20,9 @@ The sprawling legacy command surface collapses to a terminating spine. Mapping (
 | `validate-pipeline` | — (new) | validate a custom pipeline against the invariants |
 
 ### Entry points
-- **Python console scripts** now target `harness_v2.cli.main:main`:
-  `e2e-harness-v2` (canonical), plus `e2e-dev-harness` / `e2eh` aliases retained for muscle memory.
-- **Node CLI** (`e2e-harness`, `bin/e2e-harness.js`) dispatches v2 verbs to `scripts/e2e_dev_harness_v2.py`.
+- **Python console scripts** now target `e2e_harness.cli.main:main`:
+  `e2e-dev-harness` / `e2eh` (canonical; the former v2-suffixed console script was dropped in the rename).
+- **Node CLI** (`e2e-harness`, `bin/e2e-harness.js`) dispatches v2 verbs to `scripts/e2e_dev_harness.py`.
 - New runtime dependency declared: **PyYAML** (`pyyaml>=6`) — pipelines are YAML.
 
 ### Hooks (tool-layer enforcement)
@@ -31,12 +31,12 @@ U7 v2 hook layer:
 
 | legacy | v2 |
 |---|---|
-| `phase_guard.py` | `scripts/harness_v2/adapters/hooks/phase_guard_v2.py` |
-| `harness_stop_guard.py` | `scripts/harness_v2/adapters/hooks/stop_guard_v2.py` |
+| `phase_guard.py` | `scripts/e2e_harness/adapters/hooks/phase_guard.py` |
+| `harness_stop_guard.py` | `scripts/e2e_harness/adapters/hooks/stop_guard.py` |
 | `install_hooks.py` | `e2e-harness init` materializes the hooks directly (or `tools/install-e2e-dev-harness.mjs --with-hooks --runtime claude`) |
 
-Example configs ship at `skills/e2e-dev-harness-v2/hooks/` (claude settings + opencode plugin);
-the installer rewrites `__HARNESS_V2_SCRIPTS__` to the installed absolute scripts dir and merges
+Example configs ship at `skills/e2e-dev-harness/hooks/` (claude settings + opencode plugin);
+the installer rewrites `__HARNESS_SCRIPTS__` to the installed absolute scripts dir and merges
 the `PreToolUse` / `Stop` entries into `<project>/.claude/settings.json`.
 
 Recommended path: from inside the business repo run `e2e-harness init` — it installs the
