@@ -11,7 +11,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const ROOTS = ["skills/e2e-dev-harness-v2", "bin", "lib", "tools"];
+const ROOTS = ["skills/e2e-dev-harness", "bin", "lib", "tools"];
 const DIR_NAMES = new Set(["__pycache__", ".pytest_cache", ".ruff_cache", ".e2e"]);
 const FILE_EXTS = new Set([".pyc", ".pyo"]);
 

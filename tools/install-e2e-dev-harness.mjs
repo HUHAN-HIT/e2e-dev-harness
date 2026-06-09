@@ -11,7 +11,7 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const { materializeHooks } = require("../lib/hooks.js");
 
-const SKILL_NAME = "e2e-dev-harness-v2";
+const SKILL_NAME = "e2e-dev-harness";
 const WORKER_SKILL_NAMES = [
   "e2e-harness-clarification",
   "e2e-harness-planning",
@@ -375,20 +375,20 @@ function actions(options, repo, projectRoot, installRoot, sourceSkillDir, target
   }
   if (options.withHooks && !options.checkOnly) {
     // v2 hooks are materialized in-process (no legacy install_hooks.py): read the
-    // U7 example config, rewrite __HARNESS_V2_SCRIPTS__ to the installed skill's
+    // U7 example config, rewrite __HARNESS_SCRIPTS__ to the installed skill's
     // scripts dir, and merge into <project-root>/.claude/settings.json.
     const runtimeTarget = targets.includes(options.runtime) ? options.runtime : targets[0];
     const installedSkillPath = path.join(installRoot, ...TARGETS[runtimeTarget]);
     planned.push({
       id: "install-hooks",
-      description: `Materialize ${options.runtime} v2 hooks (phase_guard_v2 + stop_guard_v2) into the project root.`,
+      description: `Materialize ${options.runtime} v2 hooks (phase_guard + stop_guard) into the project root.`,
       project_root: projectRoot,
       scripts_dir: path.join(installedSkillPath, "scripts"),
       runtime: options.runtime,
     });
   }
   if (options.doctor && !options.checkOnly) {
-    const cliScript = path.join(sourceSkillDir, "scripts", "e2e_dev_harness_v2.py");
+    const cliScript = path.join(sourceSkillDir, "scripts", "e2e_dev_harness.py");
     planned.push({
       id: "doctor",
       description: "Run e2e-dev-harness doctor against the project root.",

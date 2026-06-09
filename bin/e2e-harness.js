@@ -32,12 +32,12 @@ Tool lifecycle (this machine):
 
 Project setup (run inside the business repo):
   init [project-dir]   One command: detect runtime, install the skill if missing,
-                       wire phase_guard_v2 + stop_guard_v2 hooks into
+                       wire phase_guard + stop_guard hooks into
                        .claude/settings.json, then verify. Defaults to the current
                        directory and executes immediately.
                        [--runtime auto|claude] [--dry-run] [--no-doctor] [--force]
 
-Run lifecycle (e2e-dev-harness-v2, control-plane verbs):
+Run lifecycle (e2e-dev-harness, control-plane verbs):
   start --repo <r> --feature <f> --request <q> [--tier t] [--pipeline p]
   next --state <s>                 Advance the spine or return the single blocker
   dispatch --state <s>             Emit the current phase's worker packet pointer
