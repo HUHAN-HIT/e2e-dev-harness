@@ -7,43 +7,25 @@ The harness is not just process documentation. It provides machine-checkable gat
 ## Layout
 
 ```text
-skills/e2e-dev-harness/
+skills/e2e-dev-harness-v2/
   SKILL.md
   hooks/
-    claude-code-settings.example.json
-    codex-pre-action.example.json
-    gemini-pre-action.example.json
+    claude-code-settings.example.json   # PreToolUse phase_guard_v2 + Stop stop_guard_v2
     opencode-plugin.example.js
-  ci/
-    github-actions-harness.yml
-  references/
-    execution-control.md
-    implementation-gates.md
-    common-review-issues.md
-    ...
-  review-profiles/
+  pipelines/
   scripts/
-    e2e_dev_harness.py
-    install_hooks.py
-    phase_guard.py
-    harness_stop_guard.py
-    session_checkpoint.py
-    auto_transition.py
-    run_state.py
-    artifact_registry.py
-    harness_verify.py
-    run_summary.py
-    execution_trace.py
-    checkpoint_gate.py
-    command_evidence.py
-    test_impact_plan.py
-    context_pack.py
-    tdd_evidence.py
-    task_tier.py
-    task_alignment_guard.py
-    ...
-tests/
-  test_e2e_dev_harness_scripts.py
+    e2e_dev_harness_v2.py               # CLI passthrough entry
+    harness_v2/
+      __init__.py
+      pipeline.py
+      cli/                              # argument parsing / verbs
+      core/                             # run-state, gates, evidence
+      adapters/
+        hooks/
+          phase_guard_v2.py            # PreToolUse guard
+          stop_guard_v2.py             # Stop guard
+        runtime/                       # claude / opencode / manual spawn
+  tests/
 ```
 
 ## Quick Start
@@ -91,13 +73,13 @@ e2e-harness cleanup  <repo> --execute # apply artifact-retention cleanup
 e2e-harness exec <script.py> <args>   # run any bundled scripts/<script>.py
 ```
 
-`gc` and `cleanup` forward to `gc:run`, which is dry-run by default and deletes only with `--execute`. `exec` forwards to `~/.claude/skills/e2e-dev-harness/scripts/<script.py>`; any other subcommand is passed through to `e2e_dev_harness.py`. Override the skill location with `E2E_HARNESS_HOME` and the interpreter with `E2E_HARNESS_PYTHON`.
+`gc` and `cleanup` forward to `gc:run`, which is dry-run by default and deletes only with `--execute`. `exec` forwards to `~/.claude/skills/e2e-dev-harness-v2/scripts/<script.py>`; any other subcommand is passed through to `e2e_dev_harness_v2.py`. Override the skill location with `E2E_HARNESS_HOME` and the interpreter with `E2E_HARNESS_PYTHON`.
 
 ### 4. Tool maintenance (this machine)
 
 ```bash
 e2e-harness update      # re-copy the bundled skill (backs up the previous one)
-e2e-harness uninstall   # remove ~/.claude/skills/e2e-dev-harness
+e2e-harness uninstall   # remove ~/.claude/skills/e2e-dev-harness-v2
 e2e-harness env         # JSON diagnostics: node / python / install / link state
 e2e-harness version     # print name and version
 e2e-harness link        # (re)register the global command
@@ -108,7 +90,7 @@ e2e-harness unlink      # remove the global command
 
 ### Legacy installer (deprecated for hook install)
 
-`tools/install-e2e-dev-harness.mjs` predates the `e2e-harness` CLI. **Do not use it to install hooks:** it runs `install_hooks.py` from `<repo>/skills/e2e-dev-harness`, which bakes your checkout path into the target project's hooks and breaks them if the checkout moves or is renamed. Use `e2e-harness init` instead. Its multi-runtime skill-sync presets (`--sync`, `--target` for Codex/Gemini/OpenCode) remain usable until folded into the CLI:
+`tools/install-e2e-dev-harness.mjs` predates the `e2e-harness` CLI. Its `--with-hooks` path now shares the same hook materializer as `e2e-harness init` (`lib/hooks.js`), so it writes the installed skill's absolute `scripts/` paths — not your checkout. `e2e-harness init` is still the recommended one-command entry; reach for the mjs only for its multi-runtime skill-sync presets (`--sync`, `--target` for Codex/Gemini/OpenCode) that the CLI does not yet cover:
 
 ```powershell
 node tools\install-e2e-dev-harness.mjs --sync --yes
