@@ -48,7 +48,7 @@ def run(args) -> tuple[int, dict]:
         run_id, args.feature, args.request, tier=tier, pipeline=pipeline_ref,
         pipeline_spec=merged if non_default else None, domain=dom)
     run_state.save(path, st)
-    return 0, {"schema": "e2e-dev-harness-v2.start.v1", "run_id": run_id,
+    return 0, {"schema": "e2e-dev-harness.start.v1", "run_id": run_id,
                "run_state": str(path), "current_phase": "CREATED",
                "tier": tier, "pipeline": pipeline_ref, "tier_reasons": reasons,
                "domain": adapter.name}

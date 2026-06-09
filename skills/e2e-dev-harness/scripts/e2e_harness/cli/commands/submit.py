@@ -17,6 +17,6 @@ def run(args) -> tuple[int, dict]:
             reason=getattr(args, "reason", None),
         ),
     )
-    return 0, {"schema": "e2e-dev-harness-v2.submit.v1", "phase": args.phase,
+    return 0, {"schema": "e2e-dev-harness.submit.v1", "phase": args.phase,
                "key": args.key, "recorded": args.path,
                "status": getattr(args, "status", "done")}

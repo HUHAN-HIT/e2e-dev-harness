@@ -1,4 +1,4 @@
-// e2e-dev-harness-v2 opencode plugin (example template).
+// e2e-dev-harness opencode plugin (example template).
 // U6 installer rewrites __HARNESS_V2_SCRIPTS__ to the installed absolute scripts dir.
 const { spawnSync } = require("child_process");
 

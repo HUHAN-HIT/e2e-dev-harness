@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA = "e2e-dev-harness-v2.run-state.v1"
+SCHEMA = "e2e-dev-harness.run-state.v1"
 
 
 def _stamp(now: str | None = None) -> str:

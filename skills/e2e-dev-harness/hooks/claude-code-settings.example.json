@@ -1,5 +1,5 @@
 {
-  "_comment": "e2e-dev-harness-v2 hook template. U6 installer rewrites __HARNESS_V2_SCRIPTS__ to the installed absolute scripts dir.",
+  "_comment": "e2e-dev-harness hook template. U6 installer rewrites __HARNESS_V2_SCRIPTS__ to the installed absolute scripts dir.",
   "hooks": {
     "PreToolUse": [
       {

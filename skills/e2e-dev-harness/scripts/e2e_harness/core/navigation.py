@@ -59,7 +59,7 @@ def navigation_map(spine: list[Phase], state: dict, repo_root=None) -> dict:
         nxt = {"phase": cur_phase.name, "action": f"dispatch {cur_phase.worker_skill}"}
 
     return {
-        "schema": "e2e-dev-harness-v2.navigation-map.v1",
+        "schema": "e2e-dev-harness.navigation-map.v1",
         "goal": GOAL,
         "you_are_here": cur,
         "phases": phases,

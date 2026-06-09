@@ -9,7 +9,7 @@ from e2e_harness.core import run_state
 
 def test_new_run_state_shape():
     st = run_state.new_run_state("r1", "feat", "req")
-    assert st["schema"] == "e2e-dev-harness-v2.run-state.v1"
+    assert st["schema"] == "e2e-dev-harness.run-state.v1"
     assert st["current_phase"] == "CREATED"
     assert st["tier"] == "minimal"
     assert st["pipeline"] == "minimal"

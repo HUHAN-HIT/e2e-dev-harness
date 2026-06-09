@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-COMMAND_EVIDENCE_SCHEMA = "e2e-dev-harness-v2.command-evidence.v1"
+COMMAND_EVIDENCE_SCHEMA = "e2e-dev-harness.command-evidence.v1"
 DEFAULT_TIMEOUT_SECONDS = 600
 
 

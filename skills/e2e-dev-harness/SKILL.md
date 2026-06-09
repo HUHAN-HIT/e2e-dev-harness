@@ -1,9 +1,9 @@
 ---
-name: e2e-dev-harness-v2
-description: Default canonical delivery harness (replaces the retired e2e-dev-harness). Use when a feature/bugfix/refactor needs a multi-agent dev workflow that reliably runs to completion — clarification, TDD, review, verification — with a single source of truth, declarative tier-scaled gates, and worker subagents that self-load Superpowers skills.
+name: e2e-dev-harness
+description: Default canonical delivery harness. Use when a feature/bugfix/refactor needs a multi-agent dev workflow that reliably runs to completion — clarification, TDD, review, verification — with a single source of truth, declarative tier-scaled gates, and worker subagents that self-load Superpowers skills.
 ---
 
-# E2E Dev Harness v2
+# E2E Dev Harness
 
 把需求变成"澄清→TDD→实现→(审查)→验证"的多 agent 流程,**保证跑到 VERIFIED**。
 
@@ -16,7 +16,7 @@ description: Default canonical delivery harness (replaces the retired e2e-dev-ha
 ## 6 动词
 
 ```bash
-S=skills/e2e-dev-harness-v2/scripts/e2e_dev_harness.py
+S=skills/e2e-dev-harness/scripts/e2e_dev_harness.py
 python $S start --repo . --feature "<feat>" --request "<原始需求>"   # 创建唯一 run-state
 python $S next   --state <run-state>     # 推进主干或返回单一 blocker + navigation_map
 python $S dispatch --state <run-state>   # 产出当前阶段的指针 worker packet

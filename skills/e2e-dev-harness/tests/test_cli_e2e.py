@@ -89,7 +89,7 @@ def test_dispatch_emits_worker_descriptor(tmp_path):
     _run("next", "--state", state_path, "--repo", str(tmp_path), cwd=tmp_path)
     code, dres = _run("dispatch", "--state", state_path, "--repo", str(tmp_path), cwd=tmp_path)
     desc = dres["worker_descriptor"]
-    assert desc["schema"] == "e2e-dev-harness-v2.worker-descriptor.v1"
+    assert desc["schema"] == "e2e-dev-harness.worker-descriptor.v1"
     assert desc["runtime"] == "codex"
     assert desc["tool"] == "multi_agent_v1.spawn_agent"
     assert desc["arguments"]["agent_type"] == "worker"

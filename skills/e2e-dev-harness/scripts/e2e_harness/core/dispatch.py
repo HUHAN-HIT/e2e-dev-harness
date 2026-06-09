@@ -5,7 +5,7 @@ from enum import Enum
 
 from e2e_harness.core.lifecycle import Phase
 
-PACKET_SCHEMA = "e2e-dev-harness-v2.worker-packet.v1"
+PACKET_SCHEMA = "e2e-dev-harness.worker-packet.v1"
 
 
 class DispatchStatus(str, Enum):

@@ -10,7 +10,7 @@ from e2e_harness.adapters import runtime
 
 def _packet(role="clarifier", skill="e2e-harness-clarification"):
     return {
-        "schema": "e2e-dev-harness-v2.worker-packet.v1",
+        "schema": "e2e-dev-harness.worker-packet.v1",
         "role": role,
         "skill": skill,
         "context_paths": ["docs/agent-runs/r1/run-state.json"],
@@ -30,7 +30,7 @@ def _has_model_key(obj) -> bool:
 
 def test_claude_code_descriptor_shape():
     d = runtime.spawn_worker(_packet(), runtime="claude-code")
-    assert d["schema"] == "e2e-dev-harness-v2.worker-descriptor.v1"
+    assert d["schema"] == "e2e-dev-harness.worker-descriptor.v1"
     assert d["runtime"] == "claude-code"
     assert d["tool"] == "Task"
     assert "prompt" in d["arguments"]
@@ -80,7 +80,7 @@ def test_prompt_mentions_skill_and_expected_outputs():
 
 def test_opencode_descriptor_shape():
     d = runtime.spawn_worker(_packet(), runtime="opencode")
-    assert d["schema"] == "e2e-dev-harness-v2.worker-descriptor.v1"
+    assert d["schema"] == "e2e-dev-harness.worker-descriptor.v1"
     assert d["runtime"] == "opencode"
     assert d["tool"] == "task"
     assert d["arguments"]["subagent_type"] == "general-purpose"

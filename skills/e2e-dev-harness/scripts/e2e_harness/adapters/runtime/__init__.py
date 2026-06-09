@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 
-DESCRIPTOR_SCHEMA = "e2e-dev-harness-v2.worker-descriptor.v1"
+DESCRIPTOR_SCHEMA = "e2e-dev-harness.worker-descriptor.v1"
 PORTABLE_SUBAGENT_TYPE = "general-purpose"
 
 
