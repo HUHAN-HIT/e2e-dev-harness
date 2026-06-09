@@ -81,7 +81,11 @@ def _lock(path):
         try:
             fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_RDWR)
             break
-        except FileExistsError:
+        except (FileExistsError, PermissionError):
+            # FileExistsError: another holder owns the lock.
+            # PermissionError (Windows, ERRNO 13): the lock file is in a
+            # "delete pending" state because a releasing thread is mid-unlink.
+            # Both mean "retry shortly", not a hard failure.
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"run-state lock busy: {lock}")
             time.sleep(_LOCK_POLL_S)

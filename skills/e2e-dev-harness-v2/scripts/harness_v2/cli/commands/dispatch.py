@@ -13,9 +13,11 @@ def run(args) -> tuple[int, dict]:
     phase = next((p for p in spine if p.name == name), None)
     if phase is None or not phase.worker_skill:
         return 2, {"error": f"no dispatchable worker at phase {name}"}
-    rec = state.setdefault("phases", {}).setdefault(name, {})
-    rec["dispatch"] = dispatch.DispatchStatus.DISPATCHED.value
-    run_state.save(args.state, state)
+    def _mark_dispatched(s):
+        rec = s.setdefault("phases", {}).setdefault(s.get("current_phase"), {})
+        rec["dispatch"] = dispatch.DispatchStatus.DISPATCHED.value
+
+    state = run_state.mutate(args.state, _mark_dispatched)
     # Surface the self-describing domain block (if any) to the worker. Backend
     # runs carry no domain block ⇒ extra=[] ⇒ packet is unchanged (parity).
     extra: list[str] = []
