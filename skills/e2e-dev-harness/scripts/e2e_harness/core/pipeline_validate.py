@@ -4,8 +4,8 @@ Pure (no I/O). Built-in and custom specs alike must pass before they may run.
 """
 from __future__ import annotations
 
-from harness_v2 import pipeline
-from harness_v2.core import lifecycle, gates
+from e2e_harness import pipeline
+from e2e_harness.core import lifecycle, gates
 
 _REQUIRED_FOR_CUSTOM = ("worker_role", "worker_skill", "produces", "exit_gate")
 

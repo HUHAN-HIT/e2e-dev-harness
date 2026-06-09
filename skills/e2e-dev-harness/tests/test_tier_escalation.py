@@ -4,7 +4,7 @@ Golden-fixture thresholds: a scanner scope (scanner-scope.v1) raises the tier
 floor. >=2 services => at least `standard`; >=1 cross-service dependency edge
 => `critical`. The scope never downgrades a higher text-derived tier.
 """
-from harness_v2.adapters.tier import classify
+from e2e_harness.adapters.tier import classify
 
 
 # --- golden scanner-scope fixtures (scanner-scope.v1 shape) ---

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from harness_v2.core.lifecycle import Phase
+from e2e_harness.core.lifecycle import Phase
 
 PACKET_SCHEMA = "e2e-dev-harness-v2.worker-packet.v1"
 

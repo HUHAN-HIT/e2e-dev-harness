@@ -1,5 +1,5 @@
-from harness_v2 import pipeline
-from harness_v2.core import lifecycle
+from e2e_harness import pipeline
+from e2e_harness.core import lifecycle
 
 
 def test_phase_defaults_to_no_code_write():

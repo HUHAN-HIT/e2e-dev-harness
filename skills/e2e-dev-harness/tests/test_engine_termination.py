@@ -1,5 +1,5 @@
-from harness_v2.core import lifecycle, engine, run_state
-from harness_v2 import pipeline
+from e2e_harness.core import lifecycle, engine, run_state
+from e2e_harness import pipeline
 
 
 def _spine():

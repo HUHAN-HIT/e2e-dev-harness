@@ -1,8 +1,8 @@
 """Declarative gate evaluation + closure invariant (I2)."""
 from __future__ import annotations
 
-from harness_v2.adapters.evidence import validate
-from harness_v2.core.lifecycle import Phase
+from e2e_harness.adapters.evidence import validate
+from e2e_harness.core.lifecycle import Phase
 
 
 def gate_passes(phase: Phase, phase_record: dict | None,

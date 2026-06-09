@@ -3,10 +3,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from harness_v2.adapters.hooks import phase_guard_v2 as pg
-from harness_v2.adapters.evidence import command_evidence as ce
+from e2e_harness.adapters.hooks import phase_guard as pg
+from e2e_harness.adapters.evidence import command_evidence as ce
 
-ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness_v2.py"
+ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness.py"
 
 
 def _run(*args, cwd):
@@ -46,7 +46,7 @@ def test_phase_guard_blocks_early_then_allows_at_implemented(tmp_path):
     assert d["decision"] == "deny", d
 
     # 2) Drive the run via real gates until current_phase == IMPLEMENTED.
-    from harness_v2.core import run_state
+    from e2e_harness.core import run_state
     reached_impl = False
     for _ in range(50):
         if pipeline_can_write(state_path):
@@ -68,6 +68,6 @@ def test_phase_guard_blocks_early_then_allows_at_implemented(tmp_path):
 
 
 def pipeline_can_write(state_path):
-    from harness_v2 import pipeline
-    from harness_v2.core import run_state
+    from e2e_harness import pipeline
+    from e2e_harness.core import run_state
     return pipeline.can_write_code(run_state.load(state_path))

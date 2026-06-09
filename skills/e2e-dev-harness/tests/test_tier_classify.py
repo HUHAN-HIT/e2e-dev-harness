@@ -1,4 +1,4 @@
-from harness_v2.adapters.tier import classify
+from e2e_harness.adapters.tier import classify
 
 
 def test_plain_request_is_minimal():

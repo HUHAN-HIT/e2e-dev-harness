@@ -2,8 +2,8 @@
 an extra_context line; a backend run (no domain) is byte-identical to before."""
 from types import SimpleNamespace
 
-from harness_v2.core import run_state
-from harness_v2.cli.commands import dispatch as dispatch_cmd
+from e2e_harness.core import run_state
+from e2e_harness.cli.commands import dispatch as dispatch_cmd
 
 
 def test_dispatch_surfaces_domain_in_context(tmp_path):

@@ -3,7 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness_v2.py"
+ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness.py"
 
 
 def _run(*args, cwd):
@@ -13,7 +13,7 @@ def _run(*args, cwd):
 
 
 def _make_artifact(repo: Path, phase: str, key: str) -> str:
-    from harness_v2.adapters.evidence import command_evidence as ce
+    from e2e_harness.adapters.evidence import command_evidence as ce
     base = repo / "docs" / "agent-runs" / "art"
     base.mkdir(parents=True, exist_ok=True)
     if key in ("failing_tests", "passing_tests"):

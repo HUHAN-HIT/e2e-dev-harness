@@ -1,5 +1,5 @@
-from harness_v2.core import lifecycle, gates
-from harness_v2 import pipeline
+from e2e_harness.core import lifecycle, gates
+from e2e_harness import pipeline
 
 
 def _phase(name):

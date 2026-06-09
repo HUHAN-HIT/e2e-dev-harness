@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness_v2.adapters.domain.frontend import FrontendAdapter
-from harness_v2.adapters.domain.backend import BackendAdapter
+from e2e_harness.adapters.domain.frontend import FrontendAdapter
+from e2e_harness.adapters.domain.backend import BackendAdapter
 
 _ORDER = [FrontendAdapter, BackendAdapter]   # frontend first (more specific)
 _BY_NAME = {c.name: c for c in _ORDER}

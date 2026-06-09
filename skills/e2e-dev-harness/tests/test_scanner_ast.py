@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import sys
-_LEAF = Path(__file__).resolve().parents[1] / "scripts" / "harness_v2" / "adapters" / "scanner" / "_legacy"
+_LEAF = Path(__file__).resolve().parents[1] / "scripts" / "e2e_harness" / "adapters" / "scanner" / "_legacy"
 if str(_LEAF) not in sys.path:
     sys.path.insert(0, str(_LEAF))
 

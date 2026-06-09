@@ -3,10 +3,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from harness_v2.core import run_state, engine, dispatch
-from harness_v2 import pipeline
+from e2e_harness.core import run_state, engine, dispatch
+from e2e_harness import pipeline
 
-ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness_v2.py"
+ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness.py"
 
 
 def _run(*args, cwd):

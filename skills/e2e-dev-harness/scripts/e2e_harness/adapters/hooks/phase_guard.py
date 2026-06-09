@@ -14,9 +14,9 @@ _SCRIPTS = Path(__file__).resolve().parents[3]  # .../scripts
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from harness_v2 import pipeline                       # noqa: E402
-from harness_v2.core import run_state                 # noqa: E402
-from harness_v2.adapters.hooks import paths as hook_paths  # noqa: E402
+from e2e_harness import pipeline                       # noqa: E402
+from e2e_harness.core import run_state                 # noqa: E402
+from e2e_harness.adapters.hooks import paths as hook_paths  # noqa: E402
 
 _REDIRECT_TOKENS = (">", ">>", "tee", "set-content", "add-content", "out-file")
 _REDIRECT_TARGET_RE = re.compile(r"(?:^|\s)(?:>>|>)\s*(?:\"([^\"]+)\"|'([^']+)'|([^\s;&|]+))")

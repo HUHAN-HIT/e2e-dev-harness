@@ -16,7 +16,7 @@ description: Default canonical delivery harness (replaces the retired e2e-dev-ha
 ## 6 动词
 
 ```bash
-S=skills/e2e-dev-harness-v2/scripts/e2e_dev_harness_v2.py
+S=skills/e2e-dev-harness-v2/scripts/e2e_dev_harness.py
 python $S start --repo . --feature "<feat>" --request "<原始需求>"   # 创建唯一 run-state
 python $S next   --state <run-state>     # 推进主干或返回单一 blocker + navigation_map
 python $S dispatch --state <run-state>   # 产出当前阶段的指针 worker packet

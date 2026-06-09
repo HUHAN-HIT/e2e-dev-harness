@@ -2,7 +2,7 @@
 // U6 installer rewrites __HARNESS_V2_SCRIPTS__ to the installed absolute scripts dir.
 const { spawnSync } = require("child_process");
 
-const PHASE_GUARD = "__HARNESS_V2_SCRIPTS__/harness_v2/adapters/hooks/phase_guard_v2.py";
+const PHASE_GUARD = "__HARNESS_V2_SCRIPTS__/e2e_harness/adapters/hooks/phase_guard.py";
 
 module.exports = {
   "tool.execute.before": async (input, output) => {
@@ -19,7 +19,7 @@ module.exports = {
     }
     const decision = (parsed.hookSpecificOutput || {}).permissionDecision;
     if (decision === "deny") {
-      throw new Error((parsed.hookSpecificOutput || {}).permissionDecisionReason || "phase_guard_v2 denied this write");
+      throw new Error((parsed.hookSpecificOutput || {}).permissionDecisionReason || "phase_guard denied this write");
     }
   },
 };

@@ -1,4 +1,4 @@
-from harness_v2.adapters.scanner import scan_frontend
+from e2e_harness.adapters.scanner import scan_frontend
 
 
 def test_frontend_scan_lists_components(tmp_path):

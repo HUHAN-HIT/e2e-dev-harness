@@ -1,5 +1,5 @@
-from harness_v2.core import lifecycle, navigation, run_state, engine
-from harness_v2 import pipeline
+from e2e_harness.core import lifecycle, navigation, run_state, engine
+from e2e_harness import pipeline
 
 
 def _spine():
@@ -62,7 +62,7 @@ def test_map_frames_next_action_inside_map():
 
 def test_map_next_is_null_when_complete(tmp_path):
     import json, sys
-    from harness_v2.adapters.evidence import command_evidence as ce
+    from e2e_harness.adapters.evidence import command_evidence as ce
     st = run_state.new_run_state("r1", "f", "r")
     spine = _spine()
     base = tmp_path / "art"; base.mkdir(parents=True, exist_ok=True)

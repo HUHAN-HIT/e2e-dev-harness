@@ -10,21 +10,21 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from harness_v2.core import run_state, pipeline_validate
-from harness_v2 import pipeline
+from e2e_harness.core import run_state, pipeline_validate
+from e2e_harness import pipeline
 
 
 def run(args) -> tuple[int, dict]:
     repo = Path(args.repo).resolve()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + args.feature
 
-    from harness_v2.adapters.domain import select, merge_overrides, domain_block
+    from e2e_harness.adapters.domain import select, merge_overrides, domain_block
     adapter = select(repo, explicit=getattr(args, "adapter", None))  # KeyError -> main.py exit 2
 
     tier = args.tier
     reasons: list[str] = []
     if tier == "auto":
-        from harness_v2.adapters.tier import classify
+        from e2e_harness.adapters.tier import classify
         scope = adapter.scan(repo, args.request) if getattr(args, "scan", False) else None
         tier, reasons = classify.classify_tier(args.request, scope)
 

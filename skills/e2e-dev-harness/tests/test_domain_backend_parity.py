@@ -2,8 +2,8 @@
 merged spec is byte-identical to the named built-in for every tier (parity)."""
 from pathlib import Path
 
-from harness_v2.adapters.domain import select, merge_overrides
-from harness_v2 import pipeline
+from e2e_harness.adapters.domain import select, merge_overrides
+from e2e_harness import pipeline
 
 
 def test_backend_overrides_empty_and_spec_identity():

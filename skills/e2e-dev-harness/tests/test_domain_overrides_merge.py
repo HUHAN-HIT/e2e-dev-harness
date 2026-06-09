@@ -1,6 +1,6 @@
-from harness_v2.adapters.domain import base
-from harness_v2 import pipeline
-from harness_v2.core import pipeline_validate
+from e2e_harness.adapters.domain import base
+from e2e_harness import pipeline
+from e2e_harness.core import pipeline_validate
 
 
 def test_merge_applies_overrides_and_stays_valid():

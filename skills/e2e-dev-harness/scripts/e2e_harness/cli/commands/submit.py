@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness_v2.core import run_state, engine
+from e2e_harness.core import run_state, engine
 
 
 def run(args) -> tuple[int, dict]:

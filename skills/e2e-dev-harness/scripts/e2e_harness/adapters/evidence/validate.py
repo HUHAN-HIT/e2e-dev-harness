@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from harness_v2.adapters.evidence import command_evidence, hashing
+from e2e_harness.adapters.evidence import command_evidence, hashing
 
 # Evidence keys whose artifact must be command-evidence JSON with a specific exit code.
 COMMAND_KEYS = {"failing_tests": "nonzero", "passing_tests": "zero"}

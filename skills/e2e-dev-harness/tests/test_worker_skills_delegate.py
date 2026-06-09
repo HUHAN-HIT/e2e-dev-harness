@@ -34,4 +34,4 @@ def test_reworked_skills_drop_legacy_cli():
     for skill in NO_LEGACY_CLI:
         text = (ROOT / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
         assert LEGACY_CLI not in text, f"{skill} still references legacy CLI"
-        assert "e2e_dev_harness_v2.py" in text, f"{skill} missing v2 CLI reference"
+        assert "e2e_dev_harness.py" in text, f"{skill} missing v2 CLI reference"

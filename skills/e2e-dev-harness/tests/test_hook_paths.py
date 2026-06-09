@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from harness_v2.adapters.hooks import paths as hp
+from e2e_harness.adapters.hooks import paths as hp
 
 
 def test_code_path_by_suffix(tmp_path):

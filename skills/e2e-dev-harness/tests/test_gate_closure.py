@@ -1,7 +1,7 @@
 from dataclasses import replace
 
-from harness_v2.core import lifecycle, gates
-from harness_v2 import pipeline
+from e2e_harness.core import lifecycle, gates
+from e2e_harness import pipeline
 
 
 def test_minimal_pipeline_is_gate_closed():
@@ -20,7 +20,7 @@ def test_closure_detects_unproduced_evidence():
 
 
 def test_all_builtin_tiers_gate_closed():
-    from harness_v2 import pipeline
+    from e2e_harness import pipeline
     for tier in ("minimal", "standard", "critical", "audited"):
         spine = pipeline.build_spine(tier)
         ok, unmet = gates.gate_closure_ok(spine)

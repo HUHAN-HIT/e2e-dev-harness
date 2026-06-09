@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"__HARNESS_V2_SCRIPTS__/harness_v2/adapters/hooks/phase_guard_v2.py\" --repo . --hook-input -"
+            "command": "python \"__HARNESS_V2_SCRIPTS__/e2e_harness/adapters/hooks/phase_guard.py\" --repo . --hook-input -"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"__HARNESS_V2_SCRIPTS__/harness_v2/adapters/hooks/stop_guard_v2.py\" --repo . --hook-input -"
+            "command": "python \"__HARNESS_V2_SCRIPTS__/e2e_harness/adapters/hooks/stop_guard.py\" --repo . --hook-input -"
           }
         ]
       }

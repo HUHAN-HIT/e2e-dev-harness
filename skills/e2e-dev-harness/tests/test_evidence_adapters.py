@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def test_sha256_file_matches_hashlib(tmp_path):
-    from harness_v2.adapters.evidence import hashing
+    from e2e_harness.adapters.evidence import hashing
     f = tmp_path / "a.txt"
     f.write_text("hello", encoding="utf-8")
     import hashlib
@@ -12,7 +12,7 @@ def test_sha256_file_matches_hashlib(tmp_path):
 
 
 def test_record_command_captures_exit_code_and_hashes(tmp_path):
-    from harness_v2.adapters.evidence import command_evidence as ce
+    from e2e_harness.adapters.evidence import command_evidence as ce
     ev = ce.record_command(tmp_path, f'"{sys.executable}" -c "import sys; sys.exit(3)"')
     assert ev["schema"] == ce.COMMAND_EVIDENCE_SCHEMA
     assert ev["exit_code"] == 3
@@ -21,5 +21,5 @@ def test_record_command_captures_exit_code_and_hashes(tmp_path):
 
 
 def test_is_command_evidence_rejects_plain_dict():
-    from harness_v2.adapters.evidence import command_evidence as ce
+    from e2e_harness.adapters.evidence import command_evidence as ce
     assert ce.is_command_evidence({"foo": "bar"}) is False

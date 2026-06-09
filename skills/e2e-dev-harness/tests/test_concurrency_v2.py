@@ -12,9 +12,9 @@ import threading
 import types
 from pathlib import Path  # noqa: F401 (kept for parity with command modules)
 
-from harness_v2.core import run_state
-from harness_v2.cli.commands import submit as submit_cmd
-from harness_v2.cli.commands import next as next_cmd
+from e2e_harness.core import run_state
+from e2e_harness.cli.commands import submit as submit_cmd
+from e2e_harness.cli.commands import next as next_cmd
 
 
 def _args(state, repo, phase, key, evidence):

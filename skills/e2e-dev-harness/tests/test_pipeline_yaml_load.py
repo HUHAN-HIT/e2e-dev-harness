@@ -1,6 +1,6 @@
 import pytest
 
-from harness_v2 import pipeline
+from e2e_harness import pipeline
 
 
 def test_minimal_loads_from_yaml_and_skips_planned_reviewed():

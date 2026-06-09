@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness_v2.core import run_state, navigation
-from harness_v2 import pipeline
+from e2e_harness.core import run_state, navigation
+from e2e_harness import pipeline
 
 
 def run(args) -> tuple[int, dict]:

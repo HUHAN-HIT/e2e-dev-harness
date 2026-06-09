@@ -1,5 +1,5 @@
-from harness_v2.core import lifecycle
-from harness_v2 import pipeline
+from e2e_harness.core import lifecycle
+from e2e_harness import pipeline
 
 
 def test_minimal_spine_order_and_links():

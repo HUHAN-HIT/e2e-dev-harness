@@ -2,8 +2,8 @@ import json
 import sys
 from pathlib import Path
 
-from harness_v2.core import lifecycle, gates
-from harness_v2 import pipeline
+from e2e_harness.core import lifecycle, gates
+from e2e_harness import pipeline
 
 
 def _phase(name):
@@ -11,14 +11,14 @@ def _phase(name):
 
 
 def test_validate_missing_file_fails(tmp_path):
-    from harness_v2.adapters.evidence import validate
+    from e2e_harness.adapters.evidence import validate
     ok, reason = validate.validate_evidence(tmp_path, "clarification", {"path": "nope.md"})
     assert ok is False
     assert reason == "file-not-found"
 
 
 def test_validate_empty_file_fails(tmp_path):
-    from harness_v2.adapters.evidence import validate
+    from e2e_harness.adapters.evidence import validate
     (tmp_path / "e.md").write_text("", encoding="utf-8")
     ok, reason = validate.validate_evidence(tmp_path, "clarification", {"path": "e.md"})
     assert ok is False
@@ -26,14 +26,14 @@ def test_validate_empty_file_fails(tmp_path):
 
 
 def test_validate_nonempty_doc_passes(tmp_path):
-    from harness_v2.adapters.evidence import validate
+    from e2e_harness.adapters.evidence import validate
     (tmp_path / "c.md").write_text("real", encoding="utf-8")
     ok, reason = validate.validate_evidence(tmp_path, "clarification", {"path": "c.md"})
     assert ok is True and reason is None
 
 
 def test_validate_passing_tests_requires_zero_exit(tmp_path):
-    from harness_v2.adapters.evidence import command_evidence as ce, validate
+    from e2e_harness.adapters.evidence import command_evidence as ce, validate
     ev = ce.record_command(tmp_path, f'"{sys.executable}" -c "import sys; sys.exit(1)"')
     (tmp_path / "t.json").write_text(json.dumps(ev), encoding="utf-8")
     ok, reason = validate.validate_evidence(tmp_path, "passing_tests", {"path": "t.json"})
@@ -41,7 +41,7 @@ def test_validate_passing_tests_requires_zero_exit(tmp_path):
 
 
 def test_validate_failing_tests_requires_nonzero_exit(tmp_path):
-    from harness_v2.adapters.evidence import command_evidence as ce, validate
+    from e2e_harness.adapters.evidence import command_evidence as ce, validate
     ev = ce.record_command(tmp_path, f'"{sys.executable}" -c "import sys; sys.exit(0)"')
     (tmp_path / "t.json").write_text(json.dumps(ev), encoding="utf-8")
     ok, reason = validate.validate_evidence(tmp_path, "failing_tests", {"path": "t.json"})

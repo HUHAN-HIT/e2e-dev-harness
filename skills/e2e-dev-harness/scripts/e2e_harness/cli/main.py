@@ -5,7 +5,7 @@ import argparse
 import json
 import sys
 
-from harness_v2.cli.commands import start, next as next_cmd, dispatch, submit, gate, status, validate_pipeline
+from e2e_harness.cli.commands import start, next as next_cmd, dispatch, submit, gate, status, validate_pipeline
 
 _COMMANDS = {
     "start": start.run, "next": next_cmd.run, "dispatch": dispatch.run,

@@ -1,8 +1,8 @@
 """validate-pipeline: preflight I1/I2 check on a pipeline (name or path)."""
 from __future__ import annotations
 
-from harness_v2 import pipeline
-from harness_v2.core import pipeline_validate
+from e2e_harness import pipeline
+from e2e_harness.core import pipeline_validate
 
 
 def run(args) -> tuple[int, dict]:

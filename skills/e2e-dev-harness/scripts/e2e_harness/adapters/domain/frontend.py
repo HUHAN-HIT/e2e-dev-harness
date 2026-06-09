@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from harness_v2.adapters import scanner
+from e2e_harness.adapters import scanner
 
 _FW = ("react", "vue", "svelte", "@angular/core")
 

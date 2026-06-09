@@ -1,7 +1,7 @@
 from pathlib import Path
 import pytest
-from harness_v2.adapters.domain import select
-from harness_v2.adapters.domain import backend, frontend
+from e2e_harness.adapters.domain import select
+from e2e_harness.adapters.domain import backend, frontend
 
 
 def _mk(p: Path, name: str, body: str = "{}"):

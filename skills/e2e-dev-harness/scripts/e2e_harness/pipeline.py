@@ -13,8 +13,8 @@ from pathlib import Path
 
 import yaml
 
-from harness_v2.core import lifecycle
-from harness_v2.core.lifecycle import Phase
+from e2e_harness.core import lifecycle
+from e2e_harness.core.lifecycle import Phase
 
 _PIPELINES_DIR = Path(__file__).resolve().parents[2] / "pipelines"
 _OVERRIDE_FIELDS = ("worker_role", "worker_skill", "produces", "exit_gate", "allows_code_write")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness_v2.adapters import scanner
+from e2e_harness.adapters import scanner
 
 _MARKERS = ("pom.xml", "build.gradle", "build.gradle.kts", "pyproject.toml", "setup.py", "go.mod")
 _JAVA = ("pom.xml", "build.gradle", "build.gradle.kts")

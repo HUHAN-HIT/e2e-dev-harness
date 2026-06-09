@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-from harness_v2.adapters.hooks import stop_guard_v2 as sg
-from harness_v2.core import run_state
+from e2e_harness.adapters.hooks import stop_guard as sg
+from e2e_harness.core import run_state
 
 
 def _write_state(tmp_path, current_phase):

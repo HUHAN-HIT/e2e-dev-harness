@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 
-from harness_v2 import pipeline
-from harness_v2.core import run_state, engine, dispatch, gates
-from harness_v2.adapters.evidence import command_evidence, validate
+from e2e_harness import pipeline
+from e2e_harness.core import run_state, engine, dispatch, gates
+from e2e_harness.adapters.evidence import command_evidence, validate
 
 
 def _artifact(base, phase, key):

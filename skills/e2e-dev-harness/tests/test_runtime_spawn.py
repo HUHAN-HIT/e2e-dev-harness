@@ -5,7 +5,7 @@ runtime launch descriptor (no process spawned). Scope: claude-code + manual.
 Portable subagent_type, per-role env override, and NO model pin (regression
 guard for the glm-4.7 broken-dispatch).
 """
-from harness_v2.adapters import runtime
+from e2e_harness.adapters import runtime
 
 
 def _packet(role="clarifier", skill="e2e-harness-clarification"):

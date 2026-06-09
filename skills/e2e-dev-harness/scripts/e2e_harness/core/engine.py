@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness_v2.adapters.evidence import hashing
-from harness_v2.core import gates, dispatch
-from harness_v2.core.lifecycle import Phase
+from e2e_harness.adapters.evidence import hashing
+from e2e_harness.core import gates, dispatch
+from e2e_harness.core.lifecycle import Phase
 
 
 def _phase_record(state: dict, name: str) -> dict:

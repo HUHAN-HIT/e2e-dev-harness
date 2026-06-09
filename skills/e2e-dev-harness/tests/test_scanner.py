@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "scripts" / "harness_v2" / "adapters" / "scanner" / "_legacy"
+SCRIPTS = Path(__file__).resolve().parents[1] / "scripts" / "e2e_harness" / "adapters" / "scanner" / "_legacy"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 

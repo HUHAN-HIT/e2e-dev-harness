@@ -1,10 +1,10 @@
 def test_package_imports():
-    import harness_v2
-    import harness_v2.core
-    assert harness_v2 is not None
+    import e2e_harness
+    import e2e_harness.core
+    assert e2e_harness is not None
 
 
-from harness_v2.core import run_state
+from e2e_harness.core import run_state
 
 
 def test_new_run_state_shape():
@@ -38,7 +38,7 @@ from pathlib import Path
 
 
 def test_load_rejects_schema_mismatch(tmp_path):
-    from harness_v2.core import run_state
+    from e2e_harness.core import run_state
     p = tmp_path / "bad.json"
     p.write_text(json.dumps({"schema": "wrong", "run_id": "x"}), encoding="utf-8")
     with pytest.raises(ValueError) as ei:
@@ -47,7 +47,7 @@ def test_load_rejects_schema_mismatch(tmp_path):
 
 
 def test_save_is_atomic_no_partial_on_replace(tmp_path):
-    from harness_v2.core import run_state
+    from e2e_harness.core import run_state
     st = run_state.new_run_state("r1", "feat", "req")
     p = tmp_path / "run-state.json"
     run_state.save(p, st)

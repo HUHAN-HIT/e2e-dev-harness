@@ -1,9 +1,9 @@
 """dispatch: emit one pointer worker packet for the current phase."""
 from __future__ import annotations
 
-from harness_v2.core import run_state, dispatch
-from harness_v2 import pipeline
-from harness_v2.adapters import runtime
+from e2e_harness.core import run_state, dispatch
+from e2e_harness import pipeline
+from e2e_harness.adapters import runtime
 
 
 def run(args) -> tuple[int, dict]:

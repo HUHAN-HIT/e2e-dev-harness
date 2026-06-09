@@ -1,8 +1,8 @@
 """Derived whole-journey navigation map (no hand-maintained state)."""
 from __future__ import annotations
 
-from harness_v2.core import gates, dispatch
-from harness_v2.core.lifecycle import Phase, catalog
+from e2e_harness.core import gates, dispatch
+from e2e_harness.core.lifecycle import Phase, catalog
 
 GOAL = "VERIFIED"
 

@@ -1,5 +1,5 @@
-from harness_v2.core import lifecycle, dispatch
-from harness_v2 import pipeline
+from e2e_harness.core import lifecycle, dispatch
+from e2e_harness import pipeline
 
 
 def test_status_values():
