@@ -75,7 +75,7 @@ def decide(hook_text: str, repo, run_state_path) -> dict:
                 "WHY: this file is the harness single source of truth (SSOT), owned exclusively "
                 "by the CLI — hand-editing it corrupts run-state and skips gate evidence.\n"
                 f"RECOVER: never edit run-state.json by hand. Inspect the current allowed action "
-                f"with `e2e-harness-v2 status --state {run_state_path}`, then mutate state only "
+                f"with `e2e-dev-harness status --state {run_state_path}`, then mutate state only "
                 "through `next` / `gate` / `submit`."
             )
         if hook_paths.is_hook_config_path(repo, p):
@@ -117,10 +117,10 @@ def decide(hook_text: str, repo, run_state_path) -> dict:
         "writes are permitted only in phases declared `allows_code_write` (e.g. IMPLEMENTED); "
         "the current phase must produce its own evidence first.\n"
         f"RECOVER: 1) see the whole journey + the single next action: "
-        f"`e2e-harness-v2 status --state {run_state_path}`; "
+        f"`e2e-dev-harness status --state {run_state_path}`; "
         f"2) finish this phase's expected_outputs and record them: "
-        f"`e2e-harness-v2 submit --state {run_state_path} --phase {phase} --key <k> --path <p>`; "
-        f"3) advance with `e2e-harness-v2 next --state {run_state_path}` (and `gate` to clear the "
+        f"`e2e-dev-harness submit --state {run_state_path} --phase {phase} --key <k> --path <p>`; "
+        f"3) advance with `e2e-dev-harness next --state {run_state_path}` (and `gate` to clear the "
         "exit gate) until a code-write phase is active, then retry this edit. "
         f"If {names} is NOT production code, write it under an allowed path (docs/, test evidence)."
     )

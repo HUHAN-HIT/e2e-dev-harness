@@ -16,7 +16,7 @@ _COMMANDS = {
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="e2e-harness-v2")
+    p = argparse.ArgumentParser(prog="e2e-dev-harness")
     sub = p.add_subparsers(dest="command", required=True)
 
     s = sub.add_parser("start"); s.add_argument("--repo", default=".")

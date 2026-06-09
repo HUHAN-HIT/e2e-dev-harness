@@ -36,10 +36,10 @@ def decide(run_state_path) -> dict:
             f"Do not stop yet: run '{run_id}' is at phase {phase}, not VERIFIED.\n"
             "WHY: the harness guarantees every run reaches VERIFIED; stopping now leaves the "
             "change unverified (tests / review / verification still incomplete).\n"
-            f"CONTINUE: run `e2e-harness-v2 next --state {run_state_path}` for the single next "
+            f"CONTINUE: run `e2e-dev-harness next --state {run_state_path}` for the single next "
             "action; if it returns a blocker, `dispatch` the worker, `submit` its evidence, then "
             f"`gate`. Repeat until VERIFIED. Inspect progress: "
-            f"`e2e-harness-v2 status --state {run_state_path}`."
+            f"`e2e-dev-harness status --state {run_state_path}`."
         ),
     }
 
