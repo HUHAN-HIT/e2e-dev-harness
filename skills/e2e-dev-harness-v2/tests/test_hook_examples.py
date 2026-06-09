@@ -21,6 +21,19 @@ def test_claude_pretooluse_matches_write_tools():
         assert tool in matcher
 
 
+def test_claude_commands_quote_placeholder_path():
+    data = json.loads((HOOKS_DIR / "claude-code-settings.example.json").read_text(encoding="utf-8"))
+    commands = [
+        hook["command"]
+        for groups in data["hooks"].values()
+        for group in groups
+        for hook in group["hooks"]
+    ]
+    assert commands
+    for command in commands:
+        assert 'python "__HARNESS_V2_SCRIPTS__/' in command
+
+
 def test_opencode_plugin_calls_phase_guard():
     text = (HOOKS_DIR / "opencode-plugin.example.js").read_text(encoding="utf-8")
     assert "phase_guard_v2.py" in text

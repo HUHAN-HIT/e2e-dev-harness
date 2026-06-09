@@ -128,6 +128,8 @@ class NodeInstallerTests(unittest.TestCase):
             self.assertEqual(str(project.resolve()), actions["install-hooks"]["project_root"])
             self.assertIn("e2e-dev-harness-v2", actions["install-hooks"]["scripts_dir"])
             self.assertIn(str(project.resolve()), actions["doctor"]["command"])
+            self.assertIn("e2e_dev_harness_v2.py", actions["doctor"]["command"])
+            self.assertNotIn("e2e_dev_harness.py", actions["doctor"]["command"])
 
     def test_full_preset_keeps_common_setup_short(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

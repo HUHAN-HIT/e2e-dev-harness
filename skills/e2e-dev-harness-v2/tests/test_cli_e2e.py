@@ -82,7 +82,7 @@ def test_dispatch_returns_pointer_packet(tmp_path):
 
 
 def test_dispatch_emits_worker_descriptor(tmp_path):
-    """方案1 wiring: dispatch additively emits a claude-code launch descriptor."""
+    """Dispatch emits a launchable worker request that inherits the runtime default model."""
     code, res = _run("start", "--repo", str(tmp_path), "--feature", "demo",
                      "--request", "do x", cwd=tmp_path)
     state_path = res["run_state"]
@@ -90,8 +90,12 @@ def test_dispatch_emits_worker_descriptor(tmp_path):
     code, dres = _run("dispatch", "--state", state_path, "--repo", str(tmp_path), cwd=tmp_path)
     desc = dres["worker_descriptor"]
     assert desc["schema"] == "e2e-dev-harness-v2.worker-descriptor.v1"
-    assert desc["runtime"] == "claude-code"
-    assert desc["tool"] == "Task"
+    assert desc["runtime"] == "codex"
+    assert desc["tool"] == "multi_agent_v1.spawn_agent"
+    assert desc["arguments"]["agent_type"] == "worker"
+    assert desc["arguments"]["fork_context"] is False
+    assert "model" not in desc["arguments"]
+    assert "message" in desc["arguments"]
     assert desc["expected_outputs"] == dres["expected_outputs"]
 
 
@@ -105,6 +109,23 @@ def test_dispatch_runtime_manual_yields_manual_descriptor(tmp_path):
     desc = dres["worker_descriptor"]
     assert desc["runtime"] == "manual"
     assert desc["tool"] is None
+
+
+def test_dispatch_runtime_opencode_yields_task_descriptor(tmp_path):
+    """`--runtime opencode` emits an opencode task descriptor (no model pin)."""
+    code, res = _run("start", "--repo", str(tmp_path), "--feature", "demo",
+                     "--request", "do x", cwd=tmp_path)
+    state_path = res["run_state"]
+    _run("next", "--state", state_path, "--repo", str(tmp_path), cwd=tmp_path)
+    code, dres = _run("dispatch", "--state", state_path, "--repo", str(tmp_path),
+                      "--runtime", "opencode", cwd=tmp_path)
+    desc = dres["worker_descriptor"]
+    assert desc["runtime"] == "opencode"
+    assert desc["tool"] == "task"
+    assert desc["arguments"]["subagent_type"] == "general-purpose"
+    assert "model" not in desc["arguments"]
+    assert "prompt" in desc["arguments"]
+    assert desc["expected_outputs"] == dres["expected_outputs"]
 
 
 def test_gate_verb_rejects_fake_artifact_accepts_real(tmp_path):

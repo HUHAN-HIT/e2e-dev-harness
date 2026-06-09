@@ -6,6 +6,7 @@ pipeline.can_write_code gate. Stdlib only. See design §3.2.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -18,6 +19,16 @@ from harness_v2.core import run_state                 # noqa: E402
 from harness_v2.adapters.hooks import paths as hook_paths  # noqa: E402
 
 _REDIRECT_TOKENS = (">", ">>", "tee", "set-content", "add-content", "out-file")
+_REDIRECT_TARGET_RE = re.compile(r"(?:^|\s)(?:>>|>)\s*(?:\"([^\"]+)\"|'([^']+)'|([^\s;&|]+))")
+
+
+def paths_from_shell_command(command: str) -> list[str]:
+    paths: list[str] = []
+    for match in _REDIRECT_TARGET_RE.finditer(command):
+        target = next((part for part in match.groups() if part), "")
+        if target:
+            paths.append(target)
+    return paths
 
 
 def parse_hook_input(text: str) -> tuple[str, list[str], str]:
@@ -39,6 +50,7 @@ def parse_hook_input(text: str) -> tuple[str, list[str], str]:
         cmd = tin.get("command")
         if isinstance(cmd, str):
             command = cmd
+            paths.extend(paths_from_shell_command(cmd))
     return tool, paths, command
 
 

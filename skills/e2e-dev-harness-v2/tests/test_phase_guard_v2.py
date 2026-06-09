@@ -21,7 +21,7 @@ def test_parse_hook_input_extracts_path_and_command():
     tool, paths, command = pg.parse_hook_input(_hook("Write", file_path="src/a.py", content="x"))
     assert tool == "Write" and paths == ["src/a.py"] and command == ""
     tool, paths, command = pg.parse_hook_input(_hook("Bash", command="echo hi > src/a.py"))
-    assert tool == "Bash" and command == "echo hi > src/a.py"
+    assert tool == "Bash" and paths == ["src/a.py"] and command == "echo hi > src/a.py"
 
 
 def test_parse_empty_is_safe():
@@ -56,6 +56,21 @@ def test_read_like_tool_no_paths_allowed(tmp_path):
     sp = _write_state(tmp_path, "RED")
     d = pg.decide(_hook("Bash", command="ls -la"), tmp_path, sp)
     assert d["decision"] == "allow"
+
+
+def test_shell_redirect_into_code_denied_in_non_impl_phase(tmp_path):
+    sp = _write_state(tmp_path, "RED")
+    d = pg.decide(_hook("Bash", command="echo hi > src/a.py"), tmp_path, sp)
+    assert d["decision"] == "deny"
+    assert "a.py" in d["reason"]
+
+
+def test_shell_redirect_extracts_quoted_windows_style_path(tmp_path):
+    target = tmp_path / "src" / "a.py"
+    tool, paths, command = pg.parse_hook_input(_hook("Bash", command=f'echo hi > "{target}"'))
+    assert tool == "Bash"
+    assert paths == [str(target)]
+    assert command == f'echo hi > "{target}"'
 
 
 def test_direct_run_state_write_denied(tmp_path):

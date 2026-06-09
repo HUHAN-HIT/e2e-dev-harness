@@ -2,9 +2,8 @@
 
 Pure — translates a worker packet into a runtime-specific launch *descriptor*;
 it never spawns a process. The coordinator performs the real tool call, staying
-a pure control plane. Scope: claude-code + manual (codex/opencode deferred,
-see the U2 design doc). No model is pinned, so the worker inherits the
-coordinator's accessible default model (fixes the glm-4.7 broken-dispatch).
+a pure control plane. Scope: codex + claude-code + opencode + manual. No model is
+pinned, so the worker inherits the coordinator's accessible default model.
 """
 from __future__ import annotations
 
@@ -53,6 +52,43 @@ def _claude_code(packet: dict) -> dict:
     }
 
 
+def _codex(packet: dict) -> dict:
+    role = packet.get("role", "")
+    skill = packet.get("skill", "")
+    return {
+        "schema": DESCRIPTOR_SCHEMA,
+        "runtime": "codex",
+        "tool": "multi_agent_v1.spawn_agent",
+        "arguments": {
+            "agent_type": "worker",
+            "fork_context": False,
+            "message": _prompt(packet),
+        },
+        "description": f"{role}: {skill}",
+        "context_paths": list(packet.get("context_paths", []) or []),
+        "expected_outputs": list(packet.get("expected_outputs", []) or []),
+        "context_policy": "fresh Codex worker only; fork_context=false; use context paths instead of coordinator chat.",
+    }
+
+
+def _opencode(packet: dict) -> dict:
+    role = packet.get("role", "")
+    skill = packet.get("skill", "")
+    return {
+        "schema": DESCRIPTOR_SCHEMA,
+        "runtime": "opencode",
+        "tool": "task",
+        "arguments": {
+            "description": f"{role}: {skill}",
+            "prompt": _prompt(packet),
+            "subagent_type": _subagent_type(role),
+        },
+        "context_paths": list(packet.get("context_paths", []) or []),
+        "expected_outputs": list(packet.get("expected_outputs", []) or []),
+        "context_policy": "fresh opencode task subagent only; no inherited coordinator chat beyond these context_paths.",
+    }
+
+
 def _manual(packet: dict, warning: str = "") -> dict:
     skill = packet.get("skill", "")
     descriptor = {
@@ -71,14 +107,18 @@ def _manual(packet: dict, warning: str = "") -> dict:
     return descriptor
 
 
-def spawn_worker(packet: dict, runtime: str = "claude-code") -> dict:
+def spawn_worker(packet: dict, runtime: str = "codex") -> dict:
     """Translate a worker packet into a runtime launch descriptor (no process spawned).
 
     Unknown runtimes fall back to `manual` with a `warning` rather than raising.
     """
-    name = (runtime or "claude-code").strip().lower()
+    name = (runtime or "codex").strip().lower()
+    if name in {"codex", "codex-app"}:
+        return _codex(packet)
     if name == "claude-code":
         return _claude_code(packet)
+    if name == "opencode":
+        return _opencode(packet)
     if name == "manual":
         return _manual(packet)
     return _manual(packet, warning=f"Unknown runtime {name!r}; falling back to manual dispatch.")

@@ -29,7 +29,7 @@ def _has_model_key(obj) -> bool:
 
 
 def test_claude_code_descriptor_shape():
-    d = runtime.spawn_worker(_packet())
+    d = runtime.spawn_worker(_packet(), runtime="claude-code")
     assert d["schema"] == "e2e-dev-harness-v2.worker-descriptor.v1"
     assert d["runtime"] == "claude-code"
     assert d["tool"] == "Task"
@@ -37,18 +37,24 @@ def test_claude_code_descriptor_shape():
     assert "description" in d["arguments"]
 
 
-def test_default_runtime_is_claude_code():
-    assert runtime.spawn_worker(_packet())["runtime"] == "claude-code"
+def test_default_runtime_is_codex_spawn_agent_without_model_pin():
+    d = runtime.spawn_worker(_packet())
+    assert d["runtime"] == "codex"
+    assert d["tool"] == "multi_agent_v1.spawn_agent"
+    assert d["arguments"]["agent_type"] == "worker"
+    assert d["arguments"]["fork_context"] is False
+    assert "message" in d["arguments"]
+    assert not _has_model_key(d)
 
 
 def test_subagent_type_defaults_to_general_purpose():
-    d = runtime.spawn_worker(_packet())
+    d = runtime.spawn_worker(_packet(), runtime="claude-code")
     assert d["arguments"]["subagent_type"] == "general-purpose"
 
 
 def test_env_override_sets_subagent_type(monkeypatch):
     monkeypatch.setenv("E2E_HARNESS_V2_SUBAGENT_TYPE_CLARIFIER", "my-clarifier-agent")
-    d = runtime.spawn_worker(_packet(role="clarifier"))
+    d = runtime.spawn_worker(_packet(role="clarifier"), runtime="claude-code")
     assert d["arguments"]["subagent_type"] == "my-clarifier-agent"
 
 
@@ -67,9 +73,41 @@ def test_expected_outputs_and_context_paths_pass_through():
 
 def test_prompt_mentions_skill_and_expected_outputs():
     d = runtime.spawn_worker(_packet(skill="e2e-harness-clarification"))
+    prompt = d["arguments"]["message"]
+    assert "e2e-harness-clarification" in prompt
+    assert "clarification" in prompt
+
+
+def test_opencode_descriptor_shape():
+    d = runtime.spawn_worker(_packet(), runtime="opencode")
+    assert d["schema"] == "e2e-dev-harness-v2.worker-descriptor.v1"
+    assert d["runtime"] == "opencode"
+    assert d["tool"] == "task"
+    assert d["arguments"]["subagent_type"] == "general-purpose"
+    assert "description" in d["arguments"]
+    assert "prompt" in d["arguments"]
+    assert d["arguments"]["prompt"] == d["arguments"].get("prompt")
+    assert d["context_paths"] == _packet()["context_paths"]
+    assert d["expected_outputs"] == _packet()["expected_outputs"]
+
+
+def test_opencode_prompt_mentions_skill_and_expected_outputs():
+    d = runtime.spawn_worker(_packet(skill="e2e-harness-clarification"), runtime="opencode")
     prompt = d["arguments"]["prompt"]
     assert "e2e-harness-clarification" in prompt
     assert "clarification" in prompt
+
+
+def test_opencode_env_override_sets_subagent_type(monkeypatch):
+    monkeypatch.setenv("E2E_HARNESS_V2_SUBAGENT_TYPE_CLARIFIER", "oc-clarifier")
+    d = runtime.spawn_worker(_packet(role="clarifier"), runtime="opencode")
+    assert d["arguments"]["subagent_type"] == "oc-clarifier"
+
+
+def test_opencode_no_model_pin():
+    # Regression guard: opencode seam must never pin a model (glm-4.7 breakage).
+    d = runtime.spawn_worker(_packet(), runtime="opencode")
+    assert not _has_model_key(d)
 
 
 def test_manual_descriptor():
@@ -81,7 +119,7 @@ def test_manual_descriptor():
 
 
 def test_unknown_runtime_falls_back_to_manual_with_warning():
-    d = runtime.spawn_worker(_packet(), runtime="codex")
+    d = runtime.spawn_worker(_packet(), runtime="made-up-runtime")
     assert d["runtime"] == "manual"
     assert d.get("warning")
-    assert "codex" in d["warning"]
+    assert "made-up-runtime" in d["warning"]

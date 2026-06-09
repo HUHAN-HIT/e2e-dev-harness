@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp = sub.add_parser(verb); sp.add_argument("--state", required=True); sp.add_argument("--repo", default=".")
 
     d = sub.add_parser("dispatch"); d.add_argument("--state", required=True); d.add_argument("--repo", default=".")
-    d.add_argument("--runtime", default="claude-code")
+    d.add_argument("--runtime", default="codex")
 
     sm = sub.add_parser("submit"); sm.add_argument("--state", required=True); sm.add_argument("--repo", default=".")
     sm.add_argument("--phase", required=True); sm.add_argument("--key", default=None); sm.add_argument("--path", default=None)

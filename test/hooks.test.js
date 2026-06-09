@@ -3,7 +3,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { materializeHooks, substituteScriptsDir } = require('../lib/hooks');
+const { materializeHooks, substituteScriptsDir, toShellScriptsDir } = require('../lib/hooks');
 
 function tmp() { return fs.mkdtempSync(path.join(os.tmpdir(), 'e2eh-hooks-')); }
 
@@ -46,6 +46,31 @@ test('substituteScriptsDir replaces placeholder only inside string leaves', () =
   assert.strictEqual(out.c.d, 2);
 });
 
+test('toShellScriptsDir converts a Windows backslash path to forward slashes so bash will not strip the separators', () => {
+  const win = 'C:\\Users\\14907\\.claude\\skills\\e2e-dev-harness-v2\\scripts';
+  const out = toShellScriptsDir(win);
+  assert.strictEqual(out, 'C:/Users/14907/.claude/skills/e2e-dev-harness-v2/scripts');
+  assert.ok(!out.includes('\\'), 'shell-embedded scripts dir must not contain backslashes');
+});
+
+test('toShellScriptsDir leaves a POSIX path unchanged', () => {
+  assert.strictEqual(toShellScriptsDir('/home/u/.claude/skills/e2e-dev-harness-v2/scripts'), '/home/u/.claude/skills/e2e-dev-harness-v2/scripts');
+});
+
+test('materializeHooks emits hook commands with no backslashes (bash-safe on Windows)', () => {
+  const home = fakeSkillHome();
+  const projectRoot = tmp();
+  materializeHooks({ skillHome: home, projectRoot });
+
+  const settings = JSON.parse(fs.readFileSync(path.join(projectRoot, '.claude', 'settings.json'), 'utf8'));
+  const pre = settings.hooks.PreToolUse[0].hooks[0].command;
+  const stop = settings.hooks.Stop[0].hooks[0].command;
+  assert.ok(!pre.includes('\\'), `PreToolUse command must not contain backslashes: ${pre}`);
+  assert.ok(!stop.includes('\\'), `Stop command must not contain backslashes: ${stop}`);
+  const posixScripts = path.join(home, 'scripts').replace(/\\/g, '/');
+  assert.ok(pre.includes(`${posixScripts}/harness_v2/adapters/hooks/phase_guard_v2.py`));
+});
+
 test('materializeHooks writes both hooks into a fresh settings.json with scripts dir substituted', () => {
   const home = fakeSkillHome();
   const projectRoot = tmp();
@@ -58,7 +83,7 @@ test('materializeHooks writes both hooks into a fresh settings.json with scripts
   const settings = JSON.parse(fs.readFileSync(path.join(projectRoot, '.claude', 'settings.json'), 'utf8'));
   const pre = settings.hooks.PreToolUse[0].hooks[0].command;
   const stop = settings.hooks.Stop[0].hooks[0].command;
-  assert.ok(pre.includes(path.join(home, 'scripts', 'harness_v2', 'adapters', 'hooks', 'phase_guard_v2.py')) || pre.includes(`${path.join(home, 'scripts')}/harness_v2/adapters/hooks/phase_guard_v2.py`));
+  assert.ok(pre.includes(`${toShellScriptsDir(path.join(home, 'scripts'))}/harness_v2/adapters/hooks/phase_guard_v2.py`));
   assert.ok(!pre.includes('__HARNESS_V2_SCRIPTS__'));
   assert.ok(stop.includes('stop_guard_v2.py'));
 });

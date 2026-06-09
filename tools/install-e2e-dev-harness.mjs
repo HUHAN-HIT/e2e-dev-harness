@@ -388,7 +388,7 @@ function actions(options, repo, projectRoot, installRoot, sourceSkillDir, target
     });
   }
   if (options.doctor && !options.checkOnly) {
-    const cliScript = path.join(sourceSkillDir, "scripts", "e2e_dev_harness.py");
+    const cliScript = path.join(sourceSkillDir, "scripts", "e2e_dev_harness_v2.py");
     planned.push({
       id: "doctor",
       description: "Run e2e-dev-harness doctor against the project root.",
