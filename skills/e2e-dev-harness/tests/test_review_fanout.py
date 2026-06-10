@@ -11,6 +11,11 @@ def _artifact(base, phase, key):
     """Write a real artifact valid for `key`: command-evidence JSON for the
     test-running phases (failing_tests=nonzero, passing_tests=zero), plain
     file otherwise."""
+    if key == "scope_manifest":
+        import json as _json
+        f = base / f"{phase}-{key}.json"
+        f.write_text(_json.dumps({"schema": "e2e-dev-harness.scope-manifest.v1", "status": "COMPLETE", "expected": {"services": [], "tables": [], "phases": []}, "delivered": {"services": [], "tables": [], "phases": []}}), encoding="utf-8")
+        return f
     if key == "test_substance":
         import json as _json
         tf = base / f"{phase}-real_test.py"

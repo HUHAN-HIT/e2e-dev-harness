@@ -22,6 +22,11 @@ def _artifact(repo: Path, phase: str, key: str) -> str:
     base.mkdir(parents=True, exist_ok=True)
     # Any COMMAND_KEYS key (failing_tests/passing_tests/verification) needs genuine
     # command-evidence with the right exit code; everything else is a plain artifact.
+    if key == "scope_manifest":
+        import json as _json
+        f = base / f"{phase}-{key}.json"
+        f.write_text(_json.dumps({"schema": "e2e-dev-harness.scope-manifest.v1", "status": "COMPLETE", "expected": {"services": [], "tables": [], "phases": []}, "delivered": {"services": [], "tables": [], "phases": []}}), encoding="utf-8")
+        return str(f.relative_to(repo))
     if key == "test_substance":
         import json as _json
         tf = base / f"{phase}-real_test.py"

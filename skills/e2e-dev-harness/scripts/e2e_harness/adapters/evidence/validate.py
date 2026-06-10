@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 
 from e2e_harness.adapters.evidence import command_evidence, hashing, substance
+from e2e_harness.adapters.evidence import scope as scope_ev
 from e2e_harness.core import acceptance
 
 # Evidence keys whose artifact must be command-evidence JSON with a specific exit code.
@@ -25,6 +26,9 @@ COMMAND_KEYS = {"failing_tests": "nonzero", "passing_tests": "zero", "verificati
 STRUCTURED_KEYS = {
     "acceptance_contract": lambda obj, _repo: acceptance.validate_contract(obj),
     "test_substance": substance.validate_substance_manifest,
+    # link ②: VERIFIED requires a scope manifest; a COMPLETE claim on a grounded
+    # subset is rejected (forces honest PARTIAL). PARTIAL itself is allowed.
+    "scope_manifest": scope_ev.validate_scope_manifest,
 }
 
 # Final-gate keys whose exit code is NEVER trusted from the record: the harness
