@@ -19,6 +19,14 @@ def _make_artifact(repo: Path, phase: str, key: str) -> str:
     base.mkdir(parents=True, exist_ok=True)
     # Any COMMAND_KEYS key (failing_tests/passing_tests/verification) needs genuine
     # command-evidence with the right exit code; everything else is a plain artifact.
+    if key == "acceptance_contract":
+        import json as _json
+        from e2e_harness.core import acceptance as _acc
+        f = base / f"{phase}-{key}.json"
+        f.write_text(_json.dumps({"schema": _acc.SCHEMA, "items": [
+            {"id": "AC-001", "criterion": "demo criterion",
+             "observable_behavior": "demo observable behaviour"}]}), encoding="utf-8")
+        return str(f.relative_to(repo))
     want = validate.COMMAND_KEYS.get(key)
     if want is not None:
         code = 0 if want == "zero" else 1
@@ -81,7 +89,7 @@ def test_dispatch_returns_pointer_packet(tmp_path):
     _run("next", "--state", state_path, "--repo", str(tmp_path), cwd=tmp_path)
     code, dres = _run("dispatch", "--state", state_path, "--repo", str(tmp_path), cwd=tmp_path)
     assert dres["skill"] == "e2e-harness-clarification"
-    assert dres["expected_outputs"] == ["clarification"]
+    assert dres["expected_outputs"] == ["clarification", "acceptance_contract"]
 
 
 def test_dispatch_emits_worker_descriptor(tmp_path):
@@ -149,10 +157,11 @@ def test_gate_verb_rejects_fake_artifact_accepts_real(tmp_path):
     assert gres["passed"] is False
     assert "clarification" in gres["missing_evidence"]
 
-    # real artifact at the same phase -> gate passes
-    rel = _make_artifact(tmp_path, "CLARIFIED", "clarification")
-    _run("submit", "--state", state_path, "--phase", "CLARIFIED",
-         "--key", "clarification", "--path", rel, "--repo", str(tmp_path), cwd=tmp_path)
+    # real artifacts for BOTH required keys at the same phase -> gate passes
+    for k in ("clarification", "acceptance_contract"):
+        rel = _make_artifact(tmp_path, "CLARIFIED", k)
+        _run("submit", "--state", state_path, "--phase", "CLARIFIED",
+             "--key", k, "--path", rel, "--repo", str(tmp_path), cwd=tmp_path)
     code, gres = _run("gate", "--state", state_path, "--phase", "CLARIFIED",
                       "--repo", str(tmp_path), cwd=tmp_path)
     assert code == 0

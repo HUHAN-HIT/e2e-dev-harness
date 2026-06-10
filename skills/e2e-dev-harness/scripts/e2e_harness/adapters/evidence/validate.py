@@ -12,9 +12,14 @@ import re
 from pathlib import Path
 
 from e2e_harness.adapters.evidence import command_evidence, hashing
+from e2e_harness.core import acceptance
 
 # Evidence keys whose artifact must be command-evidence JSON with a specific exit code.
 COMMAND_KEYS = {"failing_tests": "nonzero", "passing_tests": "zero", "verification": "zero"}
+
+# Evidence keys whose artifact must be a JSON document passing a structural validator
+# (link ①: requirements fidelity — a prose checkbox file can no longer satisfy the gate).
+STRUCTURED_KEYS = {"acceptance_contract": acceptance.validate_contract}
 
 # Final-gate keys whose exit code is NEVER trusted from the record: the harness
 # re-runs the recorded command and judges by the *replayed* exit code (#1 replay).
@@ -52,6 +57,14 @@ def validate_evidence(repo_root, key: str, entry) -> tuple[bool, str | None]:
     if isinstance(entry, dict) and entry.get("sha256"):
         if hashing.sha256_file(full) != entry["sha256"]:
             return False, "hash-mismatch"
+    if key in STRUCTURED_KEYS:
+        try:
+            obj = json.loads(full.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            return False, "not-json"
+        ok, reason = STRUCTURED_KEYS[key](obj)
+        if not ok:
+            return False, reason
     if key in COMMAND_KEYS:
         try:
             obj = json.loads(full.read_text(encoding="utf-8"))

@@ -41,6 +41,11 @@ def test_successful_resubmit_clears_blocker_and_advances(tmp_path):
     engine.submit_evidence(st, "CLARIFIED", None, None, status="failed", reason="boom")
     f = tmp_path / "c.md"; f.write_text("real", encoding="utf-8")
     engine.submit_evidence(st, "CLARIFIED", "clarification", str(f), repo_root=tmp_path)
+    from e2e_harness.core import acceptance as _acc
+    ac = tmp_path / "ac.json"
+    ac.write_text(json.dumps({"schema": _acc.SCHEMA, "items": [
+        {"id": "AC-001", "criterion": "c", "observable_behavior": "o"}]}), encoding="utf-8")
+    engine.submit_evidence(st, "CLARIFIED", "acceptance_contract", str(ac), repo_root=tmp_path)
     engine.evaluate(spine, st, tmp_path)
     assert "blocker" not in st["phases"]["CLARIFIED"]
     assert st["current_phase"] == "RED"

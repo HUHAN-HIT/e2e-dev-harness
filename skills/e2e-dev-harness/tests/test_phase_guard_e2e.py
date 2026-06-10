@@ -18,6 +18,13 @@ def _run(*args, cwd):
 def _make_artifact(repo: Path, phase: str, key: str) -> str:
     base = repo / "docs" / "agent-runs" / "art"
     base.mkdir(parents=True, exist_ok=True)
+    if key == "acceptance_contract":
+        from e2e_harness.core import acceptance as _acc
+        f = base / f"{phase}-{key}.json"
+        f.write_text(json.dumps({"schema": _acc.SCHEMA, "items": [
+            {"id": "AC-001", "criterion": "demo criterion",
+             "observable_behavior": "demo observable behaviour"}]}), encoding="utf-8")
+        return str(f.relative_to(repo))
     if key in ("failing_tests", "passing_tests"):
         code = 1 if key == "failing_tests" else 0
         ev = ce.record_command(repo, f'"{sys.executable}" -c "import sys; sys.exit({code})"')

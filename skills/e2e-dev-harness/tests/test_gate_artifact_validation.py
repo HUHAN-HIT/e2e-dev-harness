@@ -56,7 +56,7 @@ def test_gate_passes_with_repo_root_rejects_fake_path(tmp_path):
 
 
 def test_gate_passes_presence_only_without_repo_root():
-    rec = {"evidence": {"clarification": "anything"}}
+    rec = {"evidence": {"clarification": "anything", "acceptance_contract": "a.json"}}
     ok, missing = gates.gate_passes(_phase("CLARIFIED"), rec)
     assert ok is True and missing == []
 

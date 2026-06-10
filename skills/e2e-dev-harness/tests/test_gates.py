@@ -9,11 +9,12 @@ def _phase(name):
 def test_gate_blocks_when_evidence_missing():
     ok, missing = gates.gate_passes(_phase("CLARIFIED"), {"evidence": {}})
     assert ok is False
-    assert missing == ["clarification"]
+    # CLARIFIED now also requires a structured acceptance contract (link ①).
+    assert missing == ["clarification", "acceptance_contract"]
 
 
 def test_gate_passes_when_evidence_present():
-    rec = {"evidence": {"clarification": "h.md"}}
+    rec = {"evidence": {"clarification": "h.md", "acceptance_contract": "a.json"}}
     ok, missing = gates.gate_passes(_phase("CLARIFIED"), rec)
     assert ok is True
     assert missing == []

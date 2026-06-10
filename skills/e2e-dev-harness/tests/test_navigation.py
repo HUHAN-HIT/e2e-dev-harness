@@ -39,8 +39,8 @@ def test_map_carries_per_phase_gate_summary():
     engine.evaluate(_spine(), st)  # blocked at CLARIFIED, no evidence
     m = navigation.navigation_map(_spine(), st)
     clar = next(p for p in m["phases"] if p["name"] == "CLARIFIED")
-    assert clar["gate"]["required"] == 1
-    assert clar["gate"]["missing"] == ["clarification"]
+    assert clar["gate"]["required"] == 2  # clarification + acceptance_contract (link ①)
+    assert clar["gate"]["missing"] == ["clarification", "acceptance_contract"]
     assert clar["gate"]["ok"] is False
 
 
@@ -48,8 +48,8 @@ def test_map_reports_remaining_gates_to_goal():
     st = run_state.new_run_state("r1", "f", "r")
     engine.evaluate(_spine(), st)
     m = navigation.navigation_map(_spine(), st)
-    # CLARIFIED(1) + RED(1) + IMPLEMENTED(1) + VERIFIED(1) = 4 unmet gate keys ahead
-    assert m["remaining_gates"] == 4
+    # CLARIFIED(2) + RED(1) + IMPLEMENTED(1) + VERIFIED(1) = 5 unmet gate keys ahead
+    assert m["remaining_gates"] == 5
 
 
 def test_map_frames_next_action_inside_map():
@@ -72,6 +72,14 @@ def test_map_next_is_null_when_complete(tmp_path):
             break
         ph = next(p for p in spine if p.name == res["blocked_phase"])
         for key in ph.produces:
+            if key == "acceptance_contract":
+                from e2e_harness.core import acceptance as _acc
+                f = base / f"{ph.name}-{key}.json"
+                f.write_text(json.dumps({"schema": _acc.SCHEMA, "items": [
+                    {"id": "AC-001", "criterion": "demo",
+                     "observable_behavior": "demo behaviour"}]}), encoding="utf-8")
+                engine.submit_evidence(st, ph.name, key, str(f), repo_root=tmp_path)
+                continue
             want = validate.COMMAND_KEYS.get(key)  # incl. verification (zero exit)
             if want is not None:
                 code = 0 if want == "zero" else 1

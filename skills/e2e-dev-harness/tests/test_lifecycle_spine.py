@@ -20,5 +20,5 @@ def test_clarified_phase_binds_worker_skill():
     spine = lifecycle.build_spine(pipeline.active_phase_names("minimal"))
     clar = next(p for p in spine if p.name == "CLARIFIED")
     assert clar.worker_skill == "e2e-harness-clarification"
-    assert clar.exit_gate == ("clarification",)
-    assert clar.produces == ("clarification",)
+    assert clar.exit_gate == ("clarification", "acceptance_contract")
+    assert clar.produces == ("clarification", "acceptance_contract")

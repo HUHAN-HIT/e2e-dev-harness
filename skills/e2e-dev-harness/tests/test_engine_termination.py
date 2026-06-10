@@ -19,6 +19,7 @@ def test_submit_then_evaluate_advances():
     st = run_state.new_run_state("r1", "f", "r")
     engine.evaluate(_spine(), st)
     engine.submit_evidence(st, "CLARIFIED", "clarification", "h1.md")
+    engine.submit_evidence(st, "CLARIFIED", "acceptance_contract", "a.json")
     engine.evaluate(_spine(), st)
     assert st["current_phase"] == "RED"
 

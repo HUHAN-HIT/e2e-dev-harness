@@ -11,6 +11,12 @@ def _artifact(base, phase, key):
     """Write a real artifact valid for `key`: command-evidence JSON for the
     test-running phases (failing_tests=nonzero, passing_tests=zero), plain
     file otherwise."""
+    if key == "acceptance_contract":
+        from e2e_harness.core import acceptance as _acc
+        f = base / f"{phase}-{key}.json"
+        f.write_text(json.dumps({"schema": _acc.SCHEMA, "items": [
+            {"id": "AC-001", "criterion": "c", "observable_behavior": "o"}]}), encoding="utf-8")
+        return f
     want = validate.COMMAND_KEYS.get(key)
     if want is None:
         f = base / f"{phase}-{key}.md"

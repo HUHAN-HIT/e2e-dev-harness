@@ -15,6 +15,6 @@ def test_worker_packet_is_pointer_only():
     packet = dispatch.worker_packet(clar, run_state_path="docs/agent-runs/r1/run-state.json")
     assert packet["role"] == "requirements-clarifier"
     assert packet["skill"] == "e2e-harness-clarification"
-    assert packet["expected_outputs"] == ["clarification"]
+    assert packet["expected_outputs"] == ["clarification", "acceptance_contract"]
     assert "docs/agent-runs/r1/run-state.json" in packet["context_paths"]
     assert "instructions" not in packet
