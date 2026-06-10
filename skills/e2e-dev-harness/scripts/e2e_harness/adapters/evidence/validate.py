@@ -1,17 +1,42 @@
-"""Validate a worker's evidence artifact: exists + non-empty + hash + command-evidence."""
+"""Validate a worker's evidence artifact: exists + non-empty + hash + command-evidence.
+
+Command-evidence artifacts (test/verification commands) must additionally be *genuine*:
+produced by command_evidence.record_command, not hand-written. We enforce that
+structurally — real records always carry an `environment` block and 64-hex content
+hashes; forged JSON with placeholder hashes (e.g. "verification_stdout") is rejected.
+"""
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from e2e_harness.adapters.evidence import command_evidence, hashing
 
 # Evidence keys whose artifact must be command-evidence JSON with a specific exit code.
-COMMAND_KEYS = {"failing_tests": "nonzero", "passing_tests": "zero"}
+COMMAND_KEYS = {"failing_tests": "nonzero", "passing_tests": "zero", "verification": "zero"}
+
+# Final-gate keys whose exit code is NEVER trusted from the record: the harness
+# re-runs the recorded command and judges by the *replayed* exit code (#1 replay).
+# This catches a worker that records a genuine failing run then hand-edits exit_code.
+REPLAY_KEYS = {"verification"}
+
+_HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def _path_of(entry) -> str:
     return entry["path"] if isinstance(entry, dict) else entry
+
+
+def _is_genuine_command_evidence(obj) -> bool:
+    """True only for records that bear record_command's tamper-evident structure."""
+    if not isinstance(obj.get("environment"), dict):
+        return False
+    for hash_key in ("stdout_sha256", "stderr_sha256"):
+        value = obj.get(hash_key)
+        if not isinstance(value, str) or not _HEX64.match(value):
+            return False
+    return True
 
 
 def validate_evidence(repo_root, key: str, entry) -> tuple[bool, str | None]:
@@ -34,10 +59,22 @@ def validate_evidence(repo_root, key: str, entry) -> tuple[bool, str | None]:
             return False, "not-json"
         if not command_evidence.is_command_evidence(obj):
             return False, "not-command-evidence"
+        if not _is_genuine_command_evidence(obj):
+            return False, "forged-evidence"
         ec = obj.get("exit_code")
         want = COMMAND_KEYS[key]
         if want == "zero" and ec != 0:
             return False, f"exit-code-{ec}"
         if want == "nonzero" and (ec == 0 or ec is None):
             return False, f"exit-code-{ec}"
+        # #1 replay: the recorded exit code claims success — re-run the command and
+        # judge by reality, so a hand-edited exit_code on an otherwise-genuine record
+        # cannot pass the final gate.
+        if key in REPLAY_KEYS:
+            replay = command_evidence.record_command(obj.get("cwd") or repo_root, obj.get("command", ""))
+            actual = replay.get("exit_code")
+            if want == "zero" and actual != 0:
+                return False, f"replay-exit-{actual}"
+            if want == "nonzero" and (actual == 0 or actual is None):
+                return False, f"replay-exit-{actual}"
     return True, None

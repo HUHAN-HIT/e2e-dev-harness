@@ -14,11 +14,14 @@ def _run(*args, cwd):
 
 def _make_artifact(repo: Path, phase: str, key: str) -> str:
     """Produce a REAL artifact for `key`; return its repo-relative path."""
-    from e2e_harness.adapters.evidence import command_evidence as ce
+    from e2e_harness.adapters.evidence import command_evidence as ce, validate
     base = repo / "docs" / "agent-runs" / "art"
     base.mkdir(parents=True, exist_ok=True)
-    if key in ("failing_tests", "passing_tests"):
-        code = 1 if key == "failing_tests" else 0
+    # Any COMMAND_KEYS key (failing_tests/passing_tests/verification) needs genuine
+    # command-evidence with the right exit code; everything else is a plain artifact.
+    want = validate.COMMAND_KEYS.get(key)
+    if want is not None:
+        code = 0 if want == "zero" else 1
         ev = ce.record_command(repo, f'"{sys.executable}" -c "import sys; sys.exit({code})"')
         f = base / f"{phase}-{key}.json"
         f.write_text(json.dumps(ev), encoding="utf-8")

@@ -17,7 +17,11 @@ description: Default canonical delivery harness. Use when a feature/bugfix/refac
 
 ```bash
 S=skills/e2e-dev-harness/scripts/e2e_dev_harness.py
-python $S start --repo . --feature "<feat>" --request "<原始需求>"   # 创建唯一 run-state
+# 含中文/非 ASCII 的需求：写进 UTF-8 文件用 --request-file/--feature-file，避免
+# Windows/git-bash 控制台编码把 argv 损坏（损坏会被 start 显式拒绝，不再静默降级）。
+printf '%s' "<原始需求>" > /tmp/req.txt
+PYTHONUTF8=1 python $S start --repo . --feature "<feat>" --request-file /tmp/req.txt  # 创建唯一 run-state
+# 纯 ASCII 时也可直接：python $S start --repo . --feature "<feat>" --request "<req>"
 python $S next   --state <run-state>     # 推进主干或返回单一 blocker + navigation_map
 python $S dispatch --state <run-state>   # 产出当前阶段的指针 worker packet
 python $S submit --state <run-state> --phase <P> --key <k> --path <p>  # 记录 worker 证据

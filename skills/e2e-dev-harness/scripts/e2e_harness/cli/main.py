@@ -20,8 +20,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     s = sub.add_parser("start"); s.add_argument("--repo", default=".")
-    s.add_argument("--feature", required=True); s.add_argument("--request", required=True)
-    s.add_argument("--tier", choices=["auto", "minimal", "standard", "critical", "audited"], default="minimal")
+    # Inline or UTF-8 file. The file channel bypasses argv so non-ASCII text is
+    # never mangled by the console codepage (Windows/git-bash); resolution and
+    # the mojibake guard live in start.run via core.text_input.
+    s.add_argument("--feature", default=None); s.add_argument("--feature-file", default=None)
+    s.add_argument("--request", default=None); s.add_argument("--request-file", default=None)
+    # Default auto: the classifier is active unless a tier is pinned. (A static
+    # default would leave it dormant and silently under-tier every run.)
+    s.add_argument("--tier", choices=["auto", "minimal", "standard", "critical", "audited"], default="auto")
     s.add_argument("--pipeline", default=None,
                    help="built-in name or path to a custom pipeline yaml (overrides --tier's spine)")
     s.add_argument("--adapter", default=None, help="force domain adapter (backend|frontend)")

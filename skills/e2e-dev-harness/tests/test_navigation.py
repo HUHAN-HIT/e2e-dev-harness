@@ -62,7 +62,7 @@ def test_map_frames_next_action_inside_map():
 
 def test_map_next_is_null_when_complete(tmp_path):
     import json, sys
-    from e2e_harness.adapters.evidence import command_evidence as ce
+    from e2e_harness.adapters.evidence import command_evidence as ce, validate
     st = run_state.new_run_state("r1", "f", "r")
     spine = _spine()
     base = tmp_path / "art"; base.mkdir(parents=True, exist_ok=True)
@@ -72,8 +72,9 @@ def test_map_next_is_null_when_complete(tmp_path):
             break
         ph = next(p for p in spine if p.name == res["blocked_phase"])
         for key in ph.produces:
-            if key in ("failing_tests", "passing_tests"):
-                code = 1 if key == "failing_tests" else 0
+            want = validate.COMMAND_KEYS.get(key)  # incl. verification (zero exit)
+            if want is not None:
+                code = 0 if want == "zero" else 1
                 f = base / f"{ph.name}-{key}.json"
                 f.write_text(json.dumps(ce.record_command(tmp_path, f'"{sys.executable}" -c "import sys; sys.exit({code})"')), encoding="utf-8")
             else:

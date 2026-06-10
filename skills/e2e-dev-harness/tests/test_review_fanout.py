@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 
 from e2e_harness import pipeline
@@ -16,11 +17,10 @@ def _artifact(base, phase, key):
         f.write_text("real", encoding="utf-8")
         return f
     f = base / f"{phase}-{key}.json"
-    f.write_text(json.dumps({
-        "schema": command_evidence.COMMAND_EVIDENCE_SCHEMA,
-        "command": "pytest",
-        "exit_code": 1 if want == "nonzero" else 0,
-    }), encoding="utf-8")
+    code = 0 if want == "zero" else 1
+    ev = command_evidence.record_command(
+        base, f'"{sys.executable}" -c "import sys; sys.exit({code})"')
+    f.write_text(json.dumps(ev), encoding="utf-8")
     return f
 
 
