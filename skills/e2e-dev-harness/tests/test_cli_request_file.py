@@ -1,5 +1,12 @@
-"""start: UTF-8 file channel for feature/request + loud mojibake rejection."""
+"""start: UTF-8 file channel for feature/request + loud mojibake rejection.
+
+The child env deliberately strips PYTHONIOENCODING so these tests prove the
+harness emits UTF-8 stdout *intrinsically* — independent of the console
+codepage (cp936/GBK on Windows). Without the in-process UTF-8 reconfigure,
+non-ASCII JSON would be written in the platform codepage and fail to decode.
+"""
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -7,9 +14,16 @@ from pathlib import Path
 ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness.py"
 
 
+def _child_env():
+    env = dict(os.environ)
+    env.pop("PYTHONIOENCODING", None)  # do not let an external override mask the bug
+    return env
+
+
 def _run(*args, cwd):
     proc = subprocess.run([sys.executable, str(ENTRY), *args],
-                          cwd=cwd, capture_output=True, text=True, encoding="utf-8")
+                          cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+                          env=_child_env())
     return proc.returncode, json.loads(proc.stdout or "{}")
 
 

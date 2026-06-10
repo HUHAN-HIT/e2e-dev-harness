@@ -51,7 +51,24 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _force_utf8_io() -> None:
+    """Emit machine-readable JSON as UTF-8 regardless of the console codepage.
+
+    The CLI contract is "JSON to stdout"; on a non-UTF-8 console (e.g. cp936/GBK
+    on Windows) `ensure_ascii=False` output would otherwise be encoded in the
+    platform codepage and fail to decode downstream. Reconfigure before any write.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv=None) -> int:
+    _force_utf8_io()
     args = build_parser().parse_args(argv)
     try:
         code, result = _COMMANDS[args.command](args)
