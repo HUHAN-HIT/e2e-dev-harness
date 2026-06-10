@@ -20,7 +20,7 @@ _CATALOG: dict[str, Phase] = {
     "CLARIFIED":   Phase("CLARIFIED", "requirements-clarifier", "e2e-harness-clarification", ("clarification", "acceptance_contract"), ("clarification", "acceptance_contract"), None),
     "PLANNED":     Phase("PLANNED", "implementation-planner", "e2e-harness-planning", ("plan",), ("plan",), None),
     "RED":         Phase("RED", "tdd-red", "e2e-harness-tdd-red", ("failing_tests",), ("failing_tests",), None),
-    "IMPLEMENTED": Phase("IMPLEMENTED", "code-developer", "e2e-harness-implementation", ("passing_tests",), ("passing_tests",), None),
+    "IMPLEMENTED": Phase("IMPLEMENTED", "code-developer", "e2e-harness-implementation", ("passing_tests", "test_substance"), ("passing_tests", "test_substance"), None),
     "REVIEWED":    Phase("REVIEWED", "semantic-reviewer", "e2e-harness-review", ("review",), ("review",), None),
     "VERIFIED":    Phase("VERIFIED", "coverage-reviewer", "e2e-harness-completion", ("verification",), ("verification",), None),
 }

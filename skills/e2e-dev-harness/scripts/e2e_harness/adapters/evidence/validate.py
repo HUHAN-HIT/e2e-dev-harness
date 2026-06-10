@@ -11,15 +11,21 @@ import json
 import re
 from pathlib import Path
 
-from e2e_harness.adapters.evidence import command_evidence, hashing
+from e2e_harness.adapters.evidence import command_evidence, hashing, substance
 from e2e_harness.core import acceptance
 
 # Evidence keys whose artifact must be command-evidence JSON with a specific exit code.
 COMMAND_KEYS = {"failing_tests": "nonzero", "passing_tests": "zero", "verification": "zero"}
 
-# Evidence keys whose artifact must be a JSON document passing a structural validator
-# (link ①: requirements fidelity — a prose checkbox file can no longer satisfy the gate).
-STRUCTURED_KEYS = {"acceptance_contract": acceptance.validate_contract}
+# Evidence keys whose artifact must be a JSON document passing a structural validator.
+# Each validator takes (parsed_obj, repo_root) -> (ok, reason). A prose/empty file
+# can no longer satisfy these gates.
+#   acceptance_contract — link ①: machine-checkable acceptance criteria.
+#   test_substance      — link ③: tests derive from the contract, assert real behaviour.
+STRUCTURED_KEYS = {
+    "acceptance_contract": lambda obj, _repo: acceptance.validate_contract(obj),
+    "test_substance": substance.validate_substance_manifest,
+}
 
 # Final-gate keys whose exit code is NEVER trusted from the record: the harness
 # re-runs the recorded command and judges by the *replayed* exit code (#1 replay).
@@ -62,7 +68,7 @@ def validate_evidence(repo_root, key: str, entry) -> tuple[bool, str | None]:
             obj = json.loads(full.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             return False, "not-json"
-        ok, reason = STRUCTURED_KEYS[key](obj)
+        ok, reason = STRUCTURED_KEYS[key](obj, repo_root)
         if not ok:
             return False, reason
     if key in COMMAND_KEYS:

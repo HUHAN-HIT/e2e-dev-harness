@@ -18,6 +18,18 @@ def _make_artifact(repo: Path, phase: str, key: str) -> str:
     base.mkdir(parents=True, exist_ok=True)
     # Any COMMAND_KEYS key (failing_tests/passing_tests/verification) needs genuine
     # command-evidence with the right exit code; everything else is a plain artifact.
+    if key == "test_substance":
+        import json as _json
+        tf = base / f"{phase}-real_test.py"
+        tf.write_text("def test_real():" + chr(10) + "    assert 1 + 1 == 2" + chr(10), encoding="utf-8")
+        man = {"schema": "e2e-dev-harness.test-substance.v1",
+               "acceptance_contract_path": str(base / "CLARIFIED-acceptance_contract.json"),
+               "language": "python", "test_files": [str(tf)],
+               "red_tests": ["t::test_real"], "green_tests": ["t::test_real"],
+               "ac_coverage": {"AC-001": ["t::test_real"]}}
+        f = base / f"{phase}-{key}.json"
+        f.write_text(_json.dumps(man), encoding="utf-8")
+        return str(f.relative_to(repo))
     if key == "acceptance_contract":
         import json as _json
         from e2e_harness.core import acceptance as _acc

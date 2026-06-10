@@ -48,8 +48,8 @@ def test_map_reports_remaining_gates_to_goal():
     st = run_state.new_run_state("r1", "f", "r")
     engine.evaluate(_spine(), st)
     m = navigation.navigation_map(_spine(), st)
-    # CLARIFIED(2) + RED(1) + IMPLEMENTED(1) + VERIFIED(1) = 5 unmet gate keys ahead
-    assert m["remaining_gates"] == 5
+    # CLARIFIED(2) + RED(1) + IMPLEMENTED(2) + VERIFIED(1) = 6 unmet gate keys ahead
+    assert m["remaining_gates"] == 6
 
 
 def test_map_frames_next_action_inside_map():
@@ -72,6 +72,18 @@ def test_map_next_is_null_when_complete(tmp_path):
             break
         ph = next(p for p in spine if p.name == res["blocked_phase"])
         for key in ph.produces:
+            if key == "test_substance":
+                tf = base / f"{ph.name}-real_test.py"
+                tf.write_text("def test_real():" + chr(10) + "    assert 1 + 1 == 2" + chr(10), encoding="utf-8")
+                man = {"schema": "e2e-dev-harness.test-substance.v1",
+                       "acceptance_contract_path": str(base / "CLARIFIED-acceptance_contract.json"),
+                       "language": "python", "test_files": [str(tf)],
+                       "red_tests": ["t::test_real"], "green_tests": ["t::test_real"],
+                       "ac_coverage": {"AC-001": ["t::test_real"]}}
+                f = base / f"{ph.name}-{key}.json"
+                f.write_text(json.dumps(man), encoding="utf-8")
+                engine.submit_evidence(st, ph.name, key, str(f), repo_root=tmp_path)
+                continue
             if key == "acceptance_contract":
                 from e2e_harness.core import acceptance as _acc
                 f = base / f"{ph.name}-{key}.json"
