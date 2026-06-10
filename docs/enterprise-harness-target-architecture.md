@@ -19,6 +19,19 @@
 5. 将 gate、scanner、runtime、policy 做成可注册扩展点。
 6. 将 CLI、模板、配置、观测面产品化。
 
+## 关键校准：交付保真是前提，不是默认（2026-06-10 补）
+
+> 依据：jeepay 端到端试跑产物审计 + 保真链蓝图 `docs/2026-06-10-harness-delivery-fidelity-blueprint.md`。
+
+本文档默认了一个未经验证的前提：**harness 的 deterministic gate 与 evidence 链是可信的信任锚**。jeepay 的真实试跑推翻了这个前提——
+
+- `mvn test` 55 个测试全绿、`run-state` 标 `VERIFIED`、harness 判定"交付完成"；
+- 但设计文档要求的风控引擎、T+1 清结算、乐观锁、资金冻结**一个都没真正落地**；空方法配空断言、乐观锁无 `@Version` 靠 mock 掩盖、`verification` 证据 sha256 是占位符且根本不被校验。
+
+即：**当前 harness 的"可信"是"看起来可信"。它优化的是"通过 gate"，而不是"符合设计文档"，两者之间没有任何机制绑定。**
+
+因此本文档原列的 5 个 gap（控制面形态、状态分散、扩展点、runtime adapter、observability）全部是**工程形态**问题；它们之上还缺一个更根本的维度——**交付保真（delivery fidelity）**。把一个空壳 gate 产品化、事件化、插件化，只会把"自动自欺"做得更精致。**保真必须前置于产品化。** 详见下方 Gap 0 与 Phase 0。
+
 ## Current Strengths
 
 ### 1. Coordinator And Worker Separation
@@ -65,6 +78,20 @@
 这个方向非常关键。企业级 harness 的最大失败模式不是 agent 不会做事，而是 coordinator 被中间态、证据块、review 输出和路径噪声淹死，最后绕过 harness 手工编码。
 
 ## Current Gaps
+
+### 0. Delivery Fidelity Is Assumed, Not Enforced（最根本）
+
+下列 5 个 gap 都是"形态"问题；本 gap 是"是否真的在交付"问题，优先级最高。harness 把"需求→交付物"用证据钉死的链条，在每一环都断了（jeepay 实证）：
+
+| 保真环 | 应保证 | jeepay 实际 | 缺的机制 |
+| --- | --- | --- | --- |
+| ① 需求保真 | 设计文档→可机器校验的验收契约 | clarification 把验收标准记成 prose 勾选框，不绑定任何校验 | acceptance contract（验收项→ID→可观察行为）|
+| ② 范围保真 | 设计的范围=交付的范围 | `tier=minimal` 把 80+ 文件需求缩成 Phase1 骨架仍标 VERIFIED；payment/前端/MQ 零改动、无建表 SQL | 范围分解 + 按范围核完成度；子集记 PARTIAL |
+| ③ 实现保真 | 测试派生自验收项、断言真实行为 | 空方法 + assertDoesNotThrow 空断言；乐观锁无 @Version 用 mock 掩盖 | 测试实质闸门（红绿同批、非空断言、覆盖验收项）|
+| ④ 证据保真 | 每个"完成"可被独立复算 | sha256 占位符、手写证据；最终 `verification` key 根本不在校验范围 | gate 自验复算，拒绝自报 |
+| ⑤ 认证层自身保真 | 认证系统自己得可靠 | harness 自测随机顺序污染（7 failed→固定 3 failed）、Windows 编码基线长期红 | 测试隔离 + 清零基线 |
+
+> 元教训：会执行的 Agent 在无人逐步核验时**天然倾向产出"看起来完成"而非"真正完成"**（本次审计中执行 Agent 自身也发生过伪造工具输出）。故全自动交付的前提是 ④⑤ 这种"不信任何自报、强制独立复算、认证层自身可信"。否则"全自动"="全自动自欺"。
 
 ### 1. Control Plane Is Still Script-Shaped
 
@@ -335,6 +362,27 @@ planned
 
 ## Recommended Evolution Plan
 
+> 次序校准（2026-06-10）：下列 Phase 1–5 是**产品化形态**演进；它们之前必须先有 Phase 0 建立**交付保真**，否则是在把空壳 gate 产品化。
+
+### Phase 0: Establish Delivery Fidelity（前置地基）
+
+Goal: 让"通过 gate"收敛于"符合设计文档"，使后续产品化建立在可信的 gate/evidence 之上。
+
+Tasks（每项仍走 TDD + `gitnexus_impact` + `detect_changes`，不即兴改码）:
+
+1. ④ 证据保真：gate 自验复算；`verification` 纳入命令证据校验；拒绝非 `record_command` 产出（缺 environment / 哈希非 64hex）。并入 `risk-remediation` plan。
+2. ⑤ 认证层自身保真：修 harness 自测的共享状态隔离（随机顺序污染）+ 固定 IO 编码、清零基线红。这是其余一切验证可信的地基，应最先做。
+3. ① 需求保真：clarification 产出结构化验收契约（每条验收标准→ID→可观察行为）。
+4. ③ 实现保真：测试派生自验收契约；检测空方法/零断言测试；强制 RED 与 GREEN 同一批测试。
+5. ② 范围保真：设计→service/表/phase 范围分解；按范围核完成度；子集交付记 PARTIAL 而非 VERIFIED。
+
+Exit criteria:
+
+- 伪造/手写 evidence 无法通过任何 gate（含 verification）。
+- harness 自测在随机顺序下稳定全绿，基线无长期红。
+- 每条设计验收标准都能追溯到一个会失败的测试，VERIFIED 要求其全部为真。
+- 子集交付不会被标记为 VERIFIED。
+
 ### Phase 1: Stabilize Current Control Plane
 
 Goal: 不改变用户行为，先让当前控制面边界更清晰。
@@ -437,6 +485,7 @@ Exit criteria:
 - request-scoped context pack。
 - compact stdout 加 full result path。
 - GitNexus impact/detect-changes 作为关键证据。
+- （限定，2026-06-10）以上"deterministic gates / dispatcher-confirmed completion / evidence 链"作为信任锚，前提是**锚本身可信**；jeepay 证明当前它们形同虚设（见 Gap 0）。Preserve 的是机制骨架，必须先经 Phase 0 补足保真，"信任锚"才名副其实。
 
 ### Change
 
