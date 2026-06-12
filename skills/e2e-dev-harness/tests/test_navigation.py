@@ -101,9 +101,47 @@ def test_map_next_is_null_when_complete(tmp_path):
             if want is not None:
                 code = 0 if want == "zero" else 1
                 f = base / f"{ph.name}-{key}.json"
-                f.write_text(json.dumps(ce.record_command(tmp_path, f'"{sys.executable}" -c "import sys; sys.exit({code})"')), encoding="utf-8")
+                if key == "verification":
+                    tf = base / f"{ph.name}-{key}-replay_test.py"
+                    tf.write_text("def test_real():\n    assert 1 + 1 == 2\n", encoding="utf-8")
+                    command = f'"{sys.executable}" -m pytest "{tf}" -q'
+                else:
+                    command = f'"{sys.executable}" -c "import sys; sys.exit({code})"'
+                f.write_text(json.dumps(ce.record_command(tmp_path, command)), encoding="utf-8")
             else:
                 f = base / f"{ph.name}-{key}.md"; f.write_text("real", encoding="utf-8")
             engine.submit_evidence(st, ph.name, key, str(f), repo_root=tmp_path)
     m = navigation.navigation_map(spine, st, tmp_path)
     assert m["next"] is None
+
+
+def test_navigation_map_skips_verification_replay_by_default(tmp_path):
+    import json, sys
+    from e2e_harness.adapters.evidence import command_evidence as ce
+    st = run_state.new_run_state("r1", "f", "r")
+    st["current_phase"] = "VERIFIED"
+    test_file = tmp_path / "test_real.py"
+    test_file.write_text("def test_real():\n    assert 1 + 1 == 2\n", encoding="utf-8")
+    ev = ce.record_command(tmp_path, f'"{sys.executable}" -m pytest "{test_file}" -q')
+    ev["command"] = f'"{sys.executable}" -c "raise SystemExit(99)"'
+    artifact = tmp_path / "verification.json"
+    artifact.write_text(json.dumps(ev), encoding="utf-8")
+    scope = tmp_path / "scope.json"
+    scope.write_text(json.dumps({
+        "schema": "e2e-dev-harness.scope-manifest.v1",
+        "status": "COMPLETE",
+        "expected": {"services": [], "tables": [], "phases": []},
+        "delivered": {"services": [], "tables": [], "phases": []},
+    }), encoding="utf-8")
+    st["phases"]["VERIFIED"] = {
+        "evidence": {
+            "verification": {"path": str(artifact)},
+            "scope_manifest": {"path": str(scope)},
+        }
+    }
+
+    m = navigation.navigation_map(_spine(), st, tmp_path)
+
+    verified = next(p for p in m["phases"] if p["name"] == "VERIFIED")
+    assert verified["gate"]["ok"] is True
+    assert verified["gate"]["missing"] == []

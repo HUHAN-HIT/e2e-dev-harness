@@ -6,17 +6,29 @@ from e2e_harness.core.lifecycle import Phase
 
 
 def gate_passes(phase: Phase, phase_record: dict | None,
-                repo_root=None) -> tuple[bool, list[str]]:
-    evidence = (phase_record or {}).get("evidence", {})
+                repo_root=None, *, skip_replay: bool = False) -> tuple[bool, list[str]]:
+    rec = phase_record or {}
+    # v1 floor: a legacy record whose whole-phase dispatch is FAILED and which
+    # carries no per-key ledger still blocks the gate.
+    if rec.get("dispatch") == "failed" and not rec.get("failures"):
+        return False, ["failed"]
+    evidence = rec.get("evidence", {})
     missing: list[str] = []
     for k in phase.exit_gate:
         if k not in evidence:
             missing.append(k)
             continue
         if repo_root is not None:
-            ok, _reason = validate.validate_evidence(repo_root, k, evidence[k])
+            ok, _reason = validate.validate_evidence(repo_root, k, evidence[k], skip_replay=skip_replay)
             if not ok:
                 missing.append(k)
+    # S1/S2: an unresolved per-key failure blocks the gate even when the evidence is
+    # present and the phase dispatch later reads DONE — a sibling reviewer's success
+    # must not paper over another reviewer's recorded failure.
+    for fkey in sorted(rec.get("failures", {})):
+        marker = f"failed:{fkey}"
+        if marker not in missing:
+            missing.append(marker)
     return (not missing, missing)
 
 

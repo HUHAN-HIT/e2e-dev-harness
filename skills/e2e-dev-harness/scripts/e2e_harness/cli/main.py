@@ -1,17 +1,27 @@
-"""Unified e2e-dev-harness CLI: 6 verbs."""
+"""Unified e2e-dev-harness CLI."""
 from __future__ import annotations
 
 import argparse
 import json
 import sys
 
-from e2e_harness.cli.commands import start, next as next_cmd, dispatch, submit, gate, status, validate_pipeline
+from e2e_harness.cli.commands import (
+    start,
+    next as next_cmd,
+    dispatch,
+    submit,
+    gate,
+    status,
+    validate_pipeline,
+    doctor,
+)
 
 _COMMANDS = {
     "start": start.run, "next": next_cmd.run, "dispatch": dispatch.run,
     "submit": submit.run, "gate": gate.run, "status": status.run,
     # 7th verb — deliberate design §6 exception for the M3 config layer (U4).
     "validate-pipeline": validate_pipeline.run,
+    "doctor": doctor.run,
 }
 
 
@@ -48,6 +58,10 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--phase", default=None)
 
     vp = sub.add_parser("validate-pipeline"); vp.add_argument("--pipeline", required=True)
+
+    doc = sub.add_parser("doctor"); doc.add_argument("project_root", nargs="?", default=".")
+    doc.add_argument("--json", action="store_true", help="accepted for installer compatibility; output is always JSON")
+    doc.add_argument("--state", default=None, help="run-state path for read-only diagnostic")
     return p
 
 

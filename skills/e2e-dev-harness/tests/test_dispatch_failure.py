@@ -60,3 +60,42 @@ def test_cli_submit_failed_then_status_shows_blocked(tmp_path):
     _, sres = _run("status", "--state", sp, "--repo", str(tmp_path), cwd=tmp_path)
     phases = {p["name"]: p["status"] for p in sres["navigation_map"]["phases"]}
     assert phases["CLARIFIED"] == "blocked"
+
+
+def test_failed_verification_routes_back_to_implementation_rework(tmp_path):
+    from e2e_harness.adapters.evidence import command_evidence as ce
+
+    spine = pipeline.build_spine("minimal")
+    st = run_state.new_run_state("r1", "f", "r")
+    st["current_phase"] = "VERIFIED"
+    st["phases"]["IMPLEMENTED"] = {
+        "dispatch": dispatch.DispatchStatus.DONE.value,
+        "evidence": {
+            "passing_tests": {"path": "old-passing.json"},
+            "test_substance": {"path": "old-substance.json"},
+        },
+    }
+
+    ev = ce.record_command(tmp_path, f'"{sys.executable}" -c "import sys; sys.exit(1)"')
+    verification = tmp_path / "verification.json"
+    verification.write_text(json.dumps(ev), encoding="utf-8")
+    scope = tmp_path / "scope.json"
+    scope.write_text(json.dumps({
+        "schema": "e2e-dev-harness.scope-manifest.v1",
+        "status": "COMPLETE",
+        "expected": {"services": [], "tables": [], "phases": []},
+        "delivered": {"services": [], "tables": [], "phases": []},
+    }), encoding="utf-8")
+    engine.submit_evidence(st, "VERIFIED", "verification", str(verification), repo_root=tmp_path)
+    engine.submit_evidence(st, "VERIFIED", "scope_manifest", str(scope), repo_root=tmp_path)
+
+    res = engine.evaluate(spine, st, tmp_path)
+
+    assert res["rework_required"] is True
+    assert res["blocked_phase"] == "IMPLEMENTED"
+    assert res["next_action"]["skill"] == "e2e-harness-implementation"
+    assert st["current_phase"] == "IMPLEMENTED"
+    impl = st["phases"]["IMPLEMENTED"]
+    assert impl["dispatch"] == dispatch.DispatchStatus.FAILED.value
+    assert impl["evidence"] == {}
+    assert set(impl["superseded_evidence"]) == {"passing_tests", "test_substance"}

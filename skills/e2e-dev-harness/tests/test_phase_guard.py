@@ -107,3 +107,115 @@ def test_emit_pretooluse_protocol(capsys):
     assert hso["hookEventName"] == "PreToolUse"
     assert hso["permissionDecision"] == "deny"
     assert hso["permissionDecisionReason"] == "nope"
+
+
+# --- G1: non-Edit/Write write commands must not bypass the phase lock ----------
+# Threat model: prevent *unintentional* bypass — a worker reaching for sed/cp/mv/dd
+# instead of the Edit/Write tool — not a determined adversary obfuscating argv.
+
+def test_sed_inplace_code_write_denied_in_non_impl_phase(tmp_path):
+    sp = _write_state(tmp_path, "RED")
+    target = (tmp_path / "src" / "a.py").as_posix()
+    d = pg.decide(_hook("Bash", command=f"sed -i 's/x/y/' {target}"), tmp_path, sp)
+    assert d["decision"] == "deny"
+    assert "a.py" in d["reason"]
+    assert "WHY:" in d["reason"] and "RECOVER:" in d["reason"]
+
+
+def test_cp_into_code_denied_in_non_impl_phase(tmp_path):
+    sp = _write_state(tmp_path, "RED")
+    target = (tmp_path / "src" / "a.py").as_posix()
+    d = pg.decide(_hook("Bash", command=f"cp /tmp/forged.py {target}"), tmp_path, sp)
+    assert d["decision"] == "deny"
+    assert "a.py" in d["reason"]
+
+
+def test_mv_into_code_denied_in_non_impl_phase(tmp_path):
+    sp = _write_state(tmp_path, "RED")
+    target = (tmp_path / "src" / "a.py").as_posix()
+    d = pg.decide(_hook("Bash", command=f"mv /tmp/x.py {target}"), tmp_path, sp)
+    assert d["decision"] == "deny"
+    assert "a.py" in d["reason"]
+
+
+def test_tee_into_code_denied_in_non_impl_phase(tmp_path):
+    sp = _write_state(tmp_path, "RED")
+    target = (tmp_path / "src" / "a.py").as_posix()
+    d = pg.decide(_hook("Bash", command=f"echo body | tee {target}"), tmp_path, sp)
+    assert d["decision"] == "deny"
+    assert "a.py" in d["reason"]
+
+
+def test_dd_into_code_denied_in_non_impl_phase(tmp_path):
+    sp = _write_state(tmp_path, "RED")
+    target = (tmp_path / "src" / "a.py").as_posix()
+    d = pg.decide(_hook("Bash", command=f"dd if=/tmp/x of={target}"), tmp_path, sp)
+    assert d["decision"] == "deny"
+    assert "a.py" in d["reason"]
+
+
+def test_python_c_inline_write_denied_in_non_impl_phase(tmp_path):
+    sp = _write_state(tmp_path, "RED")
+    target = (tmp_path / "src" / "a.py").as_posix()
+    d = pg.decide(
+        _hook("Bash", command=f"python -c \"open('{target}','w').write('x')\""),
+        tmp_path, sp,
+    )
+    assert d["decision"] == "deny"
+    assert "WHY:" in d["reason"] and "RECOVER:" in d["reason"]
+
+
+def test_git_apply_denied_conservatively_in_non_impl_phase(tmp_path):
+    sp = _write_state(tmp_path, "RED")
+    d = pg.decide(_hook("Bash", command="git apply patch.diff"), tmp_path, sp)
+    assert d["decision"] == "deny"
+    assert "WHY:" in d["reason"] and "RECOVER:" in d["reason"]
+
+
+def test_write_command_allowed_in_impl_phase(tmp_path):
+    # The same write commands are legitimate once code writes are unlocked.
+    sp = _write_state(tmp_path, "IMPLEMENTED")
+    target = (tmp_path / "src" / "a.py").as_posix()
+    assert pg.decide(_hook("Bash", command=f"sed -i 's/x/y/' {target}"),
+                     tmp_path, sp)["decision"] == "allow"
+    assert pg.decide(_hook("Bash", command=f"cp /tmp/forged.py {target}"),
+                     tmp_path, sp)["decision"] == "allow"
+    assert pg.decide(_hook("Bash", command=f"python -c \"open('{target}','w').write('x')\""),
+                     tmp_path, sp)["decision"] == "allow"
+
+
+def test_write_command_into_doc_path_allowed_in_non_impl_phase(tmp_path):
+    # Write commands targeting non-code paths stay allowed (only code is phase-locked).
+    sp = _write_state(tmp_path, "RED")
+    target = (tmp_path / "docs" / "design" / "x.md").as_posix()
+    d = pg.decide(_hook("Bash", command=f"cp /tmp/notes.md {target}"), tmp_path, sp)
+    assert d["decision"] == "allow"
+
+
+# --- G2: SSOT (run-state.json) hard block via any write command ----------------
+
+def test_cp_into_run_state_denied(tmp_path):
+    sp = _write_state(tmp_path, "IMPLEMENTED")
+    target = (tmp_path / "docs" / "agent-runs" / "r1" / "run-state.json").as_posix()
+    d = pg.decide(_hook("Bash", command=f"cp /tmp/forged {target}"), tmp_path, sp)
+    assert d["decision"] == "deny"
+    assert "run-state.json" in d["reason"]
+
+
+def test_mv_into_run_state_denied(tmp_path):
+    sp = _write_state(tmp_path, "IMPLEMENTED")
+    target = (tmp_path / "docs" / "agent-runs" / "r1" / "run-state.json").as_posix()
+    d = pg.decide(_hook("Bash", command=f"mv /tmp/forged {target}"), tmp_path, sp)
+    assert d["decision"] == "deny"
+    assert "run-state.json" in d["reason"]
+
+
+def test_read_of_run_state_is_not_blocked(tmp_path):
+    # Reads of the SSOT (and the CLI's own status command) must stay allowed —
+    # the block is on *writes*, not on mentioning run-state.json.
+    sp = _write_state(tmp_path, "RED")
+    target = (tmp_path / "docs" / "agent-runs" / "r1" / "run-state.json").as_posix()
+    assert pg.decide(_hook("Bash", command=f"cat {target}"),
+                     tmp_path, sp)["decision"] == "allow"
+    assert pg.decide(_hook("Bash", command=f"e2e-dev-harness status --state {target}"),
+                     tmp_path, sp)["decision"] == "allow"

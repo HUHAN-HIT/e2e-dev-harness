@@ -10,12 +10,38 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = process.env.E2E_HARNESS_PACK_ROOT
+  ? path.resolve(process.env.E2E_HARNESS_PACK_ROOT)
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOTS = ["skills/e2e-dev-harness", "bin", "lib", "tools"];
-const DIR_NAMES = new Set(["__pycache__", ".pytest_cache", ".ruff_cache", ".e2e"]);
+const DIR_NAMES = new Set(["__pycache__", ".pytest_cache", ".pytest-tmp", ".ruff_cache", ".e2e"]);
 const FILE_EXTS = new Set([".pyc", ".pyo"]);
 
 let removed = 0;
+let skipped = 0;
+
+function forceRemove(full) {
+  try {
+    fs.rmSync(full, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    return true;
+  } catch (error) {
+    if (!["EPERM", "EACCES"].includes(error?.code)) throw error;
+  }
+  try {
+    fs.chmodSync(full, 0o700);
+  } catch {
+    // Best effort: Windows temp residue may already be partially inaccessible.
+  }
+  try {
+    fs.rmSync(full, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    return true;
+  } catch (error) {
+    if (!["EPERM", "EACCES"].includes(error?.code)) throw error;
+    skipped += 1;
+    process.stderr.write(`[clean-pack] warning: could not purge locked residue: ${full}\n`);
+    return false;
+  }
+}
 
 function purge(dir) {
   let entries;
@@ -28,8 +54,7 @@ function purge(dir) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (DIR_NAMES.has(entry.name) || entry.name.endsWith(".egg-info")) {
-        fs.rmSync(full, { recursive: true, force: true });
-        removed += 1;
+        if (forceRemove(full)) removed += 1;
         continue;
       }
       purge(full);
@@ -41,4 +66,6 @@ function purge(dir) {
 }
 
 for (const root of ROOTS) purge(path.join(REPO_ROOT, root));
-process.stdout.write(`[clean-pack] purged ${removed} residue path(s) before packing\n`);
+process.stdout.write(`[clean-pack] purged ${removed} residue path(s) before packing`);
+if (skipped) process.stdout.write(`; skipped ${skipped} locked residue path(s)`);
+process.stdout.write("\n");

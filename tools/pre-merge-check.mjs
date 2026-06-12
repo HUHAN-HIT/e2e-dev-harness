@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
@@ -13,7 +14,17 @@ export function buildPlan(options = {}) {
   const plan = [
     { name: "git-status", command: ["git", "status", "--short", "--branch"] },
     { name: "node-tests", command: ["npm", "test"] },
-    { name: "python-tests", command: ["python", "-m", "pytest", "skills/e2e-dev-harness/tests", "tests/test_node_installer.py", "-q"] },
+    {
+      name: "python-tests",
+      command: [
+        "python", "-m", "pytest",
+        "skills/e2e-dev-harness/tests",
+        "tests/test_node_installer.py",
+        "-q",
+        "-p", "no:cacheprovider",
+        "--basetemp=.test-tmp/pre-merge-pytest",
+      ],
+    },
   ];
 
   if (!options.skipGitNexus) {
@@ -30,6 +41,19 @@ function commandText(command) {
   return command.map((part) => (/\s/.test(part) ? `"${part}"` : part)).join(" ");
 }
 
+function envForStep(step, cwd) {
+  if (step.name !== "python-tests") return process.env;
+  const tempRoot = path.resolve(cwd, ".test-tmp", "pre-merge-temp");
+  fs.mkdirSync(tempRoot, { recursive: true });
+  return {
+    ...process.env,
+    PYTHONIOENCODING: process.env.PYTHONIOENCODING || "utf-8",
+    PYTHONUTF8: process.env.PYTHONUTF8 || "1",
+    TMP: tempRoot,
+    TEMP: tempRoot,
+  };
+}
+
 function spawnStep(step, options) {
   const [file, ...args] = step.command;
   const needsWindowsShell = process.platform === "win32" && (file === "npm" || file === "npx");
@@ -40,6 +64,7 @@ function spawnStep(step, options) {
     : args;
   const completed = spawnSync(spawnFile, spawnArgs, {
     cwd: options.cwd,
+    env: options.env,
     stdio: "inherit",
     shell: false,
   });
@@ -56,7 +81,7 @@ export function runPlan(plan, options = {}) {
 
   for (const step of plan) {
     log(`\n[pre-merge-check] ${step.name}: ${commandText(step.command)}`);
-    const completed = runCommand(step, { cwd });
+    const completed = runCommand(step, { cwd, env: envForStep(step, cwd) });
     const status = completed.status ?? 1;
     results.push({ name: step.name, status });
     if (status !== 0) {
@@ -94,7 +119,7 @@ function helpText() {
     "Runs the local checks expected before merging a development branch:",
     "  git status --short --branch",
     "  npm test",
-    "  python -m pytest skills/e2e-dev-harness/tests tests/test_node_installer.py -q",
+    "  python -m pytest skills/e2e-dev-harness/tests tests/test_node_installer.py -q -p no:cacheprovider --basetemp=.test-tmp/pre-merge-pytest",
     "  npx gitnexus detect-changes --scope all --repo e2e-dev-workflow",
     "",
     "Options:",

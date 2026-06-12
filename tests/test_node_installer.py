@@ -168,7 +168,30 @@ class NodeInstallerTests(unittest.TestCase):
             self.assertEqual(["codex", "claude", "agents"], payload["targets"])
             self.assertTrue(payload["skip_python_cli"])
             self.assertFalse(payload["install_external"])
-            self.assertEqual(["copy-skill"], [action["id"] for action in payload["actions"]])
+            action_ids = [action["id"] for action in payload["actions"]]
+            self.assertIn("copy-skill", action_ids)
+            self.assertNotIn("install-python-cli", action_ids)
+            self.assertNotIn("install-gitnexus", action_ids)
+            self.assertNotIn("install-graphify", action_ids)
+
+    def test_sync_updates_existing_claude_worktree_skill_copies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install_root = Path(tmp) / "home"
+            stale = install_root / ".claude" / "worktrees" / "wt1" / "skills" / "e2e-dev-harness"
+            stale.mkdir(parents=True)
+            (stale / "SKILL.md").write_text("stale worktree skill\n", encoding="utf-8")
+
+            code, payload = self.run_installer(
+                "--install-root",
+                str(install_root),
+                "--sync",
+                "--yes",
+            )
+
+            source = ROOT / "skills" / "e2e-dev-harness" / "SKILL.md"
+            self.assertEqual(0, code, payload)
+            self.assertEqual(source.read_text(encoding="utf-8"), (stale / "SKILL.md").read_text(encoding="utf-8"))
+            self.assertIn("copy-worktree-skills", [result["action"] for result in payload["action_results"]])
 
     def test_project_preset_installs_hooks_and_doctor_without_pip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -231,6 +254,27 @@ class NodeInstallerTests(unittest.TestCase):
             self.assertEqual(["doctor-only"], payload["presets"])
             self.assertTrue(payload["skip_skill_copy"])
             self.assertEqual(["doctor"], [action["id"] for action in payload["actions"]])
+
+    def test_doctor_only_yes_runs_current_cli_doctor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install_root = Path(tmp) / "home"
+            project = Path(tmp) / "business-project"
+            project.mkdir()
+
+            code, payload = self.run_installer(
+                "--install-root",
+                str(install_root),
+                "--project-root",
+                str(project),
+                "--doctor-only",
+                "--yes",
+            )
+
+            self.assertEqual(0, code, payload)
+            self.assertEqual(["doctor-only"], payload["presets"])
+            result = payload["action_results"][0]
+            self.assertEqual("doctor", result["action"])
+            self.assertEqual(0, result["exit_code"])
 
     def test_yes_installs_phase_and_stop_hooks_to_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

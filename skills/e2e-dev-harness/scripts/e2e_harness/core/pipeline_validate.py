@@ -63,6 +63,12 @@ def validate_spec(spec) -> tuple[bool, list[str]]:
     except Exception as exc:  # noqa: BLE001 — surface as a validation error
         return False, [f"spec not buildable: {exc}"]
 
+    # S3: the spine must start at CREATED. run-state seeds current_phase="CREATED",
+    # so a spine that begins elsewhere makes the first `evaluate` raise
+    # KeyError('CREATED') (and navigation would silently treat spine[0] as the seed).
+    if spine and spine[0].name != "CREATED":
+        errors.append("spine must start at CREATED phase")
+
     # I1 termination: linear chain with a single terminal, every next resolvable.
     spine_names = {p.name for p in spine}
     terminals = [p for p in spine if p.next_phase is None]

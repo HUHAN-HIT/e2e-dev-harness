@@ -9,6 +9,7 @@ Do not inherit coordinator chat context. Use only the packet `context_paths` (ru
 
 ## 契约 (e2e-dev-harness)
 
+- Superpowers is an external skill system. If it is unavailable, continue directly with this worker's expected_outputs and harness contract instead of inventing behavior or stopping.
 - **方法委派**: 用 `superpowers:requesting-code-review` 发起审查、`superpowers:receiving-code-review` 消化反馈。本 skill 只持 harness 专属胶水。
 - **expected_outputs**: 产出证据键 `review` —— 写审查报告到 `docs/agent-runs/<run>/handoffs/<reviewer>-review.md`,然后:
   `python skills/e2e-dev-harness/scripts/e2e_dev_harness.py submit --state <run-state> --phase REVIEWED --key <review-key> --path <report-path>`

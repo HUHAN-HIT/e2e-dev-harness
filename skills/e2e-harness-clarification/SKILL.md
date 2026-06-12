@@ -15,6 +15,7 @@ Ask the user only for intent confirmation, unresolved product decisions, or expl
 
 ## 契约 (e2e-dev-harness)
 
+- Superpowers is an external skill system. If it is unavailable, continue directly with this worker's expected_outputs and harness contract instead of inventing behavior or stopping.
 - **方法委派**: 用 `superpowers:brainstorming` 完成澄清(意图、验收标准、影响、开放问题)。本 skill 只持 harness 专属胶水,不重造方法。
 - **expected_outputs**: CLARIFIED 闸要求**两个**证据键,缺一不可:
   1. `clarification` —— 写散文交接 `docs/agent-runs/<run>/handoffs/01-requirements-clarifier.md`,然后:

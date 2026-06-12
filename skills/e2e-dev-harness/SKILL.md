@@ -35,7 +35,7 @@ python $S status --state <run-state>     # 人读导航地图
 
 ## tier 与流水线 (M2)
 
-`start --tier <t>` 选择流水线(默认 `minimal`,`auto` 由请求文本分类):
+`start --tier <t>` selects the pipeline. The default `auto` classifies the request text; use `minimal` only when explicitly pinned:
 
 | tier | 活跃阶段 | 说明 |
 |---|---|---|

@@ -17,6 +17,7 @@ Stop after the guard report is written; do not reopen implementation tasks.
 
 ## 契约 (e2e-dev-harness)
 
+- Superpowers is an external skill system. If it is unavailable, continue directly with this worker's expected_outputs and harness contract instead of inventing behavior or stopping.
 - **方法委派**: 用 `superpowers:verification-before-completion` 做完成前验证(全测通过、验收对齐)。
 - **expected_outputs**: VERIFIED 闸要求**两个**证据键,缺一不可:
   1. `verification` —— 验证命令证据(exit 0, gate 会**重跑复算**):

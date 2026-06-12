@@ -12,7 +12,7 @@ def test_dispatch_surfaces_domain_in_context(tmp_path):
     st["current_phase"] = "CLARIFIED"
     p = tmp_path / "run-state.json"
     run_state.save(p, st)
-    args = SimpleNamespace(state=str(p), repo=str(tmp_path), runtime="manual")
+    args = SimpleNamespace(state=str(p), repo=str(tmp_path), runtime="codex")
     code, packet = dispatch_cmd.run(args)
     assert code == 0
     assert any("domain:frontend" in c and "test_runner:vitest" in c
@@ -24,7 +24,7 @@ def test_dispatch_backend_no_domain_unchanged(tmp_path):
     st["current_phase"] = "CLARIFIED"
     p = tmp_path / "run-state.json"
     run_state.save(p, st)
-    args = SimpleNamespace(state=str(p), repo=str(tmp_path), runtime="manual")
+    args = SimpleNamespace(state=str(p), repo=str(tmp_path), runtime="codex")
     code, packet = dispatch_cmd.run(args)
     assert code == 0
     assert packet["context_paths"] == [str(p)]   # only the run-state pointer

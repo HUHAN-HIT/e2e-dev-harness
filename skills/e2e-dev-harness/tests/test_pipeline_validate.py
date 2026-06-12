@@ -90,3 +90,12 @@ def test_allows_code_write_nonbool_rejected():
     ok, errors = pv.validate_spec(spec)
     assert ok is False
     assert any("allows_code_write" in e for e in errors)
+
+
+def test_spine_must_start_at_created():
+    # S3: run-state seeds current_phase="CREATED", so a spine that begins elsewhere
+    # makes the first `evaluate` raise KeyError('CREATED'). Reject it at validation.
+    spec = {"name": "c", "phases": ["CLARIFIED", "VERIFIED"]}
+    ok, errors = pv.validate_spec(spec)
+    assert ok is False
+    assert any("start at CREATED" in e for e in errors)

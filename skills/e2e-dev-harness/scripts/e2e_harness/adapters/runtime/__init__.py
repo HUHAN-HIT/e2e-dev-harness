@@ -8,6 +8,8 @@ pinned, so the worker inherits the coordinator's accessible default model.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
+from typing import Protocol
 
 DESCRIPTOR_SCHEMA = "e2e-dev-harness.worker-descriptor.v1"
 PORTABLE_SUBAGENT_TYPE = "general-purpose"
@@ -107,21 +109,88 @@ def _manual(packet: dict, warning: str = "") -> dict:
     return descriptor
 
 
-def spawn_worker(packet: dict, runtime: str = "codex") -> dict:
-    """Translate a worker packet into a runtime launch descriptor (no process spawned).
+@dataclass(frozen=True)
+class RuntimeCapabilities:
+    """Pure capability data for a runtime (design §4.1).
 
-    Unknown runtimes fall back to `manual` with a `warning` rather than raising.
+    Invariant (enforced by the contract test): ``can_auto_spawn`` is true iff a
+    ``spawn_tool`` exists — i.e. iff the runtime can launch an isolated worker on
+    its own. ``manual`` (and any unknown runtime) cannot, so dispatch must block
+    rather than let the coordinator self-deal.
     """
+
+    name: str
+    can_auto_spawn: bool
+    spawn_tool: str | None
+
+
+class RuntimeAdapter(Protocol):
+    """Uniform runtime seam (design §4.2). The dispatcher talks only to this."""
+
+    name: str
+
+    def capabilities(self) -> RuntimeCapabilities: ...
+
+    def spawn(self, packet: dict) -> dict: ...
+
+
+class _SpawnAdapter:
+    """Auto-spawn runtime: wraps an existing packet→descriptor function."""
+
+    def __init__(self, name: str, spawn_tool: str, spawn_fn) -> None:
+        self.name = name
+        self._caps = RuntimeCapabilities(name, True, spawn_tool)
+        self._spawn_fn = spawn_fn
+
+    def capabilities(self) -> RuntimeCapabilities:
+        return self._caps
+
+    def spawn(self, packet: dict) -> dict:
+        return self._spawn_fn(packet)
+
+
+class _ManualAdapter:
+    """Manual / unknown runtime: cannot auto-spawn (carries an optional warning)."""
+
+    name = "manual"
+
+    def __init__(self, warning: str = "") -> None:
+        self._warning = warning
+
+    def capabilities(self) -> RuntimeCapabilities:
+        return RuntimeCapabilities("manual", False, None)
+
+    def spawn(self, packet: dict) -> dict:
+        return _manual(packet, warning=self._warning)
+
+
+def get_adapter(runtime: str = "codex") -> RuntimeAdapter:
+    """Resolve a runtime name to its adapter. Unknown → manual (with a warning)."""
     name = (runtime or "codex").strip().lower()
     if name in {"codex", "codex-app"}:
-        return _codex(packet)
+        return _SpawnAdapter("codex", "multi_agent_v1.spawn_agent", _codex)
     if name == "claude-code":
-        return _claude_code(packet)
+        return _SpawnAdapter("claude-code", "Task", _claude_code)
     if name == "opencode":
-        return _opencode(packet)
+        return _SpawnAdapter("opencode", "task", _opencode)
     if name == "manual":
-        return _manual(packet)
-    return _manual(packet, warning=f"Unknown runtime {name!r}; falling back to manual dispatch.")
+        return _ManualAdapter()
+    return _ManualAdapter(warning=f"Unknown runtime {name!r}; falling back to manual dispatch.")
 
 
-__all__ = ["spawn_worker", "DESCRIPTOR_SCHEMA"]
+def spawn_worker(packet: dict, runtime: str = "codex") -> dict:
+    """Backward-compat shim: translate a packet into a runtime launch descriptor.
+
+    Delegates to the resolved adapter; output is unchanged from the original
+    free-function seam. Unknown runtimes fall back to `manual` with a `warning`.
+    """
+    return get_adapter(runtime).spawn(packet)
+
+
+__all__ = [
+    "spawn_worker",
+    "get_adapter",
+    "RuntimeAdapter",
+    "RuntimeCapabilities",
+    "DESCRIPTOR_SCHEMA",
+]

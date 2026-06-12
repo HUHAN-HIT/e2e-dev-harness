@@ -17,6 +17,7 @@ Stop after the red test fails for the intended reason; do not implement producti
 
 ## 契约 (e2e-dev-harness)
 
+- Superpowers is an external skill system. If it is unavailable, continue directly with this worker's expected_outputs and harness contract instead of inventing behavior or stopping.
 - **方法委派**: 用 `superpowers:test-driven-development`(红阶段)写出证明验收标准的失败测试。
 - **expected_outputs**: 产出证据键 `failing_tests` —— 提交失败测试证据后:
   `python skills/e2e-dev-harness/scripts/e2e_dev_harness.py submit --state <run-state> --phase RED --key failing_tests --path <evidence-path>`

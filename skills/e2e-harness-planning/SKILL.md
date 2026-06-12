@@ -9,6 +9,7 @@ Do not inherit coordinator chat context. Use only the packet `context_paths` (ru
 
 ## 契约 (e2e-dev-harness)
 
+- Superpowers is an external skill system. If it is unavailable, continue directly with this worker's expected_outputs and harness contract instead of inventing behavior or stopping.
 - **方法委派**: 用 `superpowers:writing-plans` 把澄清后的需求转成服务切片实现计划与调度。本 skill 只持 harness 专属胶水,不重造规划方法。
 - **expected_outputs**: 产出证据键 `plan` —— 写实现计划到 `docs/agent-runs/<run>/handoffs/02-implementation-planner.md`,然后:
   `python skills/e2e-dev-harness/scripts/e2e_dev_harness.py submit --state <run-state> --phase PLANNED --key plan --path <plan-path>`

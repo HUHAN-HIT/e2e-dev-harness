@@ -1,0 +1,17 @@
+{
+  "last_verified_submit": {
+    "key": "verification",
+    "rc": 0,
+    "stdout": "{\"schema\": \"e2e-dev-harness.submit.v1\", \"phase\": \"VERIFIED\", \"key\": \"verification\", \"recorded\": \"docs\\\\agent-runs\\\\art\\\\VERIFIED-verification.json\", \"status\": \"done\"}",
+    "stderr": ""
+  },
+  "VERIFIED_evidence_in_state": {
+    "verification": {
+      "path": "docs\\agent-runs\\art\\VERIFIED-verification.json",
+      "sha256": "da9047f7ef381dc6e9ff479aa65de67782178d91a0dd75d5cc9497359ba51fb0",
+      "bytes": 658
+    }
+  },
+  "current_phase": "VERIFIED",
+  "gate_stdout": "{\"phase\": \"VERIFIED\", \"passed\": true, \"missing_evidence\": []}"
+}

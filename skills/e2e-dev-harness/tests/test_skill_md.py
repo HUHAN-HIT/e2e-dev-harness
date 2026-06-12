@@ -19,3 +19,9 @@ def test_skill_md_documents_tiers_and_review_fanout():
         assert tier in text
     assert "r1" in text and "r2" in text and "r3" in text  # review fan-out
     assert "--tier" in text
+
+
+def test_skill_md_documents_auto_as_default_tier():
+    text = SKILL.read_text(encoding="utf-8")
+    assert "default `auto`" in text
+    assert "default `minimal`" not in text

@@ -200,6 +200,28 @@ function resolveTargets(target) {
   return target === "all" ? ["codex", "claude", "agents"] : [target];
 }
 
+function existingClaudeWorktreeSkillTargets(repo, installRoot) {
+  const roots = [
+    path.join(installRoot, ".claude", "worktrees"),
+    path.join(repo, ".claude", "worktrees"),
+  ];
+  const seen = new Set();
+  const targets = [];
+  for (const root of roots) {
+    if (!fs.existsSync(root)) continue;
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const skillPath = path.join(root, entry.name, "skills", SKILL_NAME);
+      if (!fs.existsSync(skillPath)) continue;
+      const resolved = path.resolve(skillPath);
+      if (seen.has(resolved)) continue;
+      seen.add(resolved);
+      targets.push({ worktree: entry.name, path: resolved });
+    }
+  }
+  return targets;
+}
+
 function findCommand(command) {
   const locator = process.platform === "win32" ? "where" : "which";
   const completed = childProcess.spawnSync(locator, [command], { encoding: "utf8" });
@@ -345,6 +367,14 @@ function actions(options, repo, projectRoot, installRoot, sourceSkillDir, target
         path: path.join(installRoot, ...TARGETS[target]),
       })),
     });
+    const worktreeTargets = existingClaudeWorktreeSkillTargets(repo, installRoot);
+    if (worktreeTargets.length) {
+      planned.push({
+        id: "copy-worktree-skills",
+        description: `Update existing Claude worktree copies of ${SKILL_NAME}.`,
+        targets: worktreeTargets,
+      });
+    }
   }
   if (!options.skipPythonCli && !options.checkOnly) {
     const extras = options.extras.length ? `[${options.extras.join(",")}]` : "";
@@ -416,6 +446,30 @@ function executeAction(action, context) {
       }
       installed.push({
         target: target.target,
+        path: target.path,
+        backup,
+        files: copied.files,
+        directories: copied.directories,
+      });
+    }
+    return { action: action.id, exit_code: 0, installed_skills: installed };
+  }
+  if (action.id === "copy-worktree-skills") {
+    const installed = [];
+    const sourceSkillsParent = path.dirname(context.sourceSkillDir);
+    for (const target of action.targets) {
+      const backup = backupExisting(target.path, context.installRoot, `claude-worktree-${target.worktree}`, context.timestamp);
+      const copied = copyDirectory(context.sourceSkillDir, target.path);
+      const targetSkillsParent = path.dirname(target.path);
+      for (const workerName of WORKER_SKILL_NAMES) {
+        const workerSource = path.join(sourceSkillsParent, workerName);
+        if (fs.existsSync(workerSource)) {
+          copyDirectory(workerSource, path.join(targetSkillsParent, workerName));
+        }
+      }
+      installed.push({
+        target: "claude-worktree",
+        worktree: target.worktree,
         path: target.path,
         backup,
         files: copied.files,

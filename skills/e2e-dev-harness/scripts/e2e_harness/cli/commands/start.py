@@ -32,7 +32,9 @@ def run(args) -> tuple[int, dict]:
     if tier == "auto":
         from e2e_harness.adapters.tier import classify
         scope = adapter.scan(repo, request) if getattr(args, "scan", False) else None
-        tier, reasons = classify.classify_tier(request, scope)
+        # auto=True applies the G4 baseline floor: a derived (non-pinned) tier never
+        # drops to minimal — review is the default. `--tier minimal` opts down.
+        tier, reasons = classify.classify_tier(request, scope, auto=True)
 
     pipeline_ref = getattr(args, "pipeline", None) or tier
     spec = pipeline.load_spec(pipeline_ref)  # load/parse error -> main.py emits error JSON (exit 2)

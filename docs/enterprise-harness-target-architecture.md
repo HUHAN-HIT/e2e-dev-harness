@@ -32,6 +32,35 @@
 
 因此本文档原列的 5 个 gap（控制面形态、状态分散、扩展点、runtime adapter、observability）全部是**工程形态**问题；它们之上还缺一个更根本的维度——**交付保真（delivery fidelity）**。把一个空壳 gate 产品化、事件化、插件化，只会把"自动自欺"做得更精致。**保真必须前置于产品化。** 详见下方 Gap 0 与 Phase 0。
 
+## 当前工程校准：目标架构仍正确，但下一步应转向单一真相（2026-06-11 补）
+
+> 依据：当前 checkout 代码与 GitNexus 索引复核；聚焦 `skills/e2e-dev-harness/scripts/e2e_harness`、`skills/e2e-dev-harness/tests`、`docs/enterprise-harness-target-architecture.md`。
+
+当前工程已经比本文最初写作时更接近目标态。Phase 0 的几个关键保真机制已经进入代码并有测试覆盖：
+
+- `verification` 已作为 command-evidence key 进入 gate 校验，并对最终验证证据执行受限 replay；非 `record_command` 结构、缺 `environment`、非 64hex hash、越界 cwd、非测试命令都会被拒绝。
+- `acceptance_contract` 已要求结构化 JSON：每条验收标准必须有稳定 `AC-xxx` ID、criterion 与 observable behavior。
+- `test_substance` 已能识别 Python/Java 空测试、弱断言、`assertDoesNotThrow(() -> {})` 等空壳绿灯。
+- `scope_manifest` 已能区分 `COMPLETE` 与 `PARTIAL`，并对声明交付的表做基础 repo grounding，避免子集交付被标成 VERIFIED。
+- `RuntimeAdapter` seam 已存在，Claude Code、Codex、OpenCode、manual runtime 共享能力/descriptor 契约测试。
+- `pipeline` 已支持自定义 YAML（`--pipeline <path>`）覆盖 phase spine 与 per-phase `exit_gate`/`produces`，内置 tier 名解析到 shipped `pipelines/*.yaml`（见 `pipeline.py`）。
+
+> 更正（2026-06-11）：早先此处曾写“`.e2e/config.yaml` 驱动的 plugin registry 已能加载 custom gates / scanners / policy packs”，与活代码不符，并与下文 Phase 4 自相矛盾。当前活代码**没有** `.e2e/config.yaml` 加载器；`plugin_registry.py` 仅存于 `adapters/scanner/_legacy/`，gate/scanner/policy provider 仍硬编码在 `validate.py`（`STRUCTURED_KEYS`/`COMMAND_KEYS` 为字面 dict）。配置驱动的 plugin registry 属 **Phase 4 未完成项**；已落地的仅为 pipeline-YAML 覆盖。
+
+这说明本文的方向不是"未来也许能做"，而是已经成为当前工程的主线。但当前 checkout 仍然没有把这些能力收束成完整企业控制面：
+
+- 权威状态仍主要是 `run-state.json` 单文件模型，虽有 lock 与 atomic write，但还不是 event-sourced audit trail。
+- 当前活代码中没有成型的 `event_log.py` / `state_store.py` / `recover` 命令实现；若其他分支或历史实现存在，也不能当作当前工程事实。
+- `doctor` 仍偏 installer readiness，只检查 project root 与 `.claude/settings.json`，还不能解释一个 run 为什么卡住、哪个事件/任务/证据是第一故障点。
+- `navigation_map()` 已默认 `skip_replay=True`，读状态不会误触发 replay，这是正确边界；显式 verification 才应执行 replay。
+
+因此更好的下一步不是继续抽象更多 adapter 或引入外部编排框架，而是：
+
+1. 把 Phase 0 保真链端到端接牢：`acceptance_contract -> failing_tests -> test_substance -> passing_tests -> scope_manifest -> verification replay`。
+2. 引入单一控制面真相：优先采用 `control-plane.json` 或 append-only `events/` 作为权威，`run-state.json` / `agent-schedule.json` / `coordinator-summary.json` 作为兼容快照。
+3. 把 doctor/recover 建在这条真相链上：输出第一个不一致点、阻塞任务、缺失证据、下一条合法修复命令。
+4. 等真相链和诊断面稳定后，再继续推进插件化、runtime adapter 深化和产品化 UI/报告。
+
 ## Current Strengths
 
 ### 1. Coordinator And Worker Separation
@@ -217,6 +246,8 @@ e2e_harness/
 
 CLI 应该只是薄壳。真正的 harness 行为应在 `domain/` 和 `engine/` 中表达。
 
+> 校准（2026-06-11）：当前实现并未按此 6 层展开，而是收敛为 `core/`（domain + engine 合并）+ `adapters/` + `cli/` + `pipelines/*.yaml`。其中 lifecycle / tier 缩放 / phase spine / `exit_gate` 已下沉为 `pipelines/*.yaml` 数据，替代了本图中 `policies/lifecycle_policy.py` 等“策略即模块”的设想；`cli/main.py` 已是约 97 行薄壳路由。因此后续不必为对称而强行铺满 6 层包——Avoid 段“不要大爆炸重构核心 control plane”在此同样适用。
+
 ### 2. Domain Model
 
 建议引入明确的 domain objects：
@@ -298,6 +329,8 @@ class RuntimeAdapter:
 
 默认 provider 由 harness 内置，团队 provider 通过 `.e2e/config.yaml` 注册。
 
+> 校准（2026-06-11）：pipeline **组装**已是数据驱动——`--pipeline <path>` 可用自定义 YAML 覆盖 phase spine 与 per-phase `exit_gate`/`produces`（见 `pipeline.py`），无需改源码。尚未实现的是 gate/scanner/policy **provider 注册**本身（当前 `validate.py` 的 `STRUCTURED_KEYS`/`COMMAND_KEYS` 为字面 dict，加新 gate 必须改源码）。因此本节 registry 的真实范围应收窄为“provider 注册 + template override”；“pipeline 可配置”已完成，不应再计入待办。
+
 ### 5. Thin Coordinator Contract
 
 Coordinator 的唯一稳定输出应是 `ExecutionPacket`：
@@ -364,9 +397,13 @@ planned
 
 > 次序校准（2026-06-10）：下列 Phase 1–5 是**产品化形态**演进；它们之前必须先有 Phase 0 建立**交付保真**，否则是在把空壳 gate 产品化。
 
+> 执行次序锁定（2026-06-11，本文结尾结论的前置版）：在交付保真链与诊断面稳定前，不扩大抽象面。推荐严格次序——**① Phase 0 收尾（RED↔GREEN 同批测试绑定、保真链端到端）→ ② `doctor --state` 只读诊断 + `recover`（Phase 5 切片，ROI 最高，直接降低当前多文件状态漂移与人工恢复风险）→ ③ 最小 append-only control-plane event writer（Phase 2，`run-state.json` 作 projection）**。**Plugin Registry（Phase 4）与 §1 的 6 层重构在此三步完成前显式标记为“暂不启动，待真实企业接入需求触发”**——不要在保真链 + 诊断面稳定之前继续扩大抽象面。
+
 ### Phase 0: Establish Delivery Fidelity（前置地基）
 
 Goal: 让"通过 gate"收敛于"符合设计文档"，使后续产品化建立在可信的 gate/evidence 之上。
+
+2026-06-11 当前状态：Phase 0 已经启动且部分可运行，但还没有完全成为端到端交付判定闭环。证据防伪、verification replay、acceptance contract、test substance、scope manifest 都已有模块和测试；下一步要验证这些 key 是否出现在默认 pipeline 的正确 phase gate 中，并确保最终 VERIFIED 必须同时满足需求、测试、实现、范围与 replay 证据。
 
 Tasks（每项仍走 TDD + `gitnexus_impact` + `detect_changes`，不即兴改码）:
 
@@ -406,6 +443,8 @@ Exit criteria:
 
 Goal: 先双写 event log 和现有 snapshot。
 
+2026-06-11 当前状态：当前 checkout 仍以 `run-state.json` 为主要权威文件，`core/run_state.py` 提供 schema 校验、lock、atomic write。历史设计中提到的 `event_log.py` / `state_store.py` / snapshot projection 不能视为当前活实现。这里的更优切入点是先做最小 append-only control-plane event writer，再把现有 `run-state.json` 作为 projection，而不是一次性迁移所有状态文件。
+
 Tasks:
 
 1. 新增 `events/` append-only writer。
@@ -440,6 +479,8 @@ Exit criteria:
 
 ### Phase 4: Add Plugin Registry
 
+> 状态（2026-06-11）：**暂不启动**，待真实企业接入需求（如外部 SonarQube / 内部 CI / 非 Java scanner / 合规审批）触发。当前 `--pipeline <path>` 自定义 YAML 已覆盖约 80% 可配置需求；在保真链 + 诊断面（次序 ①②③）稳定前不投入 provider 注册层，以免把抽象面扩大到尚未可信的 gate 之上。
+
 Goal: 企业定制不改 harness 源码。
 
 Tasks:
@@ -459,6 +500,8 @@ Exit criteria:
 ### Phase 5: Productize Observability And Recovery
 
 Goal: harness 能自解释、自恢复、自审计。
+
+2026-06-11 当前状态：`doctor` 命令已经存在，但仍是浅层安装/项目可用性检查；它还不能读取 run 控制面、定位第一个不一致点或生成恢复动作。Phase 5 不应等所有插件化完成后才开始，至少应提前做 `doctor --state` 的只读诊断切片，因为这会直接降低当前多文件状态漂移和人工恢复风险。
 
 Tasks:
 
@@ -511,15 +554,20 @@ Exit criteria:
 更准确的成熟度判断：
 
 - Control model: strong。
-- Gate rigor: strong。
-- Multi-agent isolation: improving and directionally correct。
-- Context management: recently improved, still needs product hardening。
+- Gate rigor: improving；Phase 0 的关键保真模块已经存在，但还需要证明默认 pipeline 的端到端 gate 链不会绕过它们。
+- Multi-agent isolation: improving and directionally correct；runtime adapter seam 已存在，下一步是让 runtime 状态与控制面事件一致。
+- Context management: recently improved；read-only navigation 默认跳过 replay 是正确边界，显式 verification 才应复算。
 - Maintainability: medium risk。
-- Extensibility: biggest gap。
-- Observability and recovery: next major enterprise requirement。
+- Extensibility: 自定义 pipeline YAML 已能覆盖 phase spine 与 gate 组合（无需改源码）；但 gate/scanner/policy **provider 本身**仍在源码内，`.e2e/config.yaml` plugin registry 属 Phase 4 未启动项。后续应先稳定 provider 契约与失败语义，再做注册层。
+- Observability and recovery: 当前最大 gap；`doctor` 仍浅，缺 run timeline、failure taxonomy、first-inconsistency、recover path。
+- State truth: 当前最大架构风险；`run-state.json` 已是较好的单文件 SSOT 起点，但企业目标仍应走 control-plane event log + compatibility snapshots。
 
 最佳路线不是重写，而是内核化、事件化、插件化、产品化。
 
 一句话：
 
 > 保留 deterministic harness 作为控制面，把 phase 执行彻底 worker 化，把状态升级为 event-sourced audit trail，再用 adapter/plugin/config 把它变成团队可扩展平台。
+
+2026-06-11 的执行版一句话：
+
+> 先把交付保真链接到默认 gate，再把 `run-state.json` 升级为 control-plane event projection，随后让 `doctor --state` 和 `recover` 基于同一条真相链解释和修复 run；不要在这三件事之前继续扩大抽象面。

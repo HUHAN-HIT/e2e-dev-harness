@@ -7,7 +7,8 @@ from e2e_harness.core.lifecycle import Phase, catalog
 GOAL = "VERIFIED"
 
 
-def _phase_status(spine: list[Phase], state: dict, idx: int, repo_root=None) -> str:
+def _phase_status(spine: list[Phase], state: dict, idx: int,
+                  repo_root=None, *, skip_replay: bool = True) -> str:
     names = [p.name for p in spine]
     cur = state.get("current_phase", spine[0].name)
     cur_idx = names.index(cur) if cur in names else 0
@@ -16,7 +17,7 @@ def _phase_status(spine: list[Phase], state: dict, idx: int, repo_root=None) -> 
     if idx < cur_idx:
         return "done"
     if idx == cur_idx:
-        ok, _ = gates.gate_passes(phase, rec, repo_root)
+        ok, _ = gates.gate_passes(phase, rec, repo_root, skip_replay=skip_replay)
         if phase.next_phase is None and ok:
             return "done"
         if rec.get("dispatch") == dispatch.DispatchStatus.FAILED.value:
@@ -25,7 +26,8 @@ def _phase_status(spine: list[Phase], state: dict, idx: int, repo_root=None) -> 
     return "pending"
 
 
-def navigation_map(spine: list[Phase], state: dict, repo_root=None) -> dict:
+def navigation_map(spine: list[Phase], state: dict, repo_root=None,
+                   *, skip_replay: bool = True) -> dict:
     names = [p.name for p in spine]
     cur = state.get("current_phase", spine[0].name)
     cur_idx = names.index(cur) if cur in names else 0
@@ -33,10 +35,10 @@ def navigation_map(spine: list[Phase], state: dict, repo_root=None) -> dict:
     phases = []
     for i, p in enumerate(spine):
         rec = state.get("phases", {}).get(p.name, {})
-        ok, missing = gates.gate_passes(p, rec, repo_root)
+        ok, missing = gates.gate_passes(p, rec, repo_root, skip_replay=skip_replay)
         phases.append({
             "name": p.name,
-            "status": _phase_status(spine, state, i, repo_root),
+            "status": _phase_status(spine, state, i, repo_root, skip_replay=skip_replay),
             "gate": {"required": len(p.exit_gate), "missing": missing, "ok": ok},
         })
 

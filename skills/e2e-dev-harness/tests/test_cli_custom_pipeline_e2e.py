@@ -46,7 +46,12 @@ def _make_artifact(repo: Path, phase: str, key: str) -> str:
     want = validate.COMMAND_KEYS.get(key)
     if want is not None:
         code = 0 if want == "zero" else 1
-        ev = ce.record_command(repo, f'"{sys.executable}" -c "import sys; sys.exit({code})"')
+        command = f'"{sys.executable}" -c "import sys; sys.exit({code})"'
+        if key == "verification":
+            tf = base / f"{phase}-{key}-replay_test.py"
+            tf.write_text("def test_real():\n    assert 1 + 1 == 2\n", encoding="utf-8")
+            command = f'"{sys.executable}" -m pytest "{tf}" -q'
+        ev = ce.record_command(repo, command)
         f = base / f"{phase}-{key}.json"
         f.write_text(json.dumps(ev), encoding="utf-8")
     else:

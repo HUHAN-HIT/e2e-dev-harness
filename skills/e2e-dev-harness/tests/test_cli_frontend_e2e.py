@@ -50,7 +50,12 @@ def _artifact(repo: Path, phase: str, key: str) -> str:
     want = validate.COMMAND_KEYS.get(key)
     if want is not None:
         code = 0 if want == "zero" else 1
-        ev = ce.record_command(repo, f'"{sys.executable}" -c "import sys; sys.exit({code})"')
+        command = f'"{sys.executable}" -c "import sys; sys.exit({code})"'
+        if key == "verification":
+            tf = base / f"{phase}-{key}-replay_test.py"
+            tf.write_text("def test_real():\n    assert 1 + 1 == 2\n", encoding="utf-8")
+            command = f'"{sys.executable}" -m pytest "{tf}" -q'
+        ev = ce.record_command(repo, command)
         f = base / f"{phase}-{key}.json"
         f.write_text(json.dumps(ev), encoding="utf-8")
     else:
@@ -87,4 +92,6 @@ def test_frontend_repo_drives_to_verified(tmp_path):
                  "--path", _artifact(tmp_path, phase, key), "--repo", str(tmp_path), cwd=tmp_path)
     assert nres["complete"] is True
     assert nres["navigation_map"]["you_are_here"] == "VERIFIED"
-    assert steps <= 6
+    # No --tier => auto, floored to `standard` (G4): the standard spine adds
+    # PLANNED + REVIEWED, so termination is 7 steps. Bound stays tight.
+    assert steps <= 8

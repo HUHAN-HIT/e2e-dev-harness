@@ -17,6 +17,7 @@ Stop after tests pass and the manifest is written; do not perform R1/R2/R3 self-
 
 ## 契约 (e2e-dev-harness)
 
+- Superpowers is an external skill system. If it is unavailable, continue directly with this worker's expected_outputs and harness contract instead of inventing behavior or stopping.
 - **方法委派**: 用 `superpowers:test-driven-development`(绿阶段)写最小实现让红测转绿;遇阻用 `superpowers:systematic-debugging`。
 - **expected_outputs**: IMPLEMENTED 闸要求**两个**证据键,缺一不可:
   1. `passing_tests` —— 测试转绿后(命令证据,exit 0):

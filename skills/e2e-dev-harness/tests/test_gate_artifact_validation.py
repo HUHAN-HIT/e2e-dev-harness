@@ -80,6 +80,17 @@ def _forged(**overrides):
     return base
 
 
+def _pytest_command(path: Path) -> str:
+    return f'"{sys.executable}" -m pytest "{path}" -q'
+
+
+def _write_pytest_file(path: Path, *, passing: bool) -> None:
+    body = "def test_real():\n    assert 1 + 1 == 2\n"
+    if not passing:
+        body = "def test_real():\n    assert 1 + 1 == 3\n"
+    path.write_text(body, encoding="utf-8")
+
+
 def test_validate_verification_requires_zero_exit(tmp_path):
     from e2e_harness.adapters.evidence import command_evidence as ce, validate
     ev = ce.record_command(tmp_path, f'"{sys.executable}" -c "import sys; sys.exit(1)"')
@@ -107,7 +118,9 @@ def test_validate_rejects_missing_environment(tmp_path):
 
 def test_validate_genuine_record_command_passes(tmp_path):
     from e2e_harness.adapters.evidence import command_evidence as ce, validate
-    ev = ce.record_command(tmp_path, f'"{sys.executable}" -c "import sys; sys.exit(0)"')
+    test_file = tmp_path / "test_replay_pass.py"
+    _write_pytest_file(test_file, passing=True)
+    ev = ce.record_command(tmp_path, _pytest_command(test_file))
     (tmp_path / "v.json").write_text(json.dumps(ev), encoding="utf-8")
     ok, reason = validate.validate_evidence(tmp_path, "verification", {"path": "v.json"})
     assert ok is True and reason is None
@@ -120,9 +133,36 @@ def test_validate_verification_rejects_tampered_exit_code(tmp_path):
     hand-edits exit_code to 0. #2 cannot see it (structure is authentic); #1's
     replay re-runs the recorded command and catches the lie."""
     from e2e_harness.adapters.evidence import command_evidence as ce, validate
-    ev = ce.record_command(tmp_path, f'"{sys.executable}" -c "import sys; sys.exit(1)"')
+    test_file = tmp_path / "test_replay_fail.py"
+    _write_pytest_file(test_file, passing=False)
+    ev = ce.record_command(tmp_path, _pytest_command(test_file))
     assert ev["exit_code"] == 1  # genuinely failing command
     ev["exit_code"] = 0          # tamper: claim success
     (tmp_path / "v.json").write_text(json.dumps(ev), encoding="utf-8")
     ok, reason = validate.validate_evidence(tmp_path, "verification", {"path": "v.json"})
     assert ok is False and reason.startswith("replay-exit")
+
+
+def test_validate_verification_rejects_replay_cwd_outside_repo(tmp_path):
+    from e2e_harness.adapters.evidence import command_evidence as ce, validate
+    outside = tmp_path.parent
+    test_file = tmp_path / "test_replay_pass.py"
+    _write_pytest_file(test_file, passing=True)
+    ev = ce.record_command(tmp_path, _pytest_command(test_file))
+    ev["cwd"] = str(outside)
+    (tmp_path / "v.json").write_text(json.dumps(ev), encoding="utf-8")
+    ok, reason = validate.validate_evidence(tmp_path, "verification", {"path": "v.json"})
+    assert ok is False
+    assert reason == "replay-cwd-outside-repo"
+
+
+def test_validate_verification_rejects_replay_command_outside_allowlist(tmp_path):
+    from e2e_harness.adapters.evidence import command_evidence as ce, validate
+    test_file = tmp_path / "test_replay_pass.py"
+    _write_pytest_file(test_file, passing=True)
+    ev = ce.record_command(tmp_path, _pytest_command(test_file))
+    ev["command"] = f'"{sys.executable}" -c "import pathlib; pathlib.Path(\'owned.txt\').write_text(\'x\')"'
+    (tmp_path / "v.json").write_text(json.dumps(ev), encoding="utf-8")
+    ok, reason = validate.validate_evidence(tmp_path, "verification", {"path": "v.json"})
+    assert ok is False
+    assert reason == "replay-command-disallowed"
