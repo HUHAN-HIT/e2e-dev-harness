@@ -310,6 +310,57 @@ class CrossServiceDependencyScanTests(unittest.TestCase):
         self.assertEqual(["OrderClient.reserve", "PaymentController.post"], result["symbol_seeds"])
         self.assertFalse(any("CatalogClient.sync" in command for command in [" ".join(call) for call in calls]))
 
+    def test_gitnexus_evidence_extracts_impact_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            dependencies = [
+                {
+                    "source_service": "services/source-service",
+                    "target_service": "services/target-service",
+                    "source_symbol": "com.example.Source.call",
+                    "target_symbol": "com.example.Target.handle",
+                }
+            ]
+
+            def fake_runner(command: list[str], cwd: Path) -> dict:
+                if command[:2] == ["gitnexus", "impact"]:
+                    return {
+                        "command": " ".join(command),
+                        "exit_code": 0,
+                        "stdout_tail": json.dumps(
+                            {
+                                "risk": "HIGH",
+                                "summary": {
+                                    "direct": 3,
+                                    "processes_affected": 2,
+                                    "modules_affected": 1,
+                                },
+                            }
+                        ),
+                        "stderr_tail": "",
+                    }
+                return {"command": " ".join(command), "exit_code": 0, "stdout_tail": "{}", "stderr_tail": ""}
+
+            result, warnings = cross_service_dependency_scan.gitnexus_evidence(
+                repo,
+                dependencies,
+                "strict",
+                command_runner=fake_runner,
+                gitnexus_available=True,
+            )
+
+        self.assertEqual([], warnings)
+        self.assertTrue(result["verified"])
+        self.assertEqual(
+            {
+                "risk": "HIGH",
+                "direct": 3,
+                "processes_affected": 2,
+                "modules_affected": 1,
+            },
+            result["impact_summary"],
+        )
+
     def test_gitnexus_unavailable_marks_evidence_insufficient(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
