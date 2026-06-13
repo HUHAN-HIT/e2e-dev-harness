@@ -70,7 +70,7 @@ cost and reason summaries.
 - Auto selection uses the recommendation.
 - Explicit `--tier` selections are preserved even when below the
   recommendation. In that case downgrade metadata records
-  `requested_below_recommended`, `requires_provenance`, and `blocked=false`
+  `requested_below_recommended`, `requires_provenance=true`, and `blocked=false`
   under the current contract.
 
 GitNexus impact evidence raises the recommendation for MEDIUM, HIGH, or
