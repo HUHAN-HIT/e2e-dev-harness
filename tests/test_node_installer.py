@@ -396,5 +396,39 @@ class NodeInstallerTests(unittest.TestCase):
             self.assertFalse(payload["executed"])
 
 
+    def test_with_hooks_runs_doctor_strict_doctor_only_stays_shallow(self) -> None:
+        """F6 wiring: when the install writes settings (--with-hooks), the final
+        doctor runs --strict so settings readiness is a hard gate. doctor-only runs
+        before any settings are written, so it must stay shallow (no --strict)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            install_root = Path(tmp) / "home"
+            project = Path(tmp) / "business-project"
+            project.mkdir()
+
+            # settings-writing flow -> strict
+            code, payload = self.run_installer(
+                "--install-root", str(install_root),
+                "--target", "claude",
+                "--project-root", str(project),
+                "--skip-python-cli", "--skip-external",
+                "--with-hooks", "--runtime", "claude", "--doctor",
+            )
+            self.assertEqual(0, code, payload)
+            doctor = {a["id"]: a for a in payload["actions"]}["doctor"]
+            self.assertIn("--strict", doctor["command"])
+            self.assertTrue(doctor.get("strict"))
+
+            # doctor-only -> no settings written -> shallow (no --strict)
+            code2, payload2 = self.run_installer(
+                "--install-root", str(install_root),
+                "--project-root", str(project),
+                "--doctor-only",
+            )
+            self.assertEqual(0, code2, payload2)
+            doctor2 = {a["id"]: a for a in payload2["actions"]}["doctor"]
+            self.assertNotIn("--strict", doctor2["command"])
+            self.assertFalse(doctor2.get("strict", False))
+
+
 if __name__ == "__main__":
     unittest.main()
