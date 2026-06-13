@@ -1,0 +1,29 @@
+{
+  "schema": "e2e-dev-harness.command-evidence.v1",
+  "command": "python -m pytest skills/e2e-dev-harness/tests/test_agent_team_provider.py skills/e2e-dev-harness/tests/test_agent_team_profiles.py skills/e2e-dev-harness/tests/test_agent_team_dispatch.py skills/e2e-dev-harness/tests/test_runtime_spawn.py skills/e2e-dev-harness/tests/test_runtime_adapter_contract.py skills/e2e-dev-harness/tests/test_review_fanout.py -q",
+  "argv": [
+    "python",
+    "-m",
+    "pytest",
+    "skills/e2e-dev-harness/tests/test_agent_team_provider.py",
+    "skills/e2e-dev-harness/tests/test_agent_team_profiles.py",
+    "skills/e2e-dev-harness/tests/test_agent_team_dispatch.py",
+    "skills/e2e-dev-harness/tests/test_runtime_spawn.py",
+    "skills/e2e-dev-harness/tests/test_runtime_adapter_contract.py",
+    "skills/e2e-dev-harness/tests/test_review_fanout.py",
+    "-q"
+  ],
+  "cwd": "C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify",
+  "started_at": "2026-06-12T15:10:48Z",
+  "finished_at": "2026-06-12T15:10:49Z",
+  "elapsed_ms": 1419,
+  "exit_code": 2,
+  "stdout_tail": "\n=================================== ERRORS ====================================\n__ ERROR collecting skills/e2e-dev-harness/tests/test_agent_team_provider.py __\nImportError while importing test module 'C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\\skills\\e2e-dev-harness\\tests\\test_agent_team_provider.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\nD:\\SOFTWARE\\anaconda3\\Lib\\importlib\\__init__.py:88: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nskills\\e2e-dev-harness\\tests\\test_agent_team_provider.py:4: in <module>\n    from e2e_harness.adapters.agent_team import builtin\nE   ModuleNotFoundError: No module named 'e2e_harness.adapters.agent_team'\n__ ERROR collecting skills/e2e-dev-harness/tests/test_agent_team_profiles.py __\nImportError while importing test module 'C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\\skills\\e2e-dev-harness\\tests\\test_agent_team_profiles.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\nD:\\SOFTWARE\\anaconda3\\Lib\\importlib\\__init__.py:88: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nskills\\e2e-dev-harness\\tests\\test_agent_team_profiles.py:5: in <module>\n    from e2e_harness.adapters.agent_team import registry, schema\nE   ModuleNotFoundError: No module named 'e2e_harness.adapters.agent_team'\n_____ ERROR collecting skills/e2e-dev-harness/tests/test_review_fanout.py _____\nImportError while importing test module 'C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\\skills\\e2e-dev-harness\\tests\\test_review_fanout.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\nD:\\SOFTWARE\\anaconda3\\Lib\\importlib\\__init__.py:88: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nskills\\e2e-dev-harness\\tests\\test_review_fanout.py:7: in <module>\n    from e2e_harness.adapters.agent_team import builtin\nE   ModuleNotFoundError: No module named 'e2e_harness.adapters.agent_team'\n============================== warnings summary ===============================\nD:\\SOFTWARE\\anaconda3\\Lib\\site-packages\\_pytest\\cacheprovider.py:475\n  D:\\SOFTWARE\\anaconda3\\Lib\\site-packages\\_pytest\\cacheprovider.py:475: PytestCacheWarning: could not create cache path C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\\.pytest_cache\\v\\cache\\nodeids: [WinError 5] \u62d2\u7edd\u8bbf\u95ee\u3002: 'C:\\\\Users\\\\14907\\\\Documents\\\\Codex\\\\2026-05-23\\\\skill-skill-superpowers-skill-tdd-graphify\\\\.pytest_cache\\\\v\\\\cache'\n    config.cache.set(\"cache/nodeids\", sorted(self.cached_nodeids))\n\nD:\\SOFTWARE\\anaconda3\\Lib\\site-packages\\_pytest\\cacheprovider.py:429\n  D:\\SOFTWARE\\anaconda3\\Lib\\site-packages\\_pytest\\cacheprovider.py:429: PytestCacheWarning: could not create cache path C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\\.pytest_cache\\v\\cache\\lastfailed: [WinError 5] \u62d2\u7edd\u8bbf\u95ee\u3002: 'C:\\\\Users\\\\14907\\\\Documents\\\\Codex\\\\2026-05-23\\\\skill-skill-superpowers-skill-tdd-graphify\\\\.pytest_cache\\\\v\\\\cache'\n    config.cache.set(\"cache/lastfailed\", self.lastfailed)\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ===========================\nERROR skills/e2e-dev-harness/tests/test_agent_team_provider.py\nERROR skills/e2e-dev-harness/tests/test_agent_team_profiles.py\nERROR skills/e2e-dev-harness/tests/test_review_fanout.py\n!!!!!!!!!!!!!!!!!!! Interrupted: 3 errors during collection !!!!!!!!!!!!!!!!!!!\n2 warnings, 3 errors in 0.30s\n",
+  "stderr_tail": "",
+  "stdout_sha256": "1dc4ea90df10c10d3e9b8e3fa6081e89abdd025934e65a86f558e13a1061e537",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "environment": {
+    "python": "3.13.12",
+    "platform": "win32"
+  }
+}

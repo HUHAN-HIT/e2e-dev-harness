@@ -44,6 +44,13 @@ def _make_artifact(repo: Path, phase: str, key: str) -> str:
             {"id": "AC-001", "criterion": "demo criterion",
              "observable_behavior": "demo observable behaviour"}]}), encoding="utf-8")
         return str(f.relative_to(repo))
+    if key == "module_plan":
+        import json as _json
+        from e2e_harness.core import module_plan as _mp
+        f = base / f"{phase}-{key}.json"
+        f.write_text(_json.dumps({"schema": _mp.SCHEMA, "modules": [
+            {"id": "core", "name": "Core", "depends_on": [], "acceptance_ids": ["AC-001"]}]}), encoding="utf-8")
+        return str(f.relative_to(repo))
     want = validate.COMMAND_KEYS.get(key)
     if want is not None:
         code = 0 if want == "zero" else 1

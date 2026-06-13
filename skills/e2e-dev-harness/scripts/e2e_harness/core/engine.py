@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from e2e_harness.adapters.evidence import hashing
-from e2e_harness.core import gates, dispatch
+from e2e_harness.core import gates, dispatch, multitrack
 from e2e_harness.core.lifecycle import Phase
 
 
@@ -110,10 +110,25 @@ def _route_verification_rework(
     }
 
 
+def _region_of(state: dict) -> str:
+    """Current fork-join region. Defaults to 'prologue' so legacy/single-track
+    runs (which never set `region`) behave exactly as before."""
+    return state.get("region", "prologue")
+
+
 def evaluate(spine: list[Phase], state: dict, repo_root=None) -> dict:
-    """Advance current_phase past every gate that already passes; stop at first
-    blocker or terminal. Terminates: each pass advances >=0 phases along a finite
-    spine then blocks or completes."""
+    """Region-aware terminating advance. prologue/epilogue use the single-cursor
+    walk; module_band advances each independent track to its own blocker. Each
+    pass advances >=0 phases along a finite spine then blocks or completes."""
+    region = _region_of(state)
+    if region == "module_band":
+        return _evaluate_band(spine, state, repo_root)
+    return _evaluate_singleton(spine, state, repo_root)
+
+
+def _evaluate_singleton(spine: list[Phase], state: dict, repo_root=None) -> dict:
+    """Single-cursor walk: advance current_phase past every gate that already
+    passes; stop at first blocker or terminal. Used for prologue and epilogue."""
     by_name = _by_name(spine)
     name = state.get("current_phase", spine[0].name)
     while True:
@@ -123,7 +138,10 @@ def evaluate(spine: list[Phase], state: dict, repo_root=None) -> dict:
         if not ok:
             if _verification_rework_needed(phase, rec, missing):
                 reason = rec.get("blocker") or f"verification gate failed: {', '.join(missing)}"
-                routed = _route_verification_rework(spine, state, phase, missing, reason)
+                if state.get("tracks"):
+                    routed = _route_band_verification_rework(spine, state, missing, reason, repo_root)
+                else:
+                    routed = _route_verification_rework(spine, state, phase, missing, reason)
                 if routed is not None:
                     return routed
             state["current_phase"] = name
@@ -140,4 +158,148 @@ def evaluate(spine: list[Phase], state: dict, repo_root=None) -> dict:
         if phase.next_phase is None:
             state["current_phase"] = name
             return {"complete": True, "blocked_phase": None, "missing_evidence": [], "next_action": {}}
-        name = phase.next_phase
+        nxt = phase.next_phase
+        # Fork point: stepping from a singleton phase (e.g. PLANNED) into the
+        # module band (a namespaced phase). Materialize tracks once and hand off.
+        if multitrack.module_of(nxt) is not None and multitrack.module_of(name) is None:
+            state["region"] = "module_band"
+            state["tracks"] = multitrack.fork_tracks(spine, _band_module_plan(state, repo_root))
+            return _evaluate_band(spine, state, repo_root)
+        name = nxt
+
+
+def _band_module_plan(state: dict, repo_root) -> dict | None:
+    """Resolve the run's module plan (for real depends_on edges) without creating
+    an import cycle at module load. None -> fork_tracks falls back to linear deps."""
+    if repo_root is None:
+        return None
+    from e2e_harness import pipeline  # local import: pipeline imports multitrack/yaml, not engine
+    return pipeline._module_plan_from_state(state, repo_root)
+
+
+def _module_first_blocker(chain: list[Phase], state: dict, repo_root):
+    """First phase in a module chain whose gate does not pass, with its missing
+    keys. (None, []) when the whole chain passes (the module is complete)."""
+    for phase in chain:
+        rec = state.get("phases", {}).get(phase.name, {})
+        ok, missing = gates.gate_passes(phase, rec, repo_root)
+        if not ok:
+            return phase, missing
+    return None, []
+
+
+def _evaluate_band(spine: list[Phase], state: dict, repo_root=None) -> dict:
+    """Advance every active track to its own first blocker; surface the whole
+    frontier (the per-beat dispatch set) plus a single leading-cursor projection
+    for back-compat. Joins to epilogue/VERIFIED when all tracks complete."""
+    tracks = state.setdefault("tracks", {})
+    chains = multitrack.module_chains(spine)
+    # Refresh each track's cursor + complete flag from evidence/gates (the cursor
+    # is derived; only dispatch state is genuinely stored per track).
+    for mid, chain in chains.items():
+        track = tracks.setdefault(mid, {
+            "module_id": mid, "current_phase": chain[0].name,
+            "dispatch": "pending", "depends_on": [], "complete": False,
+        })
+        blocker, _missing = _module_first_blocker(chain, state, repo_root)
+        if blocker is None:
+            track["complete"] = True
+            track["current_phase"] = chain[-1].name
+        else:
+            track["complete"] = False
+            track["current_phase"] = blocker.name
+
+    # Join barrier: all tracks complete -> epilogue, then run the VERIFIED gate.
+    if tracks and all(t["complete"] for t in tracks.values()):
+        state["region"] = "epilogue"
+        state["current_phase"] = "VERIFIED"
+        return _evaluate_singleton(spine, state, repo_root)
+
+    rsp = state.get("_run_state_path", "")
+    frontier: list[dict] = []
+    for mid in multitrack.active_track_ids(tracks):
+        blocker, missing = _module_first_blocker(chains[mid], state, repo_root)
+        rec = state.get("phases", {}).get(blocker.name, {})
+        entry = {
+            "track": mid,
+            "blocked_phase": blocker.name,
+            "missing": missing,
+            "worker_packet": dispatch.worker_packet(blocker, rsp),
+        }
+        if rec.get("dispatch") == dispatch.DispatchStatus.FAILED.value:
+            entry["failed"] = True
+            entry["blocker"] = rec.get("blocker")
+        frontier.append(entry)
+
+    lead = multitrack.project_leading_phase(tracks, "module_band", None)
+    state["current_phase"] = lead
+    lead_entry = next((e for e in frontier if e["blocked_phase"] == lead),
+                      frontier[0] if frontier else None)
+    result = {
+        "complete": False,
+        "region": "module_band",
+        "tracks_frontier": frontier,
+        "blocked_phase": lead,
+        "missing_evidence": lead_entry["missing"] if lead_entry else [],
+        "next_action": lead_entry["worker_packet"] if lead_entry else {},
+    }
+    if lead_entry and lead_entry.get("failed"):
+        result["failed"] = True
+        result["blocker"] = lead_entry.get("blocker")
+    return result
+
+
+def _last_code_write(chain: list[Phase]) -> Phase | None:
+    """The rework target inside a module chain — the last phase that may write
+    code (IMPLEMENTED#m). None when the chain has no code-write phase."""
+    for phase in reversed(chain):
+        if phase.allows_code_write:
+            return phase
+    return None
+
+
+def _route_band_verification_rework(spine: list[Phase], state: dict, missing: list[str],
+                                    reason: str, repo_root) -> dict | None:
+    """Verification rework for a multi-track run (design §Per-Track Rework, v1).
+
+    Attributable (a missing key carries a #module suffix) -> reopen only those
+    modules; otherwise reopen every track conservatively. Reopening a track resets
+    its IMPLEMENTED#m phase (supersede + clear evidence, mark failed) and flips the
+    run back to module_band so the band re-drives the affected implementations.
+    """
+    chains = multitrack.module_chains(spine)
+    tracks = state.get("tracks", {})
+    attributed = sorted({multitrack.module_of(k) for k in missing
+                         if multitrack.module_of(k) is not None})
+    targets = attributed or list(tracks)
+    reopened: list[str] = []
+    for mid in targets:
+        target = _last_code_write(chains.get(mid, []))
+        if target is None:
+            continue
+        target_rec = _phase_record(state, target.name)
+        existing = target_rec.get("evidence", {})
+        if existing:
+            target_rec["superseded_evidence"] = dict(existing)
+        target_rec["evidence"] = {}
+        target_rec["dispatch"] = dispatch.DispatchStatus.FAILED.value
+        target_rec["blocker"] = reason
+        target_rec["rework_required"] = {
+            "from_phase": "VERIFIED",
+            "missing_evidence": list(missing),
+            "reason": reason,
+        }
+        tracks[mid]["complete"] = False
+        tracks[mid]["dispatch"] = dispatch.DispatchStatus.PENDING.value
+        tracks[mid]["current_phase"] = target.name
+        reopened.append(mid)
+    if not reopened:
+        return None
+    state["region"] = "module_band"
+    result = _evaluate_band(spine, state, repo_root)
+    result["rework_required"] = True
+    result["rework_from_phase"] = "VERIFIED"
+    result["verification_missing_evidence"] = list(missing)
+    result["reopened_tracks"] = reopened
+    result["blocker"] = reason
+    return result

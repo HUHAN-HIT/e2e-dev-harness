@@ -1,491 +1,465 @@
-﻿# E2E Dev Harness
+# E2E Dev Harness
 
-This repository contains an agent-neutral delivery harness for serious Java/Spring/Maven requirement implementation. It is designed for Codex, Claude Code, Gemini CLI, OpenCode, CI jobs, and any runtime that can read `SKILL.md` and execute the bundled Python scripts.
+一个**与运行时无关（agent-neutral）的多 agent 交付 harness**：把一个需求变成
+"澄清 → 规划 → TDD → 实现 →（审查）→ 验证"的多 agent 流程，并通过**单一事实源
+（SSOT）run-state、声明式分级门禁、自加载 Superpowers 技能的 worker 子 agent，以及可选的
+运行时 Hook**，**保证流程跑到 `VERIFIED` 才结束**。
 
-The harness is not just process documentation. It provides machine-checkable gates, run-state files, agent schedules, artifact registries, replay verification, workflow tiers, review profiles, and optional runtime hook templates that can block code writes before the implementation phase and block premature finalization when the active agent runtime actually supports blocking hooks.
+它不是单纯的流程文档，而是一套可被机器校验的控制面。可在 **Codex、Claude Code、Gemini CLI、
+OpenCode、CI 任务**，以及任何"能读 `SKILL.md` 并执行随包 Python 脚本"的运行时上工作。
+默认领域适配器面向 **Java / Spring / Maven**，并内置 **frontend** 适配器。
 
-## Layout
+> 本仓库自身被 GitNexus 索引为 **e2e-dev-workflow**。改动代码符号前请按 `CLAUDE.md` 的约定
+> 先做 GitNexus 影响分析；本 README 仅为文档，不在该约束内。
+
+---
+
+## 目录
+
+- [核心保证](#核心保证)
+- [两个包、两个 CLI（先看这里）](#两个包两个-cli先看这里)
+- [目录结构](#目录结构)
+- [快速开始](#快速开始)
+- [安装器 CLI：`e2e-harness`（Node）](#安装器-clie2e-harnessnode)
+- [控制面：8 个动词（Python）](#控制面8-个动词python)
+- [执行循环](#执行循环)
+- [tier 与流水线](#tier-与流水线)
+- [领域适配器（DomainAdapter）](#领域适配器domainadapter)
+- [Agent-Team 派发与 worker 技能](#agent-team-派发与-worker-技能)
+- [run 归档目录](#run-归档目录)
+- [门禁与证据语义](#门禁与证据语义)
+- [运行时 Hook（强制执行）](#运行时-hook强制执行)
+- [验证 Hook 行为](#验证-hook-行为)
+- [非 ASCII 需求与编码](#非-ascii-需求与编码)
+- [多运行时安装器与可编辑 Python 安装](#多运行时安装器与可编辑-python-安装)
+- [环境变量](#环境变量)
+- [GitNexus 集成](#gitnexus-集成)
+- [开发与测试](#开发与测试)
+- [文档索引](#文档索引)
+- [许可证](#许可证)
+
+---
+
+## 核心保证
+
+- **单一事实源**：每个 run 只有一份 `run-state.json`。所有动词读/改它，没有平行调度文件。
+- **终止性主干（spine）**：`CREATED → … → VERIFIED`，每一步对照终点，避免局部最优。
+- **声明式分级门禁**：门禁按 tier 裁剪、校验**真实产物**（文件存在 + 非空 + 哈希；红/绿测试须为
+  带正确退出码的命令证据），通过与否只由证据键决定。
+- **协调者只管控制面**：Coordinator 只读 run-state、发 worker packet（指针）、记证据、推进主干，
+  **不**亲自做代码探索/设计/TDD/审查/实现。
+- **worker 自加载技能**：每个 worker 子 agent 在隔离上下文中**首动作即 invoke 自己的技能**，
+  具体方法委派给 Superpowers 技能库。
+- **可选硬 Hook**：在支持阻塞式 Hook 的运行时上，实现阶段前的生产代码写入会被拦截、未到
+  `VERIFIED` 的提前收尾会被阻止。
+
+---
+
+## 两个包、两个 CLI（先看这里）
+
+仓库里有两套东西，名字相近，职责不同，**务必区分**：
+
+| | npm 包 `e2e-harness` | Python 包 `e2e-dev-harness` |
+|---|---|---|
+| 角色 | 安装器 + 控制面命令的**薄转发层** | harness **控制面本体** |
+| 入口 | `bin/e2e-harness.js` | `skills/e2e-dev-harness/scripts/e2e_dev_harness.py`（控制台脚本 `e2e-dev-harness` / `e2eh`） |
+| 命令 | `link`/`unlink`/`install`/`update`/`uninstall`/`env`/`version`/`init` + 转发 8 个动词 | `start`/`next`/`dispatch`/`submit`/`gate`/`status`/`validate-pipeline`/`doctor` |
+| 元数据 | `package.json`（v0.2.0） | `pyproject.toml`（v0.2.0，requires-python ≥ 3.10，依赖 `pyyaml>=6`） |
+
+`e2e-harness <verb> ...`（除自有的生命周期/`init` 子命令外）会原样转发给
+`e2e_dev_harness.py <verb> ...`。所以下文"控制面 8 动词"既可用 `e2e-harness next --state …`
+调用，也可直接 `python …/e2e_dev_harness.py next --state …`。
+
+---
+
+## 目录结构
 
 ```text
-skills/e2e-dev-harness/
-  SKILL.md
-  hooks/
-    claude-code-settings.example.json   # PreToolUse phase_guard + Stop stop_guard
-    opencode-plugin.example.js
-  pipelines/
-  scripts/
-    e2e_dev_harness.py               # CLI passthrough entry
-    e2e_harness/
-      __init__.py
-      pipeline.py
-      cli/                              # argument parsing / verbs
-      core/                             # run-state, gates, evidence
-      adapters/
-        hooks/
-          phase_guard.py            # PreToolUse guard
-          stop_guard.py             # Stop guard
-        runtime/                       # claude / opencode / manual spawn
-  tests/
+.
+├── bin/e2e-harness.js              # Node CLI：安装器 + 动词转发
+├── lib/                            # Node CLI 内部实现
+│   ├── paths.js                    #   skillHome / Python 解析 / .harness-env.json
+│   ├── install.js  resolve.js      #   拷贝技能 / argv → spawn 描述
+│   ├── init.js     lifecycle.js    #   一键初始化 / link 检测 / selfCheck
+│   ├── hooks.js    opencode-hooks.js  # Hook 物化（Claude / OpenCode）
+├── tools/
+│   ├── install-e2e-dev-harness.mjs # 多运行时安装器（Codex/Claude/Gemini/OpenCode）
+│   ├── pre-merge-check.mjs         # 合并前总检查（node + pytest + gitnexus）
+│   └── clean-pack.mjs
+├── skills/e2e-dev-harness/
+│   ├── SKILL.md                    # 协调者纪律 + 6 动词 + 循环（中文）
+│   ├── pipelines/                  # minimal / standard / critical / audited .yaml
+│   ├── agent-teams/                # default-*.yaml：每阶段的 worker 角色编排
+│   ├── references/agent-orchestration.md
+│   ├── hooks/
+│   │   ├── claude-code-settings.example.json   # __HARNESS_SCRIPTS__ 占位模板
+│   │   └── opencode-plugin.example.js
+│   ├── scripts/
+│   │   ├── e2e_dev_harness.py      # CLI 透传入口
+│   │   └── e2e_harness/            # Python 包
+│   │       ├── cli/                #   main.py + commands/*
+│   │       ├── core/               #   run_state / engine / gates / lifecycle / navigation …
+│   │       ├── adapters/           #   hooks / runtime / domain / agent_team / evidence / tier …
+│   │       └── pipeline.py
+│   └── tests/                      # harness Python 测试（64 文件）
+├── test/                           # Node CLI 测试（node --test）
+├── tests/test_node_installer.py    # 安装器 Python 测试
+├── docs/                           # 设计 / 安装器文档
+├── pyproject.toml  package.json
 ```
 
-## Quick Start
+---
 
-The recommended way to install and drive the harness is the **`e2e-harness` Node CLI** (`bin/e2e-harness.js`). It always resolves the canonical skill copy at `~/.claude/skills/e2e-dev-harness`, so the hooks it writes never depend on your current directory or which checkout you ran it from.
+## 快速开始
 
-> **Make the command global first.** This package ships *inside this repo* and is **not published to npm**, so `npx e2e-harness …` will 404. Register it once with `npm link`, then call it bare from anywhere — no path, no `npx`:
->
-> ```bash
-> npm link              # run from the repo root
-> # equivalently, after `e2e-harness install`: e2e-harness link
-> e2e-harness unlink    # remove the global command later
-> ```
+### 0. 把命令做成全局命令
 
-### 1. Install to this machine
+本包**只在仓库内分发，未发布到 npm**，所以 `npx e2e-harness …` 会 404。先 `npm link` 一次：
+
+```bash
+npm link              # 在仓库根目录执行
+e2e-harness --version # 任意目录下可直接裸调用
+e2e-harness unlink    # 以后想移除全局命令
+```
+
+### 1. 安装到本机
 
 ```bash
 e2e-harness install
 ```
 
-Copies the bundled skill into `~/.claude/skills/e2e-dev-harness`, records the Python interpreter in `.harness-env.json`, and backs up any previous install to `~/.claude/skill-backups/` (outside the skills directory, so the backup is never re-discovered as a duplicate skill).
+把随包技能拷到 `~/.claude/skills/e2e-dev-harness`，把所用 Python 解释器记录到
+`.harness-env.json`，并把任何旧安装备份到 `~/.claude/skill-backups/`（在 skills 目录之外，
+避免备份被再次当成重复技能发现）。
 
-### 2. Initialize a business repository (one command)
+### 2. 在业务仓库里一键初始化
 
-From inside the business repo (or pass its path), run:
+在业务仓库内（或把它的路径作为参数）执行：
 
 ```bash
-e2e-harness init               # targets the current directory
+e2e-harness init                 # 目标 = 当前目录
 e2e-harness init <business-repo>
 ```
 
-`init` does the whole setup with minimal input: it detects the runtime, **installs the skill if it is missing**, materializes the `phase_guard` + `stop_guard` hooks into `<repo>/.claude/settings.json` (rewriting `__HARNESS_SCRIPTS__` to the installed skill's absolute `scripts/` path — never your checkout), then runs a finishing check. It prints a one-line summary and **executes immediately**; an existing `settings.json` is backed up first and the merge is idempotent (re-running adds nothing).
+`init` 一步到位：检测运行时 → **技能缺失则先安装** → 把 `phase_guard` + `stop_guard` 两个
+Hook 物化进 `<repo>/.claude/settings.json`（把模板里的 `__HARNESS_SCRIPTS__` 重写为已安装技能的
+**绝对** `scripts/` 路径，绝不指向你的检出目录）→ 跑一次 `doctor`。已存在的 `settings.json`
+会先备份，合并是幂等的（重复执行不新增）。
 
-Flags: `--dry-run` (preview without writing), `--runtime auto|claude`, `--no-doctor`, `--force` (wire hooks even if no Python interpreter is found).
+可选参数：`--runtime auto|claude|opencode`、`--dry-run`（只预览不写）、`--no-doctor`、
+`--force`（即使找不到 Python 也照样写 Hook）。
 
-### 3. Day-to-day commands
+> 默认只发 Claude 格式 Hook 模板，所以 `init` 总是落到 `.claude/`。检测到 `.opencode/`
+> 会改用 OpenCode 插件；检测到只有 `.codex/` 时仍写 Claude 格式 Hook 并给出警告。
 
-```bash
-e2e-harness status   <repo>           # doctor: hooks / index / run-state readiness
-e2e-harness next     <repo>           # next allowed harness action
-e2e-harness map      <repo>           # compact "you are here" navigation map
-e2e-harness dispatch <repo>           # dispatch state + open scheduled tasks
-e2e-harness gc       <repo>           # report artifact-retention cleanup candidates
-e2e-harness cleanup  <repo> --execute # apply artifact-retention cleanup
-e2e-harness exec <script.py> <args>   # run any bundled scripts/<script>.py
-```
-
-`gc` and `cleanup` forward to `gc:run`, which is dry-run by default and deletes only with `--execute`. `exec` forwards to `~/.claude/skills/e2e-dev-harness/scripts/<script.py>`; any other subcommand is passed through to `e2e_dev_harness.py`. Override the skill location with `E2E_HARNESS_HOME` and the interpreter with `E2E_HARNESS_PYTHON`.
-
-### 4. Tool maintenance (this machine)
+### 3. 跑一个 run（控制面）
 
 ```bash
-e2e-harness update      # re-copy the bundled skill (backs up the previous one)
-e2e-harness uninstall   # remove ~/.claude/skills/e2e-dev-harness
-e2e-harness env         # JSON diagnostics: node / python / install / link state
-e2e-harness version     # print name and version
-e2e-harness link        # (re)register the global command
-e2e-harness unlink      # remove the global command
+S=skills/e2e-dev-harness/scripts/e2e_dev_harness.py
+
+# 创建唯一 run-state（current_phase = CREATED）
+python $S start --repo . --feature login --request "实现手机号登录"
+
+# 循环推进：next 给出下一步或单一 blocker
+python $S next   --state docs/agent-runs/<run>/run-state.json
+python $S dispatch --state docs/agent-runs/<run>/run-state.json
+python $S submit --state docs/agent-runs/<run>/run-state.json --phase <P> --key <k> --path <evidence>
+python $S gate   --state docs/agent-runs/<run>/run-state.json
+python $S status --state docs/agent-runs/<run>/run-state.json   # 人读导航地图
 ```
 
-`env` exits non-zero when the skill is not installed or no Python is found, so it doubles as a CI readiness probe.
+---
 
-### Legacy installer (deprecated for hook install)
+## 安装器 CLI：`e2e-harness`（Node）
 
-`tools/install-e2e-dev-harness.mjs` predates the `e2e-harness` CLI. Its `--with-hooks` path now shares the same hook materializer as `e2e-harness init` (`lib/hooks.js`), so it writes the installed skill's absolute `scripts/` paths — not your checkout. `e2e-harness init` is still the recommended one-command entry; reach for the mjs only for its multi-runtime skill-sync presets (`--sync`, `--target` for Codex/Gemini/OpenCode) that the CLI does not yet cover:
+本机生命周期命令：
 
-```powershell
-node tools\install-e2e-dev-harness.mjs --sync --yes
+```bash
+e2e-harness link        # 注册全局命令（npm link）
+e2e-harness unlink      # 移除全局命令
+e2e-harness install     # 拷贝随包技能到 ~/.claude/skills（旧的先备份）
+e2e-harness update      # 重新拷贝（同样先备份旧版本）
+e2e-harness uninstall   # 删除 ~/.claude/skills/e2e-dev-harness（不动全局命令，需另跑 unlink）
+e2e-harness env         # JSON 诊断：node / python / 安装 / link 状态
+e2e-harness version     # 打印包名与版本（别名 -v / --version）
 ```
 
-The editable Python CLI remains available when you want global command aliases:
+`env` 在技能未安装或找不到 Python 时退出码非零，可直接当作 CI 就绪探针。
 
-```powershell
-python -m pip install -e .[dev,ast]
-e2eh --version
+项目命令（在业务仓库内运行；除 `init` 外都转发给 `e2e_dev_harness.py`）：
+
+```bash
+e2e-harness init [project-dir] [--runtime auto|claude|opencode] [--dry-run] [--no-doctor] [--force]
+e2e-harness start --repo . --feature <f> --request <q> [--tier t] [--pipeline p]
+e2e-harness next   --state <s>
+e2e-harness dispatch --state <s>
+e2e-harness submit --state <s> --phase <P> [--key k] [--path p]
+e2e-harness gate   --state <s> [--phase P]
+e2e-harness status --state <s>
+e2e-harness validate-pipeline --pipeline <p>
+e2e-harness doctor . --json
+e2e-harness exec <script.py> [args]   # 运行 scripts/<script>.py（裸文件名）
 ```
 
-After the editable CLI is installed, the shorter tool-first project bootstrap is:
+> 历史说明：旧版本曾有 `map` / `gc` / `cleanup` / `clarify` / `prepare` / `plan` / `verify` /
+> `guard` 等命令，已在 2026-06 的控制面重设计中**移除**。请勿沿用旧文档里的这些命令。
 
-```powershell
-e2eh install C:\path\to\business-repo --full --yes
+---
+
+## 控制面：8 个动词（Python）
+
+入口 `e2e_dev_harness.py`（= 控制台脚本 `e2e-dev-harness` / `e2eh`）。所有动词**输出 JSON 到 stdout**
+（即使在 cp936/GBK 控制台也强制 UTF-8）。
+
+### `start` — 创建唯一 run-state
+
+```bash
+python $S start --repo . \
+  --feature <feat>            # 或 --feature-file <utf8.txt>
+  --request "<原始需求>"      # 或 --request-file <utf8.txt>
+  [--tier auto|minimal|standard|critical|audited]   # 默认 auto
+  [--pipeline <内建名|yaml路径>]   # 覆盖 --tier 推出的 spine
+  [--adapter backend|frontend]     # 强制领域适配器
+  [--scan]                         # 跑适配器扫描以抬高 tier 下限
 ```
 
-When you are already in the target repository, the repo argument can be omitted:
+写出 `docs/agent-runs/<run_id>/run-state.json`，其中 `run_id = <UTC时间戳>-<feature>`。
+输出包含 `run_id`、`run_state`（路径）、`current_phase: CREATED`、`tier`、`pipeline`、
+`tier_reasons`、`domain`。`--tier auto` 时分类器读需求文本判定 tier（见下文 G4 下限）。
 
-```powershell
-e2eh install --full --yes
+### `next` — 推进主干或给出单一 blocker
+
+`--state <s>`（必填）、`--repo .`。评估当前 spine：
+- 可推进则前进一阶段；
+- 否则返回**单一 blocker** + `navigation_map`（全旅程"你在这里"视图）。
+- 阶段 `CLARIFIED` 受阻时，额外列出仍待用户确认的 `open_questions`（澄清→回答→重提→推进的闭环）。
+- 到达完成时，依据 scope manifest 把交付标注为 `COMPLETE` 或 `PARTIAL`，子集交付不会被静默当成 `VERIFIED`。
+
+### `dispatch` — 产出当前阶段的 worker packet
+
+```bash
+python $S dispatch --state <s> \
+  [--runtime codex|codex-app|claude-code|opencode|manual]   # 默认 codex
+  [--team-profile <名>] [--max-workers N]
 ```
 
-Full installer usage is documented in
-[`docs/e2e-dev-harness-installer.md`](docs/e2e-dev-harness-installer.md).
+把当前阶段规划成 agent-team，写出 `agent-team-plan.json` 与
+`dispatch-invocations/<phase>-<时间戳>.json`，并返回**自包含的 worker 描述符**（含
+`context_paths` 与 `expected_outputs`）。
+- 能自动 spawn 的运行时（codex/claude-code/opencode）→ 标记阶段 `DISPATCHED`，退出码 0；
+- 不能自动 spawn 的 `manual`（及未知运行时）→ 返回 `dispatch_blocked`（退出码 3，
+  reason `manual_runtime_requires_human_dispatch`），由协调者手动 spawn worker，再 `submit` 证据。
+  （没有 `WAITING_DISPATCH` 状态，也没有 `dispatch-ack` 握手——均已在重设计中移除。）
 
-The long command is still available:
+### `submit` — 记录 worker 证据
 
-```powershell
-python -m pip install -e .[dev]
-e2e-dev-harness --version
-e2e-dev-harness doctor . --json
+```bash
+python $S submit --state <s> --phase <P> [--key <k>] [--path <evidence>] \
+  [--status done|failed] [--reason <文本>]
 ```
 
-`doctor` checks Python, skill layout, project markers, pytest, Maven, GitNexus, and Claude hook readiness. Use `--strict` in CI or onboarding scripts when warnings should block adoption.
+把某阶段的证据键 → 证据文件路径写入 run-state；`--status failed --reason …` 标记失败。
 
-Create a controlled run before analysis or implementation. This writes the
-starter design artifact, run-state, `.phase-lock`, artifact registry, and
-agent schedule. Production code writes stay locked until the implementation
-gate passes.
+### `gate` — 跑阶段声明式门禁
 
-```powershell
-e2e-dev-harness start . `
-  --feature "<feature>" `
-  --request "<original user request>"
+`--state <s>`、`[--phase P]`（默认当前阶段）。通过 → 退出码 0；未过 → 退出码 1 并返回
+`missing_evidence`。门禁只看声明的 `exit_gate` 证据键，本身不推进状态。
+
+### `status` — 人读导航地图
+
+`--state <s>`。只读地返回 `navigation_map`（与 `next` 同源），不推进生命周期。
+
+### `validate-pipeline` — 校验流水线 yaml
+
+`--pipeline <内建名|路径>`。对内建或自定义流水线做不变式校验（阶段闭包、门禁闭包等）。
+
+### `doctor` — 环境/状态体检
+
+```bash
+python $S doctor [project_root] [--json] [--state <run-state>]
 ```
 
-Ask the harness what is allowed next:
+检查 Python、技能布局、项目标记、Hook 就绪等；带 `--state` 时附带只读的 run-state 一致性诊断。
 
-```powershell
-e2e-dev-harness next . `
-  --state docs\agent-runs\<run>\run-state.json
-```
+---
 
-### Development Navigation Map
-
-Use `e2e-harness map <repo> --state <run-state.json>` for the shortest "you are here" view. The map is a read-only projection of the current `next` result and does not advance lifecycle state.
-
-The map reports:
-
-- current lifecycle, workflow stage, and phase
-- ready/blocked status
-- one next safe action
-- active dispatch work
-- allowed and forbidden writes now
-- required evidence and key artifact paths
-
-The map has three detail levels:
-
-- Compact stdout: `you_are_here`, `state_confidence`, `next_single_action`, `primary_blocker_code`, and a short `must_read_paths` list.
-- `coordinator-summary.json`: durable coordinator resume view with bounded diagnostic checks and authority pointers.
-- `full_result_path` / `--json-full`: full control-plane result with execution packet, workflow overview, preflight, and state diagnostics.
-
-Use `state_confidence` as the first trust signal:
-
-- `ready`: run-state and derived views agree.
-- `degraded`: the main lifecycle is readable, but a derived view such as `coordinator-summary.json` is stale.
-- `blocked`: a required control-plane surface is missing, invalid, or inconsistent.
-
-The map remains read-only. Repair still goes through the command named in `next_single_action` or through doctor/recovery commands.
-
-Use `next --json-full` or the `full_result_path` when you need the complete workflow plan, execution packet, todo policy, or checkpoint details. Use `doctor --state` when environment health or state consistency looks abnormal.
-
-Then fill the generated design doc and run clarification/discovery:
-
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py clarify . `
-  --design-doc docs\design\<feature>.md `
-  --run-state docs\agent-runs\<run>\run-state.json
-
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py prepare . `
-  --design-doc docs\design\<feature>.md `
-  --workflow-tier auto `
-  --agent-mode strict `
-  --agent-scope discovery `
-  --service-scope discovery `
-  --include-agent-content
-```
-
-After affected services or paths are known, create the full agent-run archive:
-
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py plan . `
-  --design-doc docs\design\<feature>.md `
-  --agent-run-dir docs\agent-runs\<run> `
-  --service-scope affected `
-  --service services\<service> `
-  --create-archive
-```
-
-This creates:
+## 执行循环
 
 ```text
-docs/agent-runs/<run>/
-  run-state.json
-  .phase-lock
-  artifact-registry.json
-  run-summary.json
-  run-summary.md
-  exec-plan.md
-  handoffs/
-  service-designs/
-  review-requests/
-  reviews/
-  evidence/
+start  ── 创建唯一 run-state（CREATED）
+  │
+  └─▶ 循环 {
+        next      ── 若 complete → 收尾；否则给出当前阶段
+        dispatch  ── 产出当前阶段 worker packet（指针）
+        spawn     ── 子 agent 在隔离上下文中 invoke 自己的技能并干活
+        submit    ── 记录该阶段证据
+        gate      ── 跑阶段门禁
+      } 直到 VERIFIED
 ```
 
-`next` also writes `docs/agent-runs/<run>/session-checkpoint.json`. Runtime hooks validate this checkpoint before code writes, so a resumed or compacted agent must reload the current lifecycle and next action instead of continuing from a stale chat summary.
+worker packet 是**指针**（role + skill + context_paths + expected_outputs），不是任务详述。
+子 agent 只读自己的 `context_paths`、只写本阶段声明的产物。
 
-## Workflow Tiers
+---
 
-Use `--workflow-tier auto|basic|standard|critical|audited`.
+## tier 与流水线
 
-All tiers keep auditable evidence, test proof, and replayable run records. The tier only controls evidence depth and orchestration strength.
+`start --tier <t>` 选择流水线（`pipelines/*.yaml`）。裁剪是**结构性**的：被跳过的阶段从计算出的
+spine 中移除，`next` 直接越过，导航地图渲染 `– skipped`。
 
-| Tier | Use When | Required Evidence |
-| --- | --- | --- |
-| `basic` | Small scoped delivery work | clarification, bounded impact summary, test evidence, completion proof, task alignment, run-state, artifact registry, run summary |
-| `standard` | Normal requirement implementation | `basic` plus R1/R2/R3 reviews, coverage matrix, requirements archive |
-| `critical` | MQ/HTTP/DB/security/payment/refund/cross-service work | `standard` plus GitNexus impact artifact, contracts, service plans, handoffs, strict guard |
-| `audited` | Audit, compliance, incident, or production-critical work | `critical` plus harness policy, harness replay, completion replay, state history |
+| tier | 活跃阶段 | 说明 |
+|---|---|---|
+| `minimal` | `CREATED → CLARIFIED → RED → IMPLEMENTED → VERIFIED` | 跳过 `PLANNED` / `REVIEWED` |
+| `standard` | 全主干 | 单 reviewer |
+| `critical` | 全主干 | `REVIEWED` 派 r1/r2/r3 三份独立审查（隔离上下文，不审自己的实现） |
+| `audited` | 全主干 | r1/r2/r3 + `VERIFIED` 增 `verification` 与 `audit_replay` 证据 |
 
-## Dependency Scan Parser
+完整主干：`CREATED → CLARIFIED → PLANNED → RED → IMPLEMENTED → REVIEWED → VERIFIED`。
+**只有 `IMPLEMENTED` 阶段 `allows_code_write: true`**——生产代码只能在此阶段写。
 
-`cross_service_dependency_scan.py` reports `java_parser.backend`. The current scanner uses `regex-fallback` even when `tree_sitter` packages are installed, and reports `ast_parser_active: false`, because silently claiming AST precision would hide missed Java call paths. Treat `regex-fallback` as acceptable for lightweight discovery; for high-risk Java impact decisions, require GitNexus evidence and use `--require-tree-sitter-ast` if the run policy demands an active AST parser.
+- `--tier auto`（默认）：分类器读需求文本判定 tier，并应用 **G4 基线下限**——派生（非显式钉住）的
+  tier **不会**降到 `minimal`，审查是默认。只有显式 `--tier minimal` 才会降级。
+- `--pipeline <名|路径>`：覆盖 `--tier` 推出的 spine，可指向内建名或自定义 yaml。
+- 每个内建 tier 都通过门禁闭包校验（`gate_closure_ok`）。
 
-GitNexus command roles are intentionally separated:
+自定义流水线 yaml 形如：
 
-- `gitnexus context` takes a code symbol such as a class, function, method, or `Class.method`; do not pass service directories.
-- `gitnexus impact` or `gitnexus detect-changes` owns affected-scope analysis.
-- In multi-service runs, generate evidence only for the services declared in the global design/service slices, not every detected module in the repository.
-
-For `critical` or `audited` completion, GitNexus evidence is a gate input, not a best-effort hint. If MCP/CLI/index access fails, pause and ask the user whether to approve degradation. Approved degradation must be recorded in an evidence file containing `Approval: user-approved`, `Reason:`, and `Fallback Evidence:` or `Compensating Evidence:`, then passed with `--gitnexus-degradation`.
-
-For `critical` or `audited` implementation, dependency discovery evidence is required before production code opens. This prevents compile-driven discovery after the implementation has already been written.
-
-Knowledge graph refresh status is run-scoped. Prefer:
-
-```powershell
-python skills\e2e-dev-harness\scripts\kg_refresh.py . `
-  --mode auto `
-  --status-file docs\agent-runs\<run>\evidence\knowledge-graph-refresh.json
+```yaml
+name: standard
+phases:
+  - CREATED
+  - CLARIFIED
+  - PLANNED
+  - RED
+  - phase: IMPLEMENTED
+    allows_code_write: true
+  - REVIEWED
+  - VERIFIED
 ```
 
-Implementation gates first read the current run's evidence file, then the latest
-run evidence, and only then fall back to root-level legacy files such as
-`knowledge-graph\knowledge-graph-refresh.json`. A stale root file with
-`status: skipped` or `reason: no knowledge graph configured` is blocked when the
-repository already has `.gitnexus\meta.json`; regenerate run-scoped evidence
-instead of editing the phase lock or downgrading the gate.
+`critical` / `audited` 还会在阶段上声明 `produces:` 与 `exit_gate:`（如 `[r1_review, r2_review, r3_review]`）。
 
-## Incremental Test Scope
+---
 
-For large Maven repositories, do not default to full-suite testing on every turn. Generate a test impact plan from changed files and dependency evidence, then run every required command in that plan.
+## 领域适配器（DomainAdapter）
 
-```powershell
-git diff --name-only > docs\agent-runs\<run>\evidence\changed-files.txt
+适配器位于 CLI 层（`start` 内），core 不感知。
+- **backend**（默认，Java/Spring/Maven）：不贡献任何 override、不带 domain 块——backend run 与
+  引入适配器前**逐字节一致**（parity 契约）。
+- **frontend**：检测 JS/TS UI 仓库（`package.json` + react/vue/svelte/angular，或 vite/vitest 配置），
+  把范围发现路由到前端扫描器，并带一个自描述 `domain` 块（`test_runner: vitest`、
+  `review_profile: frontend-default`），在 `dispatch` 时透传给 worker。当前**不改**流水线 spine。
 
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py test-impact . `
-  --changed-files docs\agent-runs\<run>\evidence\changed-files.txt `
-  --dependency-report docs\agent-runs\<run>\evidence\cross-service-dependencies.json `
-  --output docs\agent-runs\<run>\evidence\test-impact-plan.json
-```
+选择顺序：`--adapter` 显式指定 → 否则按检测器顺序（frontend 优先，更具体）→ 否则回落 backend。
+`--scan` 会跑适配器扫描以抬高 tier 下限。未知的显式适配器名 → 退出码 2。
 
-Completion can then prove that the planned affected commands actually passed:
+---
 
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py gate . `
-  --phase completion `
-  --design-doc docs\design\<feature>.md `
-  --unit-test-evidence docs\agent-runs\<run>\evidence\green-test.txt `
-  --test-impact-plan docs\agent-runs\<run>\evidence\test-impact-plan.json
-```
+## Agent-Team 派发与 worker 技能
 
-If the plan contains `mvn -pl services\foo -am test`, the unit-test evidence must contain that command with `exit_code: 0`. Root/shared build or source changes intentionally expand to `mvn test`.
-
-## Context Packs
-
-For multi-agent runs, generate a request-scoped context pack per scheduled agent instead of passing the full conversation or all run artifacts.
-
-Work is split by role even for one service: design, test, code, semantic review, and coverage must be different agent roles with ready handoff artifacts between them. `plan --create-archive` writes short role templates under `agent-roles/`, and `agent-schedule.json` requires each role task to reference one. Multi-service work adds service-local design slices and parallel service code agents. If the global design declares multiple affected services/modules, orchestration must use `multi` even when the caller supplied `--mode single`; high-risk or large single-service work uses `single-review`, not `multi`, so risk words alone do not force service splitting.
+`dispatch` 在生命周期阶段与运行时描述符之间多一层 agent-team 规划：
 
 ```text
-docs/agent-runs/<run>/service-designs/<service>.md
-docs/agent-runs/<run>/service-plans/<service>/implementation-plan.md
-docs/agent-runs/<run>/service-plans/<service>/test-impact-plan.json
+pipeline phase → agent_team provider/profile → worker packet(s) → runtime adapter → descriptor(s)
 ```
 
-Multi-service `plan --create-archive` writes run-state lifecycle `SERVICE_DESIGN_REQUIRED`. Dispatch service-design workers to produce the slices, then validate returned evidence before R2/TDD red or dispatching code agents; the command below transitions the run-state to `PLANNED` only when every global AC is mapped into concrete service slices with runtime path, first red test, expected failure, required Maven command, dependency boundary, and test impact. The global design template includes `System Sequence`; service slices include `Local Sequence`, and cross-service, contract, shared-state, or event dependencies must keep that local sequence concrete enough to drive the first red test and dependency-edge implementation.
+- 生命周期阶段定义**所需证据**；内建 provider 决定该证据由**几个 worker** 产出；
+  运行时适配器把一个 worker packet 翻成 Codex / Claude Code / OpenCode / manual 描述符；
+  门禁仍只凭证据键决定阶段切换——agent-team 计划本身不能通过任何门禁。
+- 单 worker 阶段保留顶层 `worker_descriptor`；多 worker 阶段额外输出 `agent_team_plan`、
+  `worker_descriptors`，以及 `agent-team-plan.json` 与 `dispatch-invocations/<phase>-<时间戳>.json`。
+- 内建 profile 在 `agent-teams/default-*.yaml`；项目自定义 profile 用 `--team-profile` 显式选择，
+  建议放在 `.e2e/agent-teams/`。
 
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py service-design . `
-  --global-design docs\design\<feature>.md `
-  --service-design-dir docs\agent-runs\<run>\service-designs `
-  --run-state docs\agent-runs\<run>\run-state.json
-```
+各阶段对应的 worker 角色与技能（`default-standard` 为例）：
 
-```powershell
-python skills\e2e-dev-harness\scripts\context_pack.py . `
-  --agent-schedule docs\agent-runs\<run>\agent-schedule.json `
-  --service services\<service> `
-  --output docs\agent-runs\<run>\context-packs\<service>.json `
-  --max-files 12 `
-  --max-chars 120000
-```
+| 阶段 | 角色 | worker 技能 |
+|---|---|---|
+| `CLARIFIED` | requirements-clarifier | `e2e-harness-clarification` |
+| `PLANNED` | implementation-planner | `e2e-harness-planning` |
+| `RED` | tdd-red / test-case-developer | `e2e-harness-tdd-red` |
+| `IMPLEMENTED` | code-developer | `e2e-harness-implementation` |
+| `REVIEWED` | semantic-reviewer | `e2e-harness-review` |
+| `VERIFIED` | coverage-reviewer | `e2e-harness-completion` |
 
-The pack lists allowed inputs, allowed outputs, dependency phase, and budget. A pack that exceeds file or byte limits is blocked, forcing the coordinator to summarize inputs before dispatch.
+> 运行时不钉死模型：worker 继承协调者可访问的默认模型。可用环境变量
+> `E2E_HARNESS_SUBAGENT_TYPE_<ROLE>` 覆盖某角色的 subagent 类型。
 
-For Claude Code project integrations, start with L0 serial isolated dispatch instead of trying true parallelism first: read `agent-schedule.json`, claim the next ready task, spawn a fresh subagent/session with only its role template and context pack, complete the task with a scheduled evidence file, then dispatch the next dependent task. This keeps role isolation and handoff gates active without making the core skill depend on a specific runtime scheduler.
+---
 
-**Prerequisite for autonomous dispatch:** install the runtime hooks first with
-`python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime claude --json`
-(see [Hook Configuration](#hook-configuration)). The hooks back the
-`supports_task_hook`/`supports_blocking_stop` capabilities the dispatcher relies
-on to confirm a spawned `Task` and to block premature finalization. Without an
-enforceable runtime hook, `dispatch-next`/`dispatch-beat` force
-`WAITING_DISPATCH`: the coordinator must then acknowledge each spawned worker
-manually with `dispatch-ack` before `dispatch-complete` will accept its evidence.
-Autonomous, hook-confirmed dispatch is the installed-hooks path; manual `dispatch-ack`
-is the fallback when hooks are absent.
-
-The bundled dispatcher provides the first Claude Code/Superpowers execution loop:
-
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py runtime-capabilities . --runtime claude-code
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py dispatch-beat . `
-  --schedule docs\agent-runs\<run>\agent-schedule.json `
-  --state docs\agent-runs\<run>\run-state.json `
-  --runtime claude-code `
-  --max-workers 4
-```
-
-`dispatch-beat` scans the schedule for the next ready wave and reports earlier
-skipped tasks with their blockers. It validates dependency phases, ready handoff
-markers, role templates, and context-pack budgets before claiming tasks. It then
-writes `context-packs/<task-id>.json`, claims each task, writes dispatcher
-invocation JSON, and returns self-contained Claude Code `Task` prompts. Each
-subagent must use only its context pack and scheduled outputs. `dispatch-next`
-remains the compatibility wrapper for `dispatch-beat --max-workers 1`. After a
-subagent returns evidence, close the task:
-
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py dispatch-complete . `
-  --schedule docs\agent-runs\<run>\agent-schedule.json `
-  --state docs\agent-runs\<run>\run-state.json `
-  --task-id T10 `
-  --agent code-developer-payment `
-  --evidence docs\agent-runs\<run>\service-plans\payment\code-agent.md
-```
-
-If the active runtime cannot spawn an independent subagent/session, `dispatch-beat`
-records `WAITING_DISPATCH` with `dispatch.status=waiting_dispatch` and emits a
-manual dispatch packet. Claude Code Stop hooks allow that paused handoff state so
-the coordinator can start a fresh session, but completion gates still fail until
-scheduled tasks, reviews, handoffs, and evidence are complete.
-
-`start` now writes a bootstrap schedule with a `requirements-clarifier` task, so
-clarification can be delegated before the full plan archive exists. The
-coordinator still runs deterministic control-plane commands such as
-`plan --create-archive`, but requirements, use cases, implementation planning,
-tests, semantic reviews, service code, and coverage work must move through
-scheduled subagents whenever the runtime can provide isolated Task sessions.
-
-For R1/R2/R3 tasks, `dispatch-complete` immediately runs the reviewer gate against
-the reported review evidence. A reviewer task is not marked complete when the
-report fails independence, request-hash, required-field, or no-code-change checks.
-
-Before a multi-service code agent writes code, claim the scheduled service task. Phase guard blocks unclaimed service writes and blocks one claimed task from editing multiple services:
-
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py agent-task . `
-  --schedule docs\agent-runs\<run>\agent-schedule.json `
-  --action claim `
-  --task-id T04 `
-  --agent code-developer-order-service `
-  --state docs\agent-runs\<run>\run-state.json
-```
-
-After service-local ACs, tests, and review evidence are done, complete the task. The evidence path must exist and match one of the task outputs in `agent-schedule.json`:
-
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py agent-task . `
-  --schedule docs\agent-runs\<run>\agent-schedule.json `
-  --action complete `
-  --task-id T04 `
-  --agent code-developer-order-service `
-  --state docs\agent-runs\<run>\run-state.json `
-  --evidence docs\agent-runs\<run>\service-plans\order-service\unit-test-evidence.txt
-```
-
-## AC Progress
-
-Do not stop after the first passing AC unless the user explicitly scoped the run to that AC. Before R3, prove all assigned ACs for the global design or service design slice are implemented and tested:
-
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py ac-progress . `
-  --service-design docs\agent-runs\<run>\service-designs\<service>.md `
-  --coverage-matrix docs\agent-runs\<run>\service-plans\<service>\coverage-matrix.md `
-  --implementation-manifest docs\agent-runs\<run>\service-plans\<service>\implementation-manifest.md `
-  --unit-test-evidence docs\agent-runs\<run>\service-plans\<service>\unit-test-evidence.txt
-```
-
-If this blocks on `AC-2`, dispatch or continue code-developer TDD red/green for `AC-2`; do not ask whether to start R3.
-
-## Hook Configuration
-
-The hook examples are templates. To enforce them, run `install_hooks.py` from the installed skill directory so the generated hook command points to absolute guard script paths. Do not copy the example command verbatim into another repository; `python skills/e2e-dev-harness/scripts/phase_guard.py ...` only works when that repository contains the skill source tree. Codex and Gemini enforcement still depends on whether the host runner exposes a blocking pre-action/pre-tool hook.
-For one-command setup from the harness source repository, prefer the bootstrap
-installer with `--project <business-repo> --yes`; this updates the skill
-runtime copy, writes the hook config into the business repository instead of the
-harness source repository, and runs `doctor`. Use `--hooks-only` when the skill
-copy is already current and only hook wiring needs repair.
-You can also install or check project-local hook configuration with:
-
-```powershell
-python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime claude --json
-python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime claude --check --json
-python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime opencode --json
-python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime opencode --check --json
-```
-
-The installed Claude hooks use two guards. The first argument is the target repository, not the current shell directory.
-
-Code exploration/write guard:
-
-```powershell
-"C:\absolute\path\to\python.exe" "C:\absolute\path\to\skills\e2e-dev-harness\scripts\phase_guard.py" "C:\absolute\path\to\target-repo" --hook-input - --require-active-run-for-read --require-session-checkpoint --checkpoint-max-age-minutes 30 --json
-```
-
-Stop/finalization guard:
-
-```powershell
-"C:\absolute\path\to\python.exe" "C:\absolute\path\to\skills\e2e-dev-harness\scripts\harness_stop_guard.py" "C:\absolute\path\to\target-repo" --hook-input - --strict --json
-```
-
-`phase_guard.py` reads `docs/agent-runs/<run>/.phase-lock`. With `--require-active-run-for-read`, code `Read`/`Grep`/`Glob` is blocked until `start` creates an active run, and dispatch-gated phases require an active worker before code exploration. Red-test writes under `src/test`, `test`, or `tests` during `PLANNED` require an active `test-case-developer`; runtime production and test writes during `IMPLEMENTED` require an active `code-developer`. `IMPLEMENTED` must come from run-state transition history with ready implementation-gate evidence; editing `.phase-lock` and `run-state.json` by hand is blocked. In multi-service runs it also requires a claimed service code-developer task for runtime code writes in the touched service/module. It recognizes direct file tools including Claude `Update`, `apply_patch`, common shell write commands, and inline Python/Node/PowerShell mutation patterns; unknown tools touching code paths fail closed. Harness artifacts under `docs/agent-runs/` may be written before implementation except control files such as `.phase-lock`, `run-state.json`, `artifact-registry.json`, and `agent-schedule.json`.
-
-With `--require-session-checkpoint`, production/test code writes also require a fresh `session-checkpoint.json` produced by `e2e_dev_harness.py next`. If run-state changes or the checkpoint ages out, the hook blocks and forces the agent to reload the state machine before continuing.
-
-`harness_stop_guard.py` is wired to Claude Code `Stop` with `--strict`. It blocks Claude from ending a run while lifecycle is non-terminal, or while the post-code run still has open scheduled tasks. A run directory without `run-state.json` blocks only when it contains files; empty stale scaffold directories are ignored with a warning. This is the guard that prevents "compiled successfully, summary emitted, R2/R3/completion skipped" behavior.
-
-### Claude Code
-
-1. Create `.claude/` in the target repository if it does not exist.
-2. Merge this file into `.claude/settings.json`:
+## run 归档目录
 
 ```text
-skills/e2e-dev-harness/hooks/claude-code-settings.example.json
+docs/agent-runs/<run_id>/
+  run-state.json                         # SSOT，唯一控制文件
+  agent-team-plan.json                   # 最近一次 dispatch 的 team 规划
+  dispatch-invocations/<phase>-<stamp>.json
+  evidence/<file>                        # worker submit 进来的证据（约定路径）
 ```
 
-Minimal project config:
+`run-state.json` 由 CLI 独占；`phase_guard` 会**硬拒绝**对它和 Hook 配置本身的直接写入
+（中途改任一个都会破坏状态或关闭强制执行）。
+
+---
+
+## 门禁与证据语义
+
+门禁校验**真实产物**，不是叙述：
+- 文件**存在 + 非空 + 哈希**；
+- 红/绿测试键（`failing_tests` / `passing_tests`）必须是**命令证据且退出码正确**——红测试退出码非零、
+  绿测试退出码为零；
+- 高风险（API/MQ/支付/数据/安全/跨服务）工作**不能**靠事后补一段轻量测试备注静默通过。
+
+因此"编译通过、发了总结、跳过审查/验证"这类行为在门禁与 Stop Hook 面前不成立。
+
+---
+
+## 运行时 Hook（强制执行）
+
+两个 stdlib-only 守卫，位于
+`skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks/`：
+
+### `phase_guard.py`（PreToolUse，matcher `Edit|Write|MultiEdit|NotebookEdit|Bash`）
+
+代码写入的**阶段锁**。只有当前阶段 `allows_code_write`（即 `pipeline.can_write_code`）时才放行生产代码写入，
+否则 deny 并给出指向 `status`/`submit`/`gate`/`next` 的恢复提示。它还会：
+- **硬拒绝**对 `run-state.json` 和 Hook 配置自身的直接写入；
+- 拦截绕过 `Edit`/`Write` 的写法——`Bash` 重定向、`sed -i` / `cp` / `mv` / `tee` / `dd`、
+  `patch` / `git apply`、内联 `python -c` 写入——在非代码写入阶段保守地拒绝不透明写。
+
+`docs/agent-runs/` 下的 harness 产物不算代码路径，可在实现前写；只有 `run-state.json` 与 Hook 配置是硬拒绝。
+参数：`--repo .`、`--hook-input -`（工具事件以 JSON 从 stdin 传入）；run-state 在 `docs/agent-runs/` 下自动发现，无需 `--state`。
+
+### `stop_guard.py`（Stop）
+
+读 `run-state.current_phase`，在它不是 `VERIFIED` 之前**阻止结束 run**，并返回应执行的下一步
+（`next` → `dispatch` → `submit` → `gate`，循环）。这是阻止"提前收尾"的守卫。
+
+### Hook 模板与物化
+
+模板：`hooks/claude-code-settings.example.json`，命令里用 `__HARNESS_SCRIPTS__` 占位。
+`e2e-harness init`（或下文多运行时安装器）会把占位重写为已安装技能的**绝对** `scripts/` 路径，
+并转成正斜杠（Hook 命令经 shell 执行，Windows 上反斜杠会被吞）；合并幂等，已存在的 settings 先备份成 `.bak`。
+
+最小 Claude 项目配置（`.claude/settings.json`）：
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|Grep|Glob|Task|TaskCreate|Write|Edit|Update|MultiEdit|NotebookEdit|Bash",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
         "hooks": [
-          {
-            "type": "command",
-            "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --require-active-run-for-read --require-session-checkpoint --checkpoint-max-age-minutes 30 --json"
-          }
+          { "type": "command",
+            "command": "python \"<scripts>/e2e_harness/adapters/hooks/phase_guard.py\" --repo . --hook-input -" }
         ]
       }
     ],
     "Stop": [
       {
-        "matcher": "",
         "hooks": [
-          {
-            "type": "command",
-            "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\harness_stop_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --strict --json"
-          }
+          { "type": "command",
+            "command": "python \"<scripts>/e2e_harness/adapters/hooks/stop_guard.py\" --repo . --hook-input -" }
         ]
       }
     ]
@@ -493,261 +467,173 @@ Minimal project config:
 }
 ```
 
-3. Restart Claude Code or reload project settings.
-4. Verify with the manual check below.
+> 不要把示例命令逐字复制到别的仓库——物化后的命令只有在该仓库能访问到已安装技能源树时才解析得对。
+> 用 `init` 重写占位符才安全。
 
-### Codex
+### 各运行时
 
-Codex runtimes differ by host. If your Codex runner supports pre-action hook configuration, merge:
+- **Claude Code**：`e2e-harness init --runtime claude`。两守卫均为硬拦截。
+- **OpenCode**：`e2e-harness init --runtime opencode` 写出 `.opencode/plugins/e2e-dev-harness.js`。
+  `tool.execute.before → phase_guard`（**硬**阶段锁，与 Claude PreToolUse deny 等价）；
+  `event session.idle → stop_guard`（**软**提醒——OpenCode 没有"否决 stop"原语，
+  `session.idle` 只能观测）。即 OpenCode 上**阶段写锁是硬门禁，跑到 VERIFIED 只是建议性**。
+- **Codex / Gemini CLI**：未随包发 Hook 模板。若 runner 支持阻塞式 pre-tool/pre-action 钩子，
+  可手工接同一条 `phase_guard.py` 命令（把工具事件 JSON 从 stdin 喂入，`blocking: true`），
+  并按各自工具名调整 matcher。若无法阻塞，则只能在本地 wrapper 或 CI 里 best-effort 跑该命令。
 
-```text
-skills/e2e-dev-harness/hooks/codex-pre-action.example.json
+---
+
+## 验证 Hook 行为
+
+先用 `start` 建一个 run，再在代码写入阶段之前探一次写：
+
+```bash
+G=skills/e2e-dev-harness/scripts/e2e_harness/adapters/hooks
+python "$G/phase_guard.py" --repo . \
+  --hook-input '{"tool_name":"Edit","tool_input":{"file_path":"services/payment/src/main/java/PaymentService.java"}}'
 ```
 
-The intended mapping is:
+代码写入阶段之前（被阶段锁拦截）应返回：
 
 ```json
-{
-  "event": "pre-action",
-  "tools": ["Read", "Grep", "Glob", "Write", "Edit", "MultiEdit", "NotebookEdit"],
-  "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --require-active-run-for-read --json",
-  "blocking": true
-}
+{ "hookSpecificOutput": { "hookEventName": "PreToolUse",
+  "permissionDecision": "deny", "permissionDecisionReason": "Blocked: ... phase-locked. ..." } }
 ```
 
-If the Codex host does not expose pre-action hooks, use `phase_guard.py` or the portable `pre-code` command in the local wrapper or CI before allowing file-write steps, and always run `e2e_dev_harness.py guard` over the saved verify result.
+run 未到 `VERIFIED` 时探 stop 守卫：
 
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py pre-code . `
-  --tool Edit `
-  --path services\payment-service\src\main\java\PaymentService.java `
-  --run-dir docs\agent-runs\<run>
+```bash
+python "$G/stop_guard.py" --repo . --hook-input -
+# → {"decision":"block","reason":"Do not stop yet: ... not VERIFIED. ..."}
 ```
 
-### Gemini CLI
+把 run 推进到 `IMPLEMENTED`（记证据 → 过门禁 → `next`）后再探一次 `phase_guard`，应返回
+`permissionDecision: "allow"`。
 
-If your Gemini runner supports pre-tool hooks, merge:
+---
 
-```text
-skills/e2e-dev-harness/hooks/gemini-pre-action.example.json
+## 非 ASCII 需求与编码
+
+含中文/非 ASCII 的需求，请写进 UTF-8 文件用 `--request-file` / `--feature-file` 传入，避免
+Windows / git-bash 控制台编码把 argv 损坏：
+
+```bash
+printf '%s' "<原始需求>" > /tmp/req.txt
+PYTHONUTF8=1 python $S start --repo . --feature login --request-file /tmp/req.txt
 ```
 
-The intended mapping is:
+`start` 会显式拒绝被控制台损坏（含 U+FFFD）的文本而非静默降级。纯 ASCII 时可直接 `--request "<req>"`。
 
-```json
-{
-  "event": "pre-tool-use",
-  "tools": ["read_file", "grep", "glob", "write_file", "replace", "edit", "multi_edit"],
-  "command": "\"C:\\absolute\\path\\to\\python.exe\" \"C:\\absolute\\path\\to\\skills\\e2e-dev-harness\\scripts\\phase_guard.py\" \"C:\\absolute\\path\\to\\target-repo\" --hook-input - --require-active-run-for-read --json",
-  "blocking": true
-}
+---
+
+## 多运行时安装器与可编辑 Python 安装
+
+### 多运行时安装器（`tools/install-e2e-dev-harness.mjs`）
+
+`e2e-harness init` 之外的另一条路，覆盖 Codex/Gemini/OpenCode 的技能同步与 Hook 安装。默认 dry-run，
+加 `--yes` 才真正执行：
+
+```bash
+node tools/install-e2e-dev-harness.mjs --sync --yes
+node tools/install-e2e-dev-harness.mjs --project <business-repo> --yes
+node tools/install-e2e-dev-harness.mjs --target opencode --project-root . --with-hooks --runtime opencode --yes
 ```
 
-If the runner uses different tool names, keep the command and update only the tool matcher list.
+常用参数：
 
-### OpenCode
+| 参数 | 含义 |
+|---|---|
+| `--target codex\|claude\|agents\|opencode\|all` | 技能目标运行时（默认 `codex`） |
+| `--sync` | 预设：`--target all --skip-python-cli --skip-external` |
+| `--project <path>` | 预设：同步全部技能 + 装 Hook + 跑 doctor |
+| `--full` | 预设：`--target all --install-external --with-hooks --runtime claude --doctor` |
+| `--project-root <path>` | 业务仓库根（Hook 与 doctor 的目标，别名 `--hook-repo`） |
+| `--with-hooks --runtime <r>` | 安装运行时 Hook |
+| `--hooks-only` | 只装 Hook，不拷技能、不跑 pip |
+| `--doctor` / `--check-only` | 跑 doctor / 只检查不规划写入 |
+| `--yes` | 执行（否则 dry-run） |
 
-Install the project plugin instead of copying the template by hand:
+完整用法见 [`docs/e2e-dev-harness-installer.md`](docs/e2e-dev-harness-installer.md)。
 
-```powershell
-python skills\e2e-dev-harness\scripts\install_hooks.py . --runtime opencode --json
+### 可编辑 Python 安装（控制台脚本）
+
+想要全局的 `e2e-dev-harness` / `e2eh` 控制台命令时：
+
+```bash
+python -m pip install -e .[dev,ast]   # dev=pytest；ast=tree_sitter（可选）
+e2e-dev-harness --version
+e2e-dev-harness doctor . --json
 ```
 
-This writes:
+> 注意：`e2e-dev-harness` / `e2eh` 现在**只**是控制面（start/next/…/doctor），不再承担安装职责——
+> 安装走 Node CLI `e2e-harness` 或上面的 `.mjs` 安装器。
 
-```text
-.opencode/plugins/e2e-dev-harness.js
+---
+
+## 环境变量
+
+| 变量 | 作用 |
+|---|---|
+| `E2E_HARNESS_HOME` | 覆盖技能位置（默认 `~/.claude/skills/e2e-dev-harness`） |
+| `E2E_HARNESS_PYTHON` | 覆盖 Python 解释器（优先于 `.harness-env.json` 记录值与自动探测） |
+| `PYTHONUTF8=1` | 非 ASCII 需求时建议设置 |
+| `E2E_HARNESS_SUBAGENT_TYPE_<ROLE>` | 覆盖某 worker 角色的 subagent 类型 |
+
+`.harness-env.json`（位于技能 home）记录安装时所用的 Python。Node CLI 在转发时会自动设置
+`PYTHONDONTWRITEBYTECODE=1`，避免在随包脚本目录里产生 `__pycache__`（可显式覆盖）。
+
+---
+
+## GitNexus 集成
+
+本仓库被 GitNexus 索引（见 `CLAUDE.md` / `AGENTS.md`）。对 backend 的 `critical` / `audited` run，
+GitNexus 的影响分析可作为门禁证据；索引刷新由 GitNexus CLI 负责：
+
+```bash
+npx gitnexus analyze   # 刷新知识图谱索引
 ```
 
-The plugin registers `tool.execute.before`, passes OpenCode tool input to `phase_guard.py`, normalizes common path fields such as `filePath` and `patchText`, and throws on guard failure so the tool execution is blocked. It includes `--require-active-run-for-read` and `--require-session-checkpoint`; run `e2e_dev_harness.py start` and `e2e_dev_harness.py next` before code exploration or edits.
+GitNexus 命令角色是刻意分开的：`context` 接收**代码符号**（类/函数/方法/`Class.method`），
+`impact` / `detect-changes` 负责受影响范围分析。改动代码符号前请按 `CLAUDE.md` 的约定先做 impact，
+提交前跑 `detect-changes`。
 
-For role isolation, keep reviewer and design agents with write permissions disabled in OpenCode agent configuration. Code agents may receive edit permission, but the plugin remains the phase/scope gate.
+> harness 自身已不再随包 `cross_service_dependency_scan.py` 等旧脚本——依赖/影响证据统一以 GitNexus 为源。
 
-### Post-Gate Transition Adapter
+---
 
-When a runtime can run post-tool hooks, use `auto_transition.py` after a gate status file is written. It advances state only from a ready gate status artifact; it does not bypass `gate`.
+## 开发与测试
 
-```powershell
-python skills\e2e-dev-harness\scripts\auto_transition.py . `
-  --status-file docs\agent-runs\<run>\evidence\implementation-gate.json `
-  --state docs\agent-runs\<run>\run-state.json `
-  --json
+合并前总检查（Node 测试 + Python 测试 + GitNexus detect-changes）：
+
+```bash
+npm run pre-merge-check
 ```
 
-## Verify Hook Behavior
+也可分别运行：
 
-Create or locate a run archive, then check a code write before implementation:
-
-```powershell
-"C:\absolute\path\to\python.exe" "C:\absolute\path\to\skills\e2e-dev-harness\scripts\phase_guard.py" "C:\absolute\path\to\target-repo" `
-  --tool Edit `
-  --path services\payment-service\src\main\java\PaymentService.java `
-  --run-dir docs\agent-runs\<run> `
-  --json
-```
-
-Expected before implementation:
-
-```json
-{
-  "ready": false
-}
-```
-
-Check the stop guard after code is implemented but before R3/completion:
-
-```powershell
-"C:\absolute\path\to\python.exe" "C:\absolute\path\to\skills\e2e-dev-harness\scripts\harness_stop_guard.py" "C:\absolute\path\to\target-repo" `
-  --run-dir docs\agent-runs\<run> `
-  --json
-```
-
-Expected while lifecycle is `IMPLEMENTED`:
-
-```json
-{
-  "ready": false
-}
-```
-
-Open the implementation phase through the implementation gate after required planning/red-test evidence exists. The gate updates `run-state.json` and `.phase-lock` automatically when it passes:
-
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py gate . `
-  --phase implementation `
-  --run-state docs\agent-runs\<run>\run-state.json `
-  --design-doc docs\design\<feature>.md `
-  --kg-status-file docs\agent-runs\<run>\evidence\knowledge-graph-refresh.json `
-  --review-dir docs\agent-runs\<run>\reviews `
-  --red-test-evidence docs\agent-runs\<run>\evidence\red-test.txt `
-  --json
-```
-
-Manual `run_state.py --transition IMPLEMENTED` is blocked unless it includes `--gate implementation`, `--gate-status passed`, and existing implementation-gate evidence. Prefer rerunning the gate; use manual transition only to repair a previously successful gate status write failure.
-
-Run the same `phase_guard.py` command again. Expected:
-
-```json
-{
-  "ready": true
-}
-```
-
-## Intent And Checkpoints
-
-For high-risk work, require user-intent anchoring before planning:
-
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py clarify . `
-  --design-doc docs\design\<feature>.md `
-  --require-intent
-```
-
-The design must include `Restated Intent`, written in the agent's own words, before the user confirms it. Store phase confirmations under `docs\agent-runs\<run>\confirmations\` and require them at gates:
-
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py gate . `
-  --phase implementation `
-  --checkpoint-mode required `
-  --confirmation-dir docs\agent-runs\<run>\confirmations
-```
-
-Use `--checkpoint-mode advisory` when non-interactive CI should report missing confirmations without blocking.
-
-## Command Evidence
-
-Use `command_evidence.py` for Maven, GitNexus, security, or custom verification commands when evidence must include command, exit code, elapsed time, output hashes, and environment metadata:
-
-```powershell
-python skills\e2e-dev-harness\scripts\command_evidence.py . `
-  --command "mvn test" `
-  --output docs\agent-runs\<run>\evidence\maven-test.json
-```
-
-## TDD Modes
-
-Use scenario-based TDD enforcement:
-
-| Scenario | Mode | Evidence |
-| --- | --- | --- |
-| small/simple change | `--tdd-mode auto` resolves to `basic` | non-empty red evidence that names the expected failing test or failure reason |
-| normal standard requirement | `--tdd-mode auto` resolves to `basic` plus R2/R3 reviews | red evidence, green unit-test JSON, coverage matrix |
-| API/MQ/payment/data/security/cross-service | `--tdd-mode auto` resolves to `strict` when the workflow tier is `critical` or `audited` | red command JSON with non-zero exit code, green command JSON with zero exit code |
-| audit/compliance run | `--tdd-mode strict` | strict red/green evidence plus trace and replay |
-
-`auto` is the default. The gate reads the design and dependency report to classify the workflow tier; high-risk API/MQ/payment/data/security/cross-service work cannot silently pass with lightweight post-hoc test notes.
-
-## Harness Replay
-
-Replay a run and write summary artifacts:
-
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py verify . `
-  --harness `
-  --workflow-tier critical `
-  --state docs\agent-runs\<run>\run-state.json `
-  --strict-workflow `
-  --summary-json docs\agent-runs\<run>\run-summary.json `
-  --summary-md docs\agent-runs\<run>\run-summary.md `
-  --json
-```
-
-Record phase timing and optional token usage during `verify`:
-
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py verify . `
-  --skip-maven `
-  --trace-file docs\agent-runs\<run>\execution-trace.json `
-  --json
-```
-
-Refresh the artifact registry after planned files are written:
-
-```powershell
-python skills\e2e-dev-harness\scripts\artifact_registry.py . `
-  --registry docs\agent-runs\<run>\artifact-registry.json `
-  --refresh `
-  --json
-```
-
-## CI Guard
-
-`workflow_guard.py` and `e2e_dev_harness.py guard` return exit code `0` when ready and `2` when blocked.
-
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py guard . `
-  --verify-status docs\agent-runs\<run>\evidence\verify.json `
-  --strict `
-  --require-completion `
-  --json
-```
-
-Use this in pre-push or CI after the implementation gate writes a verify status artifact.
-For GitHub Actions, copy and edit:
-
-```text
-skills/e2e-dev-harness/ci/github-actions-harness.yml
-```
-
-The bundled workflow targets `windows-latest` because this harness is maintained for Windows-first Java/Maven projects.
-
-Strict completion also validates phase coverage. A run is blocked if plan did not create harness state, R1/R2/R3 reviews are missing, TDD red/green evidence is absent, completion gate was skipped, or the strict guard result is not saved for final reporting. Save guard output into the run evidence directory:
-
-```powershell
-python skills\e2e-dev-harness\scripts\e2e_dev_harness.py guard . `
-  --verify-status docs\agent-runs\<run>\evidence\verify.json `
-  --strict `
-  --require-completion `
-  --status-file docs\agent-runs\<run>\evidence\strict-guard.json `
-  --json
-```
-
-## Development Checks
-
-Run the local test suite:
-
-```powershell
-python -m unittest discover -s tests
-python -m compileall -q skills\e2e-dev-harness\scripts
+```bash
+npm test                                   # Node CLI 测试（test/，node --test）
+python -m pytest skills/e2e-dev-harness/tests tests/test_node_installer.py -q \
+  -p no:cacheprovider --basetemp=.test-tmp/pre-merge-pytest
+python -m compileall -q skills/e2e-dev-harness/scripts
 git diff --check
 ```
+
+---
+
+## 文档索引
+
+| 文档 | 内容 |
+|---|---|
+| [`skills/e2e-dev-harness/SKILL.md`](skills/e2e-dev-harness/SKILL.md) | 协调者纪律、6 动词、循环、tier（权威操作指南） |
+| [`docs/e2e-dev-harness-installer.md`](docs/e2e-dev-harness-installer.md) | 安装器完整用法 |
+| [`skills/e2e-dev-harness/references/agent-orchestration.md`](skills/e2e-dev-harness/references/agent-orchestration.md) | agent 编排参考 |
+| [`MIGRATION.md`](MIGRATION.md) / [`CHANGELOG.md`](CHANGELOG.md) | 从旧 harness 的迁移与变更记录 |
+| `docs/` | 交付保真蓝图、目标架构、各项设计与审计文档 |
+
+---
+
+## 许可证
+
+- npm 包 `e2e-harness`：`package.json` 标注 **MIT**。
+- Python 包 `e2e-dev-harness`：`pyproject.toml` 标注 **Proprietary**。

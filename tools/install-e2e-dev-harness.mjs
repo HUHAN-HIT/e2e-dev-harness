@@ -10,6 +10,7 @@ import { createRequire } from "node:module";
 // Single source of truth for hook materialization, shared with `e2e-harness init`.
 const require = createRequire(import.meta.url);
 const { materializeHooks } = require("../lib/hooks.js");
+const { materializeOpencodePlugin } = require("../lib/opencode-hooks.js");
 
 const SKILL_NAME = "e2e-dev-harness";
 const WORKER_SKILL_NAMES = [
@@ -26,6 +27,7 @@ const TARGETS = {
   codex: [".codex", "skills", SKILL_NAME],
   claude: [".claude", "skills", SKILL_NAME],
   agents: [".agents", "skills", SKILL_NAME],
+  opencode: [".opencode", "skills", SKILL_NAME],
 };
 
 function parseArgs(argv) {
@@ -123,8 +125,8 @@ function parseArgs(argv) {
     else throw new Error(`Unknown argument: ${arg}`);
   }
 
-  if (!["codex", "claude", "agents", "all"].includes(args.target)) {
-    throw new Error("--target must be codex, claude, agents, or all");
+  if (!["codex", "claude", "agents", "opencode", "all"].includes(args.target)) {
+    throw new Error("--target must be codex, claude, agents, opencode, or all");
   }
   if (args.installExternal && args.skipExternal) {
     throw new Error("--install-external and --skip-external cannot be used together");
@@ -177,7 +179,7 @@ function helpText() {
     "  --sync                             Fast preset: --target all --skip-python-cli --skip-external",
     "  --project <path>                   Project preset: sync all skills, install hooks, run doctor",
     "  --full                             Preset: --target all --install-external --with-hooks --runtime claude --doctor",
-    "  --target codex|claude|agents|all   Runtime skill target (default: codex)",
+    "  --target codex|claude|agents|opencode|all   Runtime skill target (default: codex)",
     "  --install-root <path>              Root that contains .codex/.claude/.agents",
     "  --repo <path>                      Harness source repository root (default: installer repo)",
     "  --project-root, --project <path>   Business project root for hooks and doctor",
@@ -479,14 +481,23 @@ function executeAction(action, context) {
     return { action: action.id, exit_code: 0, installed_skills: installed };
   }
   if (action.id === "install-hooks") {
-    // Delegate to the shared materializer (lib/hooks.js). scripts_dir is
+    // Delegate to the shared materializer. scripts_dir is
     // <installedSkillHome>/scripts, so its parent is the installed skill home
-    // from which the hook template and substitution path are derived. This adds
-    // idempotent merging and a settings.json backup over the old inline concat.
-    const res = materializeHooks({
-      skillHome: path.dirname(action.scripts_dir),
-      projectRoot: action.project_root,
-    });
+    // from which the hook template and substitution path are derived. The
+    // opencode runtime consumes a JS plugin (.opencode/plugins/), every other
+    // runtime consumes a claude-format settings.json merge.
+    const skillHome = path.dirname(action.scripts_dir);
+    if (action.runtime === "opencode") {
+      const res = materializeOpencodePlugin({ skillHome, projectRoot: action.project_root });
+      return {
+        action: action.id,
+        exit_code: 0,
+        plugin_path: res.pluginPath,
+        hooks_added: res.added,
+        hooks_already_present: res.alreadyPresent,
+      };
+    }
+    const res = materializeHooks({ skillHome, projectRoot: action.project_root });
     return {
       action: action.id,
       exit_code: 0,

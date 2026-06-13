@@ -40,3 +40,19 @@ def test_opencode_plugin_calls_phase_guard():
     assert "tool.execute.before" in text
     assert "permissionDecision" in text
     assert "__HARNESS_SCRIPTS__" in text
+
+
+def test_opencode_plugin_wires_stop_softguard():
+    text = (HOOKS_DIR / "opencode-plugin.example.js").read_text(encoding="utf-8")
+    # session.idle is opencode's "agent finished" event; we bridge it to stop_guard.
+    assert "session.idle" in text
+    assert "stop_guard.py" in text
+    # the reminder surfaces via the opencode client log API (toast is an event,
+    # not a callable), so the plugin must take `client` from its context.
+    assert "client" in text
+    # the plugin must be a proper opencode plugin function (returns hooks), not a
+    # bare hooks-object export — otherwise `client` is unavailable.
+    assert "async (" in text
+    # explicit downgrade note: opencode has no Stop-veto, so this is advisory only.
+    lowered = text.lower()
+    assert "soft" in lowered or "advisory" in lowered or "cannot" in lowered

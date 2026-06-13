@@ -1,0 +1,60 @@
+{
+  "schema": "e2e-dev-harness.acceptance-contract.v1",
+  "items": [
+    {
+      "id": "AC-001",
+      "criterion": "Builtin agent-team provider preserves single-worker packet parity for normal phases.",
+      "observable_behavior": "A provider test compares the planned worker packet for a single-worker phase with the existing core dispatch packet fields and observes matching role, skill, context paths, and expected outputs."
+    },
+    {
+      "id": "AC-002",
+      "criterion": "Agent-team providers are pure planners and do not mutate run state, spawn runtimes, or submit evidence.",
+      "observable_behavior": "Provider tests call plan generation with a phase request and observe returned dictionaries with no run-state file changes and no runtime descriptor side effects."
+    },
+    {
+      "id": "AC-003",
+      "criterion": "Claude Code and OpenCode runtime descriptors honor packet-level runtime_subagent_type when no environment override is set.",
+      "observable_behavior": "Runtime adapter tests spawn descriptors from packets declaring runtime_subagent_type and observe that Claude Code and OpenCode arguments contain that subagent alias."
+    },
+    {
+      "id": "AC-004",
+      "criterion": "Environment-specific subagent overrides continue to take precedence over packet-declared runtime_subagent_type.",
+      "observable_behavior": "Runtime adapter tests set the existing E2E_HARNESS_SUBAGENT_TYPE role override and observe that it wins over the packet runtime_subagent_type value."
+    },
+    {
+      "id": "AC-005",
+      "criterion": "Codex runtime descriptors remain model-unpinned and context-isolated.",
+      "observable_behavior": "Runtime adapter tests observe Codex descriptors use multi_agent_v1.spawn_agent, fork_context=false, and contain no model argument after packet-level runtime_subagent_type support is added."
+    },
+    {
+      "id": "AC-006",
+      "criterion": "Dispatch consumes agent-team plans and emits descriptors for every ready worker while preserving existing single-worker dispatch compatibility.",
+      "observable_behavior": "Dispatch integration tests observe unchanged single-worker output for default phases and multiple descriptor records when a profile expands a phase into multiple workers."
+    },
+    {
+      "id": "AC-007",
+      "criterion": "Manual and unknown runtimes remain safely blocked.",
+      "observable_behavior": "Dispatch tests using manual or unknown runtime observe a blocked response and no dispatched state transition."
+    },
+    {
+      "id": "AC-008",
+      "criterion": "Bundled and project-local team profiles validate deterministically with explicit trust boundaries.",
+      "observable_behavior": "Profile tests observe bundled profiles load in deterministic order, project-local profiles load only by explicit name, and invalid profiles report the offending path and field."
+    },
+    {
+      "id": "AC-009",
+      "criterion": "Critical and audited REVIEWED phases expand into R1, R2, and R3 reviewer workers.",
+      "observable_behavior": "Review fan-out tests observe three reviewer workers with stable ids and expected outputs r1_review, r2_review, and r3_review."
+    },
+    {
+      "id": "AC-010",
+      "criterion": "Evidence-key gates remain authoritative and agent-team metadata only adds producer accountability.",
+      "observable_behavior": "Gate or dispatch tests observe phases still require their configured evidence keys and do not pass based solely on agent-team plan metadata."
+    },
+    {
+      "id": "AC-011",
+      "criterion": "Documentation and installed-copy sync reflect the agent-team provider/profile/runtime boundary.",
+      "observable_behavior": "Documentation diff includes the new boundary and usage notes, and installer sync completes successfully after implementation."
+    }
+  ]
+}

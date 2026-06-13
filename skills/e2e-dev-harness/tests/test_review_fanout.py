@@ -4,6 +4,7 @@ from pathlib import Path
 
 from e2e_harness import pipeline
 from e2e_harness.core import run_state, engine, dispatch, gates
+from e2e_harness.adapters.agent_team import builtin
 from e2e_harness.adapters.evidence import command_evidence, validate
 
 
@@ -33,6 +34,12 @@ def _artifact(base, phase, key):
         f = base / f"{phase}-{key}.json"
         f.write_text(json.dumps({"schema": _acc.SCHEMA, "items": [
             {"id": "AC-001", "criterion": "c", "observable_behavior": "o"}]}), encoding="utf-8")
+        return f
+    if key == "module_plan":
+        from e2e_harness.core import module_plan as _mp
+        f = base / f"{phase}-{key}.json"
+        f.write_text(json.dumps({"schema": _mp.SCHEMA, "modules": [
+            {"id": "core", "name": "Core", "depends_on": [], "acceptance_ids": ["AC-001"]}]}), encoding="utf-8")
         return f
     want = validate.COMMAND_KEYS.get(key)
     if want is None:
@@ -69,6 +76,35 @@ def test_critical_reviewed_dispatch_packet_lists_three_reviews():
     reviewed = next(p for p in spine if p.name == "REVIEWED")
     packet = dispatch.worker_packet(reviewed, "docs/agent-runs/r1/run-state.json")
     assert packet["expected_outputs"] == ["r1_review", "r2_review", "r3_review"]
+
+
+def test_critical_reviewed_agent_team_plan_splits_three_reviews(tmp_path):
+    spine = pipeline.build_spine("critical")
+    reviewed = next(p for p in spine if p.name == "REVIEWED")
+    plan = builtin.BuiltinAgentTeamProvider().plan_phase({
+        "schema": "e2e-dev-harness.agent-team-request.v1",
+        "run_state_path": "docs/agent-runs/r1/run-state.json",
+        "repo_root": str(tmp_path),
+        "runtime": "codex",
+        "pipeline": "critical",
+        "phase": {
+            "name": reviewed.name,
+            "worker_role": reviewed.worker_role,
+            "worker_skill": reviewed.worker_skill,
+            "produces": list(reviewed.produces),
+            "exit_gate": list(reviewed.exit_gate),
+            "allows_code_write": reviewed.allows_code_write,
+        },
+        "context_paths": ["docs/agent-runs/r1/run-state.json"],
+        "team_profile": "default-critical",
+        "constraints": {"max_workers": 3, "fresh_context": True, "allow_code_write": False},
+    })
+
+    assert [worker["expected_outputs"] for worker in plan["workers"]] == [
+        ["r1_review"],
+        ["r2_review"],
+        ["r3_review"],
+    ]
 
 
 def test_critical_reviewed_blocks_until_three_real_reviews(tmp_path):

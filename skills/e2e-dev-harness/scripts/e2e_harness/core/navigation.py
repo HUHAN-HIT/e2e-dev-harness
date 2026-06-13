@@ -1,10 +1,49 @@
 """Derived whole-journey navigation map (no hand-maintained state)."""
 from __future__ import annotations
 
-from e2e_harness.core import gates, dispatch
+from e2e_harness.core import gates, dispatch, multitrack
 from e2e_harness.core.lifecycle import Phase, catalog
 
 GOAL = "VERIFIED"
+
+
+def _track_lanes(spine: list[Phase], state: dict, repo_root, *, skip_replay: bool) -> list[dict]:
+    """One lane per track: its module phases (status + gate), progress, dispatch,
+    and which depends_on tracks still block it. Empty outside a module band."""
+    tracks = state.get("tracks")
+    if not tracks:
+        return []
+    chains = multitrack.module_chains(spine)
+    done = {mid for mid, t in tracks.items() if t.get("complete")}
+    lanes: list[dict] = []
+    for mid, track in tracks.items():
+        chain = chains.get(mid, [])
+        lane_phases = []
+        passed = 0
+        for phase in chain:
+            rec = state.get("phases", {}).get(phase.name, {})
+            ok, missing = gates.gate_passes(phase, rec, repo_root, skip_replay=skip_replay)
+            if ok:
+                passed += 1
+                status = "done"
+            elif rec.get("dispatch") == dispatch.DispatchStatus.FAILED.value:
+                status = "blocked"
+            elif phase.name == track.get("current_phase"):
+                status = "current"
+            else:
+                status = "pending"
+            lane_phases.append({
+                "name": phase.name, "status": status,
+                "gate": {"required": len(phase.exit_gate), "missing": missing, "ok": ok},
+            })
+        lanes.append({
+            "module_id": mid,
+            "phases": lane_phases,
+            "progress": f"{passed}/{len(chain)}",
+            "dispatch": track.get("dispatch", "pending"),
+            "blocked_by_deps": [d for d in track.get("depends_on", []) if d not in done],
+        })
+    return lanes
 
 
 def _phase_status(spine: list[Phase], state: dict, idx: int,
@@ -63,7 +102,9 @@ def navigation_map(spine: list[Phase], state: dict, repo_root=None,
     return {
         "schema": "e2e-dev-harness.navigation-map.v1",
         "goal": GOAL,
+        "region": state.get("region", "prologue"),
         "you_are_here": cur,
+        "tracks": _track_lanes(spine, state, repo_root, skip_replay=skip_replay),
         "phases": phases,
         "full_catalog": full,
         "progress": f"{done}/{len(spine)}",

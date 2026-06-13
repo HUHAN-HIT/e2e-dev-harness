@@ -25,3 +25,12 @@ def test_skill_md_documents_auto_as_default_tier():
     text = SKILL.read_text(encoding="utf-8")
     assert "default `auto`" in text
     assert "default `minimal`" not in text
+
+
+def test_skill_md_documents_beat_cycle_for_module_band():
+    text = SKILL.read_text(encoding="utf-8")
+    assert "tracks_frontier" in text
+    assert "beat" in text or "一拍" in text
+    # the concurrent fan-out + reconcile loop must be described
+    assert "module_band" in text
+    assert "await" in text or "并发" in text

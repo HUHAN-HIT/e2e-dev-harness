@@ -7,13 +7,14 @@ names resolve to shipped yaml with no special privilege.
 """
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import replace
 from pathlib import Path
 
 import yaml
 
-from e2e_harness.core import lifecycle
+from e2e_harness.core import lifecycle, module_plan, multitrack
 from e2e_harness.core.lifecycle import Phase
 
 _PIPELINES_DIR = Path(__file__).resolve().parents[2] / "pipelines"
@@ -83,24 +84,57 @@ def build_spine(pipeline: str) -> list[Phase]:
     return spec_to_spine(load_spec(pipeline))
 
 
-def spine_for_state(state: dict) -> list[Phase]:
-    """Single seam for the CLI: embedded spec (hermetic custom run) else named built-in."""
+def _base_spine(state: dict) -> list[Phase]:
     spec = state.get("pipeline_spec")
     if spec:
         return spec_to_spine(spec)
     return build_spine(state.get("pipeline", "minimal"))
 
 
+def _module_plan_from_state(state: dict, repo_root) -> dict | None:
+    """Parsed+valid module plan from PLANNED evidence, else None (needs repo_root
+    to resolve the artifact path; missing/invalid plan -> single track)."""
+    if repo_root is None:
+        return None
+    entry = (state.get("phases", {}).get("PLANNED", {})
+             .get("evidence", {}).get("module_plan"))
+    if not entry:
+        return None
+    rel = entry["path"] if isinstance(entry, dict) else entry
+    full = Path(rel)
+    if not full.is_absolute():
+        full = Path(repo_root) / rel
+    try:
+        obj = json.loads(full.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    ok, _ = module_plan.validate_module_plan(obj)
+    return obj if ok else None
+
+
+def spine_for_state(state: dict, repo_root=None) -> list[Phase]:
+    """Single seam for the CLI: embedded spec (hermetic custom run) else named
+    built-in; expanded into per-module tracks (B2) when PLANNED carries a valid
+    module plan with >=2 modules and repo_root is given to resolve it."""
+    base = _base_spine(state)
+    mplan = _module_plan_from_state(state, repo_root)
+    if mplan is not None:
+        return multitrack.expand(base, mplan)
+    return base
+
+
 def can_write_code(state: dict) -> bool:
     """True iff state['current_phase'] resolves to a spine phase declaring allows_code_write.
 
     Single source of phase code-write authority — reused by the PreToolUse hook
-    and any CLI that needs the same answer. Conservative: unknown / missing phase → False.
+    and any CLI that needs the same answer. Multi-track phases (`IMPLEMENTED#auth`)
+    inherit their base phase's authority. Conservative: unknown / missing → False.
     """
     current = state.get("current_phase")
     if not current:
         return False
-    for phase in spine_for_state(state):
-        if phase.name == current:
+    base_name = multitrack.base_phase_name(current)
+    for phase in _base_spine(state):
+        if phase.name == base_name:
             return bool(phase.allows_code_write)
     return False

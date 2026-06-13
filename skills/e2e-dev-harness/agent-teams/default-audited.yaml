@@ -1,0 +1,38 @@
+schema: e2e-dev-harness.agent-team-profile.v1
+name: default-audited
+description: Audited pipeline with R1/R2/R3 review fan-out.
+roles:
+  requirements-clarifier:
+    skill: e2e-harness-clarification
+    runtime_subagent_type: requirements-clarifier
+    max_workers: 1
+  implementation-planner:
+    skill: e2e-harness-planning
+    runtime_subagent_type: implementation-planner
+    max_workers: 1
+  tdd-red:
+    skill: e2e-harness-tdd-red
+    runtime_subagent_type: test-case-developer
+    max_workers: 1
+  code-developer:
+    skill: e2e-harness-implementation
+    runtime_subagent_type: code-developer
+    max_workers: 1
+  semantic-reviewer:
+    skill: e2e-harness-review
+    runtime_subagent_type: semantic-reviewer
+    max_workers: 3
+  coverage-reviewer:
+    skill: e2e-harness-completion
+    runtime_subagent_type: coverage-reviewer
+    max_workers: 1
+phases:
+  REVIEWED:
+    strategy: evidence-key-fanout
+    workers:
+      - id_suffix: r1
+        expected_outputs: [r1_review]
+      - id_suffix: r2
+        expected_outputs: [r2_review]
+      - id_suffix: r3
+        expected_outputs: [r3_review]
