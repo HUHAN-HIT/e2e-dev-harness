@@ -421,22 +421,23 @@ function actions(options, repo, projectRoot, installRoot, sourceSkillDir, target
   }
   if (options.doctor && !options.checkOnly) {
     const cliScript = path.join(sourceSkillDir, "scripts", "e2e_dev_harness.py");
-    // F6: when this install materializes .claude/settings.json (--with-hooks), the
-    // closing doctor runs --strict so settings readiness becomes a hard gate. The
-    // install-hooks action above is planned before this one, so settings are written
-    // first. doctor-only runs BEFORE any settings exist, so it stays shallow — strict
-    // only when this run actually wrote settings.
+    // F6: when this install materializes runtime hooks (--with-hooks), the closing
+    // doctor runs --strict so hook readiness becomes a hard gate. The install-hooks
+    // action above is planned before this one, so hooks are written first.
+    // doctor-only runs BEFORE any hooks exist, so it stays shallow — strict only
+    // when this run actually wrote runtime hook config.
     const strict = Boolean(options.withHooks);
-    const doctorArgs = ["doctor", projectRoot, "--json"];
+    const doctorArgs = ["doctor", projectRoot, "--json", "--runtime", options.runtime];
     if (strict) doctorArgs.push("--strict");
     planned.push({
       id: "doctor",
       description: strict
-        ? "Run e2e-dev-harness doctor --strict against the project root (verifies written settings)."
+        ? "Run e2e-dev-harness doctor --strict against the project root (verifies written runtime hooks)."
         : "Run e2e-dev-harness doctor against the project root.",
       command: pythonCommand(cliScript, doctorArgs),
       cwd: repo,
       project_root: projectRoot,
+      runtime: options.runtime,
       strict,
     });
   }

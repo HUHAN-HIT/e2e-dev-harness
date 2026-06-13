@@ -62,3 +62,28 @@ def test_doctor_strict_blocks_on_unparseable_settings(tmp_path):
     assert code == 2
     assert payload["ready"] is False
     assert payload["checks"]["claude_settings"]["parseable"] is False
+
+
+def test_doctor_strict_opencode_checks_plugin_not_claude_settings(tmp_path):
+    (tmp_path / ".opencode" / "plugins").mkdir(parents=True)
+    (tmp_path / ".opencode" / "plugins" / "e2e-dev-harness.js").write_text(
+        "phase_guard.py\nstop_guard.py\n",
+        encoding="utf-8",
+    )
+
+    code, payload = _doctor(tmp_path, "--strict", "--runtime", "opencode")
+
+    assert code == 0
+    assert payload["ready"] is True
+    assert payload["runtime"] == "opencode"
+    assert payload["checks"]["claude_settings"]["available"] is False
+    assert payload["checks"]["opencode_plugin"]["available"] is True
+
+
+def test_doctor_strict_opencode_blocks_when_plugin_missing(tmp_path):
+    code, payload = _doctor(tmp_path, "--strict", "--runtime", "opencode")
+
+    assert code == 2
+    assert payload["ready"] is False
+    assert payload["runtime"] == "opencode"
+    assert any("e2e-dev-harness.js" in r for r in payload["blocked_reasons"])

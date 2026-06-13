@@ -429,6 +429,38 @@ class NodeInstallerTests(unittest.TestCase):
             self.assertNotIn("--strict", doctor2["command"])
             self.assertFalse(doctor2.get("strict", False))
 
+    def test_opencode_with_hooks_and_doctor_runs_strict_runtime_check(self) -> None:
+        """The strict final doctor must validate the opencode plugin, not require
+        a Claude settings file after an opencode hook install."""
+        with tempfile.TemporaryDirectory() as tmp:
+            install_root = Path(tmp) / "home"
+            project = Path(tmp) / "business-project"
+            repo = Path(tmp) / "repo"
+            project.mkdir()
+            repo.mkdir()
+
+            code, payload = self.run_installer(
+                "--repo", str(repo),
+                "--source-skill-dir", str(ROOT / "skills" / "e2e-dev-harness"),
+                "--install-root", str(install_root),
+                "--target", "opencode",
+                "--project-root", str(project),
+                "--skip-python-cli", "--skip-external",
+                "--with-hooks", "--runtime", "opencode", "--doctor",
+                "--yes",
+            )
+
+            self.assertEqual(0, code, payload)
+            plugin_path = project / ".opencode" / "plugins" / "e2e-dev-harness.js"
+            self.assertTrue(plugin_path.exists(), payload)
+            self.assertFalse((project / ".claude" / "settings.json").exists())
+            doctor = {a["id"]: a for a in payload["actions"]}["doctor"]
+            self.assertIn("--strict", doctor["command"])
+            self.assertIn("--runtime opencode", doctor["command"])
+            doctor_result = payload["action_results"][-1]
+            self.assertEqual("doctor", doctor_result["action"])
+            self.assertEqual(0, doctor_result["exit_code"], doctor_result)
+
 
 if __name__ == "__main__":
     unittest.main()

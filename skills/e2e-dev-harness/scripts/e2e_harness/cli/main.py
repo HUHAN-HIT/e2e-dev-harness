@@ -70,6 +70,8 @@ def build_parser() -> argparse.ArgumentParser:
     doc = sub.add_parser("doctor"); doc.add_argument("project_root", nargs="?", default=".")
     doc.add_argument("--json", action="store_true", help="accepted for installer compatibility; output is always JSON")
     doc.add_argument("--state", default=None, help="run-state path for read-only diagnostic")
+    doc.add_argument("--runtime", default="claude",
+                     help="hook runtime to validate in --strict mode (claude|claude-code|codex|opencode)")
     doc.add_argument("--strict", action="store_true",
                      help="promote settings/hooks readiness from informational to hard blockers")
 
