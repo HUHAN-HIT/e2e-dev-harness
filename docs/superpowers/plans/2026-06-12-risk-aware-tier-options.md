@@ -250,7 +250,7 @@ Add this test to `skills/e2e-dev-harness/tests/test_cli_e2e.py`:
 
 ```python
 def test_start_auto_returns_tier_recommendation(tmp_path):
-    result = run_cli(
+    code, res = _run(
         "start",
         "--repo",
         str(tmp_path),
@@ -261,13 +261,13 @@ def test_start_auto_returns_tier_recommendation(tmp_path):
         cwd=tmp_path,
     )
 
-    assert result.returncode == 0
-    data = json.loads(result.stdout)
-    assert data["tier"] == "standard"
-    assert data["tier_recommendation"]["recommended_tier"] == "standard"
-    assert data["tier_recommendation"]["selected_tier"] == "standard"
-    assert len(data["tier_recommendation"]["options"]) == 4
-    assert data["tier_reasons"] == data["tier_recommendation"]["reasons"]
+    assert code == 0
+    assert res["tier"] == "standard"
+    assert res["tier_recommendation"]["recommended_tier"] == "standard"
+    assert res["tier_recommendation"]["selected_tier"] == "standard"
+    assert res["tier_recommendation"]["selection_source"] == "auto"
+    assert len(res["tier_recommendation"]["options"]) == 4
+    assert res["tier_reasons"] == res["tier_recommendation"]["reasons"]
 ```
 
 - [ ] **Step 2: Write a failing CLI test for explicit downgrade metadata**
@@ -276,7 +276,7 @@ Add this test to the same file:
 
 ```python
 def test_start_explicit_tier_records_downgrade_metadata(tmp_path):
-    result = run_cli(
+    code, res = _run(
         "start",
         "--repo",
         str(tmp_path),
@@ -289,12 +289,12 @@ def test_start_explicit_tier_records_downgrade_metadata(tmp_path):
         cwd=tmp_path,
     )
 
-    assert result.returncode == 0
-    data = json.loads(result.stdout)
-    assert data["tier"] == "standard"
-    assert data["tier_recommendation"]["recommended_tier"] == "critical"
-    assert data["tier_recommendation"]["selection_source"] == "explicit"
-    assert data["tier_recommendation"]["downgrade"]["requires_provenance"] is True
+    assert code == 0
+    assert res["tier"] == "standard"
+    assert res["tier_recommendation"]["recommended_tier"] == "critical"
+    assert res["tier_recommendation"]["selected_tier"] == "standard"
+    assert res["tier_recommendation"]["selection_source"] == "explicit"
+    assert res["tier_recommendation"]["downgrade"]["requires_provenance"] is True
 ```
 
 - [ ] **Step 3: Run the focused CLI tests and verify they fail**
@@ -513,7 +513,7 @@ Add to `skills/e2e-dev-harness/tests/test_cli_e2e.py`:
 
 ```python
 def test_start_persists_tier_recommendation(tmp_path):
-    result = run_cli(
+    code, res = _run(
         "start",
         "--repo",
         str(tmp_path),
@@ -524,9 +524,8 @@ def test_start_persists_tier_recommendation(tmp_path):
         cwd=tmp_path,
     )
 
-    assert result.returncode == 0
-    data = json.loads(result.stdout)
-    state = json.loads(Path(data["run_state"]).read_text(encoding="utf-8"))
+    assert code == 0
+    state = json.loads(Path(res["run_state"]).read_text(encoding="utf-8"))
     assert state["tier"] == "critical"
     assert state["tier_recommendation"]["recommended_tier"] == "critical"
     assert state["tier_recommendation"]["selected_tier"] == "critical"
@@ -585,7 +584,7 @@ Add to `skills/e2e-dev-harness/tests/test_skill_md.py`:
 
 ```python
 def test_skill_md_documents_tier_options_and_gitnexus_evidence():
-    text = SKILL_MD.read_text(encoding="utf-8")
+    text = SKILL.read_text(encoding="utf-8")
 
     assert "tier_recommendation" in text
     assert "recommended_tier" in text
