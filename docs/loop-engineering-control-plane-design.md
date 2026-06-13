@@ -29,6 +29,7 @@ Loop Engineering 在本文中的含义不是“多 agent 自动跑任务”，�
 - `verification`、`acceptance_contract`、`test_substance`、`scope_manifest` 已进入 evidence validation 体系。
 - `RuntimeAdapter` seam 已存在，Codex、Claude Code、OpenCode、manual runtime 共享 descriptor/capability 契约。
 - `pipeline.py` 已支持 YAML pipeline 覆盖 phase spine、`exit_gate`、`produces` 和 `allows_code_write`。
+- agent-team provider 已进入 dispatch planning：默认 profile 仍以 single-worker 为主，critical/audited review 已有 `evidence-key-fanout`，多模块 run 已有基于 ready frontier 的 `module-fanout` 入口。
 - `navigation_map()` 默认 `skip_replay=True`，读状态不会误触发 verification replay。
 - 当前 checkout 中 `doctor` 仍是浅层 installer readiness check，不能被写成成熟 run-level diagnosis。
 - 当前 checkout 中没有成型的 `event_log.py`、`state_store.py`、`recover.py`。这些属于目标态或历史分支能力，不能当作当前事实。
@@ -54,6 +55,10 @@ Worker 只拥有自己被调度任务要求的输出和 evidence。worker 可以
 ### 5. Recovery Is A Control-Plane Path
 
 恢复不是绕过 gate 的后门。恢复必须有计划、审批、输入 hash、输出 hash、影响范围和下一条合法命令。
+
+### 6. Agent Team Plans Work, Subagents Execute Work
+
+Agent team 是任务图、隔离合同和并发策略的上层抽象。Subagent 只是 Codex、Claude Code、OpenCode 或 manual runtime 中的执行机制。控制面不应该把“多开 subagent”等同于“安全并行”；只有当任务边界、证据归属、写入范围和依赖关系都被 agent-team plan 明确声明后，才允许并发。
 
 ## Target Architecture
 
@@ -222,6 +227,170 @@ Each event should include:
 - `reason`
 - `source_command`
 
+## Agent Team Isolation And Throughput
+
+Agent team 是 Loop Engineering 中提高隔离性和效率的主要机制，但它必须服务于控制面，而不是绕过控制面。正确模型是：
+
+> Agent team plans independent work. Runtime adapters launch fresh workers. Gates accept only owned evidence. Coordinator remains the only state authority.
+
+### Current Role In The Control Plane
+
+当前设计中，agent team 应位于 `dispatch` 与 runtime adapter 之间：
+
+```mermaid
+flowchart TD
+  state["run-state.json projection"] --> dispatch["dispatch command"]
+  pipeline["pipeline spine"] --> dispatch
+  profile["agent-team profile"] --> provider["AgentTeamProvider"]
+  moduleplan["module_plan"] --> provider
+  dispatch --> provider
+
+  provider --> plan["agent-team-plan.json"]
+  plan --> w1["worker packet A"]
+  plan --> w2["worker packet B"]
+  plan --> w3["worker packet C"]
+
+  w1 --> runtime["RuntimeAdapter"]
+  w2 --> runtime
+  w3 --> runtime
+  runtime --> descriptor["fresh worker descriptor"]
+
+  descriptor --> evidence["owned evidence"]
+  evidence --> gate["gate validation"]
+  gate --> stateevent["state event or run-state mutation"]
+```
+
+The provider is pure planning logic. It should not mutate run state, submit evidence, or advance lifecycle. Its only job is to transform phase, profile, module frontier and constraints into worker packets plus an evidence contract.
+
+### Isolation Contract
+
+Every worker packet should be treated as an isolation contract, not just a prompt. The target shape is:
+
+```json
+{
+  "schema": "e2e-dev-harness.worker-packet.v1",
+  "id": "IMPLEMENTED#billing",
+  "role": "code-developer",
+  "skill": "e2e-harness-implementation",
+  "context_policy": "fresh",
+  "context_paths": [
+    "docs/agent-runs/example/run-state.json",
+    "docs/agent-runs/example/module-plan.json"
+  ],
+  "expected_outputs": [
+    "passing_tests#billing",
+    "test_substance#billing"
+  ],
+  "allowed_write_paths": [
+    "services/billing/**",
+    "tests/billing/**"
+  ],
+  "owned_evidence_keys": [
+    "passing_tests#billing",
+    "test_substance#billing"
+  ],
+  "parallel_group": "module:billing",
+  "conflict_groups": [
+    "database:migrations"
+  ],
+  "depends_on": [
+    "RED#billing"
+  ],
+  "producer_id": "IMPLEMENTED#billing"
+}
+```
+
+Required invariants:
+
+- `context_policy` must stay `fresh`; workers must not inherit coordinator chat.
+- `context_paths` must be bounded and explicit.
+- `expected_outputs` and `owned_evidence_keys` must match the phase gate contract.
+- `allowed_write_paths` must be enforced by `phase_guard` or an equivalent pre-write guard.
+- `producer_id` must be recorded in submitted evidence so one worker cannot satisfy another worker's key.
+- `parallel_group` controls concurrency; workers in the same group are mutually exclusive.
+- `conflict_groups` declare shared resources such as migrations, generated clients or package manifests.
+
+### Throughput Model
+
+The safe unit of parallelism is not a lifecycle phase. It is an independent frontier item.
+
+| Strategy | When To Use | Safety Rule | Efficiency Gain |
+| --- | --- | --- | --- |
+| `single-worker` | default phases, unclear dependency graph, small tasks | one worker owns all phase outputs | lowest overhead |
+| `evidence-key-fanout` | independent review or audit outputs such as `r1_review`, `r2_review`, `r3_review` | each worker owns one evidence key | parallel review without code-write conflicts |
+| `module-fanout` | module DAG shows multiple ready modules | each worker owns one module namespace and write scope | parallel RED/IMPLEMENTED/REVIEWED across modules |
+| `band-fanout` | future extension for service bands or domains | frontier must prove no shared write or conflict group | higher throughput for large multi-service work |
+
+`module-fanout` should only use modules returned by a ready frontier. A module whose dependency is incomplete should remain absent from the frontier, so dispatch stays single-worker for that branch. This keeps throughput tied to proof of independence instead of optimistic parallelism.
+
+### Evidence Ownership
+
+Fan-out only helps if the evidence contract is stricter than the worker prompt.
+
+Agent-team plans should include:
+
+```json
+{
+  "evidence_contract": {
+    "required_keys": [
+      "passing_tests#auth",
+      "passing_tests#billing"
+    ],
+    "producers": {
+      "passing_tests#auth": "IMPLEMENTED#auth",
+      "passing_tests#billing": "IMPLEMENTED#billing"
+    }
+  }
+}
+```
+
+Gate validation should reject:
+
+- evidence submitted by a worker whose `producer_id` does not own the key;
+- un-namespaced module evidence in a module-scoped phase;
+- duplicate evidence for the same key unless the replacement is an explicit rework event;
+- review fan-out where two reviewers produce the same `expected_outputs`;
+- manual-runtime blocks that are presented as completed worker evidence.
+
+### Phase-Level Usage
+
+| Phase | Agent Team Use | Isolation Boundary | Efficiency Notes |
+| --- | --- | --- | --- |
+| `CLARIFIED` | usually `single-worker` | one clarification contract | parallel clarification creates drift; keep final authority in coordinator-side gate |
+| `PLANNED` | `single-worker` until module DAG is produced | whole-run planning | plan may create `module_plan`, but should not implement |
+| `RED` | `module-fanout` when module DAG has independent frontier | namespaced failing tests per module | high ROI: independent red tests expose conflicts early |
+| `IMPLEMENTED` | `module-fanout` with `allowed_write_paths` | module/service write ownership | highest risk and highest gain; requires write guard and conflict groups |
+| `REVIEWED` | `evidence-key-fanout` for critical/audited, `module-fanout` for module review | review key or module namespace | safe parallelism because reviewers should not write production code |
+| `VERIFIED` | normally `single-worker` | whole-run replay and scope verdict | keep as convergence point; fan-out only for collecting independent audit inputs |
+
+### Efficiency Metrics
+
+Do not measure agent-team success by worker count. Measure it by closed-loop throughput:
+
+- time from `dispatch` to all required evidence submitted;
+- number of blocked frontier items;
+- rework rate per worker and per module;
+- evidence collision count;
+- write-scope violation count;
+- coordinator context bytes saved by fresh workers;
+- critical path length after applying module dependencies;
+- time spent in `WAITING_DISPATCH` or manual runtime fallback.
+
+These metrics should eventually feed `doctor --state` and timeline reports so the user can see whether agent-team fan-out is actually improving delivery.
+
+### Design Boundaries
+
+Agent team must not:
+
+- advance lifecycle directly;
+- bypass evidence validators;
+- relax `allows_code_write`;
+- turn runtime-specific subagent names into control-plane state;
+- claim global `COMPLETE` from a partial module frontier;
+- let the coordinator edit worker-owned outputs during fan-out recovery.
+
+Subagent type remains runtime metadata. The portable contract is the worker packet plus descriptor, not the exact subagent name a runtime happens to support.
+
 ## Doctor And Recovery Design
 
 ### `doctor --state`
@@ -307,6 +476,38 @@ Exit criteria:
 
 - `acceptance_contract -> failing_tests -> test_substance -> passing_tests -> scope_manifest -> verification replay` is enforced end to end.
 
+### Phase 1.5: Add Agent-Team Isolation Contracts
+
+Goal: make agent-team fan-out safe enough to improve throughput without weakening gates.
+
+Primary files:
+
+- `skills/e2e-dev-harness/scripts/e2e_harness/adapters/agent_team/builtin.py`
+- `skills/e2e-dev-harness/scripts/e2e_harness/adapters/agent_team/schema.py`
+- `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/dispatch.py`
+- `skills/e2e-dev-harness/scripts/e2e_harness/adapters/runtime/__init__.py`
+- `skills/e2e-dev-harness/agent-teams/default-*.yaml`
+
+Required behavior:
+
+- worker packets carry `owned_evidence_keys`, `allowed_write_paths`, `producer_id`, `parallel_group`, and optional `conflict_groups`;
+- `agent-team-plan.json` maps every required evidence key to exactly one producer;
+- module fan-out emits namespaced evidence keys for each ready module;
+- review fan-out remains evidence-key based and code-write-free;
+- manual runtime can block dispatch without marking worker evidence complete.
+
+Required tests:
+
+- module fan-out rejects duplicate evidence ownership;
+- dependent module remains single-worker until its dependency completes;
+- `phase_guard` rejects writes outside a worker's `allowed_write_paths`;
+- submit/gate rejects evidence whose `producer_id` does not own the key;
+- critical/audited review fan-out still emits R1/R2/R3 descriptors.
+
+Exit criteria:
+
+- agent-team fan-out increases parallelism only for proven-independent frontier items, and every worker output is attributable to a single owner.
+
 ### Phase 2: Add Read-Only State Diagnosis
 
 Goal: make run failures explainable without manual file archaeology.
@@ -322,6 +523,8 @@ Required behavior:
 - explain missing evidence;
 - explain stale dispatch;
 - explain worker-owned output blockers;
+- explain blocked parallel groups and module-frontier dependencies;
+- report evidence producer mismatches;
 - distinguish missing content from missing proof;
 - emit exactly one next legal command when possible.
 
@@ -346,6 +549,7 @@ Required behavior:
 - `recover --apply` requires approval metadata;
 - recovery records input and output hashes;
 - recovery refuses worker-owned artifact writes from coordinator context.
+- recovery refuses to complete a fan-out worker whose owned evidence keys are missing or produced by another worker.
 
 Exit criteria:
 
@@ -404,16 +608,19 @@ The project can call itself a Loop Engineering control plane when all of the fol
 - Tests can be traced back to acceptance IDs.
 - Final verification evidence is genuine, replayable and shape-validated.
 - `COMPLETE` and `PARTIAL` are distinct machine states.
+- Agent-team fan-out is limited to proven-independent frontier items.
+- Every fan-out worker has explicit context, write scope, evidence ownership and producer identity.
 - A stuck run can be diagnosed with one read-only command.
 - Recovery requires explicit approval and leaves an audit trail.
 - State transitions are reconstructable from event truth or a verified projection.
 
 ## Recommended Next Step
 
-Start with Phase 1 and Phase 2. They produce the most value with the least architectural risk:
+Start with Phase 1 through Phase 2. They produce the most value with the least architectural risk:
 
 1. finish the delivery fidelity chain;
-2. add read-only `doctor --state`;
-3. only then implement `recover` and event projection.
+2. add agent-team isolation contracts for safe fan-out;
+3. add read-only `doctor --state`;
+4. only then implement `recover` and event projection.
 
 That sequence keeps the system honest. It prevents the project from productizing an attractive loop that still cannot prove it delivered the requested design.
