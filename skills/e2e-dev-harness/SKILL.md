@@ -77,6 +77,21 @@ GitNexus impact evidence raises the recommendation for MEDIUM, HIGH, or
 CRITICAL risk. Missing GitNexus verification on cross-service dependencies
 must stay visible in `tier_recommendation.reasons`.
 
+### Tier preview confirmation
+
+Use `start --preview-tier` when Codex should show the user the recommended
+workflow before creating a run. The command emits `tier-preview.v1`, includes
+the same `tier_recommendation` options as normal `start`, and does not create
+`run-state.json`.
+
+Codex should present the recommendation, tier costs, and GitNexus/scanner
+reasons to the user. After the user chooses, create the real run with
+`start --tier <choice>` using the same repo, feature, request, adapter, scan,
+and pipeline inputs.
+
+Do not implement this as a stdin prompt. The CLI remains JSON-only and
+non-interactive; the user choice happens in the coordinator conversation.
+
 裁剪是结构性的:被跳阶段从计算出的 spine 移除,`next` 越过、导航地图渲染 `– skipped`。每个内建 tier 都过 I2 门禁闭包(`gate_closure_ok`)。门禁校验**真实产物**(文件存在+非空+哈希;`failing_tests`/`passing_tests` 须为命令证据且退出码正确)。
 ## Agent-Team Dispatch Boundary
 

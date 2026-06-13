@@ -41,6 +41,17 @@ def test_skill_md_documents_tier_options_and_gitnexus_evidence():
     assert "blocked=false" in text
 
 
+def test_skill_md_documents_tier_preview_confirmation():
+    text = SKILL.read_text(encoding="utf-8")
+
+    assert "--preview-tier" in text
+    assert "tier-preview.v1" in text
+    assert "does not create" in text
+    assert "run-state.json" in text
+    assert "Codex" in text
+    assert "start --tier <choice>" in text
+
+
 def test_skill_md_documents_beat_cycle_for_module_band():
     text = SKILL.read_text(encoding="utf-8")
     assert "tracks_frontier" in text
