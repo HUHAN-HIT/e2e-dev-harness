@@ -1,11 +1,28 @@
-"""doctor: lightweight project readiness diagnostics for installer contracts."""
+"""doctor: lightweight project readiness diagnostics for installer contracts.
+
+`doctor` without `--state` is the installer readiness check (`doctor.v1`).
+`doctor --state <run-state>` is a separate read-only run-diagnosis surface
+(`doctor-state.v1`) that never mutates state or replays verification.
+"""
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
+from e2e_harness.core import run_state, state_diagnosis
+
+
+def _run_state_diagnosis(args, state_path) -> tuple[int, dict]:
+    state = run_state.load(state_path)
+    payload = state_diagnosis.diagnose_run(state, state_path, getattr(args, "repo", "."))
+    return (2 if payload["run_blocked"] else 0), payload
+
 
 def run(args) -> tuple[int, dict]:
+    # --state carries the run-state path (cli/main.py:75); None => installer readiness.
+    state_path = getattr(args, "state", None)
+    if state_path:
+        return _run_state_diagnosis(args, state_path)
     project_root = Path(args.project_root).resolve()
     settings = project_root / ".claude" / "settings.json"
     opencode_plugin = project_root / ".opencode" / "plugins" / "e2e-dev-harness.js"
