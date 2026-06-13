@@ -22,8 +22,12 @@ description: Default canonical delivery harness. Use when a feature/bugfix/refac
 # 含中文/非 ASCII 的需求：写进 UTF-8 文件用 --request-file/--feature-file，避免
 # Windows/git-bash 控制台编码把 argv 损坏（损坏会被 start 显式拒绝，不再静默降级）。
 printf '%s' "<原始需求>" > /tmp/req.txt
-PYTHONUTF8=1 e2e-harness start --repo . --feature "<feat>" --request-file /tmp/req.txt  # 创建唯一 run-state
-# 纯 ASCII 时也可直接：e2e-harness start --repo . --feature "<feat>" --request "<req>"
+# Human/coordinator startup is preview-first: compute recommendation without creating run-state.
+PYTHONUTF8=1 e2e-harness start --preview-tier --repo . --feature "<feat>" --request-file /tmp/req.txt
+# coordinator 展示 recommended_tier/options/reasons；用户确认后创建唯一 run-state：
+PYTHONUTF8=1 e2e-harness start --repo . --feature "<feat>" --request-file /tmp/req.txt --tier <choice>
+# Automation/CI with a pre-confirmed tier may call normal start directly; do not add stdin prompts.
+# 纯 ASCII 时也可直接用 --request "<req>" 替代 --request-file /tmp/req.txt。
 e2e-harness next   --state <run-state>     # 推进主干或返回单一 blocker + navigation_map
 e2e-harness dispatch --state <run-state>   # 产出当前阶段的指针 worker packet
 e2e-harness submit --state <run-state> --phase <P> --key <k> --path <p>  # 记录 worker 证据

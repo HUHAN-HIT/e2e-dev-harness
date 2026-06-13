@@ -69,6 +69,7 @@ def test_skill_md_documents_tier_options_and_gitnexus_evidence():
 
 def test_skill_md_documents_tier_preview_confirmation():
     text = SKILL.read_text(encoding="utf-8")
+    command_block = text.split("## 循环", 1)[0]
 
     assert "--preview-tier" in text
     assert "tier-preview.v1" in text
@@ -76,6 +77,14 @@ def test_skill_md_documents_tier_preview_confirmation():
     assert "run-state.json" in text
     assert "Codex" in text
     assert "start --tier <choice>" in text
+    assert "Do not implement this as a stdin prompt" in text
+    assert "non-interactive" in text
+
+    preview_cmd = "e2e-harness start --preview-tier"
+    confirmed_cmd = 'e2e-harness start --repo . --feature "<feat>" --request-file /tmp/req.txt --tier <choice>'
+    assert preview_cmd in command_block
+    assert confirmed_cmd in command_block
+    assert command_block.index(preview_cmd) < command_block.index(confirmed_cmd)
 
 
 def test_skill_md_documents_beat_cycle_for_module_band():
