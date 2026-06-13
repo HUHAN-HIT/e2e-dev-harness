@@ -89,6 +89,25 @@ def test_start_auto_returns_tier_recommendation(tmp_path):
     assert res["tier_reasons"] == res["tier_recommendation"]["reasons"]
 
 
+def test_start_persists_tier_recommendation(tmp_path):
+    code, res = _run(
+        "start",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "persist-tier-options",
+        "--request",
+        "add refund settlement to the ledger",
+        cwd=tmp_path,
+    )
+
+    assert code == 0
+    state = json.loads(Path(res["run_state"]).read_text(encoding="utf-8"))
+    assert state["tier"] == "critical"
+    assert state["tier_recommendation"]["recommended_tier"] == "critical"
+    assert state["tier_recommendation"]["selected_tier"] == "critical"
+
+
 def test_start_explicit_tier_records_downgrade_metadata(tmp_path):
     code, res = _run(
         "start",
