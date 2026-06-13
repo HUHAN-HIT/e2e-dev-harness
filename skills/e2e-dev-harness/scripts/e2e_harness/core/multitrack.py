@@ -135,7 +135,24 @@ def ready_frontier(spine: list[Phase], state: dict, mplan: dict) -> list[Phase]:
         nxt = next((p for p in chains[mid] if not _satisfied(p)), None)
         if nxt is not None:
             frontier.append(nxt)
-    return frontier
+
+    # FAN1 safety floor: serialize modules that share a named conflict_group
+    # (migrations sequence, lockfile/manifest, codegen sink, shared schema). Keep
+    # the deterministic frontier order; withhold any later module whose groups
+    # intersect an already-selected module's. Modules with no declared group are
+    # unaffected — clearly-independent work still fans out. Pure: no repo I/O.
+    groups = {m["id"]: set(m.get("conflict_groups", []) or [])
+              for m in mplan.get("modules", []) if isinstance(m, dict) and "id" in m}
+    selected: list[Phase] = []
+    active_groups: set[str] = set()
+    for phase in frontier:
+        mid = module_of(phase.name)
+        phase_groups = groups.get(mid or "", set())
+        if active_groups & phase_groups:
+            continue
+        selected.append(phase)
+        active_groups |= phase_groups
+    return selected
 
 
 # --- First-class tracks (方案 B): ledger materialization + projection ----------
@@ -159,6 +176,25 @@ def module_chains(spine: list[Phase]) -> dict[str, list[Phase]]:
             order.append(mid)
         chains[mid].append(phase)
     return {mid: chains[mid] for mid in order}
+
+
+def completed_modules(spine: list[Phase], state: dict) -> set[str]:
+    """Module ids whose entire chain (RED#<id>/IMPLEMENTED#<id>/REVIEWED#<id>) has
+    every exit_gate key present in run-state evidence.
+
+    A cheap presence check (NOT `gate_passes`): no validate_evidence/replay, because
+    the only caller — `label_delivery` — runs once the whole run is `complete`, i.e.
+    after every gate already validated each key. Mirrors the `_satisfied` idiom in
+    `ready_frontier` and keys off REVIEWED#<id> chain completion, never VERIFIED#<id>
+    (which does not exist — VERIFIED is a whole-run singleton)."""
+    def _evidence(name: str) -> dict:
+        return state.get("phases", {}).get(name, {}).get("evidence", {})
+
+    out: set[str] = set()
+    for mid, chain in module_chains(spine).items():
+        if all(all(k in _evidence(p.name) for k in p.exit_gate) for p in chain):
+            out.add(mid)
+    return out
 
 
 def fork_tracks(spine: list[Phase], mplan: dict | None = None) -> dict:

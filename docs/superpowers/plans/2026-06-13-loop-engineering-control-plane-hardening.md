@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python stdlib, existing `e2e_harness` modules, pytest/unittest tests under `skills/e2e-dev-harness/tests`, GitNexus impact analysis for symbol edits.
 
+**Out of scope (deferred):** Phase 3 `recover` (approval-gated recovery) is intentionally NOT in this plan. Per the design's recommended sequence (`docs/loop-engineering-control-plane-design.md:467-474`), recovery is sequenced with/after tamper-evident event projection; this plan lands fidelity, fan-out safety, read-only diagnosis, and the event-log seam first, and leaves `recover` to a follow-up.
+
 ---
 
 ## Preconditions
@@ -20,9 +22,9 @@
 ## File Structure
 
 - Modify `skills/e2e-dev-harness/scripts/e2e_harness/adapters/evidence/validate.py`: extend replay command allow-list while preserving strict test-command checks.
-- Modify `skills/e2e-dev-harness/scripts/e2e_harness/adapters/evidence/scope.py`: ground delivered module ids from run-state rather than trusting `phases` self-report.
+- Modify `skills/e2e-dev-harness/scripts/e2e_harness/adapters/evidence/scope.py`: ground delivered module ids in `label_delivery` against trusted engine-owned run-state (`REVIEWED#<id>` chain completion). The gate-time validator stays tables-only (it has no run-state) — a documented weakening.
 - Modify `skills/e2e-dev-harness/scripts/e2e_harness/core/module_plan.py`: accept optional `conflict_groups` as named shared resources and expose them to scheduling.
-- Modify `skills/e2e-dev-harness/scripts/e2e_harness/core/multitrack.py`: filter module fan-out by declared conflict groups without repo I/O.
+- Modify `skills/e2e-dev-harness/scripts/e2e_harness/core/multitrack.py`: filter module fan-out by declared conflict groups without repo I/O; add `completed_modules(spine, state)` (cheap exit-gate-presence check, no repo I/O) for scope phase-grounding (Task 2).
 - Modify `skills/e2e-dev-harness/scripts/e2e_harness/core/engine.py`: add module namespace ownership validation for evidence submission when worker identity is supplied.
 - Modify `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/submit.py`: pass worker identity to `submit_evidence` when invocation metadata is available.
 - Modify `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/doctor.py`: keep default installer readiness behavior and add `--state` run diagnosis dispatch.
@@ -94,23 +96,50 @@ Expected: new allowed-command cases fail with `AssertionError`.
 
 - [ ] **Step 4: Implement strict branches**
 
-Update `_replay_command_allowed` with conservative branches:
+First add a module-level deny-list near the other runner sets (`validate.py:66-68`):
 
 ```python
-    if name == "go":
-        return args[:1] == ["test"]
-    if name == "cargo":
-        return "test" in args
-    if name in {"pnpm", "yarn"}:
-        return args[:1] == ["test"] or args[:2] == ["run", "test"]
-    if name == "npx":
-        return bool(args) and (
-            (_command_name(args[0]) in _NODE_TEST_COMMANDS and "test" in args[1:])
-            or _command_name(args[0]) == "jest"
-        )
+# jest sub-commands/flags that are NOT a test run. A bare `npx jest` and flag-only
+# runs (e.g. `npx jest --runInBand`) ARE full test runs, so we cannot require a
+# "test" token; instead we reject jest's known non-test entry points.
+_JEST_NON_TEST_ARGS = {"--init", "--help", "-h", "--version", "-v"}
 ```
 
-Keep the existing Python, npm, node, Maven and Gradle behavior unchanged.
+Then **replace the existing single-line `npx` branch** (`validate.py:110-111`) with the version below and add the `go`/`cargo`/`pnpm`/`yarn` branches. Removing the old `npx` one-liner is required — leaving both makes the new branch unreachable and re-introduces the `npx jest --init` leak:
+
+```python
+    if name == "npx":
+        if not args:
+            return False
+        runner = _command_name(args[0])
+        rest = args[1:]
+        if runner in _NODE_TEST_COMMANDS:        # vitest / playwright: unchanged, strict
+            return "test" in rest
+        if runner == "jest":                      # bare/flag jest = full test run; deny non-test subcommands
+            return not (rest and rest[0] in _JEST_NON_TEST_ARGS)
+        return False
+    if name == "go":                              # first subcommand must be `test`
+        return args[:1] == ["test"]
+    if name == "cargo":                           # must invoke the `test` subcommand (stricter than `"test" in args`)
+        return args[:1] == ["test"]
+    if name in {"pnpm", "yarn"}:                  # mirror the npm rule
+        return args[:1] == ["test"] or args[:2] == ["run", "test"]
+```
+
+Keep the existing Python, npm, node, Maven and Gradle behavior unchanged. Do NOT add `jest` to `_NODE_TEST_COMMANDS`: that set requires a literal `test` token and would wrongly reject the required positive case `npx jest --runInBand`. Per-case trace confirming Step 2's tests pass:
+
+| Command | branch | result |
+| --- | --- | --- |
+| `go test ./...` | go → `args[:1]==["test"]` | ALLOW ✓ |
+| `cargo test --all` | cargo → `args[:1]==["test"]` | ALLOW ✓ |
+| `pnpm test` / `pnpm run test` | pnpm/yarn | ALLOW ✓ |
+| `yarn test` / `yarn run test` | pnpm/yarn | ALLOW ✓ |
+| `npx jest --runInBand` | npx→jest, `--runInBand` ∉ deny-list | ALLOW ✓ |
+| `npx jest test` | npx→jest, `test` ∉ deny-list | ALLOW ✓ |
+| `go build ./...` | go → `["build"]!=["test"]` | REJECT ✓ |
+| `cargo build` | cargo → `["build"]!=["test"]` | REJECT ✓ |
+| `pnpm install` / `yarn add lodash` | pnpm/yarn | REJECT ✓ |
+| `npx jest --init` | npx→jest, `--init` ∈ deny-list | REJECT ✓ |
 
 - [ ] **Step 5: Verify focused tests**
 
@@ -124,8 +153,13 @@ Expected: all tests in the file pass.
 
 ### Task 2: Ground Delivered Modules In Scope Manifest
 
+> **Correction (2026-06-13):** an earlier draft grounded `phases` by reading run-state from `obj.get("state")` inside the gate validator. That is circular — `obj` is the worker-produced manifest, so the worker would ground its own delivery — and it keyed completion off `VERIFIED#<id>` records that never exist (`MODULE_SCOPED=(RED,IMPLEMENTED,REVIEWED)`; `VERIFIED` is a whole-run singleton). The gate validator `validate_scope_manifest(obj, repo_root)` is invoked with **no run-state** (`validate.py:147` `STRUCTURED_KEYS['scope_manifest'](obj, repo_root)`; `gates.py` passes only a single phase-record), so gate-time module grounding is infeasible without a new cross-cutting seam. This task instead grounds `phases` at **completion time** in `label_delivery` (which already holds trusted engine-owned state) and leaves the gate validator tables-only.
+>
+> **Signature note (verified 2026-06-13):** `label_delivery(state, repo_root)` ALREADY has this exact signature (`adapters/evidence/scope.py:66`); its current body is `return _effective(obj, repo_root)` where `_effective` = `assess(obj["expected"], _ground(obj["delivered"], repo_root))`. So Step 4 is an **in-body INSERT** (filter `delivered["phases"]` against `completed_modules` before assessing), NOT a signature change. Inlining `_ground`+`assess` as shown reproduces `_effective` exactly — do not drop the existing grounding path, and keep `validate_scope_manifest`/`_effective` (gate-time) untouched.
+
 **Files:**
-- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/adapters/evidence/scope.py:34`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/adapters/evidence/scope.py:66` (`label_delivery`)
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/core/multitrack.py` (add `completed_modules`)
 - Test: `skills/e2e-dev-harness/tests/test_scope_evidence.py`
 
 - [ ] **Step 1: Run impact analysis**
@@ -133,56 +167,64 @@ Expected: all tests in the file pass.
 Run:
 
 ```powershell
-gitnexus_impact target="_ground" direction="upstream" repo="e2e-dev-workflow"
 gitnexus_impact target="label_delivery" direction="upstream" repo="e2e-dev-workflow"
+gitnexus_impact target="module_chains" direction="upstream" repo="e2e-dev-workflow"
 ```
 
-Expected: blast radius is recorded before editing.
+Expected: blast radius is recorded before editing. `label_delivery`'s only production caller is `next.py` on `res['complete']`, with the engine-mutated (trusted) state (`next.py:23-24`) — confirm before editing. (`completed_modules` is new code in `multitrack.py`, so it has no upstream callers yet.)
 
-- [ ] **Step 2: Write failing module-grounding tests**
+- [ ] **Step 2: Write failing module-grounding test**
 
-Add a test where `expected.phases` contains module ids and `delivered.phases` overclaims a missing module:
+Ground `phases` against trusted run-state via `label_delivery`. Two constraints drive the fixture, both verified against the code:
+
+1. `label_delivery` rebuilds the spine internally via `pipeline.spine_for_state(state, repo_root)` (`pipeline.py:115`), which only expands into per-module tracks when `state["phases"]["PLANNED"]["evidence"]["module_plan"]` resolves to a **valid on-disk module plan with ≥2 modules**. So the fixture MUST write a real `module-plan.json` and reference it — otherwise the spine stays unexpanded, `module_chains` is empty, and grounding is a no-op.
+2. `completed_modules` uses a **cheap exit-gate-presence check** (no `validate_evidence`), so `{"path": "x"}` placeholder evidence is sufficient — no genuine command-evidence needed. This is sound because `label_delivery` is only called once the run is `complete` (every gate already validated).
+
+Because the join barrier means a `complete` run has every planned module finished, the honest PARTIAL case is a manifest that **overclaims a phase that was never a module** (here `reporting`):
 
 ```python
-def test_scope_manifest_rejects_ungrounded_delivered_module(tmp_path):
-    state = {
-        "phases": {
-            "VERIFIED#auth": {"dispatch": "done", "evidence": {"verification#auth": {"path": "x"}}},
-        }
-    }
-    manifest = {
-        "schema": "e2e-dev-harness.scope-manifest.v1",
-        "status": "COMPLETE",
-        "expected": {"phases": ["auth", "billing"]},
-        "delivered": {"phases": ["auth", "billing"]},
-        "state": state,
-    }
-    ok, reason = scope.validate_scope_manifest(manifest, tmp_path)
-    assert not ok
-    assert reason == "overclaims-complete:phases:billing"
+def test_label_delivery_grounds_phases_against_completed_modules(tmp_path):
+    import json
+    from e2e_harness import pipeline
+    from e2e_harness.core import multitrack, module_plan
+    from e2e_harness.core import scope as scope_core
+    from e2e_harness.adapters.evidence import scope
+
+    # 2-module plan on disk so spine_for_state expands into per-module tracks.
+    mplan = {"schema": module_plan.SCHEMA, "modules": [
+        {"id": "auth", "name": "auth", "depends_on": [], "acceptance_ids": ["AC-001"]},
+        {"id": "billing", "name": "billing", "depends_on": [], "acceptance_ids": ["AC-002"]},
+    ]}
+    (tmp_path / "module-plan.json").write_text(json.dumps(mplan), encoding="utf-8")
+
+    spine = multitrack.expand(pipeline.build_spine("standard"), mplan)
+    by = {p.name: p for p in spine}
+    state = {"phases": {"PLANNED": {"evidence": {"module_plan": {"path": "module-plan.json"}}}}}
+
+    def _complete(*names):  # mark every exit_gate key of each module phase as present
+        for n in names:
+            state["phases"][n] = {"evidence": {k: {"path": "x"} for k in by[n].exit_gate}}
+
+    # Both real modules finished (the only state in which a run is `complete`).
+    _complete("RED#auth", "IMPLEMENTED#auth", "REVIEWED#auth",
+              "RED#billing", "IMPLEMENTED#billing", "REVIEWED#billing")
+
+    # Manifest overclaims a third phase `reporting` that was never a module.
+    man = {"schema": scope_core.SCHEMA, "status": "PARTIAL",
+           "expected":  {"services": [], "tables": [], "phases": ["auth", "billing", "reporting"]},
+           "delivered": {"services": [], "tables": [], "phases": ["auth", "billing", "reporting"]}}
+    (tmp_path / "scope.json").write_text(json.dumps(man), encoding="utf-8")
+    state["phases"]["VERIFIED"] = {"evidence": {"scope_manifest": {"path": "scope.json"}}}
+
+    status, undelivered = scope.label_delivery(state, tmp_path)
+
+    assert status == "PARTIAL"
+    assert undelivered["phases"] == ["reporting"]   # ungrounded: never a completed module
 ```
 
-Add a passing test for a truthful partial manifest:
+Completion is asserted via the `exit_gate` keys of each `REVIEWED#<id>` (e.g. `review#auth`), exactly as the engine marks a track complete — there is NO `VERIFIED#<id>` key anywhere.
 
-```python
-def test_scope_manifest_allows_truthful_partial_module_delivery(tmp_path):
-    state = {
-        "phases": {
-            "VERIFIED#auth": {"dispatch": "done", "evidence": {"verification#auth": {"path": "x"}}},
-        }
-    }
-    manifest = {
-        "schema": "e2e-dev-harness.scope-manifest.v1",
-        "status": "PARTIAL",
-        "expected": {"phases": ["auth", "billing"]},
-        "delivered": {"phases": ["auth", "billing"]},
-        "state": state,
-    }
-    ok, reason = scope.validate_scope_manifest(manifest, tmp_path)
-    assert ok, reason
-```
-
-- [ ] **Step 3: Run the focused failing tests**
+- [ ] **Step 3: Run the focused failing test**
 
 Run:
 
@@ -190,47 +232,53 @@ Run:
 python -m pytest skills/e2e-dev-harness/tests/test_scope_evidence.py -q
 ```
 
-Expected: the overclaim test fails because current grounding trusts `delivered.phases`.
+Expected: the grounding test fails because `label_delivery` currently passes `phases` through self-declared.
 
-- [ ] **Step 4: Implement module grounding**
+- [ ] **Step 4: Implement completion-time grounding**
 
-Add a helper that derives completed module ids from module-scoped VERIFIED records:
+Add `completed_modules` to `multitrack.py` (a module counts as delivered iff every phase in its chain — `RED#<id>`/`IMPLEMENTED#<id>`/`REVIEWED#<id>` — has all its `exit_gate` keys present in run-state evidence). This is a **cheap presence check, NOT** `gate_passes`: it does no `validate_evidence`/replay, because `label_delivery` only runs once the whole run is `complete` (every gate already validated). It mirrors the `_satisfied` idiom already used in `ready_frontier` (`multitrack.py:109-110`) and keys off `REVIEWED#<id>` chain completion, never `VERIFIED#<id>`:
 
 ```python
-def _completed_modules_from_state(state: dict) -> set[str]:
-    completed: set[str] = set()
-    for name, record in (state.get("phases") or {}).items():
-        if not isinstance(name, str) or not name.startswith("VERIFIED#"):
-            continue
-        module_id = name.split("#", 1)[1]
-        if record.get("dispatch") == "done" and record.get("evidence"):
-            completed.add(module_id)
-    return completed
+def completed_modules(spine: list[Phase], state: dict) -> set[str]:
+    def _evidence(name: str) -> dict:
+        return state.get("phases", {}).get(name, {}).get("evidence", {})
+    out: set[str] = set()
+    for mid, chain in module_chains(spine).items():
+        if all(all(k in _evidence(p.name) for k in p.exit_gate) for p in chain):
+            out.add(mid)
+    return out
 ```
 
-Thread optional state into `_ground` and `_effective`, then filter `phases`:
+In `label_delivery` (`scope.py:66-81`), after loading `obj`, rebuild the spine for the trusted state and intersect delivered `phases` with the completed set before assessing — importing `pipeline`/`multitrack` locally to avoid an import cycle (mirroring `engine.py:212`):
 
 ```python
-def _ground(delivered: dict, repo_root, state: dict | None = None) -> dict:
-    grounded = dict(delivered)
-    tables = delivered.get("tables") or []
-    if tables:
-        sql = _all_sql_text(repo_root)
-        grounded["tables"] = [t for t in tables if _ddl_present(t, sql)]
+def label_delivery(state: dict, repo_root) -> tuple[str | None, dict]:
+    entry = (state.get("phases", {}).get("VERIFIED", {})
+             .get("evidence", {}).get("scope_manifest"))
+    if not entry:
+        return None, {}
+    rel = entry["path"] if isinstance(entry, dict) else entry
+    full = Path(rel)
+    if not full.is_absolute():
+        full = Path(repo_root) / rel
+    try:
+        obj = json.loads(full.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, {}
+    from e2e_harness import pipeline                 # local imports: avoid import cycle
+    from e2e_harness.core import multitrack
+    spine = pipeline.spine_for_state(state, repo_root)
+    completed = multitrack.completed_modules(spine, state)
+    delivered = dict(obj.get("delivered", {}))
     phases = delivered.get("phases") or []
-    if phases and state is not None:
-        completed = _completed_modules_from_state(state)
-        grounded["phases"] = [p for p in phases if p in completed]
-    return grounded
+    if phases:
+        delivered["phases"] = [p for p in phases if p in completed]
+    return scope_core.assess(obj.get("expected", {}), _ground(delivered, repo_root))
 ```
 
-Read `state` from the manifest object so validation and labeling use the same snapshot:
+Leave the gate-time validator (`validate_scope_manifest` / `_ground`, `scope.py:34-63`) UNCHANGED except a comment that `phases`/`services` are taken as declared at gate time (no run-state available). **Documented weakening:** a `phases` overclaim passes the VERIFIED submit gate; it is downgraded to PARTIAL here at completion, against trusted state — never against the worker's own `obj`. Gate-time phase grounding would require threading the whole `state` through `validate_evidence -> STRUCTURED_KEYS`, a larger change deferred to the follow-up that also grounds `services`.
 
-```python
-def _effective(obj, repo_root) -> tuple[str, dict]:
-    grounded = _ground(obj.get("delivered", {}), repo_root, obj.get("state"))
-    return scope_core.assess(obj.get("expected", {}), grounded)
-```
+Why presence (not `gate_passes`) is correct here: `label_delivery` is reached only on `res["complete"]` (`next.py:23`), i.e. after `all_gates_pass` validated every key — so presence ⟹ validated at this point, and re-validating/replaying would be redundant and would make the unit test require genuine command-evidence. `pipeline.spine_for_state(state, repo_root)` only expands when PLANNED carries a valid ≥2-module plan resolvable under `repo_root`; absent that it returns the unexpanded spine, `module_chains` is empty, and grounding is a safe no-op.
 
 - [ ] **Step 5: Verify focused tests**
 
@@ -389,7 +437,15 @@ def _module_suffix(value: str) -> str | None:
         raise ValueError("worker-module-mismatch")
 ```
 
-Pass `worker_id` from `submit.py` only when the CLI has a trusted invocation/worker identity. Manual runtime without identity remains explicit residual risk and should not invent a fake worker id.
+**Residual-risk wording (be honest about what this guard does and does not do):**
+
+No trusted, harness-controlled identity reaches the submit path today. `e2e-dev-harness submit` accepts only `--phase/--key/--path/--status/--reason` (`cli/main.py:60-63`); `engine.submit_evidence(...)` records `evidence[key] = {path, sha256, bytes}` keyed solely by phase+key, with no producer/owner dimension (`engine.py:15-36`). To pass a `worker_id` at all, `submit.py` would need a NEW `--worker-id` argument — which the worker itself supplies. A harness-derived worker id DOES exist at dispatch time (`dispatch` writes `{phase}-default` / `producer_ids` into the `dispatch-invocation.v1` / `agent-team-plan.json` artifacts, `cli/commands/dispatch.py`), but `submit` never reads it and `submit_evidence` never validates against it, so there is currently no binding from a submitted evidence key back to a dispatched worker.
+
+Therefore frame the guard precisely:
+
+- With a self-supplied `worker_id`, the guard only prevents **accidental** mislabeling (a worker writing under the wrong namespace by mistake). It is **defense-in-depth, not an authorization boundary**: an adversarial worker can pass any `worker_id` (including another module's) and write into any namespace.
+- To make it *enforce* a trusted binding, a later task must cross-check the submitted namespace against the dispatch-time `producer_ids` (harness-controlled), not against the value the worker hands to `submit`.
+- **Explicit residual risk — manual / identity-less runtime:** for non-auto-spawn runtimes, `dispatch` records a `blocked` entry and a human runs `submit` with no descriptor/worker_id binding at all; even a future `producer_ids` cross-check degrades to accidental-mislabel protection there. Do not invent a fake worker id to paper over this.
 
 - [ ] **Step 8: Verify focused tests**
 
@@ -404,8 +460,8 @@ Expected: all focused tests pass.
 ### Task 4: Read-Only `doctor --state`
 
 **Files:**
-- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/doctor.py:8`
-- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/main.py`
+- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/doctor.py:8` (branch on `args.state`; import `run_state` + `state_diagnosis`)
+- No change needed: `skills/e2e-dev-harness/scripts/e2e_harness/cli/main.py` already defines `doctor --state <path>` (`main.py:72`)
 - Create: `skills/e2e-dev-harness/scripts/e2e_harness/core/state_diagnosis.py`
 - Test: `skills/e2e-dev-harness/tests/test_cli_doctor.py`
 
@@ -421,18 +477,20 @@ Expected: blast radius is reviewed before editing.
 
 - [ ] **Step 2: Write compatibility tests**
 
-Add a test that default `doctor` remains installer readiness:
+The real `doctor` parser already has `--state` as the **run-state path** (`cli/main.py:72` `doc.add_argument("--state", default=None, ...)`), so `args.state is None` selects installer mode and `args.state == <path>` selects run diagnosis. There is no boolean `state` and no separate `--run-state`; the tests must match that.
+
+Add a test that default `doctor` (no `--state`) remains installer readiness:
 
 ```python
 def test_doctor_default_schema_remains_installer_readiness(tmp_path):
-    args = SimpleNamespace(project_root=str(tmp_path), runtime="claude", strict=False, state=False)
+    args = SimpleNamespace(project_root=str(tmp_path), runtime="claude", strict=False, state=None)
     code, payload = doctor.run(args)
     assert code == 0
     assert payload["schema"] == "e2e-dev-harness.doctor.v1"
     assert "checks" in payload
 ```
 
-Add a test for `doctor --state`:
+Add a test for `doctor --state <path>` (singleton phase):
 
 ```python
 def test_doctor_state_reports_first_missing_evidence(tmp_path):
@@ -442,14 +500,32 @@ def test_doctor_state_reports_first_missing_evidence(tmp_path):
         "current_phase": "IMPLEMENTED",
         "phases": {"IMPLEMENTED": {"evidence": {}}},
     }), encoding="utf-8")
-    args = SimpleNamespace(project_root=str(tmp_path), runtime="claude", strict=False, state=True, run_state=str(run_state))
+    args = SimpleNamespace(project_root=str(tmp_path), runtime="claude", strict=False, state=str(run_state), repo=".")
     code, payload = doctor.run(args)
     assert code == 2
     assert payload["schema"] == "e2e-dev-harness.doctor-state.v1"
     assert payload["diagnosis_ready"] is True
     assert payload["run_blocked"] is True
     assert payload["first_fault"]["kind"] == "missing_evidence"
-    assert payload["next_legal_command"]
+    assert payload["missing_evidence"] == ["passing_tests", "test_substance"]
+    assert payload["next_legal_command"].startswith("e2e-dev-harness dispatch --state")
+```
+
+Add a test for a **namespaced module-band phase** — the case where diagnosis matters most (a stuck multi-module run). `current_phase` is namespaced and required keys must be derived by base-naming the phase, then re-namespacing:
+
+```python
+def test_doctor_state_handles_namespaced_module_phase(tmp_path):
+    run_state = tmp_path / "run-state.json"
+    run_state.write_text(json.dumps({
+        "schema": "e2e-dev-harness.run-state.v1",
+        "current_phase": "IMPLEMENTED#auth",
+        "phases": {"IMPLEMENTED#auth": {"evidence": {}}},
+    }), encoding="utf-8")
+    args = SimpleNamespace(project_root=str(tmp_path), runtime="claude", strict=False, state=str(run_state), repo=".")
+    code, payload = doctor.run(args)
+    assert code == 2
+    assert payload["blocked_phase"] == "IMPLEMENTED#auth"
+    assert payload["missing_evidence"] == ["passing_tests#auth", "test_substance#auth"]
 ```
 
 - [ ] **Step 3: Run focused failing tests**
@@ -464,10 +540,28 @@ Expected: `--state` test fails because no state diagnosis path exists.
 
 - [ ] **Step 4: Implement `state_diagnosis.py`**
 
-Create a pure diagnosis function:
+Derive required keys from the lifecycle catalog and **handle namespaced module-band phases**: a `current_phase` like `IMPLEMENTED#auth` must be base-named to look up the catalog `exit_gate`, then the keys re-namespaced with the module suffix.
 
 ```python
-def diagnose_run(state: dict, run_dir: Path) -> dict:
+from pathlib import Path
+from e2e_harness.core import lifecycle, multitrack
+
+
+def _required_keys_for_phase(phase_name: str | None) -> list[str]:
+    """exit_gate keys for a phase, namespaced when the phase is module-scoped.
+    'IMPLEMENTED#auth' -> ['passing_tests#auth', 'test_substance#auth'];
+    'IMPLEMENTED'      -> ['passing_tests', 'test_substance']."""
+    if not phase_name:
+        return []
+    base = multitrack.base_phase_name(phase_name)   # 'IMPLEMENTED#auth' -> 'IMPLEMENTED'
+    mod = multitrack.module_of(phase_name)          # 'IMPLEMENTED#auth' -> 'auth' (None if singleton)
+    phase = lifecycle.catalog().get(base)
+    if phase is None:
+        return []
+    return list(phase.exit_gate) if mod is None else [f"{k}#{mod}" for k in phase.exit_gate]
+
+
+def diagnose_run(state: dict, state_path: str, repo: str = ".") -> dict:
     current = state.get("current_phase")
     rec = (state.get("phases") or {}).get(current or "", {})
     evidence = rec.get("evidence") or {}
@@ -481,32 +575,48 @@ def diagnose_run(state: dict, run_dir: Path) -> dict:
             "task_id": None,
             "message": f"{missing[0]} evidence is missing",
         }
+    # next_legal_command is derived from the REAL CLI verb set — prog `e2e-dev-harness`,
+    # commands start/next/dispatch/submit/gate/status/doctor/migrate, flags
+    # `--state <run-state-path>` / `--repo` (see cli/main.py). It is NOT a target-lifecycle
+    # fiction: there is no `dispatch-beat` command and no `--run-dir` flag. A missing-evidence
+    # block is cleared by dispatching the blocked phase's worker, i.e. `dispatch`.
+    next_cmd = (f"e2e-dev-harness dispatch --state {state_path} --repo {repo}"
+                if first else None)
     return {
         "schema": "e2e-dev-harness.doctor-state.v1",
         "diagnosis_ready": True,
         "run_blocked": bool(first),
-        "run_dir": str(run_dir),
+        "run_dir": str(Path(state_path).parent),
         "first_fault": first,
         "blocked_phase": current if first else None,
         "blocked_task": None,
         "missing_evidence": missing,
-        "next_legal_command": f"e2e-harness dispatch-beat --run-dir {run_dir}" if first else None,
+        "next_legal_command": next_cmd,
         "coordinator_may_write_worker_outputs": False,
     }
 ```
 
-Use existing lifecycle catalog/spine helpers for `_required_keys_for_phase` rather than duplicating phase constants.
+This reuses `lifecycle.catalog()` + `multitrack.base_phase_name`/`module_of` rather than duplicating phase constants, and works for both singleton and module-band phases.
 
-- [ ] **Step 5: Wire CLI args**
+- [ ] **Step 5: Wire the existing `--state` flag (no new parser field)**
 
-Add parser fields for `doctor --state --run-state <path>` in `cli/main.py`, and branch in `doctor.run(args)`:
+`cli/main.py:72` already defines `doctor --state <path>` as the run-state path (`default=None`). Do NOT add a `--run-state` flag and do NOT introduce a boolean `state`. Branch at the top of `doctor.run(args)` on whether a path was supplied:
 
 ```python
-    if bool(getattr(args, "state", False)):
-        return _run_state_diagnosis(args)
+    # --state carries the run-state path (cli/main.py:72); None => installer readiness.
+    state_path = getattr(args, "state", None)
+    if state_path:
+        return _run_state_diagnosis(args, state_path)
 ```
 
-Default `doctor` behavior must remain byte-compatible for installer tests.
+```python
+def _run_state_diagnosis(args, state_path):
+    state = run_state.load(state_path)
+    payload = state_diagnosis.diagnose_run(state, state_path, getattr(args, "repo", "."))
+    return (2 if payload["run_blocked"] else 0), payload
+```
+
+Default `doctor` behavior (when `args.state is None`) must remain byte-compatible for installer tests — the existing installer-readiness body is untouched.
 
 - [ ] **Step 6: Verify focused tests**
 
@@ -520,21 +630,16 @@ Expected: doctor tests pass.
 
 ### Task 5: Tamper-Evident Event Log
 
+> **Scope note:** this task ships `event_log.py` and `state_store.py` as an UNWIRED, independently-tested seam. It is NOT wired into the run-state write path — `run_state.mutate` is deliberately left untouched. Per the control-plane design, events are the authoritative source and `run-state.json` is the *output* of event replay, not a co-write target (design Phase 4, `docs/loop-engineering-control-plane-design.md:408-429`: "replay events into run-state.json projection"; Non-Goal "keep run-state.json as a compatibility projection"). Coupling `append_event` into `mutate` requires an event-type-derivation layer (`mutate` sees only an opaque post-mutation dict, not the semantic event type `state_store.replay_events` switches on) and is a separate projection task, sequenced last in the design's recommended order (`design:467-474`). Tracked for that follow-up, not this task. (This removes the earlier phantom `run_state.py` edit target.)
+
 **Files:**
 - Create: `skills/e2e-dev-harness/scripts/e2e_harness/core/event_log.py`
 - Create: `skills/e2e-dev-harness/scripts/e2e_harness/core/state_store.py`
-- Modify: `skills/e2e-dev-harness/scripts/e2e_harness/core/run_state.py`
 - Test: `skills/e2e-dev-harness/tests/test_event_log.py`
 
-- [ ] **Step 1: Run impact analysis**
+- [ ] **Step 1: Confirm scope (no existing-symbol edit)**
 
-Run:
-
-```powershell
-gitnexus_impact target="mutate" file_path="skills/e2e-dev-harness/scripts/e2e_harness/core/run_state.py" direction="upstream" repo="e2e-dev-workflow"
-```
-
-Expected: blast radius is reviewed before editing.
+This task only creates new modules, so there is no existing symbol to run GitNexus impact analysis on, and `run_state.py` is intentionally NOT modified. Proceed to the event-chain tests.
 
 - [ ] **Step 2: Write event-chain tests**
 

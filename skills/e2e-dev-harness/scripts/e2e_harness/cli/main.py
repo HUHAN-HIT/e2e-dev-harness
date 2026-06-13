@@ -61,6 +61,9 @@ def build_parser() -> argparse.ArgumentParser:
     sm.add_argument("--phase", required=True); sm.add_argument("--key", default=None); sm.add_argument("--path", default=None)
     sm.add_argument("--status", choices=["done", "failed"], default="done")
     sm.add_argument("--reason", default=None)
+    sm.add_argument("--worker-id", dest="worker_id", default=None,
+                    help="OWN1 namespace guard: reject evidence whose #module differs "
+                         "from the worker's (defense-in-depth; self-supplied)")
 
     g = sub.add_parser("gate"); g.add_argument("--state", required=True); g.add_argument("--repo", default=".")
     g.add_argument("--phase", default=None)

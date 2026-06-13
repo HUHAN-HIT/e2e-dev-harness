@@ -32,7 +32,7 @@ Loop Engineering 在本文中的含义不是“多 agent 自动跑任务”，�
 - `navigation_map()` 默认 `skip_replay=True`，读状态不会误触发 verification replay。
 - 当前 checkout 中 `doctor` 仍是浅层 installer readiness check，不能被写成成熟 run-level diagnosis。
 - 当前 checkout 中没有成型的 `event_log.py`、`state_store.py`、`recover.py`。这些属于目标态或历史分支能力，不能当作当前事实。
-- （2026-06-13 核验补充）`verification` replay 当前只覆盖一个命令 allow-list（`python -m pytest｜unittest`、`pytest`、`npx vitest｜playwright`、`node --check`、`mvn`、`gradle`）；`go`/`cargo`/`pnpm`/`yarn`/`jest` 会被 `replay-command-disallowed` 拒——这些栈当前无法过 VERIFIED（见 Review Notes D4 / Phase 1）。
+- （2026-06-13 核验补充）`verification` replay 当前只覆盖一个命令 allow-list（`python -m pytest｜unittest`、`pytest`、`npm test｜run test`、`npx vitest｜playwright`、`node --check`、`mvn`、`gradle`）；`go`/`cargo`/`pnpm`/`yarn`/`jest` 会被 `replay-command-disallowed` 拒——这些栈当前无法过 VERIFIED（见 Review Notes D4 / Phase 1）。
 - （2026-06-13 核验补充）`scope_manifest` 的 grounding 当前只对 `tables` 校验 `CREATE TABLE` DDL；`services`/`phases` 取 worker 自报值（见 Review Notes D1 / Phase 1）。
 - （2026-06-13 核验补充）`audit_replay`（F5）与 `agent_team_dispatch`（F4）是 audited-tier 的 VERIFIED gate key（经 `pipelines/audited.yaml` 注入、audit 关键词自动路由），默认 minimal/standard/critical tier 不要求它们——这是有意的 tier scaling、非缺陷；`audit_replay` 为 anti-forgery-only、不 replay，与被真 replay 的 `verification` 是不同强度的保证（见 Review Notes D2/D3）。
 - （2026-06-13 设计收敛）`module-fanout` 是 dispatch 主链上的可达能力，不是 dead code；当前只由 module dependency 和 evidence presence 控制并发，不包含 write-scope、conflict-group 或 worker-owner 强制。因此 Loop Engineering hardening 不能只补 fidelity/doctor，还必须先给 fan-out 加一个安全地板。
@@ -276,7 +276,7 @@ Required output fields:
   "blocked_phase": "IMPLEMENTED",
   "blocked_task": "T03",
   "missing_evidence": ["passing_tests"],
-  "next_legal_command": "e2e-harness dispatch-beat --run-dir docs/agent-runs/example",
+  "next_legal_command": "e2e-dev-harness dispatch --state docs/agent-runs/example/run-state.json --repo .",
   "coordinator_may_write_worker_outputs": false
 }
 ```
@@ -338,7 +338,7 @@ Required tests:
 - empty or weak tests fail `test_substance`;
 - `scope_manifest` can produce `PARTIAL` without allowing final `COMPLETE`;
 - navigation reads remain side-effect-free;
-- a services/phases-only `scope_manifest` cannot reach `COMPLETE` by self-declaration (gap D1);
+- a services/phases-only `scope_manifest` cannot be labelled `COMPLETE` at completion (`label_delivery`, grounded against real `REVIEWED#<id>` chain completion) by self-declaration; the gate validator stays tables-only by design (gap D1, documented weakening);
 - a genuine `verification` record from `go test` / `cargo test` / `pnpm test` / `yarn test` / `npx jest` is accepted, not rejected as `replay-command-disallowed` (gap D4).
 - module fan-out is withheld when modules declare shared `conflict_groups`;
 - a module worker cannot submit evidence for another module namespace;
@@ -346,7 +346,7 @@ Required tests:
 
 Additional fidelity-gap closures (re-verified 2026-06-13 by 4 independent agents — see Review Notes D):
 
-- **D1 — scope grounding (severity medium).** `adapters/evidence/scope.py._ground` grounds only the `tables` category against `CREATE TABLE` DDL; `services`/`phases` pass through self-declared, so a services/phases-only expected set reaches `COMPLETE` ungrounded. Minimal fix: define `phases` as delivered module ids from the module plan, then ground them against completed module chains in run-state. Do not compare module ids directly to lifecycle phase names. `services` grounding is a harder follow-up.
+- **D1 — scope grounding (severity medium).** `adapters/evidence/scope.py._ground` grounds only the `tables` category against `CREATE TABLE` DDL; `services`/`phases` pass through self-declared, so a services/phases-only expected set reaches `COMPLETE` ungrounded. **机制更正（2026-06-13 实施核验）：grounding 不能在 gate 验证器里做。** `validate_scope_manifest(obj, repo_root)`（经 `validate.py` `STRUCTURED_KEYS['scope_manifest'](obj, repo_root)` 调用）**只拿到 worker 自产的 manifest 对象 + repo_root，拿不到 run-state**——任何「从 manifest 读 state 再 ground」都是循环自证。真实的 module-complete 信号是 `REVIEWED#<id>` 链完成（`MODULE_SCOPED=(RED,IMPLEMENTED,REVIEWED)`，VERIFIED 是全 run 单例，`VERIFIED#<id>` 记录不存在）。因此最小修法分层：(1) gate 验证器保持 **tables-only**——这是一处**有记录的弱化**：phases overclaim 仍能过 VERIFIED submit gate；(2) 在 `label_delivery(state, repo_root)`（持有 engine 可信 state、由 `next.py` 在 run 完成时调用）把 delivered `phases` 与「已完成 `REVIEWED#<id>` 链的模块集合」求交后再判 COMPLETE/PARTIAL，新增 `multitrack.completed_modules(spine, state)`（按每条模块链的 `exit_gate` key 是否在场做**廉价 presence 检查**——`label_delivery` 只在 `res["complete"]`／`all_gates_pass` 全绿后被调用，证据此刻已被 gate 验证过，无需重复 validate/replay；放在 `multitrack` 避免 `engine↔adapters` import cycle）作为该集合来源。不要把 module id 直接和 lifecycle phase 名比较。`services` grounding 与 gate-time phase grounding（需把整个 state 经 `validate_evidence -> STRUCTURED_KEYS` 串进验证器的更大改动）作后续。
 - **D4 — replay command allow-list (severity high).** `validate.py:_replay_command_allowed` is a closed enumeration (pytest/unittest, vitest/playwright, node --check, mvn, gradle); `go test` / `cargo test` / `pnpm test` / `yarn test` / `npx jest` fall through to `return False`, making `VERIFIED` structurally un-passable for those stacks even with genuine evidence — and unlike `audit_replay` this narrowing is undocumented, not by-design. Minimal fix: add conservative `go`/`cargo`/`pnpm`/`yarn` test-subcommand branches and `jest` to the node test set, each as strict as the existing branches (must reference a test subcommand).
 - **FAN1 — fan-out safety floor (severity high).** `ready_frontier` currently returns every dependency-ready module phase. Before claiming worker isolation, add declarative `conflict_groups` to module plans and require fanned-out modules to have no shared conflict group. This keeps fan-out for clearly independent modules while serializing migrations, lockfiles, shared schemas, codegen sinks and other named shared resources.
 - **OWN1 — evidence namespace ownership (severity high).** `submit_evidence` currently accepts arbitrary phase/key pairs. For module-scoped phases, a worker submitting `IMPLEMENTED#auth` evidence must not be able to satisfy `IMPLEMENTED#billing`. The lightest viable guard is a runtime assertion that claimed worker id, phase namespace and evidence key namespace match when worker identity is available; manual runtime remains an explicit residual-risk path.
@@ -356,7 +356,7 @@ Additional fidelity-gap closures (re-verified 2026-06-13 by 4 independent agents
 Exit criteria:
 
 - `acceptance_contract -> failing_tests -> test_substance -> passing_tests -> scope_manifest -> verification replay` is enforced end to end;
-- `scope_manifest` `COMPLETE` is grounded (not self-declared) at least for `tables` and delivered module ids;
+- `scope_manifest` `COMPLETE` is grounded (not self-declared) at least for `tables` (at the gate) and for delivered module ids (at completion, in `label_delivery`, against `REVIEWED#<id>` chain completion — the gate validator stays tables-only, a documented weakening);
 - `verification` replay accepts the first-class test runner of every supported stack (Python/Node/Go/Rust/JVM), or names the unsupported stack explicitly rather than silently rejecting genuine evidence.
 - module fan-out is allowed only for declared-independent modules with no shared `conflict_groups`;
 - module evidence submission cannot satisfy another module namespace when worker identity is available.
@@ -548,3 +548,16 @@ That sequence keeps the system honest. It prevents the project from productizing
 2. **先补 D 节中代价小、收益高的 fidelity 漏洞**,因为它们直接关系"通过 gate = 符合设计"这条第一原则:默认 VERIFIED gate 是否该要求 `audit_replay`;replay allow-list 扩到 go/cargo/pnpm/yarn/jest;scope grounding 是否该 ground services;`doctor` 命令面去歧义;F2 vs failure ledger 是有意还是缺陷。
 3. **fan-out 安全按 B.3 的分层做**:plan 层 `conflict_groups`(命名共享资源)+ 运行时 module-aware 写 guard + 显式声明 fan-out 不安全边界;在此之前,把 `ready_frontier` 的 ≥2 并发条件**收紧**为"仅当模块声明了互不相交 write_scope 且无共享 conflict_group",而不是一刀切关闭。
 4. **动 `ready_frontier`/`dispatch` 属主调度链**,按本仓 CLAUDE.md 先跑 `gitnexus_impact` 评估爆炸半径再改。
+
+### G. 实施前精度修正(2026-06-13 二次读码核验,11 个独立 agent 逐簇核验)
+
+> 对本稿 + 实施计划共 39 条代码断言做对抗性逐条读码:30 verified / 8 partial(均为引用层面不精确,实质成立)/ 1 refuted(对实施有利)。**无任何核心事实造假**。本子节同样只追加;下列为会影响实施或检索的精度修正。
+
+- **(已就地修正)Doctor 示例 fiction 命令。** 上文 `doctor --state` 示例的 `next_legal_command` 原为 `e2e-harness dispatch-beat --run-dir docs/agent-runs/example`,三处皆假(真实 prog 名 `e2e-dev-harness`、无 `dispatch-beat` 命令、无 `--run-dir` flag;见 `cli/main.py:32` `prog="e2e-dev-harness"` 与命令集 start/next/dispatch/submit/gate/status/validate-pipeline/doctor/migrate)。已就地改为 `e2e-dev-harness dispatch --state <run-state> --repo .`,与实施计划 Task 4 一致。
+- **D2 函数名更正。** 上文 D 节把 F4 校验器写成 `validate_evidence(repo_root,key,entry)`;真实符号是 `validate_dispatch_invocation(obj, repo_root)`(`adapters/evidence/dispatch_invocation.py:20`),该文件内不存在 `validate_evidence`。安全结论(签名不带提交者身份、无法把 evidence key 绑定到 worker)不变。
+- **D1 文件消歧。** 上文多处 `dispatch.py:85-95` / `dispatch.py:92` 指的是 `cli/commands/dispatch.py`(`:89` 实例化 provider、`:92-99` 三条件 gated fan-out);`core/dispatch.py` 只有 `DispatchStatus` enum + worker_packet,无 fan-out 逻辑。
+- **DR1 默认 doctor 语义更正。** D 节"`ready` = project_root + settings 解析"偏严;实测默认 `ready` 只取 project_root 是否存在(`doctor.py:53-55`),settings/opencode 解析仅在 `--strict` 下才升为 blocker(`:61-71`),默认仅 informational。Hard Boundary #3"默认 doctor 保持 installer readiness"仍成立。
+- **S3 `label_delivery` 已是目标签名。** `label_delivery(state, repo_root)` 已存在(`adapters/evidence/scope.py:66`),现体 `return _effective(obj, repo_root)` = `assess(expected, _ground(delivered, repo_root))`。Phase 1 不是改签名,而是在现有函数体内**插入** module grounding 并保留 `_effective` 语义。
+- **`build_spine` 形参。** `lifecycle.build_spine(phase_names: list[str], overrides=None)` 吃 phase-name 列表;`pipeline.build_spine(pipeline: str)` 形参名为 `pipeline`(非 `tier`);`spine_for_state` 本身不判 ≥2 模块,阈值在 `multitrack.expand`(`:70` `if len(modules) < 2`)。净行为与文档一致。
+- **doctor-state.v1 task 字段。** 上文示例的 `task_id:"T03"` / `blocked_task:"T03"` 为目标形态;Phase 1 初版 `state_diagnosis.diagnose_run` 暂返回 `task_id:null` / `blocked_task:null`(尚不做 task-id 推导),其余字段一致。
+- **行号漂移(写稿早于 commit `b13ef6b`)。** 多处 cite 较当前 checkout 偏移数行:如 `validate.py:95-118`→`101-124`、`:147`→`153`、`:168-180`→`174-186`、`audit_replay:8-13`→`5-13`。一律以符号名 + 实质为准。

@@ -230,3 +230,43 @@ def test_frontier_empty_when_all_modules_complete():
     _mark(st, spine, "RED#auth", "IMPLEMENTED#auth", "REVIEWED#auth",
           "RED#billing", "IMPLEMENTED#billing", "REVIEWED#billing")
     assert _front_names(spine, st, mplan) == []
+
+
+# --- FAN1: conflict-group fan-out safety floor ----------------------------------
+
+
+def _mod_cg(mid, groups, deps=()):
+    return {"id": mid, "name": f"{mid} svc", "depends_on": list(deps),
+            "acceptance_ids": ["AC-001"], "conflict_groups": list(groups)}
+
+
+def test_frontier_withholds_module_sharing_conflict_group():
+    # auth and billing are dependency-independent but both touch db:migrations ->
+    # only the first (declared order) may run; billing is serialized behind it.
+    mplan = _plan(_mod_cg("auth", ["db:migrations"]), _mod_cg("billing", ["db:migrations"]))
+    spine = multitrack.expand(pipeline.build_spine("standard"), mplan)
+    st = {"phases": {}}
+    assert _front_names(spine, st, mplan) == ["RED#auth"]
+
+
+def test_frontier_parallel_when_conflict_groups_disjoint():
+    mplan = _plan(_mod_cg("auth", ["db:migrations"]), _mod_cg("billing", ["npm:lockfile"]))
+    spine = multitrack.expand(pipeline.build_spine("standard"), mplan)
+    st = {"phases": {}}
+    assert sorted(_front_names(spine, st, mplan)) == ["RED#auth", "RED#billing"]
+
+
+def test_frontier_parallel_when_no_conflict_groups_declared():
+    # regression: modules with no conflict_groups still fan out (existing behavior).
+    spine, mplan = _expanded(_mod("auth"), _mod("billing"))
+    st = {"phases": {}}
+    assert sorted(_front_names(spine, st, mplan)) == ["RED#auth", "RED#billing"]
+
+
+def test_frontier_releases_conflict_peer_after_first_completes():
+    # once auth's chain is done, billing (same group) is no longer withheld.
+    mplan = _plan(_mod_cg("auth", ["db:migrations"]), _mod_cg("billing", ["db:migrations"]))
+    spine = multitrack.expand(pipeline.build_spine("standard"), mplan)
+    st = {"phases": {}}
+    _mark(st, spine, "RED#auth", "IMPLEMENTED#auth", "REVIEWED#auth")
+    assert _front_names(spine, st, mplan) == ["RED#billing"]

@@ -65,7 +65,13 @@ def validate_scope_manifest(obj, repo_root) -> tuple[bool, str | None]:
 
 def label_delivery(state: dict, repo_root) -> tuple[str | None, dict]:
     """Read the VERIFIED scope manifest and return the grounded (status, undelivered)
-    so the caller can record it on the run-state. (None, {}) if no manifest."""
+    so the caller can record it on the run-state. (None, {}) if no manifest.
+
+    Delivered `phases` are grounded against the set of modules whose REVIEWED#<id>
+    chain actually completed (via trusted engine-owned run-state) — a `phases`
+    overclaim that passed the tables-only gate validator is downgraded to PARTIAL
+    here. `tables` grounding (CREATE TABLE DDL) and `services` pass-through are the
+    same as `_effective`; this only adds the phases intersection on top."""
     entry = (state.get("phases", {}).get("VERIFIED", {})
              .get("evidence", {}).get("scope_manifest"))
     if not entry:
@@ -78,4 +84,14 @@ def label_delivery(state: dict, repo_root) -> tuple[str | None, dict]:
         obj = json.loads(full.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None, {}
-    return _effective(obj, repo_root)
+    # Local imports avoid an engine<->adapters import cycle (mirrors engine.py).
+    from e2e_harness import pipeline
+    from e2e_harness.core import multitrack
+
+    spine = pipeline.spine_for_state(state, repo_root)
+    completed = multitrack.completed_modules(spine, state)
+    delivered = dict(obj.get("delivered", {}))
+    phases = delivered.get("phases") or []
+    if phases:
+        delivered["phases"] = [p for p in phases if p in completed]
+    return scope_core.assess(obj.get("expected", {}), _ground(delivered, repo_root))

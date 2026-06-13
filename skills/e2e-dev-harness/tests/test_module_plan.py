@@ -135,3 +135,35 @@ def test_expected_scope_tolerates_modules_without_scope():
     scope = module_plan.expected_scope(p)
     assert scope["services"] == [] and scope["tables"] == []
     assert scope["phases"] == ["auth"]
+
+
+# --- FAN1: conflict_groups (named shared resources) ------------------------------
+
+
+def test_module_plan_accepts_conflict_groups():
+    ok, reason = module_plan.validate_module_plan(
+        _plan(_mod("auth", conflict_groups=["db:migrations", "npm:lockfile"])))
+    assert (ok, reason) == (True, None)
+
+
+def test_conflict_groups_optional():
+    ok, reason = module_plan.validate_module_plan(_plan(_mod("auth")))
+    assert (ok, reason) == (True, None)
+
+
+def test_module_plan_rejects_non_list_conflict_groups():
+    ok, reason = module_plan.validate_module_plan(
+        _plan(_mod("auth", conflict_groups="db:migrations")))
+    assert ok is False and reason.startswith("bad-conflict-groups")
+
+
+def test_module_plan_rejects_non_string_conflict_group_member():
+    ok, reason = module_plan.validate_module_plan(
+        _plan(_mod("auth", conflict_groups=["db:migrations", 123])))
+    assert ok is False and reason.startswith("bad-conflict-groups")
+
+
+def test_module_plan_rejects_blank_conflict_group():
+    ok, reason = module_plan.validate_module_plan(
+        _plan(_mod("auth", conflict_groups=["   "])))
+    assert ok is False and reason.startswith("bad-conflict-groups")

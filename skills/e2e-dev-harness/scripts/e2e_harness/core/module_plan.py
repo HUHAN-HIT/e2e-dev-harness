@@ -50,6 +50,12 @@ def _validate_module(mod) -> tuple[str | None, str | None]:
     for aid in acs:
         if not isinstance(aid, str) or not _AC_ID.match(aid):
             return mid, f"bad-acceptance-id:{mid}:{aid!r}"
+    # FAN1: optional named shared resources (migrations sequence, lockfile, codegen
+    # sink, shared schema). The scheduler withholds fan-out for modules that share
+    # one. Each must be a non-empty string.
+    groups = mod.get("conflict_groups", [])
+    if not isinstance(groups, list) or not all(_nonempty_str(g) for g in groups):
+        return mid, f"bad-conflict-groups:{mid}"
     return mid, None
 
 

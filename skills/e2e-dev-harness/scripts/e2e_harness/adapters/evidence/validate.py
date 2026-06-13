@@ -72,6 +72,10 @@ REPLAY_KEYS = {"verification"}
 _PYTHON_TEST_MODULES = {"pytest", "unittest"}
 _DIRECT_TEST_COMMANDS = {"pytest", "pytest3"}
 _NODE_TEST_COMMANDS = {"vitest", "playwright"}
+# jest sub-commands/flags that are NOT a test run. A bare `npx jest` and flag-only
+# runs (e.g. `npx jest --runInBand`) ARE full test runs, so we cannot require a
+# "test" token; instead we reject jest's known non-test entry points.
+_JEST_NON_TEST_ARGS = {"--init", "--help", "-h", "--version", "-v"}
 
 
 def _is_relative_to(child: Path, parent: Path) -> bool:
@@ -114,7 +118,21 @@ def _replay_command_allowed(command: str) -> bool:
     if name == "npm":
         return args[:1] == ["test"] or args[:2] == ["run", "test"]
     if name == "npx":
-        return bool(args) and _command_name(args[0]) in _NODE_TEST_COMMANDS and "test" in args[1:]
+        if not args:
+            return False
+        runner = _command_name(args[0])
+        rest = args[1:]
+        if runner in _NODE_TEST_COMMANDS:        # vitest / playwright: unchanged, strict
+            return "test" in rest
+        if runner == "jest":                      # bare/flag jest = full test run; deny non-test subcommands
+            return not (rest and rest[0] in _JEST_NON_TEST_ARGS)
+        return False
+    if name == "go":                              # first subcommand must be `test`
+        return args[:1] == ["test"]
+    if name == "cargo":                           # must invoke the `test` subcommand (stricter than `"test" in args`)
+        return args[:1] == ["test"]
+    if name in {"pnpm", "yarn"}:                  # mirror the npm rule
+        return args[:1] == ["test"] or args[:2] == ["run", "test"]
     if name == "node":
         return len(args) >= 2 and args[0] == "--check"
     if name == "mvn":

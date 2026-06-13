@@ -14,7 +14,21 @@ def _phase_record(state: dict, name: str) -> dict:
 
 def submit_evidence(state: dict, phase_name: str, key: str, path: str, *,
                     repo_root=None, status: str = "done", reason: str | None = None,
-                    exit_gate: tuple[str, ...] | None = None) -> None:
+                    exit_gate: tuple[str, ...] | None = None,
+                    worker_id: str | None = None) -> None:
+    # OWN1 namespace ownership guard (defense-in-depth, NOT an authorization
+    # boundary): for module-scoped phases the phase, evidence key and (when supplied)
+    # worker id must agree on the `#module` namespace, so an `IMPLEMENTED#auth` worker
+    # cannot satisfy `IMPLEMENTED#billing`. worker_id is self-supplied today, so this
+    # only stops accidental mislabeling; a trusted binding needs dispatch-time
+    # producer_ids (a later task). Singleton phases (no `#`) are unaffected.
+    phase_module = multitrack.module_of(phase_name)
+    key_module = multitrack.module_of(key) if key else None
+    worker_module = multitrack.module_of(worker_id) if worker_id else None
+    if phase_module and key_module and phase_module != key_module:
+        raise ValueError("phase-key-module-mismatch")
+    if phase_module and worker_module and phase_module != worker_module:
+        raise ValueError("worker-module-mismatch")
     rec = _phase_record(state, phase_name)
     if status == "failed":
         # Per-key failure ledger (S1/S2): a failed key is recorded under its own

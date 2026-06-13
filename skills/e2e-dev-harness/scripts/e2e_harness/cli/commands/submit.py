@@ -23,6 +23,7 @@ def run(args) -> tuple[int, dict]:
             status=getattr(args, "status", "done"),
             reason=getattr(args, "reason", None),
             exit_gate=exit_gate,
+            worker_id=getattr(args, "worker_id", None),
         ),
     )
     return 0, {"schema": "e2e-dev-harness.submit.v1", "phase": args.phase,
