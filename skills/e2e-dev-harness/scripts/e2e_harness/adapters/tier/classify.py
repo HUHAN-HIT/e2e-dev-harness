@@ -32,13 +32,42 @@ _MESSAGING = {"mq", "kafka", "rocketmq", "rabbitmq", "topic", "producer", "consu
               "payload", "消息", "队列", "生产者", "消费者"}
 _AUDIT = {"audit", "compliance", "incident", "regulatory", "合规", "审计", "事故"}
 
+# Adversarial-review triggers (design "Tier and Selection Policy"): high-stakes
+# surfaces where "how could this fail?" matters more than "does this look right?".
+# These never select a tier — recommend.py surfaces them as an opt-in
+# `--pipeline adversarial` suggestion the user confirms.
+_CONTROL_PLANE = {"control plane", "control-plane", "coordinator", "lifecycle",
+                  "phase guard", "state machine", "orchestration", "orchestrator",
+                  "控制面", "协调器", "状态机", "编排"}
+_EVIDENCE_GATE = {"evidence", "gate", "gating", "dispatch", "dispatcher",
+                  "证据", "门禁", "派发", "网关"}
+_CONCURRENCY = {"concurrency", "concurrent", "parallel", "parallelism",
+                "race condition", "fan-out", "fanout", "multi-track", "multitrack",
+                "并发", "并行", "竞态", "多轨", "扇出"}
+_VERIFICATION_SEMANTICS = {"verification semantics", "verification gate",
+                           "test framework", "test harness", "replay", "gate validator",
+                           "验证语义", "测试框架", "回放"}
+# label -> keyword set; security reuses the tier classifier's _SECURITY surface.
+_ADVERSARIAL_TRIGGERS = (
+    ("control-plane", _CONTROL_PLANE),
+    ("evidence/gate/dispatch", _EVIDENCE_GATE),
+    ("cross-module concurrency", _CONCURRENCY),
+    ("verification/test-semantics", _VERIFICATION_SEMANTICS),
+    ("security-sensitive", _SECURITY),
+)
 
-def _hits(text: str, keywords: set[str], label: str) -> list[str]:
+
+def _first_keyword(text: str, keywords: set[str]) -> str | None:
     lowered = text.lower()
     for kw in sorted(keywords):
         if re.search(r"(?<![a-z0-9])" + re.escape(kw.lower()) + r"(?![a-z0-9])", lowered):
-            return [f"{label} keyword detected: {kw}"]
-    return []
+            return kw
+    return None
+
+
+def _hits(text: str, keywords: set[str], label: str) -> list[str]:
+    kw = _first_keyword(text, keywords)
+    return [f"{label} keyword detected: {kw}"] if kw else []
 
 
 def _classify_text(text: str) -> tuple[str, list[str]]:
@@ -96,3 +125,22 @@ def classify_tier(request_text: str, scope: dict | None = None,
             "pass --tier minimal to opt down)"
         ]
     return tier, reasons
+
+
+def adversarial_triggers(request_text: str, scope: dict | None = None) -> list[str]:
+    """Advisory adversarial-review triggers (Slice 3). Returns reason strings, empty
+    when none fire. This NEVER selects a tier or pipeline — recommend.py surfaces
+    these as a user-confirmed `--pipeline adversarial` suggestion. Triggers: high
+    GitNexus impact, security-sensitive, control-plane, cross-module concurrency,
+    evidence/gate/dispatch, and verification/test-semantics changes."""
+    text = request_text or ""
+    reasons: list[str] = []
+    gitnexus = (scope or {}).get("gitnexus") or {}
+    risk = str((gitnexus.get("impact_summary") or {}).get("risk") or "").upper()
+    if risk in {"HIGH", "CRITICAL"}:
+        reasons.append(f"adversarial-review trigger (high GitNexus impact): {risk}")
+    for label, keywords in _ADVERSARIAL_TRIGGERS:
+        kw = _first_keyword(text, keywords)
+        if kw:
+            reasons.append(f"adversarial-review trigger ({label}): {kw}")
+    return reasons

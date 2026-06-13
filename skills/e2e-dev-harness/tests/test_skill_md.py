@@ -29,6 +29,14 @@ def test_skill_md_documents_adversarial_optin_pipeline():
     assert "--pipeline adversarial" in text
 
 
+def test_skill_md_documents_adversarial_recommendation():
+    """Slice 3: the tier-recommendation contract documents the advisory
+    adversarial_review suggestion (kept explicit / user-confirmed)."""
+    text = SKILL.read_text(encoding="utf-8")
+    assert "adversarial_review" in text
+    assert "suggested" in text
+
+
 def test_skill_md_documents_auto_as_default_tier():
     text = SKILL.read_text(encoding="utf-8")
     assert "default `auto`" in text

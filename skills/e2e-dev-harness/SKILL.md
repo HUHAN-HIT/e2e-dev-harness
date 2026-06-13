@@ -80,6 +80,12 @@ GitNexus impact evidence raises the recommendation for MEDIUM, HIGH, or
 CRITICAL risk. Missing GitNexus verification on cross-service dependencies
 must stay visible in `tier_recommendation.reasons`.
 
+`tier_recommendation` 还带一个**建议性**的 `adversarial_review` 块(不改 tier):
+当请求命中高风险触发——高 GitNexus impact、安全敏感、控制面、跨模块并发、
+证据/门禁/派发、验证/测试语义——`suggested=true` 并在 `reasons` 列出触发项。它
+**不**自动选流水线(`selected_tier` 仍是普通 tier);由用户确认后用 `select_with`
+(`start --pipeline adversarial`)显式启用三视角对抗审查。
+
 ### Tier preview confirmation
 
 Use `start --preview-tier` when Codex should show the user the recommended

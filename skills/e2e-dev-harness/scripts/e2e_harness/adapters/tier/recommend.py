@@ -72,6 +72,11 @@ def recommend_tier(request_text: str, scope: dict | None = None, selected_tier: 
     blocked = False
     selected = recommended if auto else requested
 
+    # Slice 3: advisory only. Adversarial review is an opt-in *pipeline*, not a
+    # tier, so it never changes selected_tier or the tier options — it surfaces a
+    # user-confirmed `--pipeline adversarial` suggestion for high-risk requests.
+    adversarial_reasons = classify.adversarial_triggers(request_text, scope)
+
     return {
         "schema": "e2e-dev-harness.tier-recommendation.v1",
         "recommended_tier": recommended,
@@ -83,5 +88,11 @@ def recommend_tier(request_text: str, scope: dict | None = None, selected_tier: 
             "requested_below_recommended": requested_below,
             "requires_provenance": requested_below,
             "blocked": blocked,
+        },
+        "adversarial_review": {
+            "suggested": bool(adversarial_reasons),
+            "pipeline": "adversarial",
+            "select_with": "start --pipeline adversarial",
+            "reasons": adversarial_reasons,
         },
     }
