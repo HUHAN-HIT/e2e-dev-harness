@@ -13,7 +13,7 @@
 ## Current Facts To Preserve
 
 - `start --tier auto` is the default in `skills/e2e-dev-harness/scripts/e2e_harness/cli/main.py`.
-- `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/start.py` only calls the classifier when `args.tier == "auto"`.
+- `skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/start.py` routes auto and explicit tier choices through the recommendation layer; auto uses `recommended_tier`, while explicit `--tier` preserves the user selection and records downgrade metadata.
 - `skills/e2e-dev-harness/scripts/e2e_harness/adapters/tier/classify.py` maps request text and optional scanner scope to one tier.
 - Auto mode currently floors plain requests to `standard`; explicit `--tier minimal` remains an opt-down.
 - Scanner scope currently raises the floor to `standard` for two or more services and `critical` for cross-service dependencies.
