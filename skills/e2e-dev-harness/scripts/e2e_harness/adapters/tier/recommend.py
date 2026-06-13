@@ -31,15 +31,20 @@ def _gitnexus_floor(scope: dict | None) -> tuple[str, list[str]]:
     gitnexus = scope.get("gitnexus") or {}
     summary = gitnexus.get("impact_summary") or {}
     risk = str(summary.get("risk") or "").upper()
+    floor = "minimal"
+    reasons: list[str] = []
     if risk in {"HIGH", "CRITICAL"}:
-        return "critical", [f"GitNexus impact risk: {risk}"]
-    if risk == "MEDIUM":
-        return "standard", ["GitNexus impact risk: MEDIUM"]
+        floor = "critical"
+        reasons.append(f"GitNexus impact risk: {risk}")
+    elif risk == "MEDIUM":
+        floor = "standard"
+        reasons.append("GitNexus impact risk: MEDIUM")
     if (scope.get("dependencies") or []) and not gitnexus.get("verified", False):
-        return "critical", [
+        floor = _max_tier(floor, "critical")
+        reasons.append(
             "cross-service dependencies found but GitNexus impact evidence is not verified"
-        ]
-    return "minimal", []
+        )
+    return floor, reasons
 
 
 def _option(tier: str, recommended: str, reasons: list[str]) -> dict:
