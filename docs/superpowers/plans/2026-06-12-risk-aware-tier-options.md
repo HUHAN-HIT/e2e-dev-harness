@@ -94,7 +94,7 @@ def test_explicit_lower_tier_records_downgrade_metadata():
     assert result["downgrade"]["blocked"] is False
 
 
-def test_explicit_below_audited_is_blocked():
+def test_explicit_below_audited_records_downgrade_metadata():
     result = recommend.recommend_tier(
         "compliance audit of the incident response",
         scope=None,
@@ -102,9 +102,10 @@ def test_explicit_below_audited_is_blocked():
     )
 
     assert result["recommended_tier"] == "audited"
-    assert result["selected_tier"] == "audited"
+    assert result["selected_tier"] == "critical"
     assert result["downgrade"]["requested_below_recommended"] is True
-    assert result["downgrade"]["blocked"] is True
+    assert result["downgrade"]["requires_provenance"] is True
+    assert result["downgrade"]["blocked"] is False
 ```
 
 - [ ] **Step 2: Run the focused tests and verify they fail**
@@ -188,8 +189,8 @@ def recommend_tier(request_text: str, scope: dict | None = None, selected_tier: 
 
     requested = recommended if auto else selected_tier
     requested_below = _rank(requested) < _rank(recommended)
-    blocked = requested_below and recommended == "audited"
-    selected = recommended if blocked else requested
+    blocked = False
+    selected = requested
 
     return {
         "schema": "e2e-dev-harness.tier-recommendation.v1",
@@ -200,7 +201,7 @@ def recommend_tier(request_text: str, scope: dict | None = None, selected_tier: 
         "options": [_option(tier, recommended, reasons) for tier in ORDER],
         "downgrade": {
             "requested_below_recommended": requested_below,
-            "requires_provenance": requested_below and not blocked,
+            "requires_provenance": requested_below,
             "blocked": blocked,
         },
     }
@@ -614,7 +615,7 @@ Add this text near the existing tier documentation in `skills/e2e-dev-harness/SK
 - `options`: minimal, standard, critical, and audited choices with cost/reason summaries.
 - `recommended_tier`: the highest floor justified by request text, scanner scope, and GitNexus impact evidence.
 - `selected_tier`: the tier actually used for the run.
-- `downgrade`: metadata showing whether an explicit selection is below the recommendation, requires provenance, or was blocked.
+- `downgrade`: metadata showing whether an explicit selection is below the recommendation. Under the current contract, explicit selections are preserved with `requires_provenance=true` and `blocked=false`.
 
 GitNexus impact evidence raises the recommendation when structured impact risk is MEDIUM, HIGH, or CRITICAL. Missing GitNexus verification on cross-service dependencies is treated conservatively and must remain visible in `tier_recommendation.reasons`.
 ```

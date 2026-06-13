@@ -27,6 +27,16 @@ def test_skill_md_documents_auto_as_default_tier():
     assert "default `minimal`" not in text
 
 
+def test_skill_md_documents_tier_options_and_gitnexus_evidence():
+    text = SKILL.read_text(encoding="utf-8")
+
+    assert "tier_recommendation" in text
+    assert "recommended_tier" in text
+    assert "selected_tier" in text
+    assert "GitNexus impact" in text
+    assert "requires_provenance" in text
+
+
 def test_skill_md_documents_beat_cycle_for_module_band():
     text = SKILL.read_text(encoding="utf-8")
     assert "tracks_frontier" in text

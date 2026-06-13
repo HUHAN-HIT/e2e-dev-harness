@@ -58,6 +58,25 @@ python $S status --state <run-state>     # 人读导航地图
 | `critical` | 全主干 | REVIEWED 派 r1/r2/r3 三份独立 review(隔离上下文,不 review 自己实现) |
 | `audited` | 全主干 | r1/r2/r3 + VERIFIED 增 audit_replay 证据 |
 
+### Tier recommendation contract
+
+`start --tier auto` emits and persists `tier_recommendation`. Its `options`
+list contains `minimal`, `standard`, `critical`, and `audited` choices with
+cost and reason summaries.
+
+- `recommended_tier`: highest floor justified by request text, scanner scope,
+  and GitNexus impact evidence.
+- `selected_tier`: actual tier used for the run.
+- Auto selection uses the recommendation.
+- Explicit `--tier` selections are preserved even when below the
+  recommendation. In that case downgrade metadata records
+  `requested_below_recommended`, `requires_provenance`, and `blocked=false`
+  under the current contract.
+
+GitNexus impact evidence raises the recommendation for MEDIUM, HIGH, or
+CRITICAL risk. Missing GitNexus verification on cross-service dependencies
+must stay visible in `tier_recommendation.reasons`.
+
 裁剪是结构性的:被跳阶段从计算出的 spine 移除,`next` 越过、导航地图渲染 `– skipped`。每个内建 tier 都过 I2 门禁闭包(`gate_closure_ok`)。门禁校验**真实产物**(文件存在+非空+哈希;`failing_tests`/`passing_tests` 须为命令证据且退出码正确)。
 ## Agent-Team Dispatch Boundary
 
