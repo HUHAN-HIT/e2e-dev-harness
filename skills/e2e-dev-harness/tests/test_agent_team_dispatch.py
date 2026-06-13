@@ -84,6 +84,31 @@ def test_custom_pipeline_dispatch_falls_back_to_tier_profile(tmp_path):
     assert len(result["worker_descriptors"]) == 3
 
 
+def test_adversarial_pipeline_dispatch_auto_selects_adversarial_profile(tmp_path):
+    """start --pipeline adversarial must auto-pair default-adversarial so the
+    coordinator receives three isolated perspective reviewers without an explicit
+    --team-profile, mirroring how critical/audited auto-select their fan-out."""
+    state = run_state.new_run_state(
+        "r1", "feature", "request", tier="standard", pipeline="adversarial")
+    state["current_phase"] = "REVIEWED"
+    path = tmp_path / "docs" / "agent-runs" / "r1" / "run-state.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    code, result = dispatch_cmd.run(Args(path, runtime="codex"))
+
+    assert code == 0
+    assert result["agent_team_plan"]["profile"] == "default-adversarial"
+    assert result["agent_team_plan"]["execution_model"] == "reviewer-fanout"
+    assert [item["worker_id"] for item in result["worker_descriptors"]] == [
+        "REVIEWED-code", "REVIEWED-design", "REVIEWED-tests"]
+    assert [item["descriptor"]["expected_outputs"] for item in result["worker_descriptors"]] == [
+        ["adversarial_code_review"],
+        ["adversarial_design_review"],
+        ["adversarial_test_design_review"],
+    ]
+
+
 def test_manual_runtime_blocks_without_marking_dispatched(tmp_path):
     path = _write_state(tmp_path, tier="critical", phase="REVIEWED")
 

@@ -25,6 +25,25 @@ def test_critical_reviewed_overrides_to_three_reviews():
     assert reviewed.worker_skill == "e2e-harness-review"  # non-overridden field inherited
 
 
+_ADVERSARIAL_KEYS = (
+    "adversarial_code_review",
+    "adversarial_design_review",
+    "adversarial_test_design_review",
+)
+
+
+def test_adversarial_is_full_spine_with_three_perspective_reviews():
+    """The opt-in adversarial pipeline keeps the full spine but overrides REVIEWED
+    to a dedicated adversarial worker skill producing/gating three independent
+    perspective keys (code, design, test-design)."""
+    assert pipeline.active_phase_names("adversarial") == [
+        "CREATED", "CLARIFIED", "PLANNED", "RED", "IMPLEMENTED", "REVIEWED", "VERIFIED"]
+    reviewed = next(p for p in pipeline.build_spine("adversarial") if p.name == "REVIEWED")
+    assert reviewed.worker_skill == "e2e-harness-adversarial-review"
+    assert reviewed.produces == _ADVERSARIAL_KEYS
+    assert reviewed.exit_gate == _ADVERSARIAL_KEYS
+
+
 def test_audited_overrides_verified_and_reviewed():
     spine = pipeline.build_spine("audited")
     verified = next(p for p in spine if p.name == "VERIFIED")

@@ -1,0 +1,38 @@
+schema: e2e-dev-harness.agent-team-profile.v1
+name: default-adversarial
+description: Adversarial pipeline with code, design, and test-design review fan-out.
+roles:
+  requirements-clarifier:
+    skill: e2e-harness-clarification
+    runtime_subagent_type: requirements-clarifier
+    max_workers: 1
+  implementation-planner:
+    skill: e2e-harness-planning
+    runtime_subagent_type: implementation-planner
+    max_workers: 1
+  tdd-red:
+    skill: e2e-harness-tdd-red
+    runtime_subagent_type: test-case-developer
+    max_workers: 1
+  code-developer:
+    skill: e2e-harness-implementation
+    runtime_subagent_type: code-developer
+    max_workers: 1
+  semantic-reviewer:
+    skill: e2e-harness-adversarial-review
+    runtime_subagent_type: semantic-reviewer
+    max_workers: 3
+  coverage-reviewer:
+    skill: e2e-harness-completion
+    runtime_subagent_type: coverage-reviewer
+    max_workers: 1
+phases:
+  REVIEWED:
+    strategy: evidence-key-fanout
+    workers:
+      - id_suffix: code
+        expected_outputs: [adversarial_code_review]
+      - id_suffix: design
+        expected_outputs: [adversarial_design_review]
+      - id_suffix: tests
+        expected_outputs: [adversarial_test_design_review]

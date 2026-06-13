@@ -21,6 +21,14 @@ def test_skill_md_documents_tiers_and_review_fanout():
     assert "--tier" in text
 
 
+def test_skill_md_documents_adversarial_optin_pipeline():
+    """Rollout step 5: the tier table must surface the opt-in adversarial pipeline
+    and the --pipeline selection path (it is not a --tier auto choice)."""
+    text = SKILL.read_text(encoding="utf-8")
+    assert "adversarial" in text
+    assert "--pipeline adversarial" in text
+
+
 def test_skill_md_documents_auto_as_default_tier():
     text = SKILL.read_text(encoding="utf-8")
     assert "default `auto`" in text

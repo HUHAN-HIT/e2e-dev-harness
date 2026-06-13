@@ -1,0 +1,13 @@
+name: adversarial
+phases:
+  - CREATED
+  - CLARIFIED
+  - PLANNED
+  - RED
+  - phase: IMPLEMENTED
+    allows_code_write: true
+  - phase: REVIEWED
+    worker_skill: e2e-harness-adversarial-review
+    produces: [adversarial_code_review, adversarial_design_review, adversarial_test_design_review]
+    exit_gate: [adversarial_code_review, adversarial_design_review, adversarial_test_design_review]
+  - VERIFIED

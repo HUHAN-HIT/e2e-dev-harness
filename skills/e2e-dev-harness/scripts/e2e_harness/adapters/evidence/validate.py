@@ -12,7 +12,7 @@ import shlex
 from pathlib import Path
 
 from e2e_harness.adapters.evidence import (
-    audit_replay, command_evidence, dispatch_invocation, hashing, substance,
+    adversarial, audit_replay, command_evidence, dispatch_invocation, hashing, substance,
 )
 from e2e_harness.adapters.evidence import scope as scope_ev
 from e2e_harness.core import acceptance, module_plan, multitrack
@@ -56,6 +56,12 @@ STRUCTURED_KEYS = {
     # F4: audited VERIFIED agent_team_dispatch must be a real dispatch-invocation whose
     # referenced team plan resolves — enforces the agent-team chain via the submit gate.
     "agent_team_dispatch": dispatch_invocation.validate_dispatch_invocation,
+    # opt-in adversarial pipeline: each REVIEWED perspective key must be a structured
+    # adversarial-review.v1 artifact whose `perspective` matches the key. Prose, empty
+    # files, and mismatched/under-justified verdicts no longer satisfy the gate.
+    "adversarial_code_review": lambda obj, _repo: adversarial.validate_adversarial_review(obj, "code"),
+    "adversarial_design_review": lambda obj, _repo: adversarial.validate_adversarial_review(obj, "design"),
+    "adversarial_test_design_review": lambda obj, _repo: adversarial.validate_adversarial_review(obj, "test-design"),
 }
 
 # Final-gate keys whose exit code is NEVER trusted from the record: the harness

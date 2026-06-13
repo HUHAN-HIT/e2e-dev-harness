@@ -9,6 +9,7 @@ def test_bundled_profiles_load_in_deterministic_order():
     profiles = registry.load_bundled_profiles()
 
     assert [profile["name"] for profile in profiles] == [
+        "default-adversarial",
         "default-audited",
         "default-critical",
         "default-minimal",

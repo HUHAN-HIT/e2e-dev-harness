@@ -21,8 +21,12 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 def _default_profile(state: dict) -> str:
+    # A built-in pipeline auto-pairs its `default-<name>` team profile so its
+    # phase fan-out (e.g. critical's r1/r2/r3, adversarial's code/design/tests)
+    # happens without an explicit --team-profile. `adversarial` is opt-in via
+    # --pipeline (not a --tier choice), so it pairs by pipeline name only.
     pipeline_name = str(state.get("pipeline", "") or "")
-    if pipeline_name in {"minimal", "standard", "critical", "audited"}:
+    if pipeline_name in {"minimal", "standard", "critical", "audited", "adversarial"}:
         return f"default-{pipeline_name}"
     tier = str(state.get("tier", "") or "")
     if tier in {"minimal", "standard", "critical", "audited"}:

@@ -57,6 +57,9 @@ python $S status --state <run-state>     # 人读导航地图
 | `standard` | 全主干 | 单 reviewer |
 | `critical` | 全主干 | REVIEWED 派 r1/r2/r3 三份独立 review(隔离上下文,不 review 自己实现) |
 | `audited` | 全主干 | r1/r2/r3 + VERIFIED 用 `verification`+`audit_replay`(命令证据背书的 manifest)+`agent_team_dispatch`(dispatch-invocation),**不含** scope_manifest |
+| `adversarial` *(opt-in)* | 全主干 | REVIEWED 派 code/design/test-design 三个**对抗视角**独立 reviewer(攻击实现/设计/测试用例假设,各持一个证据键);不在 `--tier auto` 集合内 |
+
+> `adversarial` 是 opt-in 流水线,不属于 `--tier` 自动分级集合。用 `start --pipeline adversarial` 显式选择;`dispatch` 自动配对 `default-adversarial` 团队档案,把 REVIEWED 扇出成三个隔离的对抗视角 reviewer(`adversarial_code_review` / `adversarial_design_review` / `adversarial_test_design_review`),门禁要求三个键齐备才过。
 
 ### Tier recommendation contract
 

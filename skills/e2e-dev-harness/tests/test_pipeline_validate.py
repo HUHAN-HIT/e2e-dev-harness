@@ -3,7 +3,7 @@ from e2e_harness.core import pipeline_validate as pv
 
 def test_builtin_specs_are_valid():
     from e2e_harness import pipeline
-    for name in ("minimal", "standard", "critical", "audited"):
+    for name in ("minimal", "standard", "critical", "audited", "adversarial"):
         ok, errors = pv.validate_spec(pipeline.load_spec(name))
         assert ok is True, f"{name}: {errors}"
 

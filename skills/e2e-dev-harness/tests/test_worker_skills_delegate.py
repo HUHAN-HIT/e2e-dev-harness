@@ -62,3 +62,19 @@ def test_implementation_skill_describes_per_module_namespacing():
     (IMPLEMENTED#<module>) and must submit namespaced evidence keys."""
     text = (ROOT / "skills" / "e2e-harness-implementation" / "SKILL.md").read_text(encoding="utf-8")
     assert "#<module>" in text, "implementation skill must describe per-module key namespacing"
+
+
+def test_adversarial_review_skill_contract():
+    """The opt-in adversarial reviewer worker skill must follow the harness
+    contract, cover all three perspectives via their evidence keys, and carry the
+    canonical submit command so a fresh-context worker can self-load it and act."""
+    text = (ROOT / "skills" / "e2e-harness-adversarial-review" / "SKILL.md").read_text(encoding="utf-8")
+    assert "external skill system" in text, "adversarial skill missing Superpowers fallback note"
+    assert "harness contract" in text, "adversarial skill missing harness-contract fallback"
+    assert "expected_outputs" in text, "adversarial skill missing output contract section"
+    for key in ("adversarial_code_review", "adversarial_design_review", "adversarial_test_design_review"):
+        assert key in text, f"adversarial skill missing perspective key {key}"
+    assert "e2e_dev_harness.py" in text, "adversarial skill missing canonical CLI reference"
+    assert "submit" in text, "adversarial skill missing submit command"
+    # Slice 2: the gate evidence is structured JSON, so the skill must teach the schema id
+    assert "e2e-dev-harness.adversarial-review.v1" in text, "adversarial skill missing structured schema id"
