@@ -33,7 +33,7 @@ def test_explicit_lower_tier_records_downgrade_metadata():
     assert result["downgrade"]["blocked"] is False
 
 
-def test_explicit_below_audited_is_blocked():
+def test_explicit_below_audited_preserves_selection_with_provenance_required():
     result = recommend.recommend_tier(
         "compliance audit of the incident response",
         scope=None,
@@ -41,9 +41,10 @@ def test_explicit_below_audited_is_blocked():
     )
 
     assert result["recommended_tier"] == "audited"
-    assert result["selected_tier"] == "audited"
+    assert result["selected_tier"] == "critical"
     assert result["downgrade"]["requested_below_recommended"] is True
-    assert result["downgrade"]["blocked"] is True
+    assert result["downgrade"]["requires_provenance"] is True
+    assert result["downgrade"]["blocked"] is False
 
 
 def test_gitnexus_medium_risk_floors_to_standard():

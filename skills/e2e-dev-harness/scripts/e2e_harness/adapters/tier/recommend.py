@@ -69,8 +69,8 @@ def recommend_tier(request_text: str, scope: dict | None = None, selected_tier: 
 
     requested = recommended if auto else selected_tier
     requested_below = _rank(requested) < _rank(recommended)
-    blocked = requested_below and recommended == "audited"
-    selected = recommended if blocked else requested
+    blocked = False
+    selected = recommended if auto else requested
 
     return {
         "schema": "e2e-dev-harness.tier-recommendation.v1",
@@ -81,7 +81,7 @@ def recommend_tier(request_text: str, scope: dict | None = None, selected_tier: 
         "options": [_option(tier, recommended, reasons) for tier in ORDER],
         "downgrade": {
             "requested_below_recommended": requested_below,
-            "requires_provenance": requested_below and not blocked,
+            "requires_provenance": requested_below,
             "blocked": blocked,
         },
     }

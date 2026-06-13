@@ -111,6 +111,29 @@ def test_start_explicit_tier_records_downgrade_metadata(tmp_path):
     assert res["tier_recommendation"]["downgrade"]["requires_provenance"] is True
 
 
+def test_start_explicit_tier_below_audited_preserves_selection(tmp_path):
+    code, res = _run(
+        "start",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "explicit-audited-downgrade",
+        "--request",
+        "compliance audit of the incident response",
+        "--tier",
+        "critical",
+        cwd=tmp_path,
+    )
+
+    assert code == 0
+    assert res["tier"] == "critical"
+    assert res["tier_recommendation"]["recommended_tier"] == "audited"
+    assert res["tier_recommendation"]["selected_tier"] == "critical"
+    assert res["tier_recommendation"]["selection_source"] == "explicit"
+    assert res["tier_recommendation"]["downgrade"]["requires_provenance"] is True
+    assert res["tier_recommendation"]["downgrade"]["blocked"] is False
+
+
 def test_start_then_drive_to_verified_with_real_artifacts_terminates(tmp_path):
     code, res = _run("start", "--repo", str(tmp_path), "--feature", "demo",
                      "--request", "do x", cwd=tmp_path)
