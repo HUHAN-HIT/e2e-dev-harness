@@ -56,7 +56,7 @@ python $S status --state <run-state>     # 人读导航地图
 | `minimal` | CREATED→CLARIFIED→RED→IMPLEMENTED→VERIFIED | 跳过 PLANNED/REVIEWED |
 | `standard` | 全主干 | 单 reviewer |
 | `critical` | 全主干 | REVIEWED 派 r1/r2/r3 三份独立 review(隔离上下文,不 review 自己实现) |
-| `audited` | 全主干 | r1/r2/r3 + VERIFIED 增 audit_replay 证据 |
+| `audited` | 全主干 | r1/r2/r3 + VERIFIED 用 `verification`+`audit_replay`(命令证据背书的 manifest)+`agent_team_dispatch`(dispatch-invocation),**不含** scope_manifest |
 
 ### Tier recommendation contract
 

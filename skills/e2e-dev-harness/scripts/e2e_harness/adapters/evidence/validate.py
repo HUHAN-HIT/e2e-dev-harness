@@ -8,11 +8,12 @@ hashes; forged JSON with placeholder hashes (e.g. "verification_stdout") is reje
 from __future__ import annotations
 
 import json
-import re
 import shlex
 from pathlib import Path
 
-from e2e_harness.adapters.evidence import command_evidence, hashing, substance
+from e2e_harness.adapters.evidence import (
+    audit_replay, command_evidence, dispatch_invocation, hashing, substance,
+)
 from e2e_harness.adapters.evidence import scope as scope_ev
 from e2e_harness.core import acceptance, module_plan, multitrack
 
@@ -49,6 +50,12 @@ STRUCTURED_KEYS = {
     # link ②: VERIFIED requires a scope manifest; a COMPLETE claim on a grounded
     # subset is rejected (forces honest PARTIAL). PARTIAL itself is allowed.
     "scope_manifest": scope_ev.validate_scope_manifest,
+    # F5: audited VERIFIED audit_replay must be a manifest whose every claim is backed
+    # by genuine command-evidence — prose can no longer satisfy the gate.
+    "audit_replay": audit_replay.validate_audit_replay,
+    # F4: audited VERIFIED agent_team_dispatch must be a real dispatch-invocation whose
+    # referenced team plan resolves — enforces the agent-team chain via the submit gate.
+    "agent_team_dispatch": dispatch_invocation.validate_dispatch_invocation,
 }
 
 # Final-gate keys whose exit code is NEVER trusted from the record: the harness
@@ -56,7 +63,6 @@ STRUCTURED_KEYS = {
 # This catches a worker that records a genuine failing run then hand-edits exit_code.
 REPLAY_KEYS = {"verification"}
 
-_HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _PYTHON_TEST_MODULES = {"pytest", "unittest"}
 _DIRECT_TEST_COMMANDS = {"pytest", "pytest3"}
 _NODE_TEST_COMMANDS = {"vitest", "playwright"}
@@ -116,17 +122,6 @@ def _path_of(entry) -> str:
     return entry["path"] if isinstance(entry, dict) else entry
 
 
-def _is_genuine_command_evidence(obj) -> bool:
-    """True only for records that bear record_command's tamper-evident structure."""
-    if not isinstance(obj.get("environment"), dict):
-        return False
-    for hash_key in ("stdout_sha256", "stderr_sha256"):
-        value = obj.get(hash_key)
-        if not isinstance(value, str) or not _HEX64.match(value):
-            return False
-    return True
-
-
 def validate_evidence(repo_root, key: str, entry, *, skip_replay: bool = False) -> tuple[bool, str | None]:
     path = _path_of(entry)
     if not path:
@@ -159,7 +154,7 @@ def validate_evidence(repo_root, key: str, entry, *, skip_replay: bool = False) 
             return False, "not-json"
         if not command_evidence.is_command_evidence(obj):
             return False, "not-command-evidence"
-        if not _is_genuine_command_evidence(obj):
+        if not command_evidence.is_genuine_command_evidence(obj):
             return False, "forged-evidence"
         ec = obj.get("exit_code")
         want = COMMAND_KEYS[lookup]

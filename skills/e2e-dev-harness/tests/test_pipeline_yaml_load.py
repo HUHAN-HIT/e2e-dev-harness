@@ -28,7 +28,7 @@ def test_critical_reviewed_overrides_to_three_reviews():
 def test_audited_overrides_verified_and_reviewed():
     spine = pipeline.build_spine("audited")
     verified = next(p for p in spine if p.name == "VERIFIED")
-    assert verified.exit_gate == ("verification", "audit_replay")
+    assert verified.exit_gate == ("verification", "audit_replay", "agent_team_dispatch")
     assert verified.next_phase is None
 
 

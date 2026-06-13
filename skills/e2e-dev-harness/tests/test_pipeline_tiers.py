@@ -30,6 +30,17 @@ def test_audited_adds_audit_replay_to_verified():
     assert reviewed.exit_gate == ("r1_review", "r2_review", "r3_review")
 
 
+def test_audited_verified_requires_agent_team_dispatch():
+    """F4: audited VERIFIED enforces the agent-team dispatch chain as a gate key
+    (produces+exit_gate for I2 closure); other tiers do not (tier isolation)."""
+    verified = next(p for p in pipeline.build_spine("audited") if p.name == "VERIFIED")
+    assert "agent_team_dispatch" in verified.exit_gate
+    assert "agent_team_dispatch" in verified.produces
+    for tier in ("standard", "critical"):
+        sv = next(p for p in pipeline.build_spine(tier) if p.name == "VERIFIED")
+        assert "agent_team_dispatch" not in sv.exit_gate
+
+
 def test_build_spine_overrides_are_isolated_from_catalog():
     pipeline.build_spine("critical")
     assert lifecycle.catalog()["REVIEWED"].exit_gate == ("review",)
