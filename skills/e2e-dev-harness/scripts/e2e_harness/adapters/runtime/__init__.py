@@ -15,10 +15,16 @@ DESCRIPTOR_SCHEMA = "e2e-dev-harness.worker-descriptor.v1"
 PORTABLE_SUBAGENT_TYPE = "general-purpose"
 
 
-def _subagent_type(role: str) -> str:
+def _subagent_type(role: str, packet: dict | None = None) -> str:
     key = "E2E_HARNESS_SUBAGENT_TYPE_" + str(role).strip().upper().replace("-", "_")
     override = os.environ.get(key, "").strip()
-    return override or PORTABLE_SUBAGENT_TYPE
+    if override:
+        return override
+    if packet:
+        declared = str(packet.get("runtime_subagent_type", "")).strip()
+        if declared:
+            return declared
+    return PORTABLE_SUBAGENT_TYPE
 
 
 def _prompt(packet: dict) -> str:
@@ -46,7 +52,7 @@ def _claude_code(packet: dict) -> dict:
         "arguments": {
             "description": f"{role}: {skill}",
             "prompt": _prompt(packet),
-            "subagent_type": _subagent_type(role),
+            "subagent_type": _subagent_type(role, packet),
         },
         "context_paths": list(packet.get("context_paths", []) or []),
         "expected_outputs": list(packet.get("expected_outputs", []) or []),
@@ -83,7 +89,7 @@ def _opencode(packet: dict) -> dict:
         "arguments": {
             "description": f"{role}: {skill}",
             "prompt": _prompt(packet),
-            "subagent_type": _subagent_type(role),
+            "subagent_type": _subagent_type(role, packet),
         },
         "context_paths": list(packet.get("context_paths", []) or []),
         "expected_outputs": list(packet.get("expected_outputs", []) or []),

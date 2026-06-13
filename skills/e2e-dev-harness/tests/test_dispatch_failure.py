@@ -99,3 +99,50 @@ def test_failed_verification_routes_back_to_implementation_rework(tmp_path):
     assert impl["dispatch"] == dispatch.DispatchStatus.FAILED.value
     assert impl["evidence"] == {}
     assert set(impl["superseded_evidence"]) == {"passing_tests", "test_substance"}
+
+
+def test_successful_redrive_clears_rework_residue(tmp_path):
+    """F3: after a VERIFIED->IMPLEMENTED rollback writes rework residue, a successful
+    re-drive of IMPLEMENTED must CLEAR superseded_evidence + rework_required so a
+    later reader cannot mistake a converged 'done' phase for one still needing rework,
+    and a subsequent evaluate must not re-route back into rework."""
+    from e2e_harness.adapters.evidence import command_evidence as ce
+    spine = pipeline.build_spine("minimal")
+    st = run_state.new_run_state("r1", "f", "r")
+    # Predecessors present (key-presence) so F1's all-gates check converges later.
+    st["phases"]["CLARIFIED"] = {"evidence": {
+        "clarification": {"path": "c"}, "acceptance_contract": {"path": "a"}}}
+    st["phases"]["RED"] = {"evidence": {"failing_tests": {"path": "r"}}}
+    st["current_phase"] = "VERIFIED"
+    st["phases"]["IMPLEMENTED"] = {
+        "dispatch": dispatch.DispatchStatus.DONE.value,
+        "evidence": {"passing_tests": {"path": "old-p.json"},
+                     "test_substance": {"path": "old-s.json"}},
+    }
+    ev = ce.record_command(tmp_path, f'"{sys.executable}" -c "import sys; sys.exit(1)"')
+    verification = tmp_path / "verification.json"
+    verification.write_text(json.dumps(ev), encoding="utf-8")
+    scope = tmp_path / "scope.json"
+    scope.write_text(json.dumps({
+        "schema": "e2e-dev-harness.scope-manifest.v1", "status": "COMPLETE",
+        "expected": {"services": [], "tables": [], "phases": []},
+        "delivered": {"services": [], "tables": [], "phases": []},
+    }), encoding="utf-8")
+    engine.submit_evidence(st, "VERIFIED", "verification", str(verification), repo_root=tmp_path)
+    engine.submit_evidence(st, "VERIFIED", "scope_manifest", str(scope), repo_root=tmp_path)
+    res = engine.evaluate(spine, st, tmp_path)
+    assert res["rework_required"] is True  # baseline: rolled back, residue written
+    assert "superseded_evidence" in st["phases"]["IMPLEMENTED"]
+    assert "rework_required" in st["phases"]["IMPLEMENTED"]
+
+    # Re-drive: the FIRST successful keyed done already clears the residue.
+    engine.submit_evidence(st, "IMPLEMENTED", "passing_tests", "new-p.json")
+    assert "superseded_evidence" not in st["phases"]["IMPLEMENTED"]
+    assert "rework_required" not in st["phases"]["IMPLEMENTED"]
+    engine.submit_evidence(st, "IMPLEMENTED", "test_substance", "new-s.json")
+    assert set(st["phases"]["IMPLEMENTED"]["evidence"]) == {"passing_tests", "test_substance"}
+
+    # A subsequent evaluate converges instead of re-routing to rework.
+    res2 = engine.evaluate(spine, st)
+    assert res2.get("rework_required") is not True
+    assert res2["complete"] is True

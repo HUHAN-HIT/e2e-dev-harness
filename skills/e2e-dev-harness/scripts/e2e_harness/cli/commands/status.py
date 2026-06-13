@@ -9,5 +9,6 @@ from e2e_harness import pipeline
 
 def run(args) -> tuple[int, dict]:
     state = run_state.load(args.state)
-    spine = pipeline.spine_for_state(state)
-    return 0, {"navigation_map": navigation.navigation_map(spine, state, Path(args.repo).resolve())}
+    repo = Path(args.repo).resolve()
+    spine = pipeline.spine_for_state(state, repo)
+    return 0, {"navigation_map": navigation.navigation_map(spine, state, repo)}

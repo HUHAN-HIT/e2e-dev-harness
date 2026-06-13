@@ -79,6 +79,24 @@ def test_auto_spawn_runtimes_carry_fresh_context_and_skill(name):
     assert "clarification" in text
 
 
+@pytest.mark.parametrize("name", ["claude-code", "opencode"])
+def test_task_runtimes_accept_packet_subagent_type(name, monkeypatch):
+    monkeypatch.delenv("E2E_HARNESS_SUBAGENT_TYPE_CLARIFIER", raising=False)
+    pkt = _packet(role="clarifier")
+    pkt["runtime_subagent_type"] = "requirements-clarifier"
+    desc = runtime.get_adapter(name).spawn(pkt)
+    assert desc["arguments"]["subagent_type"] == "requirements-clarifier"
+
+
+def test_packet_subagent_type_does_not_add_model_pin_to_codex():
+    pkt = _packet(role="clarifier")
+    pkt["runtime_subagent_type"] = "requirements-clarifier"
+    desc = runtime.get_adapter("codex").spawn(pkt)
+    assert desc["runtime"] == "codex"
+    assert "subagent_type" not in desc["arguments"]
+    assert not _has_model_key(desc)
+
+
 def test_manual_cannot_auto_spawn():
     caps = runtime.get_adapter("manual").capabilities()
     assert caps.can_auto_spawn is False

@@ -338,6 +338,63 @@ class NodeInstallerTests(unittest.TestCase):
             self.assertFalse(payload["ready"])
             self.assertTrue(any("Project root does not exist" in reason for reason in payload["blocked_reasons"]))
 
+    def test_opencode_runtime_installs_plugin_not_claude_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install_root = Path(tmp) / "home"
+            project = Path(tmp) / "business-project"
+            project.mkdir()
+
+            code, payload = self.run_installer(
+                "--install-root",
+                str(install_root),
+                "--target",
+                "opencode",
+                "--project-root",
+                str(project),
+                "--skip-python-cli",
+                "--skip-external",
+                "--with-hooks",
+                "--runtime",
+                "opencode",
+                "--yes",
+            )
+
+            self.assertEqual(0, code, payload)
+            plugin_path = project / ".opencode" / "plugins" / "e2e-dev-harness.js"
+            self.assertTrue(plugin_path.exists(), payload)
+            body = plugin_path.read_text(encoding="utf-8")
+            self.assertIn("phase_guard.py", body)
+            self.assertNotIn("__HARNESS_SCRIPTS__", body)
+            # the opencode path must NOT create a claude settings.json
+            self.assertFalse((project / ".claude" / "settings.json").exists())
+            self.assertIn("install-hooks", [result["action"] for result in payload["action_results"]])
+
+    def test_opencode_dry_run_plans_plugin_install(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install_root = Path(tmp) / "home"
+            project = Path(tmp) / "business-project"
+            project.mkdir()
+
+            code, payload = self.run_installer(
+                "--install-root",
+                str(install_root),
+                "--target",
+                "opencode",
+                "--project-root",
+                str(project),
+                "--skip-python-cli",
+                "--skip-external",
+                "--with-hooks",
+                "--runtime",
+                "opencode",
+            )
+
+            self.assertEqual(0, code, payload)
+            self.assertEqual(["opencode"], payload["targets"])
+            self.assertEqual("opencode", payload["runtime"])
+            self.assertIn("install-hooks", [action["id"] for action in payload["actions"]])
+            self.assertFalse(payload["executed"])
+
 
 if __name__ == "__main__":
     unittest.main()

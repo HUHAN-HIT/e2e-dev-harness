@@ -783,6 +783,42 @@ def gitnexus_symbol_seeds(dependencies: list[dict], affected_services: list[str]
     return seeds
 
 
+def _impact_summary_from_evidence(evidence: list[dict]) -> dict:
+    risk_order = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+    summary = {
+        "risk": "",
+        "direct": 0,
+        "processes_affected": 0,
+        "modules_affected": 0,
+    }
+    best_risk = 0
+    for item in evidence:
+        command = item.get("command", "")
+        if isinstance(command, str) and "gitnexus impact" not in command:
+            continue
+        raw = item.get("stdout_tail") or item.get("stdout") or ""
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        risk = data.get("risk")
+        if isinstance(risk, str):
+            risk_key = risk.upper()
+            if risk_order.get(risk_key, 0) > best_risk:
+                best_risk = risk_order[risk_key]
+                summary["risk"] = risk_key
+        item_summary = data.get("summary")
+        if not isinstance(item_summary, dict):
+            continue
+        for key in ("direct", "processes_affected", "modules_affected"):
+            value = item_summary.get(key)
+            if isinstance(value, (int, float)):
+                summary[key] = max(summary[key], int(value))
+    return summary if summary["risk"] else {}
+
+
 def gitnexus_evidence(
     repo: Path,
     dependencies: list[dict],
@@ -804,6 +840,7 @@ def gitnexus_evidence(
         "symbol_seeds": [],
         "verified": False,
         "evidence": [],
+        "impact_summary": {},
     }
     warnings: list[str] = []
     if gitnexus_mode == "off":
@@ -821,6 +858,7 @@ def gitnexus_evidence(
         evidence.append(command_runner(["gitnexus", "impact", seed, "--repo", repo_arg], repo))
     if not seeds and dependencies:
         warnings.append("No GitNexus symbol seeds were derived from scoped dependencies; do not pass service directories to gitnexus context.")
+    result["impact_summary"] = _impact_summary_from_evidence(evidence)
     result["evidence"] = evidence
     result["verified"] = bool(evidence) and all(item.get("exit_code") == 0 for item in evidence)
     if gitnexus_mode == "strict" and not result["verified"]:

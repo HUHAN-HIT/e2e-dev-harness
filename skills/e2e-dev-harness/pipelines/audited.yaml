@@ -10,5 +10,5 @@ phases:
     produces: [r1_review, r2_review, r3_review]
     exit_gate: [r1_review, r2_review, r3_review]
   - phase: VERIFIED
-    produces: [verification, audit_replay]
-    exit_gate: [verification, audit_replay]
+    produces: [verification, audit_replay, agent_team_dispatch]
+    exit_gate: [verification, audit_replay, agent_team_dispatch]

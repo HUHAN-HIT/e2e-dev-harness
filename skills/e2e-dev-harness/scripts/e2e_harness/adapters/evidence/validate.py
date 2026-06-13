@@ -8,13 +8,14 @@ hashes; forged JSON with placeholder hashes (e.g. "verification_stdout") is reje
 from __future__ import annotations
 
 import json
-import re
 import shlex
 from pathlib import Path
 
-from e2e_harness.adapters.evidence import command_evidence, hashing, substance
+from e2e_harness.adapters.evidence import (
+    audit_replay, command_evidence, dispatch_invocation, hashing, substance,
+)
 from e2e_harness.adapters.evidence import scope as scope_ev
-from e2e_harness.core import acceptance
+from e2e_harness.core import acceptance, module_plan, multitrack
 
 # Evidence keys whose artifact must be command-evidence JSON with a specific exit code.
 COMMAND_KEYS = {"failing_tests": "nonzero", "passing_tests": "zero", "verification": "zero"}
@@ -24,12 +25,37 @@ COMMAND_KEYS = {"failing_tests": "nonzero", "passing_tests": "zero", "verificati
 # can no longer satisfy these gates.
 #   acceptance_contract — link ①: machine-checkable acceptance criteria.
 #   test_substance      — link ③: tests derive from the contract, assert real behaviour.
+def _validate_acceptance_contract(obj, _repo) -> tuple[bool, str | None]:
+    """Structure + clarification-completeness (link ①, fix A2).
+
+    The contract must be well-formed AND carry no still-`open` question — an
+    unresolved ledger means clarification has not run to completion, so CLARIFIED
+    must not pass. Reason `open-questions:<id,id>` names exactly what is unresolved.
+    """
+    ok, reason = acceptance.validate_contract(obj)
+    if not ok:
+        return False, reason
+    unresolved = acceptance.unresolved_questions(obj)
+    if unresolved:
+        return False, "open-questions:" + ",".join(unresolved)
+    return True, None
+
+
 STRUCTURED_KEYS = {
-    "acceptance_contract": lambda obj, _repo: acceptance.validate_contract(obj),
+    "acceptance_contract": _validate_acceptance_contract,
+    # link ④: PLANNED must emit a machine-readable module plan (functional slices
+    # + dependency graph) so the engine can drive per-module progressive dev.
+    "module_plan": lambda obj, _repo: module_plan.validate_module_plan(obj),
     "test_substance": substance.validate_substance_manifest,
     # link ②: VERIFIED requires a scope manifest; a COMPLETE claim on a grounded
     # subset is rejected (forces honest PARTIAL). PARTIAL itself is allowed.
     "scope_manifest": scope_ev.validate_scope_manifest,
+    # F5: audited VERIFIED audit_replay must be a manifest whose every claim is backed
+    # by genuine command-evidence — prose can no longer satisfy the gate.
+    "audit_replay": audit_replay.validate_audit_replay,
+    # F4: audited VERIFIED agent_team_dispatch must be a real dispatch-invocation whose
+    # referenced team plan resolves — enforces the agent-team chain via the submit gate.
+    "agent_team_dispatch": dispatch_invocation.validate_dispatch_invocation,
 }
 
 # Final-gate keys whose exit code is NEVER trusted from the record: the harness
@@ -37,7 +63,6 @@ STRUCTURED_KEYS = {
 # This catches a worker that records a genuine failing run then hand-edits exit_code.
 REPLAY_KEYS = {"verification"}
 
-_HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _PYTHON_TEST_MODULES = {"pytest", "unittest"}
 _DIRECT_TEST_COMMANDS = {"pytest", "pytest3"}
 _NODE_TEST_COMMANDS = {"vitest", "playwright"}
@@ -97,17 +122,6 @@ def _path_of(entry) -> str:
     return entry["path"] if isinstance(entry, dict) else entry
 
 
-def _is_genuine_command_evidence(obj) -> bool:
-    """True only for records that bear record_command's tamper-evident structure."""
-    if not isinstance(obj.get("environment"), dict):
-        return False
-    for hash_key in ("stdout_sha256", "stderr_sha256"):
-        value = obj.get(hash_key)
-        if not isinstance(value, str) or not _HEX64.match(value):
-            return False
-    return True
-
-
 def validate_evidence(repo_root, key: str, entry, *, skip_replay: bool = False) -> tuple[bool, str | None]:
     path = _path_of(entry)
     if not path:
@@ -121,25 +135,29 @@ def validate_evidence(repo_root, key: str, entry, *, skip_replay: bool = False) 
     if isinstance(entry, dict) and entry.get("sha256"):
         if hashing.sha256_file(full) != entry["sha256"]:
             return False, "hash-mismatch"
-    if key in STRUCTURED_KEYS:
+    # Multi-track (B2): a per-module evidence key like `passing_tests#auth` is
+    # validated by its base key's rule — the module suffix only namespaces which
+    # module's gate the artifact satisfies, not how it is checked.
+    lookup = multitrack.base_key(key)
+    if lookup in STRUCTURED_KEYS:
         try:
             obj = json.loads(full.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             return False, "not-json"
-        ok, reason = STRUCTURED_KEYS[key](obj, repo_root)
+        ok, reason = STRUCTURED_KEYS[lookup](obj, repo_root)
         if not ok:
             return False, reason
-    if key in COMMAND_KEYS:
+    if lookup in COMMAND_KEYS:
         try:
             obj = json.loads(full.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             return False, "not-json"
         if not command_evidence.is_command_evidence(obj):
             return False, "not-command-evidence"
-        if not _is_genuine_command_evidence(obj):
+        if not command_evidence.is_genuine_command_evidence(obj):
             return False, "forged-evidence"
         ec = obj.get("exit_code")
-        want = COMMAND_KEYS[key]
+        want = COMMAND_KEYS[lookup]
         if want == "zero" and ec != 0:
             return False, f"exit-code-{ec}"
         if want == "nonzero" and (ec == 0 or ec is None):
@@ -147,7 +165,7 @@ def validate_evidence(repo_root, key: str, entry, *, skip_replay: bool = False) 
         # #1 replay: the recorded exit code claims success — re-run the command and
         # judge by reality, so a hand-edited exit_code on an otherwise-genuine record
         # cannot pass the final gate.
-        if key in REPLAY_KEYS and not skip_replay:
+        if lookup in REPLAY_KEYS and not skip_replay:
             command = obj.get("command", "")
             cwd, reason = _replay_cwd(repo_root, obj.get("cwd"))
             if reason:

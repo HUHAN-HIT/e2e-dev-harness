@@ -9,7 +9,7 @@ from e2e_harness import pipeline
 
 def run(args) -> tuple[int, dict]:
     state = run_state.load(args.state)
-    spine = pipeline.spine_for_state(state)
+    spine = pipeline.spine_for_state(state, Path(args.repo).resolve())
     name = args.phase or state.get("current_phase")
     phase = next((p for p in spine if p.name == name), None)
     if phase is None:

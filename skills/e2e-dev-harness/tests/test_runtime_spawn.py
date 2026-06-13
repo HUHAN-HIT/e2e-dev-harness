@@ -58,6 +58,22 @@ def test_env_override_sets_subagent_type(monkeypatch):
     assert d["arguments"]["subagent_type"] == "my-clarifier-agent"
 
 
+def test_claude_code_uses_packet_subagent_type_when_env_absent(monkeypatch):
+    monkeypatch.delenv("E2E_HARNESS_SUBAGENT_TYPE_CLARIFIER", raising=False)
+    pkt = _packet(role="clarifier")
+    pkt["runtime_subagent_type"] = "requirements-clarifier"
+    d = runtime.spawn_worker(pkt, runtime="claude-code")
+    assert d["arguments"]["subagent_type"] == "requirements-clarifier"
+
+
+def test_claude_code_env_override_wins_over_packet_subagent_type(monkeypatch):
+    monkeypatch.setenv("E2E_HARNESS_SUBAGENT_TYPE_CLARIFIER", "env-clarifier")
+    pkt = _packet(role="clarifier")
+    pkt["runtime_subagent_type"] = "requirements-clarifier"
+    d = runtime.spawn_worker(pkt, runtime="claude-code")
+    assert d["arguments"]["subagent_type"] == "env-clarifier"
+
+
 def test_no_model_key_anywhere_in_descriptor():
     # Regression guard: the seam must never pin a model (glm-4.7 breakage).
     d = runtime.spawn_worker(_packet())
@@ -102,6 +118,31 @@ def test_opencode_env_override_sets_subagent_type(monkeypatch):
     monkeypatch.setenv("E2E_HARNESS_SUBAGENT_TYPE_CLARIFIER", "oc-clarifier")
     d = runtime.spawn_worker(_packet(role="clarifier"), runtime="opencode")
     assert d["arguments"]["subagent_type"] == "oc-clarifier"
+
+
+def test_opencode_uses_packet_subagent_type_when_env_absent(monkeypatch):
+    monkeypatch.delenv("E2E_HARNESS_SUBAGENT_TYPE_CLARIFIER", raising=False)
+    pkt = _packet(role="clarifier")
+    pkt["runtime_subagent_type"] = "requirements-clarifier"
+    d = runtime.spawn_worker(pkt, runtime="opencode")
+    assert d["arguments"]["subagent_type"] == "requirements-clarifier"
+
+
+def test_opencode_env_override_wins_over_packet_subagent_type(monkeypatch):
+    monkeypatch.setenv("E2E_HARNESS_SUBAGENT_TYPE_CLARIFIER", "env-clarifier")
+    pkt = _packet(role="clarifier")
+    pkt["runtime_subagent_type"] = "requirements-clarifier"
+    d = runtime.spawn_worker(pkt, runtime="opencode")
+    assert d["arguments"]["subagent_type"] == "env-clarifier"
+
+
+def test_codex_ignores_packet_subagent_type_and_stays_model_unpinned():
+    pkt = _packet()
+    pkt["runtime_subagent_type"] = "requirements-clarifier"
+    d = runtime.spawn_worker(pkt, runtime="codex")
+    assert d["runtime"] == "codex"
+    assert "subagent_type" not in d["arguments"]
+    assert not _has_model_key(d)
 
 
 def test_opencode_no_model_pin():

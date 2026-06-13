@@ -219,3 +219,20 @@ def test_read_of_run_state_is_not_blocked(tmp_path):
                      tmp_path, sp)["decision"] == "allow"
     assert pg.decide(_hook("Bash", command=f"e2e-dev-harness status --state {target}"),
                      tmp_path, sp)["decision"] == "allow"
+
+
+# --- U1: hook-config block must point at the REAL installer command -------------
+
+def test_hook_config_block_points_to_real_installer_command(tmp_path):
+    # The block must guide to a directly-runnable installer command. The legacy
+    # text named `install-e2e-dev-harness`, which is not a bare command (its real
+    # form is `node tools/install-e2e-dev-harness.mjs`); `e2e-harness init` is the
+    # npm-linked entrypoint a user can run as-is.
+    sp = _write_state(tmp_path, "IMPLEMENTED")
+    d = pg.decide(
+        _hook("Edit", file_path=str(tmp_path / ".claude" / "settings.json"), new_string="{}"),
+        tmp_path, sp,
+    )
+    assert d["decision"] == "deny"
+    assert "e2e-harness init" in d["reason"]
+    assert "WHY:" in d["reason"] and "RECOVER:" in d["reason"]

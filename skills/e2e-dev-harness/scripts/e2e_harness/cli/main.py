@@ -14,6 +14,7 @@ from e2e_harness.cli.commands import (
     status,
     validate_pipeline,
     doctor,
+    migrate,
 )
 
 _COMMANDS = {
@@ -22,6 +23,8 @@ _COMMANDS = {
     # 7th verb — deliberate design §6 exception for the M3 config layer (U4).
     "validate-pipeline": validate_pipeline.run,
     "doctor": doctor.run,
+    # F2: one-shot legacy-run contract back-fill (Hybrid model).
+    "migrate": migrate.run,
 }
 
 
@@ -42,12 +45,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="built-in name or path to a custom pipeline yaml (overrides --tier's spine)")
     s.add_argument("--adapter", default=None, help="force domain adapter (backend|frontend)")
     s.add_argument("--scan", action="store_true", help="run adapter scan to raise tier floor")
+    s.add_argument("--preview-tier", action="store_true",
+                   help="compute tier recommendation/options without creating a run")
 
     for verb in ("next", "status"):
         sp = sub.add_parser(verb); sp.add_argument("--state", required=True); sp.add_argument("--repo", default=".")
 
     d = sub.add_parser("dispatch"); d.add_argument("--state", required=True); d.add_argument("--repo", default=".")
     d.add_argument("--runtime", default="codex")
+    d.add_argument("--team-profile", default=None)
+    d.add_argument("--max-workers", type=int, default=None)
+    d.add_argument("--json", action="store_true", help="accepted for compatibility; output is always JSON")
 
     sm = sub.add_parser("submit"); sm.add_argument("--state", required=True); sm.add_argument("--repo", default=".")
     sm.add_argument("--phase", required=True); sm.add_argument("--key", default=None); sm.add_argument("--path", default=None)
@@ -62,6 +70,10 @@ def build_parser() -> argparse.ArgumentParser:
     doc = sub.add_parser("doctor"); doc.add_argument("project_root", nargs="?", default=".")
     doc.add_argument("--json", action="store_true", help="accepted for installer compatibility; output is always JSON")
     doc.add_argument("--state", default=None, help="run-state path for read-only diagnostic")
+    doc.add_argument("--strict", action="store_true",
+                     help="promote settings/hooks readiness from informational to hard blockers")
+
+    mg = sub.add_parser("migrate"); mg.add_argument("--state", required=True); mg.add_argument("--repo", default=".")
     return p
 
 

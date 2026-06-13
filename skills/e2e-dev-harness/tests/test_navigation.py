@@ -145,3 +145,39 @@ def test_navigation_map_skips_verification_replay_by_default(tmp_path):
     verified = next(p for p in m["phases"] if p["name"] == "VERIFIED")
     assert verified["gate"]["ok"] is True
     assert verified["gate"]["missing"] == []
+
+
+def test_map_not_complete_when_pre_cursor_gate_fails():
+    """F1: a phase BEFORE the cursor with an unmet gate is 'blocked', not a free
+    'done'. The map's completion/next must reflect the real earliest blocker."""
+    spine = _spine()
+    st = run_state.new_run_state("r1", "f", "r")
+    st["current_phase"] = "VERIFIED"
+    for p in spine:
+        st["phases"][p.name] = {"evidence": {k: {"path": f"{p.name}-{k}.md"} for k in p.exit_gate}}
+    del st["phases"]["CLARIFIED"]["evidence"]["acceptance_contract"]
+    m = navigation.navigation_map(spine, st)
+    clar = next(p for p in m["phases"] if p["name"] == "CLARIFIED")
+    assert clar["status"] == "blocked"
+    assert m["progress"] != "5/5"
+    assert m["remaining_gates"] >= 1
+    assert m["next"] is not None
+    assert m["next"]["phase"] == "CLARIFIED"
+
+
+def test_all_gates_pass_deterministic_and_present_passes():
+    """F1: the shared predicate is deterministic for a fixed skip_replay and
+    passes iff every phase gate is satisfied (presence-only when repo_root=None)."""
+    from e2e_harness.core import gates
+    spine = _spine()
+    st = run_state.new_run_state("r1", "f", "r")
+    for p in spine:
+        st["phases"][p.name] = {"evidence": {k: {"path": "x"} for k in p.exit_gate}}
+    a = gates.all_gates_pass(spine, st, None, skip_replay=True)
+    b = gates.all_gates_pass(spine, st, None, skip_replay=True)
+    assert a == b
+    assert a[0] is True
+    del st["phases"]["RED"]["evidence"]["failing_tests"]
+    ok, blockers = gates.all_gates_pass(spine, st, None, skip_replay=True)
+    assert ok is False
+    assert blockers[0][0] == "RED"

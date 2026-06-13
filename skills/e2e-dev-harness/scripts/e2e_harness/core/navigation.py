@@ -1,10 +1,49 @@
 """Derived whole-journey navigation map (no hand-maintained state)."""
 from __future__ import annotations
 
-from e2e_harness.core import gates, dispatch
+from e2e_harness.core import gates, dispatch, multitrack
 from e2e_harness.core.lifecycle import Phase, catalog
 
 GOAL = "VERIFIED"
+
+
+def _track_lanes(spine: list[Phase], state: dict, repo_root, *, skip_replay: bool) -> list[dict]:
+    """One lane per track: its module phases (status + gate), progress, dispatch,
+    and which depends_on tracks still block it. Empty outside a module band."""
+    tracks = state.get("tracks")
+    if not tracks:
+        return []
+    chains = multitrack.module_chains(spine)
+    done = {mid for mid, t in tracks.items() if t.get("complete")}
+    lanes: list[dict] = []
+    for mid, track in tracks.items():
+        chain = chains.get(mid, [])
+        lane_phases = []
+        passed = 0
+        for phase in chain:
+            rec = state.get("phases", {}).get(phase.name, {})
+            ok, missing = gates.gate_passes(phase, rec, repo_root, skip_replay=skip_replay)
+            if ok:
+                passed += 1
+                status = "done"
+            elif rec.get("dispatch") == dispatch.DispatchStatus.FAILED.value:
+                status = "blocked"
+            elif phase.name == track.get("current_phase"):
+                status = "current"
+            else:
+                status = "pending"
+            lane_phases.append({
+                "name": phase.name, "status": status,
+                "gate": {"required": len(phase.exit_gate), "missing": missing, "ok": ok},
+            })
+        lanes.append({
+            "module_id": mid,
+            "phases": lane_phases,
+            "progress": f"{passed}/{len(chain)}",
+            "dispatch": track.get("dispatch", "pending"),
+            "blocked_by_deps": [d for d in track.get("depends_on", []) if d not in done],
+        })
+    return lanes
 
 
 def _phase_status(spine: list[Phase], state: dict, idx: int,
@@ -15,7 +54,11 @@ def _phase_status(spine: list[Phase], state: dict, idx: int,
     phase = spine[idx]
     rec = state.get("phases", {}).get(phase.name, {})
     if idx < cur_idx:
-        return "done"
+        # F1: a phase before the cursor is 'done' only if its gate STILL passes.
+        # A regressed predecessor (e.g. a contract tightened after it passed) is a
+        # real blocker, not a free 'done' inferred from cursor position.
+        ok, _ = gates.gate_passes(phase, rec, repo_root, skip_replay=skip_replay)
+        return "done" if ok else "blocked"
     if idx == cur_idx:
         ok, _ = gates.gate_passes(phase, rec, repo_root, skip_replay=skip_replay)
         if phase.next_phase is None and ok:
@@ -52,18 +95,28 @@ def navigation_map(spine: list[Phase], state: dict, repo_root=None,
         full.append({"name": name, "status": st})
 
     done = sum(1 for p in phases if p["status"] == "done")
-    remaining_gates = sum(len(p["gate"]["missing"]) for i, p in enumerate(phases) if i >= cur_idx)
+    # F1: count missing gate keys across the WHOLE spine, not just from the cursor
+    # forward — a historical gap (a regressed predecessor) must surface in the
+    # aggregate instead of being windowed out behind the cursor.
+    remaining_gates = sum(len(p["gate"]["missing"]) for p in phases)
 
-    complete = done == len(spine)
+    # F1: completion + next derive from the shared all-gates predicate so the map
+    # can never disagree with the engine on presence/structured keys. `next` points
+    # at the EARLIEST unmet phase (a regressed predecessor, else the cursor).
+    all_ok, blockers = gates.all_gates_pass(spine, state, repo_root, skip_replay=skip_replay)
+    complete = all_ok
     nxt = None
     if not complete:
-        cur_phase = spine[cur_idx]
-        nxt = {"phase": cur_phase.name, "action": f"dispatch {cur_phase.worker_skill}"}
+        blocker_name = blockers[0][0] if blockers else cur
+        blocker_phase = next((p for p in spine if p.name == blocker_name), spine[cur_idx])
+        nxt = {"phase": blocker_phase.name, "action": f"dispatch {blocker_phase.worker_skill}"}
 
     return {
         "schema": "e2e-dev-harness.navigation-map.v1",
         "goal": GOAL,
+        "region": state.get("region", "prologue"),
         "you_are_here": cur,
+        "tracks": _track_lanes(spine, state, repo_root, skip_replay=skip_replay),
         "phases": phases,
         "full_catalog": full,
         "progress": f"{done}/{len(spine)}",

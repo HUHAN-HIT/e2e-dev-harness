@@ -159,3 +159,61 @@ test('parseInitArgs reads positional project dir and all flags', () => {
 test('parseInitArgs rejects an unknown flag', () => {
   assert.throws(() => parseInitArgs(['--nope']), /unknown/i);
 });
+
+// --- U2: opencode runtime detection + dispatch --------------------------------
+
+test('detectRuntime: .opencode present resolves opencode', () => {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, '.opencode'));
+  const r = detectRuntime({ projectRoot: root, runtime: 'auto' });
+  assert.strictEqual(r.runtime, 'opencode');
+});
+
+test('detectRuntime: explicit opencode runtime wins over detection', () => {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, '.claude'));
+  const r = detectRuntime({ projectRoot: root, runtime: 'opencode' });
+  assert.strictEqual(r.runtime, 'opencode');
+});
+
+test('runInit materializes the opencode plugin (not claude settings) when runtime is opencode', () => {
+  const root = tmp();
+  let claudeCalled = false;
+  let ocArgs = null;
+  const res = runInit({
+    projectRoot: root,
+    runtime: 'opencode',
+    deps: baseDeps({
+      materializeHooks: () => { claudeCalled = true; return { added: 2, alreadyPresent: 0, settingsPath: 's', backup: null, scriptsDir: 'sc' }; },
+      materializeOpencodePlugin: (args) => { ocArgs = args; return { added: 1, alreadyPresent: 0, pluginPath: 'p', backup: null, scriptsDir: 'sc' }; },
+    }),
+  });
+  assert.strictEqual(res.runtime, 'opencode');
+  assert.ok(ocArgs, 'materializeOpencodePlugin must be called for the opencode runtime');
+  assert.strictEqual(ocArgs.projectRoot, root);
+  assert.strictEqual(claudeCalled, false, 'the claude materializer must NOT run for opencode');
+});
+
+test('detectRuntime: opencode resolves with a stop-guard downgrade warning', () => {
+  // opencode enforces the phase-write lock but cannot enforce run-to-VERIFIED
+  // (no stop-veto hook); detectRuntime must surface that as a warning.
+  const r = detectRuntime({ projectRoot: tmp(), runtime: 'opencode' });
+  assert.strictEqual(r.runtime, 'opencode');
+  assert.ok(r.warning && /verified|advisory|stop/i.test(r.warning));
+});
+
+test('runInit still materializes claude settings for the claude runtime', () => {
+  const root = tmp();
+  let claudeCalled = false;
+  let ocCalled = false;
+  runInit({
+    projectRoot: root,
+    runtime: 'claude',
+    deps: baseDeps({
+      materializeHooks: () => { claudeCalled = true; return { added: 2, alreadyPresent: 0, settingsPath: 's', backup: null, scriptsDir: 'sc' }; },
+      materializeOpencodePlugin: () => { ocCalled = true; return { added: 1, alreadyPresent: 0, pluginPath: 'p', backup: null, scriptsDir: 'sc' }; },
+    }),
+  });
+  assert.ok(claudeCalled, 'the claude materializer must run for claude');
+  assert.strictEqual(ocCalled, false, 'the opencode materializer must NOT run for claude');
+});

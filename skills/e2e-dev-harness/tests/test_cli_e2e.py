@@ -44,6 +44,13 @@ def _make_artifact(repo: Path, phase: str, key: str) -> str:
             {"id": "AC-001", "criterion": "demo criterion",
              "observable_behavior": "demo observable behaviour"}]}), encoding="utf-8")
         return str(f.relative_to(repo))
+    if key == "module_plan":
+        import json as _json
+        from e2e_harness.core import module_plan as _mp
+        f = base / f"{phase}-{key}.json"
+        f.write_text(_json.dumps({"schema": _mp.SCHEMA, "modules": [
+            {"id": "core", "name": "Core", "depends_on": [], "acceptance_ids": ["AC-001"]}]}), encoding="utf-8")
+        return str(f.relative_to(repo))
     want = validate.COMMAND_KEYS.get(key)
     if want is not None:
         code = 0 if want == "zero" else 1
@@ -59,6 +66,184 @@ def _make_artifact(repo: Path, phase: str, key: str) -> str:
         f = base / f"{phase}-{key}.md"
         f.write_text(f"# {phase} {key}\nreal evidence content\n", encoding="utf-8")
     return str(f.relative_to(repo))
+
+
+def test_start_auto_returns_tier_recommendation(tmp_path):
+    code, res = _run(
+        "start",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "tier-options",
+        "--request",
+        "rename a helper function",
+        cwd=tmp_path,
+    )
+
+    assert code == 0
+    assert res["tier"] == "standard"
+    assert res["tier_recommendation"]["recommended_tier"] == "standard"
+    assert res["tier_recommendation"]["selected_tier"] == "standard"
+    assert res["tier_recommendation"]["selection_source"] == "auto"
+    assert len(res["tier_recommendation"]["options"]) == 4
+    assert res["tier_reasons"] == res["tier_recommendation"]["reasons"]
+
+
+def test_start_preview_tier_returns_options_without_creating_run_state(tmp_path):
+    code, res = _run(
+        "start",
+        "--preview-tier",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "tier-preview",
+        "--request",
+        "rename a helper function",
+        cwd=tmp_path,
+    )
+
+    assert code == 0
+    assert res["schema"] == "e2e-dev-harness.tier-preview.v1"
+    assert res["feature"] == "tier-preview"
+    assert res["run_will_be_created"] is False
+    assert "run_state" not in res
+    assert "run_id" not in res
+    assert "current_phase" not in res
+    assert res["recommended_tier"] == "standard"
+    assert res["selected_tier"] == "standard"
+    assert [option["tier"] for option in res["tier_recommendation"]["options"]] == [
+        "minimal",
+        "standard",
+        "critical",
+        "audited",
+    ]
+    assert not (tmp_path / "docs" / "agent-runs").exists()
+
+
+def test_start_preview_explicit_lower_tier_reports_downgrade(tmp_path):
+    code, res = _run(
+        "start",
+        "--preview-tier",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "tier-preview-downgrade",
+        "--request",
+        "add refund settlement to the ledger",
+        "--tier",
+        "standard",
+        cwd=tmp_path,
+    )
+
+    assert code == 0
+    assert res["recommended_tier"] == "critical"
+    assert res["selected_tier"] == "standard"
+    assert res["tier_recommendation"]["selection_source"] == "explicit"
+    assert res["tier_recommendation"]["downgrade"]["requested_below_recommended"] is True
+    assert res["tier_recommendation"]["downgrade"]["requires_provenance"] is True
+    assert res["tier_recommendation"]["downgrade"]["blocked"] is False
+    assert not (tmp_path / "docs" / "agent-runs").exists()
+
+
+def test_start_preview_with_pipeline_marks_pipeline_override(tmp_path):
+    custom = tmp_path / "custom-pipeline.yaml"
+    custom.write_text(
+        "name: custom\n"
+        "phases:\n"
+        "  - CREATED\n"
+        "  - CLARIFIED\n"
+        "  - RED\n"
+        "  - phase: IMPLEMENTED\n"
+        "    allows_code_write: true\n"
+        "  - VERIFIED\n",
+        encoding="utf-8",
+    )
+
+    code, res = _run(
+        "start",
+        "--preview-tier",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "tier-preview-pipeline",
+        "--request",
+        "rename a helper function",
+        "--pipeline",
+        str(custom),
+        cwd=tmp_path,
+    )
+
+    assert code == 0
+    assert res["schema"] == "e2e-dev-harness.tier-preview.v1"
+    assert res["pipeline"] == str(custom)
+    assert res["pipeline_override"] is True
+    assert res["tier_controls_pipeline"] is False
+    assert res["recommended_tier"] == "standard"
+    assert not (tmp_path / "docs" / "agent-runs").exists()
+
+
+def test_start_persists_tier_recommendation(tmp_path):
+    code, res = _run(
+        "start",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "persist-tier-options",
+        "--request",
+        "add refund settlement to the ledger",
+        cwd=tmp_path,
+    )
+
+    assert code == 0
+    state = json.loads(Path(res["run_state"]).read_text(encoding="utf-8"))
+    assert state["tier"] == "critical"
+    assert state["tier_recommendation"]["recommended_tier"] == "critical"
+    assert state["tier_recommendation"]["selected_tier"] == "critical"
+
+
+def test_start_explicit_tier_records_downgrade_metadata(tmp_path):
+    code, res = _run(
+        "start",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "explicit-downgrade",
+        "--request",
+        "add refund settlement to the ledger",
+        "--tier",
+        "standard",
+        cwd=tmp_path,
+    )
+
+    assert code == 0
+    assert res["tier"] == "standard"
+    assert res["tier_recommendation"]["recommended_tier"] == "critical"
+    assert res["tier_recommendation"]["selected_tier"] == "standard"
+    assert res["tier_recommendation"]["selection_source"] == "explicit"
+    assert res["tier_recommendation"]["downgrade"]["requires_provenance"] is True
+
+
+def test_start_explicit_tier_below_audited_preserves_selection(tmp_path):
+    code, res = _run(
+        "start",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "explicit-audited-downgrade",
+        "--request",
+        "compliance audit of the incident response",
+        "--tier",
+        "critical",
+        cwd=tmp_path,
+    )
+
+    assert code == 0
+    assert res["tier"] == "critical"
+    assert res["tier_recommendation"]["recommended_tier"] == "audited"
+    assert res["tier_recommendation"]["selected_tier"] == "critical"
+    assert res["tier_recommendation"]["selection_source"] == "explicit"
+    assert res["tier_recommendation"]["downgrade"]["requires_provenance"] is True
+    assert res["tier_recommendation"]["downgrade"]["blocked"] is False
 
 
 def test_start_then_drive_to_verified_with_real_artifacts_terminates(tmp_path):

@@ -179,8 +179,8 @@ def decide(hook_text: str, repo, run_state_path) -> dict:
                 "WHY: editing the hook config during a run would disable the phase guard itself "
                 "(enforcement bypass).\n"
                 "RECOVER: change hook wiring via the installer "
-                "(`install-e2e-dev-harness --with-hooks --runtime <claude|opencode>`), not by "
-                "editing .claude/settings.json mid-run."
+                "(`e2e-harness init --runtime <claude|opencode>`), not by hand-editing the hook "
+                "config (.claude/settings.json or .opencode/plugins/) mid-run."
             )
     low = command.lower()
     if "run-state.json" in low and any(tok in low for tok in _REDIRECT_TOKENS):

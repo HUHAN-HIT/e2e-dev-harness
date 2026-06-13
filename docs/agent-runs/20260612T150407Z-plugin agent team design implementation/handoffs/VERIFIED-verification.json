@@ -1,0 +1,25 @@
+{
+  "schema": "e2e-dev-harness.command-evidence.v1",
+  "command": "python -m pytest skills/e2e-dev-harness/tests/test_runtime_spawn.py skills/e2e-dev-harness/tests/test_runtime_adapter_contract.py -q",
+  "argv": [
+    "python",
+    "-m",
+    "pytest",
+    "skills/e2e-dev-harness/tests/test_runtime_spawn.py",
+    "skills/e2e-dev-harness/tests/test_runtime_adapter_contract.py",
+    "-q"
+  ],
+  "cwd": "C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify",
+  "started_at": "2026-06-12T15:32:31Z",
+  "finished_at": "2026-06-12T15:32:32Z",
+  "elapsed_ms": 1406,
+  "exit_code": 0,
+  "stdout_tail": "............................................                             [100%]\n============================== warnings summary ===============================\nD:\\SOFTWARE\\anaconda3\\Lib\\site-packages\\_pytest\\cacheprovider.py:475\n  D:\\SOFTWARE\\anaconda3\\Lib\\site-packages\\_pytest\\cacheprovider.py:475: PytestCacheWarning: could not create cache path C:\\Users\\14907\\Documents\\Codex\\2026-05-23\\skill-skill-superpowers-skill-tdd-graphify\\.pytest_cache\\v\\cache\\nodeids: [WinError 5] \u62d2\u7edd\u8bbf\u95ee\u3002: 'C:\\\\Users\\\\14907\\\\Documents\\\\Codex\\\\2026-05-23\\\\skill-skill-superpowers-skill-tdd-graphify\\\\.pytest_cache\\\\v\\\\cache'\n    config.cache.set(\"cache/nodeids\", sorted(self.cached_nodeids))\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n44 passed, 1 warning in 0.07s\n",
+  "stderr_tail": "",
+  "stdout_sha256": "5f93c73ae696b00861a0d9c232a63f4297c33b358745c0caa3100be7fe529d68",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "environment": {
+    "python": "3.13.12",
+    "platform": "win32"
+  }
+}

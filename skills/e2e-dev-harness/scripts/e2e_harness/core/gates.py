@@ -13,8 +13,13 @@ def gate_passes(phase: Phase, phase_record: dict | None,
     if rec.get("dispatch") == "failed" and not rec.get("failures"):
         return False, ["failed"]
     evidence = rec.get("evidence", {})
+    # F2 (Hybrid contract model): judge against the contract stamped when this phase
+    # passed, if any, else the live spine gate. A later tightening of phase.exit_gate
+    # therefore cannot retroactively fail a phase that legitimately passed under the
+    # earlier contract. An empty/absent stamp falls back to the live gate.
+    effective_gate = tuple(rec.get("contract", {}).get("exit_gate") or phase.exit_gate)
     missing: list[str] = []
-    for k in phase.exit_gate:
+    for k in effective_gate:
         if k not in evidence:
             missing.append(k)
             continue
@@ -30,6 +35,33 @@ def gate_passes(phase: Phase, phase_record: dict | None,
         if marker not in missing:
             missing.append(marker)
     return (not missing, missing)
+
+
+def all_gates_pass(spine: list[Phase], state: dict, repo_root=None,
+                   *, skip_replay: bool = False) -> tuple[bool, list[tuple[str, list[str]]]]:
+    """Whole-journey closure (F1): the run is complete iff EVERY phase gate
+    currently passes — not merely because the cursor reached the terminal phase.
+
+    Returns ``(all_ok, blockers)`` where ``blockers`` is ``[(phase_name, missing)]``
+    in spine order, so ``blockers[0]`` is the earliest still-failing phase. The
+    single source of "is the journey closed", shared by the engine (authoritative,
+    ``skip_replay=False``) and navigation (display, ``skip_replay=True``). The two
+    agree exactly for presence/structured keys; for replay keys they may legitimately
+    diverge because navigation deliberately skips the side-effecting replay.
+
+    The contract a phase is judged against is resolved inside ``gate_passes``
+    (``rec['contract']['exit_gate']`` snapshot when present, else the live
+    ``phase.exit_gate``), so this predicate inherits the snapshot/live policy for
+    free and needs no contract parameter of its own.
+    """
+    phases_rec = state.get("phases", {})
+    blockers: list[tuple[str, list[str]]] = []
+    for phase in spine:
+        ok, missing = gate_passes(phase, phases_rec.get(phase.name, {}),
+                                  repo_root, skip_replay=skip_replay)
+        if not ok:
+            blockers.append((phase.name, missing))
+    return (not blockers, blockers)
 
 
 def gate_closure_ok(spine: list[Phase]) -> tuple[bool, list[str]]:

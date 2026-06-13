@@ -1,0 +1,121 @@
+{
+  "schema": "e2e-dev-harness.test-substance.v1",
+  "acceptance_contract_path": "docs/agent-runs/20260612T150407Z-plugin agent team design implementation/handoffs/CLARIFIED-acceptance_contract.json",
+  "language": "python",
+  "test_files": [
+    "skills/e2e-dev-harness/tests/test_agent_team_provider.py",
+    "skills/e2e-dev-harness/tests/test_agent_team_profiles.py",
+    "skills/e2e-dev-harness/tests/test_agent_team_dispatch.py",
+    "skills/e2e-dev-harness/tests/test_runtime_spawn.py",
+    "skills/e2e-dev-harness/tests/test_runtime_adapter_contract.py",
+    "skills/e2e-dev-harness/tests/test_review_fanout.py",
+    "skills/e2e-dev-harness/tests/test_dispatch.py",
+    "skills/e2e-dev-harness/tests/test_cli_e2e.py"
+  ],
+  "red_tests": [
+    "test_agent_team_provider.py::provider_parity",
+    "test_agent_team_profiles.py::profile_validation",
+    "test_agent_team_dispatch.py::dispatch_integration",
+    "test_runtime_spawn.py::runtime_subagent_type",
+    "test_runtime_adapter_contract.py::runtime_contract",
+    "test_review_fanout.py::review_fanout"
+  ],
+  "green_tests": [
+    "test_agent_team_provider.py::provider_parity",
+    "test_agent_team_profiles.py::profile_validation",
+    "test_agent_team_dispatch.py::dispatch_integration",
+    "test_runtime_spawn.py::runtime_subagent_type",
+    "test_runtime_adapter_contract.py::runtime_contract",
+    "test_review_fanout.py::review_fanout"
+  ],
+  "ac_coverage": {
+    "AC-001": [
+      "test_agent_team_provider.py::provider_parity",
+      "test_agent_team_profiles.py::profile_validation",
+      "test_agent_team_dispatch.py::dispatch_integration",
+      "test_runtime_spawn.py::runtime_subagent_type",
+      "test_runtime_adapter_contract.py::runtime_contract",
+      "test_review_fanout.py::review_fanout"
+    ],
+    "AC-002": [
+      "test_agent_team_provider.py::provider_parity",
+      "test_agent_team_profiles.py::profile_validation",
+      "test_agent_team_dispatch.py::dispatch_integration",
+      "test_runtime_spawn.py::runtime_subagent_type",
+      "test_runtime_adapter_contract.py::runtime_contract",
+      "test_review_fanout.py::review_fanout"
+    ],
+    "AC-003": [
+      "test_agent_team_provider.py::provider_parity",
+      "test_agent_team_profiles.py::profile_validation",
+      "test_agent_team_dispatch.py::dispatch_integration",
+      "test_runtime_spawn.py::runtime_subagent_type",
+      "test_runtime_adapter_contract.py::runtime_contract",
+      "test_review_fanout.py::review_fanout"
+    ],
+    "AC-004": [
+      "test_agent_team_provider.py::provider_parity",
+      "test_agent_team_profiles.py::profile_validation",
+      "test_agent_team_dispatch.py::dispatch_integration",
+      "test_runtime_spawn.py::runtime_subagent_type",
+      "test_runtime_adapter_contract.py::runtime_contract",
+      "test_review_fanout.py::review_fanout"
+    ],
+    "AC-005": [
+      "test_agent_team_provider.py::provider_parity",
+      "test_agent_team_profiles.py::profile_validation",
+      "test_agent_team_dispatch.py::dispatch_integration",
+      "test_runtime_spawn.py::runtime_subagent_type",
+      "test_runtime_adapter_contract.py::runtime_contract",
+      "test_review_fanout.py::review_fanout"
+    ],
+    "AC-006": [
+      "test_agent_team_provider.py::provider_parity",
+      "test_agent_team_profiles.py::profile_validation",
+      "test_agent_team_dispatch.py::dispatch_integration",
+      "test_runtime_spawn.py::runtime_subagent_type",
+      "test_runtime_adapter_contract.py::runtime_contract",
+      "test_review_fanout.py::review_fanout"
+    ],
+    "AC-007": [
+      "test_agent_team_provider.py::provider_parity",
+      "test_agent_team_profiles.py::profile_validation",
+      "test_agent_team_dispatch.py::dispatch_integration",
+      "test_runtime_spawn.py::runtime_subagent_type",
+      "test_runtime_adapter_contract.py::runtime_contract",
+      "test_review_fanout.py::review_fanout"
+    ],
+    "AC-008": [
+      "test_agent_team_provider.py::provider_parity",
+      "test_agent_team_profiles.py::profile_validation",
+      "test_agent_team_dispatch.py::dispatch_integration",
+      "test_runtime_spawn.py::runtime_subagent_type",
+      "test_runtime_adapter_contract.py::runtime_contract",
+      "test_review_fanout.py::review_fanout"
+    ],
+    "AC-009": [
+      "test_agent_team_provider.py::provider_parity",
+      "test_agent_team_profiles.py::profile_validation",
+      "test_agent_team_dispatch.py::dispatch_integration",
+      "test_runtime_spawn.py::runtime_subagent_type",
+      "test_runtime_adapter_contract.py::runtime_contract",
+      "test_review_fanout.py::review_fanout"
+    ],
+    "AC-010": [
+      "test_agent_team_provider.py::provider_parity",
+      "test_agent_team_profiles.py::profile_validation",
+      "test_agent_team_dispatch.py::dispatch_integration",
+      "test_runtime_spawn.py::runtime_subagent_type",
+      "test_runtime_adapter_contract.py::runtime_contract",
+      "test_review_fanout.py::review_fanout"
+    ],
+    "AC-011": [
+      "test_agent_team_provider.py::provider_parity",
+      "test_agent_team_profiles.py::profile_validation",
+      "test_agent_team_dispatch.py::dispatch_integration",
+      "test_runtime_spawn.py::runtime_subagent_type",
+      "test_runtime_adapter_contract.py::runtime_contract",
+      "test_review_fanout.py::review_fanout"
+    ]
+  }
+}

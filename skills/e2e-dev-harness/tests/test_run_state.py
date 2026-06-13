@@ -98,3 +98,27 @@ def test_mutate_releases_lock_and_persists(tmp_path):
     run_state.mutate(p, lambda s: s.__setitem__("feature", "feat2"))
     assert not (tmp_path / "run-state.json.lock").exists()
     assert run_state.load(p)["feature"] == "feat2"
+
+
+def test_submit_evidence_stamps_contract_when_gate_complete():
+    """F2: submit_evidence stamps the contract-in-force only once the phase gate is
+    complete, idempotently. The exit_gate parameter is OPTIONAL (default None ->
+    no stamp), so every positional legacy caller is byte-identical."""
+    from e2e_harness.core import engine
+    st = run_state.new_run_state("r1", "f", "r")
+    eg = ("plan", "module_plan")
+    engine.submit_evidence(st, "PLANNED", "plan", "p.md", exit_gate=eg)
+    assert "contract" not in st["phases"]["PLANNED"]          # gate not yet complete
+    engine.submit_evidence(st, "PLANNED", "module_plan", "m.json", exit_gate=eg)
+    assert st["phases"]["PLANNED"]["contract"]["exit_gate"] == ["plan", "module_plan"]
+    # idempotent: a later submit with a DIFFERENT exit_gate must not overwrite.
+    engine.submit_evidence(st, "PLANNED", "plan", "p2.md", exit_gate=("plan",))
+    assert st["phases"]["PLANNED"]["contract"]["exit_gate"] == ["plan", "module_plan"]
+
+
+def test_submit_evidence_without_exit_gate_writes_no_stamp():
+    """F2 back-compat: no exit_gate => no contract key (legacy behavior preserved)."""
+    from e2e_harness.core import engine
+    st = run_state.new_run_state("r1", "f", "r")
+    engine.submit_evidence(st, "PLANNED", "plan", "p.md")
+    assert "contract" not in st["phases"]["PLANNED"]

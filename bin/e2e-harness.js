@@ -171,7 +171,7 @@ function main() {
     console.log(
       `${tag}init: runtime=${result.runtime} skill=${skillState}(${result.skill.home}) `
       + `python=${result.python || 'MISSING'} hooks=+${h.added}${seen} `
-      + `settings=${h.settingsPath}${h.backup ? '(backup)' : ''} doctor=${doctorState}`
+      + `wrote=${h.settingsPath || h.pluginPath}${h.backup ? '(backup)' : ''} doctor=${doctorState}`
     );
     process.exit(result.doctor && !result.doctor.ok ? 3 : 0);
   }

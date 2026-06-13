@@ -5,6 +5,7 @@ Runs a command and returns tamper-evident JSON (exit code + stdout/stderr hashes
 from __future__ import annotations
 
 import hashlib
+import re
 import shlex
 import subprocess
 import sys
@@ -14,6 +15,8 @@ from pathlib import Path
 
 COMMAND_EVIDENCE_SCHEMA = "e2e-dev-harness.command-evidence.v1"
 DEFAULT_TIMEOUT_SECONDS = 600
+
+_HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def _now_iso() -> str:
@@ -67,3 +70,17 @@ def is_command_evidence(obj) -> bool:
         and obj.get("schema") == COMMAND_EVIDENCE_SCHEMA
         and "exit_code" in obj
     )
+
+
+def is_genuine_command_evidence(obj) -> bool:
+    """True only for records that bear record_command's tamper-evident structure: an
+    `environment` block and 64-hex content hashes. Rejects forged JSON with
+    placeholder hashes. Defined here (next to is_command_evidence) so both the
+    evidence validator and the audit-replay validator can reuse it without a cycle."""
+    if not isinstance(obj, dict) or not isinstance(obj.get("environment"), dict):
+        return False
+    for hash_key in ("stdout_sha256", "stderr_sha256"):
+        value = obj.get(hash_key)
+        if not isinstance(value, str) or not _HEX64.match(value):
+            return False
+    return True
