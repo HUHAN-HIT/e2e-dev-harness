@@ -27,14 +27,11 @@ def run(args) -> tuple[int, dict]:
     from e2e_harness.adapters.domain import select, merge_overrides, domain_block
     adapter = select(repo, explicit=getattr(args, "adapter", None))  # KeyError -> main.py exit 2
 
-    tier = args.tier
-    reasons: list[str] = []
-    if tier == "auto":
-        from e2e_harness.adapters.tier import classify
-        scope = adapter.scan(repo, request) if getattr(args, "scan", False) else None
-        # auto=True applies the G4 baseline floor: a derived (non-pinned) tier never
-        # drops to minimal — review is the default. `--tier minimal` opts down.
-        tier, reasons = classify.classify_tier(request, scope, auto=True)
+    from e2e_harness.adapters.tier import recommend
+    scope = adapter.scan(repo, request) if getattr(args, "scan", False) else None
+    tier_recommendation = recommend.recommend_tier(request, scope, selected_tier=args.tier)
+    tier = tier_recommendation["selected_tier"]
+    reasons = tier_recommendation["reasons"]
 
     pipeline_ref = getattr(args, "pipeline", None) or tier
     spec = pipeline.load_spec(pipeline_ref)  # load/parse error -> main.py emits error JSON (exit 2)
@@ -59,4 +56,5 @@ def run(args) -> tuple[int, dict]:
     return 0, {"schema": "e2e-dev-harness.start.v1", "run_id": run_id,
                "run_state": str(path), "current_phase": "CREATED",
                "tier": tier, "pipeline": pipeline_ref, "tier_reasons": reasons,
+               "tier_recommendation": tier_recommendation,
                "domain": adapter.name}

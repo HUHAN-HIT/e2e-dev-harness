@@ -68,6 +68,49 @@ def _make_artifact(repo: Path, phase: str, key: str) -> str:
     return str(f.relative_to(repo))
 
 
+def test_start_auto_returns_tier_recommendation(tmp_path):
+    code, res = _run(
+        "start",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "tier-options",
+        "--request",
+        "rename a helper function",
+        cwd=tmp_path,
+    )
+
+    assert code == 0
+    assert res["tier"] == "standard"
+    assert res["tier_recommendation"]["recommended_tier"] == "standard"
+    assert res["tier_recommendation"]["selected_tier"] == "standard"
+    assert res["tier_recommendation"]["selection_source"] == "auto"
+    assert len(res["tier_recommendation"]["options"]) == 4
+    assert res["tier_reasons"] == res["tier_recommendation"]["reasons"]
+
+
+def test_start_explicit_tier_records_downgrade_metadata(tmp_path):
+    code, res = _run(
+        "start",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "explicit-downgrade",
+        "--request",
+        "add refund settlement to the ledger",
+        "--tier",
+        "standard",
+        cwd=tmp_path,
+    )
+
+    assert code == 0
+    assert res["tier"] == "standard"
+    assert res["tier_recommendation"]["recommended_tier"] == "critical"
+    assert res["tier_recommendation"]["selected_tier"] == "standard"
+    assert res["tier_recommendation"]["selection_source"] == "explicit"
+    assert res["tier_recommendation"]["downgrade"]["requires_provenance"] is True
+
+
 def test_start_then_drive_to_verified_with_real_artifacts_terminates(tmp_path):
     code, res = _run("start", "--repo", str(tmp_path), "--feature", "demo",
                      "--request", "do x", cwd=tmp_path)
