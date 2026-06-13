@@ -14,6 +14,32 @@ from e2e_harness.core import run_state, pipeline_validate, text_input
 from e2e_harness import pipeline
 
 
+def _preview_result(*, feature: str, adapter_name: str, tier_recommendation: dict,
+                    pipeline_ref: str, pipeline_override: bool) -> dict:
+    return {
+        "schema": "e2e-dev-harness.tier-preview.v1",
+        "feature": feature,
+        "domain": adapter_name,
+        "run_will_be_created": False,
+        "recommended_tier": tier_recommendation["recommended_tier"],
+        "selected_tier": tier_recommendation["selected_tier"],
+        "selection_source": tier_recommendation["selection_source"],
+        "tier_reasons": tier_recommendation["reasons"],
+        "tier_recommendation": tier_recommendation,
+        "pipeline": pipeline_ref,
+        "pipeline_override": pipeline_override,
+        "tier_controls_pipeline": not pipeline_override,
+        "confirmation": {
+            "recommended_start_args": [
+                "start",
+                "--tier",
+                tier_recommendation["recommended_tier"],
+            ],
+            "choice_arg": "--tier <minimal|standard|critical|audited>",
+        },
+    }
+
+
 def run(args) -> tuple[int, dict]:
     repo = Path(args.repo).resolve()
     # Resolve inline-or-file and reject console-mangled (U+FFFD) text loudly,
@@ -41,6 +67,15 @@ def run(args) -> tuple[int, dict]:
         return 2, {"error": "invalid pipeline", "pipeline": pipeline_ref, "errors": errors}
 
     custom = pipeline.is_path(pipeline_ref)
+    if getattr(args, "preview_tier", False):
+        return 0, _preview_result(
+            feature=feature,
+            adapter_name=adapter.name,
+            tier_recommendation=tier_recommendation,
+            pipeline_ref=str(pipeline_ref),
+            pipeline_override=custom,
+        )
+
     # Embed the resolved spec when the run is non-default in any way (custom
     # pipeline, adapter overrides, or a non-backend domain). Backend + built-in
     # stays lean (name only) — that is the parity contract.

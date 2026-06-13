@@ -45,6 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="built-in name or path to a custom pipeline yaml (overrides --tier's spine)")
     s.add_argument("--adapter", default=None, help="force domain adapter (backend|frontend)")
     s.add_argument("--scan", action="store_true", help="run adapter scan to raise tier floor")
+    s.add_argument("--preview-tier", action="store_true",
+                   help="compute tier recommendation/options without creating a run")
 
     for verb in ("next", "status"):
         sp = sub.add_parser(verb); sp.add_argument("--state", required=True); sp.add_argument("--repo", default=".")
