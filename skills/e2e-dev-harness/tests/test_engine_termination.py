@@ -54,3 +54,26 @@ def test_evaluate_idempotent_after_complete():
     res = engine.evaluate(spine, st)
     assert res["complete"] is True
     assert engine.evaluate(spine, st)["complete"] is True
+
+
+def test_evaluate_does_not_complete_when_predecessor_gate_regressed():
+    """F1: completion is an all-gates invariant, not a cursor terminal. A
+    predecessor whose gate regressed (e.g. a contract tightened after it passed)
+    must re-block the run instead of riding a stale terminal cursor to complete."""
+    spine = _spine()
+    st = run_state.new_run_state("r1", "f", "r")
+    for _ in range(len(spine) + 1):
+        res = engine.evaluate(spine, st)
+        if res["complete"]:
+            break
+        ph = next(p for p in spine if p.name == res["blocked_phase"])
+        for key in ph.produces:
+            engine.submit_evidence(st, ph.name, key, f"{ph.name}-{key}.md")
+    assert engine.evaluate(spine, st)["complete"] is True  # baseline: journey closed
+    # Regress a predecessor: drop one IMPLEMENTED gate key, then re-evaluate.
+    del st["phases"]["IMPLEMENTED"]["evidence"]["test_substance"]
+    res = engine.evaluate(spine, st)
+    assert res["complete"] is False
+    assert res["blocked_phase"] == "IMPLEMENTED"
+    assert "test_substance" in res["missing_evidence"]
+    assert st["current_phase"] == "IMPLEMENTED"

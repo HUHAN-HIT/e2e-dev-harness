@@ -157,6 +157,27 @@ def test_band_verification_failure_reopens_implementation_tracks(tmp_path):
         {"passing_tests#auth", "test_substance#auth"}
 
 
+def test_band_redrive_clears_rework_residue(tmp_path):
+    """F3 (band): re-driving a reopened module IMPLEMENTED#m clears its rework
+    residue via the same single submit_evidence fix as the single-track path, so a
+    converged track is not left advertising stale superseded_evidence/rework_required."""
+    st, spine = _completed_band_state(tmp_path, _mod("auth"), _mod("reports"))
+    st["phases"]["VERIFIED"] = {
+        "evidence": {"verification": {"path": "v"}, "scope_manifest": {"path": "s"}},
+        "dispatch": dispatch_core.DispatchStatus.FAILED.value,
+        "blocker": "verification command exited 1",
+    }
+    st["region"] = "epilogue"
+    st["current_phase"] = "VERIFIED"
+    engine.evaluate(spine, st, None)  # reopens tracks; writes residue on IMPLEMENTED#auth
+    assert "superseded_evidence" in st["phases"]["IMPLEMENTED#auth"]
+    assert "rework_required" in st["phases"]["IMPLEMENTED#auth"]
+
+    engine.submit_evidence(st, "IMPLEMENTED#auth", "passing_tests#auth", "new-p.json")
+    assert "superseded_evidence" not in st["phases"]["IMPLEMENTED#auth"]
+    assert "rework_required" not in st["phases"]["IMPLEMENTED#auth"]
+
+
 def test_single_track_verification_rework_is_unchanged(tmp_path):
     # guards the back-compat path: no tracks -> legacy _route_verification_rework
     from e2e_harness.adapters.evidence import command_evidence as ce

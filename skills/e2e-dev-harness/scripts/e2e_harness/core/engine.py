@@ -13,7 +13,8 @@ def _phase_record(state: dict, name: str) -> dict:
 
 
 def submit_evidence(state: dict, phase_name: str, key: str, path: str, *,
-                    repo_root=None, status: str = "done", reason: str | None = None) -> None:
+                    repo_root=None, status: str = "done", reason: str | None = None,
+                    exit_gate: tuple[str, ...] | None = None) -> None:
     rec = _phase_record(state, phase_name)
     if status == "failed":
         # Per-key failure ledger (S1/S2): a failed key is recorded under its own
@@ -43,6 +44,19 @@ def submit_evidence(state: dict, phase_name: str, key: str, path: str, *,
         failures.pop("_phase", None)
         if not failures:
             rec.pop("failures", None)
+    # F3: a successful re-drive resolves a prior verification rollback — clear the
+    # rework bookkeeping so a later reader cannot mistake this converged phase for one
+    # still awaiting rework. Cleared on the first keyed done; the gate still governs
+    # whether the phase is actually complete.
+    rec.pop("superseded_evidence", None)
+    rec.pop("rework_required", None)
+    # F2 (Hybrid contract model): once this submit completes the phase gate, stamp
+    # the contract in force at pass time so a later tightening cannot retroactively
+    # invalidate this phase. Idempotent (never overwrites an existing stamp). Absent
+    # exit_gate => no stamp, so every legacy positional caller is byte-identical.
+    if exit_gate and "contract" not in rec:
+        if all(k in rec.get("evidence", {}) for k in exit_gate):
+            rec["contract"] = {"exit_gate": list(exit_gate)}
 
 
 def _by_name(spine: list[Phase]) -> dict[str, Phase]:
@@ -156,8 +170,30 @@ def _evaluate_singleton(spine: list[Phase], state: dict, repo_root=None) -> dict
                 result["blocker"] = rec.get("blocker")
             return result
         if phase.next_phase is None:
-            state["current_phase"] = name
-            return {"complete": True, "blocked_phase": None, "missing_evidence": [], "next_action": {}}
+            # F1: completion is an all-gates invariant, not a cursor terminal.
+            # A predecessor whose gate regressed after it passed (e.g. a contract
+            # tightened later) must re-block the run rather than ride this terminal
+            # cursor to a false complete. Re-check the whole spine and, on a
+            # regression, route the cursor back to the EARLIEST still-failing phase
+            # (the same backward-cursor idiom the block path below already uses).
+            all_ok, blockers = gates.all_gates_pass(spine, state, repo_root)
+            if all_ok:
+                state["current_phase"] = name
+                return {"complete": True, "blocked_phase": None, "missing_evidence": [], "next_action": {}}
+            first_name, first_missing = blockers[0]
+            state["current_phase"] = first_name
+            first_phase = by_name[first_name]
+            result = {
+                "complete": False,
+                "blocked_phase": first_name,
+                "missing_evidence": first_missing,
+                "next_action": dispatch.worker_packet(first_phase, state.get("_run_state_path", "")),
+            }
+            first_rec = state.get("phases", {}).get(first_name, {})
+            if first_rec.get("dispatch") == dispatch.DispatchStatus.FAILED.value:
+                result["failed"] = True
+                result["blocker"] = first_rec.get("blocker")
+            return result
         nxt = phase.next_phase
         # Fork point: stepping from a singleton phase (e.g. PLANNED) into the
         # module band (a namespaced phase). Materialize tracks once and hand off.

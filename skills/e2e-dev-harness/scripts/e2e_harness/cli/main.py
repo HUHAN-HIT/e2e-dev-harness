@@ -14,6 +14,7 @@ from e2e_harness.cli.commands import (
     status,
     validate_pipeline,
     doctor,
+    migrate,
 )
 
 _COMMANDS = {
@@ -22,6 +23,8 @@ _COMMANDS = {
     # 7th verb — deliberate design §6 exception for the M3 config layer (U4).
     "validate-pipeline": validate_pipeline.run,
     "doctor": doctor.run,
+    # F2: one-shot legacy-run contract back-fill (Hybrid model).
+    "migrate": migrate.run,
 }
 
 
@@ -65,6 +68,10 @@ def build_parser() -> argparse.ArgumentParser:
     doc = sub.add_parser("doctor"); doc.add_argument("project_root", nargs="?", default=".")
     doc.add_argument("--json", action="store_true", help="accepted for installer compatibility; output is always JSON")
     doc.add_argument("--state", default=None, help="run-state path for read-only diagnostic")
+    doc.add_argument("--strict", action="store_true",
+                     help="promote settings/hooks readiness from informational to hard blockers")
+
+    mg = sub.add_parser("migrate"); mg.add_argument("--state", required=True); mg.add_argument("--repo", default=".")
     return p
 
 

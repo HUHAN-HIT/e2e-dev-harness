@@ -54,7 +54,11 @@ def _phase_status(spine: list[Phase], state: dict, idx: int,
     phase = spine[idx]
     rec = state.get("phases", {}).get(phase.name, {})
     if idx < cur_idx:
-        return "done"
+        # F1: a phase before the cursor is 'done' only if its gate STILL passes.
+        # A regressed predecessor (e.g. a contract tightened after it passed) is a
+        # real blocker, not a free 'done' inferred from cursor position.
+        ok, _ = gates.gate_passes(phase, rec, repo_root, skip_replay=skip_replay)
+        return "done" if ok else "blocked"
     if idx == cur_idx:
         ok, _ = gates.gate_passes(phase, rec, repo_root, skip_replay=skip_replay)
         if phase.next_phase is None and ok:
@@ -91,13 +95,21 @@ def navigation_map(spine: list[Phase], state: dict, repo_root=None,
         full.append({"name": name, "status": st})
 
     done = sum(1 for p in phases if p["status"] == "done")
-    remaining_gates = sum(len(p["gate"]["missing"]) for i, p in enumerate(phases) if i >= cur_idx)
+    # F1: count missing gate keys across the WHOLE spine, not just from the cursor
+    # forward — a historical gap (a regressed predecessor) must surface in the
+    # aggregate instead of being windowed out behind the cursor.
+    remaining_gates = sum(len(p["gate"]["missing"]) for p in phases)
 
-    complete = done == len(spine)
+    # F1: completion + next derive from the shared all-gates predicate so the map
+    # can never disagree with the engine on presence/structured keys. `next` points
+    # at the EARLIEST unmet phase (a regressed predecessor, else the cursor).
+    all_ok, blockers = gates.all_gates_pass(spine, state, repo_root, skip_replay=skip_replay)
+    complete = all_ok
     nxt = None
     if not complete:
-        cur_phase = spine[cur_idx]
-        nxt = {"phase": cur_phase.name, "action": f"dispatch {cur_phase.worker_skill}"}
+        blocker_name = blockers[0][0] if blockers else cur
+        blocker_phase = next((p for p in spine if p.name == blocker_name), spine[cur_idx])
+        nxt = {"phase": blocker_phase.name, "action": f"dispatch {blocker_phase.worker_skill}"}
 
     return {
         "schema": "e2e-dev-harness.navigation-map.v1",
