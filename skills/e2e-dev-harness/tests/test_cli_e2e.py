@@ -51,6 +51,38 @@ def _make_artifact(repo: Path, phase: str, key: str) -> str:
         f.write_text(_json.dumps({"schema": _mp.SCHEMA, "modules": [
             {"id": "core", "name": "Core", "depends_on": [], "acceptance_ids": ["AC-001"]}]}), encoding="utf-8")
         return str(f.relative_to(repo))
+    if key == "agent_team_dispatch":
+        # F4: the audited VERIFIED gate requires a real dispatch-invocation whose
+        # referenced team plan resolves to a non-empty worker set. Write both the
+        # team plan and the invocation that points at it.
+        import json as _json
+        from e2e_harness.adapters.evidence import dispatch_invocation as _di
+        plan = base / f"{phase}-team-plan.json"
+        plan.write_text(_json.dumps({
+            "schema": "e2e-dev-harness.agent-team-plan.v1",
+            "workers": [{"id": f"{phase}#core", "expected_outputs": []}]}), encoding="utf-8")
+        f = base / f"{phase}-{key}.json"
+        f.write_text(_json.dumps({
+            "schema": _di.DISPATCH_INVOCATION_SCHEMA,
+            "phase": phase,
+            "team_plan_path": str(plan.relative_to(repo)),
+            "descriptors": [{"id": f"{phase}#core", "runtime": "codex"}]}), encoding="utf-8")
+        return str(f.relative_to(repo))
+    if key == "audit_replay":
+        # F5: the audited VERIFIED gate requires an audit-replay manifest whose every
+        # claim is backed by genuine command-evidence (anti-forgery, not replayed).
+        import json as _json
+        from e2e_harness.adapters.evidence import audit_replay as _ar
+        ev = ce.record_command(repo, f'"{sys.executable}" -c "import sys; sys.exit(0)"')
+        claim_rec = base / f"{phase}-{key}-claim.json"
+        claim_rec.write_text(json.dumps(ev), encoding="utf-8")
+        f = base / f"{phase}-{key}.json"
+        f.write_text(_json.dumps({
+            "schema": _ar.AUDIT_REPLAY_SCHEMA,
+            "claims": [{"name": "audited suite",
+                        "evidence": str(claim_rec.relative_to(repo)),
+                        "expect_exit": 0}]}), encoding="utf-8")
+        return str(f.relative_to(repo))
     want = validate.COMMAND_KEYS.get(key)
     if want is not None:
         code = 0 if want == "zero" else 1
@@ -270,6 +302,52 @@ def test_start_then_drive_to_verified_with_real_artifacts_terminates(tmp_path):
     # standard spine (adds PLANNED + REVIEWED) and terminates in 7 steps. The
     # bound stays tight to guard against a runaway loop / pipeline regression.
     assert steps <= 8
+
+
+def test_start_audited_then_drive_to_verified_terminates(tmp_path):
+    """End-to-end proof that the *audited* tier's evidence chain
+    (command-backed audit_replay verification + agent_team_dispatch
+    provenance) drives a run all the way to VERIFIED via the CLI.
+
+    The standard drive (above) never exercises the audited spine, so a
+    regression in the audited gates or the dispatch-provenance evidence
+    would otherwise pass undetected.
+    """
+    code, res = _run("start", "--repo", str(tmp_path), "--feature", "audited-demo",
+                     "--request", "compliance audit of the incident response",
+                     "--tier", "audited", cwd=tmp_path)
+    assert code == 0
+    assert res["tier"] == "audited"
+    state_path = res["run_state"]
+    steps = 0
+    nres = {"complete": False}
+    while steps < 50:
+        steps += 1
+        code, nres = _run("next", "--state", state_path, "--repo", str(tmp_path), cwd=tmp_path)
+        if nres["complete"]:
+            break
+        phase = nres["blocked_phase"]
+        for key in nres["next_action"]["expected_outputs"]:
+            rel = _make_artifact(tmp_path, phase, key)
+            _run("submit", "--state", state_path, "--phase", phase,
+                 "--key", key, "--path", rel, "--repo", str(tmp_path), cwd=tmp_path)
+    assert nres["complete"] is True
+    assert nres["navigation_map"]["you_are_here"] == "VERIFIED"
+    # Prove the audited VERIFIED gate validated the full audited chain — not just
+    # `verification`. Its three required keys (verification + audit_replay +
+    # agent_team_dispatch) all passed; a regression dropping the dispatch-provenance
+    # or audit-replay evidence would shrink `required` or leave `missing` non-empty.
+    verified = next(n for n in nres["navigation_map"]["full_catalog"] if n["name"] == "VERIFIED")
+    assert verified["status"] == "done"
+    # Re-check the VERIFIED gate directly: the audited spine requires three keys
+    # (verification + audit_replay + agent_team_dispatch), and all pass against the
+    # canonically-produced evidence. This guards the audit-replay and dispatch-
+    # provenance validators — a regression rejecting valid evidence fails here.
+    code, gres = _run("gate", "--state", state_path, "--phase", "VERIFIED",
+                      "--repo", str(tmp_path), cwd=tmp_path)
+    assert code == 0
+    assert gres["passed"] is True
+    assert gres["missing_evidence"] == []
 
 
 def test_fake_path_evidence_never_reaches_verified(tmp_path):
