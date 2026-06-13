@@ -13,6 +13,16 @@ def test_skill_md_has_frontmatter_and_verbs():
     assert "VERIFIED" in text
 
 
+def test_skill_md_uses_resume_safe_cli_commands():
+    text = SKILL.read_text(encoding="utf-8")
+    command_block = text.split("## 循环", 1)[0]
+
+    assert "e2e-harness start" in command_block
+    assert "e2e-harness status --state <run-state>" in command_block
+    assert "S=skills/e2e-dev-harness/scripts/e2e_dev_harness.py" not in command_block
+    assert "Do not use repo-relative" in command_block
+
+
 def test_skill_md_documents_tiers_and_review_fanout():
     text = SKILL.read_text(encoding="utf-8")
     for tier in ("minimal", "standard", "critical", "audited"):

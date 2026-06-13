@@ -8,9 +8,44 @@ derived from the REAL CLI verb set, never the target-lifecycle diagram.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from e2e_harness.core import lifecycle, multitrack
+
+
+def _resolve_blocked_task(state_path: str, blocked_phase: str | None) -> str | None:
+    """The worker dispatched for the blocked phase, read from the on-disk
+    `agent-team-plan.json` (workers[].id / producer_ids written by `dispatch`).
+
+    This is the honest current-checkout "task id" — phase-derived
+    (`IMPLEMENTED-default`, `REVIEWED-r1`, or a module-namespaced `IMPLEMENTED#auth`)
+    — NOT a fictional `T0x`. A worker belongs to phase P iff its id == P or starts
+    with `P-` (a `-suffix` reviewer/default variant); `IMPLEMENTED#auth` does not
+    start with `IMPLEMENTED-`, so a singleton phase never grabs a module worker and
+    vice-versa. Returns the first match (sorted, deterministic) or None when no
+    artifact names a worker for the phase — no value is invented."""
+    if not blocked_phase:
+        return None
+    plan_path = Path(state_path).parent / "agent-team-plan.json"
+    if not plan_path.exists():
+        return None
+    try:
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(plan, dict):
+        return None
+    workers = plan.get("workers")
+    ids = [w["id"] for w in workers
+           if isinstance(w, dict) and isinstance(w.get("id"), str)] \
+        if isinstance(workers, list) else []
+    if not ids:  # fall back to the evidence contract's producer_ids
+        contract = plan.get("evidence_contract")
+        if isinstance(contract, dict) and isinstance(contract.get("producer_ids"), list):
+            ids = [i for i in contract["producer_ids"] if isinstance(i, str)]
+    matches = sorted(i for i in ids if i == blocked_phase or i.startswith(blocked_phase + "-"))
+    return matches[0] if matches else None
 
 
 def _required_keys_for_phase(phase_name: str | None) -> list[str]:
@@ -89,6 +124,12 @@ def diagnose_run(state: dict, state_path: str, repo: str = ".") -> dict:
             "task_id": None,
             "message": blocker or f"{current} dispatch failed",
         }
+    # F-6: resolve the real blocked task id from the dispatch artifact (the worker
+    # the harness dispatched for this phase), instead of returning null. Only when
+    # blocked; otherwise nothing is stuck and there is no task to name.
+    task_id = _resolve_blocked_task(state_path, current) if first else None
+    if first is not None:
+        first["task_id"] = task_id
     # next_legal_command is derived from the REAL CLI verb set — prog `e2e-dev-harness`,
     # commands start/next/dispatch/submit/gate/status/doctor/migrate, flags
     # `--state <run-state-path>` / `--repo` (see cli/main.py). It is NOT a target-lifecycle
@@ -103,7 +144,7 @@ def diagnose_run(state: dict, state_path: str, repo: str = ".") -> dict:
         "run_dir": str(Path(state_path).parent),
         "first_fault": first,
         "blocked_phase": current if first else None,
-        "blocked_task": None,
+        "blocked_task": task_id,
         "missing_evidence": missing,
         "next_legal_command": next_cmd,
         "coordinator_may_write_worker_outputs": False,

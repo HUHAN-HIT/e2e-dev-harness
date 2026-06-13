@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import json
 import os
 import time
@@ -97,12 +98,29 @@ def _lock(path):
             os.unlink(str(lock))
 
 
-def mutate(path: str | Path, fn, now: str | None = None) -> dict:
+def mutate(path: str | Path, fn, now: str | None = None,
+           events_path: str | Path | None = None) -> dict:
     """Concurrency-safe load -> fn(state) (mutated in place) -> save, under an
     exclusive lock. Returns the saved state. Every mutating verb must go through
-    this so parallel workers cannot lose updates (last-os.replace-wins)."""
+    this so parallel workers cannot lose updates (last-os.replace-wins).
+
+    `events_path` (F-2 wiring): when given, the same load->fn->save transition is
+    ALSO projected onto the tamper-evident event log via
+    `state_store.derive_events` + `event_log.append_event`, INSIDE the lock so the
+    sidecar chain stays consistent with run-state.json under concurrency. Default
+    None keeps the byte-compatible behavior (run-state.json remains the sole
+    artifact — the compatibility-projection Non-Goal); no caller passes it yet,
+    so this is a wired-but-inert seam. The state write is authoritative-in-
+    practice today, so event derivation runs only AFTER `save` succeeds and never
+    blocks or corrupts it. (`event_log`/`state_store` are imported locally to keep
+    this core module's import graph minimal.)"""
     with _lock(path):
         state = load(path)
+        before = copy.deepcopy(state) if events_path is not None else None
         fn(state)
         save(path, state, now=now)
+        if events_path is not None:
+            from e2e_harness.core import event_log, state_store
+            for event in state_store.derive_events(before, state):
+                event_log.append_event(events_path, event)
         return state

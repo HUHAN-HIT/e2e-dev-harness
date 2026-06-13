@@ -15,6 +15,7 @@ from e2e_harness.cli.commands import (
     validate_pipeline,
     doctor,
     migrate,
+    recover,
 )
 
 _COMMANDS = {
@@ -25,6 +26,8 @@ _COMMANDS = {
     "doctor": doctor.run,
     # F2: one-shot legacy-run contract back-fill (Hybrid model).
     "migrate": migrate.run,
+    # F-1: approval-gated, auditable control-plane recovery (design Phase 3).
+    "recover": recover.run,
 }
 
 
@@ -79,6 +82,14 @@ def build_parser() -> argparse.ArgumentParser:
                      help="promote settings/hooks readiness from informational to hard blockers")
 
     mg = sub.add_parser("migrate"); mg.add_argument("--state", required=True); mg.add_argument("--repo", default=".")
+
+    # F-1 recover: two-step, approval-gated control-plane repair (design Phase 3).
+    # --plan is read-only; --apply requires --approval and is the ONLY path that
+    # may flip coordinator_may_write_worker_outputs (under explicit approval).
+    rc = sub.add_parser("recover"); rc.add_argument("--state", required=True); rc.add_argument("--repo", default=".")
+    rc.add_argument("--plan", action="store_true", help="read-only: emit a recovery plan (default)")
+    rc.add_argument("--apply", action="store_true", help="apply the approved narrow repair")
+    rc.add_argument("--approval", default=None, help="path to a recovery-approval.v1 file (required for --apply)")
     return p
 
 

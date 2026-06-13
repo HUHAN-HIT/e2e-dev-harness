@@ -15,5 +15,8 @@ def run(args) -> tuple[int, dict]:
     if phase is None:
         return 2, {"error": f"unknown phase {name}"}
     rec = state.get("phases", {}).get(name, {})
-    ok, missing = gates.gate_passes(phase, rec, Path(args.repo).resolve())
+    # F-4: thread the trusted run-state so the scope_manifest validator grounds
+    # phases/services at gate time here too — Hard Boundary #4 ("No ungrounded
+    # COMPLETE") must hold on the operator `gate` verb, not just through `next`.
+    ok, missing = gates.gate_passes(phase, rec, Path(args.repo).resolve(), state=state)
     return (0 if ok else 1), {"phase": name, "passed": ok, "missing_evidence": missing}

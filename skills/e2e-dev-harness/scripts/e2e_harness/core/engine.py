@@ -15,13 +15,14 @@ def _phase_record(state: dict, name: str) -> dict:
 def submit_evidence(state: dict, phase_name: str, key: str, path: str, *,
                     repo_root=None, status: str = "done", reason: str | None = None,
                     exit_gate: tuple[str, ...] | None = None,
-                    worker_id: str | None = None) -> None:
+                    worker_id: str | None = None,
+                    authorized_producers: list[str] | None = None) -> None:
     # OWN1 namespace ownership guard (defense-in-depth, NOT an authorization
     # boundary): for module-scoped phases the phase, evidence key and (when supplied)
     # worker id must agree on the `#module` namespace, so an `IMPLEMENTED#auth` worker
     # cannot satisfy `IMPLEMENTED#billing`. worker_id is self-supplied today, so this
-    # only stops accidental mislabeling; a trusted binding needs dispatch-time
-    # producer_ids (a later task). Singleton phases (no `#`) are unaffected.
+    # only stops accidental mislabeling. The trusted binding is `authorized_producers`
+    # below. Singleton phases (no `#`) are unaffected.
     phase_module = multitrack.module_of(phase_name)
     key_module = multitrack.module_of(key) if key else None
     worker_module = multitrack.module_of(worker_id) if worker_id else None
@@ -29,6 +30,21 @@ def submit_evidence(state: dict, phase_name: str, key: str, path: str, *,
         raise ValueError("phase-key-module-mismatch")
     if phase_module and worker_module and phase_module != worker_module:
         raise ValueError("worker-module-mismatch")
+    # F-5 trusted-binding cross-check (OWN1 -> authorization boundary).
+    # `authorized_producers` are the worker ids the HARNESS dispatched for this
+    # band, read by the caller from the dispatch artifacts (producer_ids), NOT the
+    # worker-self-reported worker_id. We enforce ONLY the case the OWN1 residual
+    # left open: a MODULE-namespaced submit against a MODULE FAN-OUT dispatch must
+    # name a module that was actually dispatched, rejecting a forged/phantom module
+    # namespace. Singleton submits, non-fan-out dispatches, and runs with no
+    # dispatch record (manual / identity-less runtime) are deliberately NOT gated
+    # here — that residual degrades to the OWN1 anti-mislabel guard above, by design.
+    if phase_module and authorized_producers:
+        namespaced = [p for p in authorized_producers if "#" in p]
+        if namespaced and not any(
+            p == phase_name or p.startswith(phase_name + "-") for p in namespaced
+        ):
+            raise ValueError("evidence-namespace-not-dispatched")
     rec = _phase_record(state, phase_name)
     if status == "failed":
         # Per-key failure ledger (S1/S2): a failed key is recorded under its own
@@ -162,7 +178,7 @@ def _evaluate_singleton(spine: list[Phase], state: dict, repo_root=None) -> dict
     while True:
         phase = by_name[name]
         rec = state.get("phases", {}).get(name, {})
-        ok, missing = gates.gate_passes(phase, rec, repo_root)
+        ok, missing = gates.gate_passes(phase, rec, repo_root, state=state)
         if not ok:
             if _verification_rework_needed(phase, rec, missing):
                 reason = rec.get("blocker") or f"verification gate failed: {', '.join(missing)}"
@@ -232,7 +248,7 @@ def _module_first_blocker(chain: list[Phase], state: dict, repo_root):
     keys. (None, []) when the whole chain passes (the module is complete)."""
     for phase in chain:
         rec = state.get("phases", {}).get(phase.name, {})
-        ok, missing = gates.gate_passes(phase, rec, repo_root)
+        ok, missing = gates.gate_passes(phase, rec, repo_root, state=state)
         if not ok:
             return phase, missing
     return None, []

@@ -19,8 +19,7 @@ from e2e_harness import pipeline                       # noqa: E402
 from e2e_harness.core import run_state                 # noqa: E402
 from e2e_harness.adapters.hooks import paths as hook_paths  # noqa: E402
 
-_REDIRECT_TOKENS = (">", ">>", "tee", "set-content", "add-content", "out-file")
-_REDIRECT_TARGET_RE = re.compile(r"(?:^|\s)(?:>>|>)\s*(?:\"([^\"]+)\"|'([^']+)'|([^\s;&|]+))")
+_REDIRECT_TARGET_RE = re.compile(r"(?:^|\s)\d*(?:>>|>)\s*(?:\"([^\"]+)\"|'([^']+)'|([^\s;&|]+))")
 
 
 def paths_from_shell_command(command: str) -> list[str]:
@@ -182,16 +181,6 @@ def decide(hook_text: str, repo, run_state_path) -> dict:
                 "(`e2e-harness init --runtime <claude|opencode>`), not by hand-editing the hook "
                 "config (.claude/settings.json or .opencode/plugins/) mid-run."
             )
-    low = command.lower()
-    if "run-state.json" in low and any(tok in low for tok in _REDIRECT_TOKENS):
-        return _deny(
-            "Blocked: shell redirect into run-state.json.\n"
-            "WHY: run-state.json is the CLI-owned SSOT; a raw redirect bypasses its schema and "
-            "the gate evidence trail.\n"
-            "RECOVER: use `submit` to record evidence and `next` / `gate` to advance — never "
-            "redirect into run-state.json."
-        )
-
     code_paths = [p for p in paths if hook_paths.is_code_path(repo, p)]
     opaque_write = is_opaque_write_command(command)
     if not code_paths and not opaque_write:

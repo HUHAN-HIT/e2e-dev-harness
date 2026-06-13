@@ -100,6 +100,46 @@ def test_mutate_releases_lock_and_persists(tmp_path):
     assert run_state.load(p)["feature"] == "feat2"
 
 
+# --- F-2 wiring: mutate is the single chokepoint of every mutating verb, so it
+# is the event-log wiring point. Additive `events_path` param: default None is
+# byte-identical to today (compatibility-projection Non-Goal); when supplied,
+# mutate snapshots before->after and appends derive_events(...) to the chained
+# log, so events become a tamper-evident projection of the same transition.
+
+
+def test_mutate_with_events_path_appends_derived_chain(tmp_path):
+    from e2e_harness.core import event_log, state_store
+    p = tmp_path / "run-state.json"
+    events = tmp_path / "events.jsonl"
+    run_state.save(p, run_state.new_run_state("r1", "feat", "req"))
+
+    def _advance(s):
+        s["current_phase"] = "IMPLEMENTED"
+        s.setdefault("phases", {})["IMPLEMENTED"] = {
+            "dispatch": "done", "evidence": {"passing_tests": {"path": "x"}}}
+
+    saved = run_state.mutate(p, _advance, events_path=events)
+
+    ok, reason = event_log.verify_chain(events)
+    assert ok, reason
+    types = [e["type"] for e in event_log.read_events(events)]
+    assert "phase.submitted" in types and "gate.passed" in types
+    # The event projection reconstructs the same transition the run-state saved.
+    projected = state_store.replay_events(event_log.read_events(events))
+    assert projected["current_phase"] == saved["current_phase"] == "IMPLEMENTED"
+    assert projected["phases"]["IMPLEMENTED"]["dispatch"] == "done"
+
+
+def test_mutate_without_events_path_writes_no_sidecar(tmp_path):
+    """Byte-compat floor: default mutate (no events_path) is unchanged — it leaves
+    only run-state.json (lock released, tmp replaced), never an events sidecar."""
+    p = tmp_path / "run-state.json"
+    run_state.save(p, run_state.new_run_state("r1", "feat", "req"))
+    run_state.mutate(p, lambda s: s.__setitem__("current_phase", "CLARIFIED"))
+    leftovers = sorted(q.name for q in tmp_path.iterdir() if q.name != "run-state.json")
+    assert leftovers == []
+
+
 def test_submit_evidence_stamps_contract_when_gate_complete():
     """F2: submit_evidence stamps the contract-in-force only once the phase gate is
     complete, idempotently. The exit_gate parameter is OPTIONAL (default None ->

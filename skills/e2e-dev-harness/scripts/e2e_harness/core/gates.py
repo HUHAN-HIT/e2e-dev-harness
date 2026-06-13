@@ -6,7 +6,12 @@ from e2e_harness.core.lifecycle import Phase
 
 
 def gate_passes(phase: Phase, phase_record: dict | None,
-                repo_root=None, *, skip_replay: bool = False) -> tuple[bool, list[str]]:
+                repo_root=None, *, skip_replay: bool = False,
+                state: dict | None = None) -> tuple[bool, list[str]]:
+    # `state` (F-4) is threaded through to validate_evidence so the scope_manifest
+    # validator can ground phases/services against the trusted run-state at gate
+    # time. None (the default, and every navigation/display caller) keeps the
+    # legacy tables-only grounding — no behavior change for those paths.
     rec = phase_record or {}
     # v1 floor: a legacy record whose whole-phase dispatch is FAILED and which
     # carries no per-key ledger still blocks the gate.
@@ -24,7 +29,8 @@ def gate_passes(phase: Phase, phase_record: dict | None,
             missing.append(k)
             continue
         if repo_root is not None:
-            ok, _reason = validate.validate_evidence(repo_root, k, evidence[k], skip_replay=skip_replay)
+            ok, _reason = validate.validate_evidence(repo_root, k, evidence[k],
+                                                     skip_replay=skip_replay, state=state)
             if not ok:
                 missing.append(k)
     # S1/S2: an unresolved per-key failure blocks the gate even when the evidence is
@@ -58,7 +64,7 @@ def all_gates_pass(spine: list[Phase], state: dict, repo_root=None,
     blockers: list[tuple[str, list[str]]] = []
     for phase in spine:
         ok, missing = gate_passes(phase, phases_rec.get(phase.name, {}),
-                                  repo_root, skip_replay=skip_replay)
+                                  repo_root, skip_replay=skip_replay, state=state)
         if not ok:
             blockers.append((phase.name, missing))
     return (not blockers, blockers)

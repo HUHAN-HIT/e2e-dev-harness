@@ -88,6 +88,27 @@ def test_shell_redirect_into_run_state_denied(tmp_path):
     assert d["decision"] == "deny"
 
 
+def test_status_stderr_merge_with_run_state_is_not_blocked(tmp_path):
+    sp = _write_state(tmp_path, "RED")
+    target = (tmp_path / "docs" / "agent-runs" / "r1" / "run-state.json").as_posix()
+    d = pg.decide(
+        _hook(
+            "Bash",
+            command=f"e2e-harness status --state {target} 2>&1 | head -120",
+        ),
+        tmp_path,
+        sp,
+    )
+    assert d["decision"] == "allow"
+
+
+def test_stderr_redirect_into_run_state_denied(tmp_path):
+    sp = _write_state(tmp_path, "IMPLEMENTED")
+    target = (tmp_path / "docs" / "agent-runs" / "r1" / "run-state.json").as_posix()
+    d = pg.decide(_hook("Bash", command=f"python bad.py 2> {target}"), tmp_path, sp)
+    assert d["decision"] == "deny"
+
+
 def test_settings_json_write_denied(tmp_path):
     sp = _write_state(tmp_path, "IMPLEMENTED")
     d = pg.decide(_hook("Edit", file_path=str(tmp_path / ".claude" / "settings.json"), new_string="{}"), tmp_path, sp)

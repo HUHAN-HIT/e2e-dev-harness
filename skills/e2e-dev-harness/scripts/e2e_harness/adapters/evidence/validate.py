@@ -146,7 +146,8 @@ def _path_of(entry) -> str:
     return entry["path"] if isinstance(entry, dict) else entry
 
 
-def validate_evidence(repo_root, key: str, entry, *, skip_replay: bool = False) -> tuple[bool, str | None]:
+def validate_evidence(repo_root, key: str, entry, *, skip_replay: bool = False,
+                      state: dict | None = None) -> tuple[bool, str | None]:
     path = _path_of(entry)
     if not path:
         return False, "no-path"
@@ -168,7 +169,13 @@ def validate_evidence(repo_root, key: str, entry, *, skip_replay: bool = False) 
             obj = json.loads(full.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             return False, "not-json"
-        ok, reason = STRUCTURED_KEYS[lookup](obj, repo_root)
+        # F-4: only the scope_manifest validator consumes the trusted run-state (to
+        # ground phases/services at gate time); every other structured validator
+        # keeps its (obj, repo_root) signature untouched.
+        if lookup == "scope_manifest":
+            ok, reason = scope_ev.validate_scope_manifest(obj, repo_root, state)
+        else:
+            ok, reason = STRUCTURED_KEYS[lookup](obj, repo_root)
         if not ok:
             return False, reason
     if lookup in COMMAND_KEYS:

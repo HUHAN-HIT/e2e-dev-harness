@@ -257,3 +257,71 @@ def test_doctor_state_reports_rework_required(tmp_path):
     assert payload["first_fault"]["kind"] == "rework_required"
     assert payload["blocked_phase"] == "IMPLEMENTED"
     assert "verification" in payload["first_fault"]["message"]
+
+
+# --- F-6: resolve the real blocked task id from dispatch/team-plan artifacts ---
+# diagnose_run returned task_id/blocked_task=null. The honest current-checkout
+# "task id" is the worker dispatched for the blocked phase, recorded in
+# `agent-team-plan.json` (workers[].id / producer_ids). No artifact => stays null.
+
+
+def test_doctor_state_resolves_blocked_task_from_team_plan(tmp_path):
+    run_state = tmp_path / "run-state.json"
+    run_state.write_text(json.dumps({
+        "schema": "e2e-dev-harness.run-state.v1",
+        "current_phase": "IMPLEMENTED",
+        "phases": {"IMPLEMENTED": {"evidence": {}}},
+    }), encoding="utf-8")
+    # The dispatch artifact the harness wrote for this phase (cli/commands/dispatch.py).
+    (tmp_path / "agent-team-plan.json").write_text(json.dumps({
+        "schema": "e2e-dev-harness.agent-team-plan.v1",
+        "phase": "IMPLEMENTED",
+        "workers": [{"id": "IMPLEMENTED-default", "expected_outputs": ["passing_tests"]}],
+        "evidence_contract": {"producer_ids": ["IMPLEMENTED-default"]},
+    }), encoding="utf-8")
+    args = SimpleNamespace(project_root=str(tmp_path), runtime="claude", strict=False,
+                           state=str(run_state), repo=".")
+    code, payload = doctor.run(args)
+    assert code == 2
+    assert payload["blocked_task"] == "IMPLEMENTED-default"
+    assert payload["first_fault"]["task_id"] == "IMPLEMENTED-default"
+
+
+def test_doctor_state_resolves_module_blocked_task(tmp_path):
+    run_state = tmp_path / "run-state.json"
+    run_state.write_text(json.dumps({
+        "schema": "e2e-dev-harness.run-state.v1",
+        "current_phase": "IMPLEMENTED#auth",
+        "phases": {"IMPLEMENTED#auth": {"evidence": {}}},
+    }), encoding="utf-8")
+    # module fan-out: worker id IS the namespaced phase; only the blocked module's
+    # worker must be selected, not a sibling module's.
+    (tmp_path / "agent-team-plan.json").write_text(json.dumps({
+        "schema": "e2e-dev-harness.agent-team-plan.v1",
+        "phase": "IMPLEMENTED",
+        "workers": [{"id": "IMPLEMENTED#auth"}, {"id": "IMPLEMENTED#billing"}],
+        "evidence_contract": {"producer_ids": ["IMPLEMENTED#auth", "IMPLEMENTED#billing"]},
+    }), encoding="utf-8")
+    args = SimpleNamespace(project_root=str(tmp_path), runtime="claude", strict=False,
+                           state=str(run_state), repo=".")
+    code, payload = doctor.run(args)
+    assert code == 2
+    assert payload["blocked_task"] == "IMPLEMENTED#auth"
+    assert payload["first_fault"]["task_id"] == "IMPLEMENTED#auth"
+
+
+def test_doctor_state_blocked_task_stays_null_without_artifacts(tmp_path):
+    """Honest null: a blocked run with no dispatch artifact on disk yields no task
+    id (no fabricated T0x)."""
+    run_state = tmp_path / "run-state.json"
+    run_state.write_text(json.dumps({
+        "schema": "e2e-dev-harness.run-state.v1",
+        "current_phase": "IMPLEMENTED",
+        "phases": {"IMPLEMENTED": {"evidence": {}}},
+    }), encoding="utf-8")
+    args = SimpleNamespace(project_root=str(tmp_path), runtime="claude", strict=False,
+                           state=str(run_state), repo=".")
+    code, payload = doctor.run(args)
+    assert code == 2
+    assert payload["blocked_task"] is None
+    assert payload["first_fault"]["task_id"] is None
