@@ -270,6 +270,37 @@ def test_start_explicit_tier_below_recommended_blocks_without_confirmation(tmp_p
     assert not (tmp_path / "docs" / "agent-runs").exists()
 
 
+def test_start_downgrade_blocked_takes_precedence_over_invalid_pipeline(tmp_path):
+    # F3: the downgrade gate depends only on the tier recommendation, not on the
+    # pipeline. When an unconfirmed downgrade coincides with an invalid --pipeline
+    # (both exit 2), the user-confirmation requirement must NOT be masked by the
+    # "invalid pipeline" error — the coordinator has to see it has to ask the user.
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(
+        "name: b\nphases:\n  - CREATED\n  - phase: CLARIFIED\n    exit_gate: [clarification, ghost]\n  - VERIFIED\n",
+        encoding="utf-8")
+    code, res = _run(
+        "start",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "downgrade-and-bad-pipeline",
+        "--request",
+        "add refund settlement to the ledger",
+        "--tier",
+        "standard",
+        "--pipeline",
+        str(bad),
+        cwd=tmp_path,
+    )
+
+    assert code == 2
+    assert res["schema"] == "e2e-dev-harness.tier-downgrade-blocked.v1"
+    assert res["recommended_tier"] == "critical"
+    assert res["selected_tier"] == "standard"
+    assert not (tmp_path / "docs" / "agent-runs").exists()
+
+
 def test_start_explicit_tier_downgrade_confirmed_creates_run_and_anchors_provenance(tmp_path):
     # The confirmation is settled ONCE in run-state (mirror of approvals.impact_degradation):
     # auditable, with an explicit reason — not re-derivable from the conversation.

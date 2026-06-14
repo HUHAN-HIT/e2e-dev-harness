@@ -111,13 +111,13 @@ def run(args) -> tuple[int, dict]:
     reasons = tier_recommendation["reasons"]
 
     pipeline_ref = getattr(args, "pipeline", None) or tier
-    spec = pipeline.load_spec(pipeline_ref)  # load/parse error -> main.py emits error JSON (exit 2)
-    merged = merge_overrides(spec, adapter.pipeline_overrides())
-    ok, errors = pipeline_validate.validate_spec(merged)
-    if not ok:
-        return 2, {"error": "invalid pipeline", "pipeline": pipeline_ref, "errors": errors}
-
     custom = pipeline.is_path(pipeline_ref)
+
+    # preview is a read-only dry run: it only SIGNALS (including a still-needed
+    # downgrade choice) and never exits 2, so it returns BEFORE any pipeline
+    # load/validate and before the blocked backstop. It needs only pipeline_ref +
+    # custom, never the resolved spec — so an invalid --pipeline does not turn a
+    # preview into an error.
     if getattr(args, "preview_tier", False):
         return 0, _preview_result(
             feature=feature,
@@ -127,10 +127,14 @@ def run(args) -> tuple[int, dict]:
             pipeline_override=custom,
         )
 
-    # A1: authoritative backstop. A below-recommended tier with no valid confirmation
-    # is BLOCKED here — the run is never created, so a coordinator cannot turn a
-    # historical preference into a current downgrade. preview (above) never reaches
-    # this branch; it only signals.
+    # A1/F3: authoritative backstop, enforced BEFORE pipeline load/validate. The
+    # downgrade gate depends ONLY on the tier recommendation, not on the pipeline, so
+    # it must out-rank the "invalid pipeline" error — both exit 2, and if pipeline
+    # validation ran first an invalid --pipeline would MASK the downgrade-blocked
+    # signal, leaving the coordinator unaware it has to ask the user. A
+    # below-recommended tier with no valid confirmation is BLOCKED here; the run is
+    # never created, so a coordinator cannot turn a historical preference into a
+    # current downgrade. preview (above) never reaches this branch; it only signals.
     downgrade = tier_recommendation["downgrade"]
     if downgrade["blocked"]:
         return 2, {
@@ -144,6 +148,12 @@ def run(args) -> tuple[int, dict]:
                             + tier_recommendation["recommended_tier"]),
             "tier_recommendation": tier_recommendation,
         }
+
+    spec = pipeline.load_spec(pipeline_ref)  # load/parse error -> main.py emits error JSON (exit 2)
+    merged = merge_overrides(spec, adapter.pipeline_overrides())
+    ok, errors = pipeline_validate.validate_spec(merged)
+    if not ok:
+        return 2, {"error": "invalid pipeline", "pipeline": pipeline_ref, "errors": errors}
 
     # Embed the resolved spec when the run is non-default in any way (custom
     # pipeline, adapter overrides, or a non-backend domain). Backend + built-in
