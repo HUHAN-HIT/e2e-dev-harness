@@ -105,11 +105,59 @@ def _lock_payload() -> bytes:
     }, ensure_ascii=False).encode("utf-8")
 
 
-def _lock_is_stale(lock: Path) -> bool:
+def _pid_alive(pid) -> bool:
+    """Best-effort 跨平台存活判断。不确定一律返回 True(偏向不回收可能仍活的锁;
+    真死锁仍由 mtime backstop 兜底),所以绝不会把活锁判反。"""
     try:
-        return (time.time() - lock.stat().st_mtime) > _LOCK_STALE_S
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return True
+    if pid <= 0:
+        return True
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            SYNCHRONIZE = 0x00100000
+            handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return True
+            return False
+        except Exception:  # noqa: BLE001 — 不确定即视为存活
+            return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True   # 存在但非本进程所有
+    except OSError:
+        return True
+
+
+def _lock_is_stale(lock: Path) -> bool:
+    # Cheap fast path: a lock whose mtime is recent is never stale — this keeps the
+    # hot acquisition-retry loop free of payload reads / liveness syscalls under
+    # contention. Only once the mtime backstop is exceeded do we pay for liveness:
+    # a same-host lock whose recorded pid is a LIVE process is still NOT stale
+    # (protecting a holder stalled mid-mutation from being reclaimed by a second
+    # writer); a dead local holder, an unreadable payload, or a cross-host lock
+    # (liveness unknowable) is reclaimable via the mtime backstop.
+    try:
+        mtime_exceeded = (time.time() - lock.stat().st_mtime) > _LOCK_STALE_S
     except OSError:
         return False
+    if not mtime_exceeded:
+        return False
+    try:
+        payload = json.loads(lock.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        payload = None
+    if isinstance(payload, dict) and payload.get("hostname") == socket.gethostname():
+        if _pid_alive(payload.get("pid")):
+            return False
+    return True
 
 
 @contextlib.contextmanager

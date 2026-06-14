@@ -269,3 +269,42 @@ def test_submit_evidence_without_exit_gate_writes_no_stamp():
     st = run_state.new_run_state("r1", "f", "r")
     engine.submit_evidence(st, "PLANNED", "plan", "p.md")
     assert "contract" not in st["phases"]["PLANNED"]
+
+
+# --- D4: stale-lock staleness uses same-host pid liveness, not mtime alone -----
+# `_lock_is_stale` must never reclaim a lock whose recorded pid is a live process
+# on this host (protecting a holder stalled mid-mutation), while still reclaiming a
+# dead holder past the mtime backstop and falling back to mtime cross-host.
+import socket as _socket_for_lock_tests
+
+
+def test_lock_not_stale_when_holder_pid_alive(tmp_path, monkeypatch):
+    lock = tmp_path / "run-state.json.lock"
+    lock.write_text(json.dumps({"pid": os.getpid(),
+                                "hostname": _socket_for_lock_tests.gethostname(),
+                                "timestamp": "now"}), encoding="utf-8")
+    old = time.time() - 10_000
+    os.utime(lock, (old, old))
+    monkeypatch.setattr(run_state, "_LOCK_STALE_S", 0.01, raising=False)
+    assert run_state._lock_is_stale(lock) is False
+
+
+def test_lock_stale_when_holder_pid_dead_and_mtime_old(tmp_path, monkeypatch):
+    lock = tmp_path / "run-state.json.lock"
+    lock.write_text(json.dumps({"pid": 999999,
+                                "hostname": _socket_for_lock_tests.gethostname(),
+                                "timestamp": "old"}), encoding="utf-8")
+    old = time.time() - 10_000
+    os.utime(lock, (old, old))
+    monkeypatch.setattr(run_state, "_LOCK_STALE_S", 0.01, raising=False)
+    assert run_state._lock_is_stale(lock) is True
+
+
+def test_lock_cross_host_falls_back_to_mtime(tmp_path, monkeypatch):
+    lock = tmp_path / "run-state.json.lock"
+    lock.write_text(json.dumps({"pid": os.getpid(), "hostname": "some-other-host",
+                                "timestamp": "old"}), encoding="utf-8")
+    old = time.time() - 10_000
+    os.utime(lock, (old, old))
+    monkeypatch.setattr(run_state, "_LOCK_STALE_S", 0.01, raising=False)
+    assert run_state._lock_is_stale(lock) is True
