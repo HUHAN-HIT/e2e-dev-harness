@@ -25,7 +25,7 @@ tier-preview-confirmation（前置 spec）已让 `start --preview-tier` 把"选�
 
 **单一真相源**：降级这一事实只落定一次——由一个**确认令牌**（confirmation token，其非空 reason 是审计锚）承载，下游只读不重算。`blocked` 是协调器面对的机器不变量，不再是文档里的劝告。auto 永不降级（requested == recommended），故永不 blocked。
 
-preview 与 start 共用同一 `recommend_tier` 推荐，但分工严格：**preview 只出信号、永不阻断、永不 exit 2**；**start 是权威背板**——未确认降级则 exit 2、绝不建 run。
+preview 与 start 共用同一 `recommend_tier` 推荐，但分工严格：**preview 只出信号，不因 pipeline load/validate 或降级背板而阻断**（输入解析、adapter 选择等**上游**错误仍可 exit 2）；**start 是权威背板**——未确认降级则 exit 2、绝不建 run。
 
 ## 3. 目标 / 非目标
 
@@ -40,7 +40,7 @@ preview 与 start 共用同一 `recommend_tier` 推荐，但分工严格：**pre
 **非目标**
 - 不引入自动降级（降级仍是人类决定，与 D3 同立场）。
 - 不改 tier 推荐/floor 逻辑、不动 `--impact-mode` 三态语义。
-- 不把 preview 变成会 exit 2 的校验门（它是只读 dry-run）。
+- 不让 pipeline 校验/降级背板把 preview 阻断成错误（preview 是只读 dry-run）；输入解析、adapter 选择等**上游**错误不在此列，仍可 exit 2。
 - 不统一 `main.py` 顶层异常信封（`{"error": str(exc)}`）—— 那是更大范围，超出 `start` 错误面。
 
 ## 4. 逐修设计
@@ -105,7 +105,7 @@ confirmed = requested_below and _is_confirmed(confirmation)
 
 **根因**：`run()` 原序 pipeline load/validate → invalid pipeline 早退 → preview 返回 → blocked 背板。非法 `--pipeline` + 降级时，"invalid pipeline" 先 exit 2，盖住降级信号。
 
-**约束**：blocked 背板**必须**排在 preview 返回之后（preview 永不阻断、要 exit 0 出信号），而 preview 又需要 pipeline 信息。
+**约束**：blocked 背板**必须**排在 preview 返回之后（preview 不被该背板阻断、对降级只出信号），而 preview 又需要 pipeline 信息。
 
 **改动**：降级判定只依赖 `tier_recommendation`（与 pipeline 无关），故把 **preview 返回**与 **blocked 背板**双双前移到 load/validate 之前：
 ```python
@@ -115,7 +115,7 @@ if downgrade["blocked"]: return 2, {tier-downgrade-blocked.v1} # 出兄弟错误
 spec = load_spec(...) ; merged = merge(...) ; ok, errors = validate(...)
 if not ok:              return 2, {invalid-pipeline.v1}
 ```
-副产物：preview 不再依赖 `merged`，故非法 `--pipeline` 也不再把 preview 变成错误——契合其"只读 dry-run、永不 exit 2"契约（此前 preview+非法 pipeline 无测试覆盖，属隐性不一致，今对齐）。
+副产物：preview 不再依赖 `merged`，故非法 `--pipeline` 也不再把 preview 变成错误——契合其"pipeline 校验/降级背板不阻断 preview"契约（此前 preview+非法 pipeline 无测试覆盖，属隐性不一致，今对齐）。注意范围：preview 仍会因**上游**错误 exit 2——这些步骤早于 tier 逻辑、不在 F3 重排序范围内：`text_input.read_text_arg` 拒 U+FFFD 乱码（[start.py:88](../../../skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/start.py)），及 adapter 选择 `KeyError`（[start.py:95](../../../skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/start.py)，如 `--adapter nope` → exit 2 `{"error":"'unknown adapter: nope'"}`）。
 
 ### F4 — `start` 错误返回统一 schema 信封
 
@@ -149,9 +149,9 @@ return 2, {"schema": "e2e-dev-harness.invalid-pipeline.v1",
 
 ## 7. 风险
 
-- **F3 行为变更（已知、可接受）**：preview+非法 pipeline 由"exit 2 报错"改为"exit 0 出 preview"。此前无测试覆盖该组合，且新行为契合 preview "永不 exit 2" 契约，属对齐而非回归。
+- **F3 行为变更（已知、可接受）**：preview+非法 pipeline 由"exit 2 报错"改为"exit 0 出 preview"。此前无测试覆盖该组合，且新行为契合"pipeline 校验/降级背板不阻断 preview"契约，属对齐而非回归。（preview 仍会因上游输入/adapter 错误 exit 2，不受此影响。）
 - **F2 收缩面**：`confirmed` 判定收紧（拒空 reason 令牌）。唯一真实 caller `start` 本就只在 reason 非空时构造令牌，故对现有路径与全部确认测试无影响；纯属堵未来 caller 的绕过缝隙。
-- **迁移代价**：A1 是新建闸，不改既有 run-state 读路径；在途 run 不含 `approvals.tier_downgrade` 时下游按"无确认"处理，与设计一致。
+- **迁移代价**：A1 只阻断**新的**未确认降级 start，不改既有 run-state 读路径，也不 retroactive 拦截历史 run。`approvals.tier_downgrade` 是**只写的审计锚**（仅 start 建 run 时写入 [start.py:182](../../../skills/e2e-dev-harness/scripts/e2e_harness/cli/commands/start.py)；全仓无下游 gate 读取——已由 grep + GitNexus query 双证），故历史 run 缺该 key 仅表示它没有降级审计锚，不代表任何门会据此判定。
 
 ## 8. 范围外
 
