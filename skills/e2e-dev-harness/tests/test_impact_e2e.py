@@ -41,12 +41,12 @@ def _verified():
             "open_questions": [], "degradation": None, "approval": None}
 
 
-def _start_args(tmp_path):
+def _start_args(tmp_path, impact_mode="strict"):
     return SimpleNamespace(
         repo=str(tmp_path), feature="impactfeat", feature_file=None,
         request="modify the checkout API endpoint handler", request_file=None,
         adapter=None, tier="standard", scan=False, pipeline=None,
-        preview_tier=False, language_profile=None, impact_mode="strict")
+        preview_tier=False, language_profile=None, impact_mode=impact_mode)
 
 
 def _next(tmp_path, state_path):
@@ -131,3 +131,59 @@ def test_strict_impact_gate_full_flow(tmp_path, monkeypatch):
     _submit(tmp_path, state_path, "PLANNED", "module_plan", mp_path)
     _code, nres = _next(tmp_path, state_path)
     assert nres["blocked_phase"] == "RED"   # PLANNED satisfied, advanced past it
+
+
+def test_impact_degradation_flow(tmp_path, monkeypatch):
+    """Impact on by default; an unverifiable assessment offers degradation. The
+    coordinator records an approval and the run proceeds as `degraded` (no
+    impact_refs required), with the approval hash as the trust anchor."""
+    monkeypatch.setattr(
+        "e2e_harness.adapters.impact.gitnexus.GitNexusImpactProvider", _FakeProvider)
+    _FakeProvider.result = _blocked()
+    repo = tmp_path
+
+    code, res = start_cmd.run(_start_args(tmp_path, impact_mode="auto"))
+    assert code == 0
+    state_path = Path(res["run_state"])
+    run_dir = state_path.parent
+
+    _next(tmp_path, state_path)  # -> CLARIFIED (needs evidence)
+    clar = _write(repo, run_dir, "clarification.md", "# clarified\n")
+    contract = _write(repo, run_dir, "acceptance-contract.json",
+                      _contract(["checkout_handler"], marker="v1"))
+    _submit(tmp_path, state_path, "CLARIFIED", "clarification", clar)
+    _submit(tmp_path, state_path, "CLARIFIED", "acceptance_contract", contract)
+
+    # impact BLOCKED -> reopen CLARIFIED AND offer degradation
+    _code, nres = _next(tmp_path, state_path)
+    assert nres["blocked_phase"] == "CLARIFIED"
+    assert nres["impact"]["status"] == "blocked"
+    assert nres["impact"]["degradation_available"] is True
+
+    # coordinator records the degradation approval (the trust anchor)
+    approval = run_dir / "gitnexus-degradation.json"
+    approval.write_text(json.dumps({
+        "schema": "e2e-dev-harness.impact-degradation-approval.v1",
+        "approval": "user-approved",
+        "reason": "GitNexus not indexed here",
+        "fallback_evidence": ["manual code review of checkout_handler"],
+    }), encoding="utf-8")
+    from e2e_harness.cli.commands import approve_impact_degradation as approve_cmd
+    acode, _ares = approve_cmd.run(SimpleNamespace(
+        state=str(state_path), approval=str(approval), reason="env has no gitnexus"))
+    assert acode == 0
+
+    # next -> bridge re-runs (approval present) -> degraded -> proceeds to PLANNED
+    _code, nres = _next(tmp_path, state_path)
+    assert nres["blocked_phase"] == "PLANNED"
+
+    # degraded imposes NO impact_refs requirement: a plain module_plan passes PLANNED
+    plan = _write(repo, run_dir, "plan.md", "# plan\n")
+    mp = {"schema": "e2e-dev-harness.module-plan.v1",
+          "modules": [{"id": "core", "name": "Core", "depends_on": [],
+                       "acceptance_ids": ["AC-001"]}]}
+    mp_path = _write(repo, run_dir, "module-plan.json", mp)
+    _submit(tmp_path, state_path, "PLANNED", "plan", plan)
+    _submit(tmp_path, state_path, "PLANNED", "module_plan", mp_path)
+    _code, nres = _next(tmp_path, state_path)
+    assert nres["blocked_phase"] == "RED"   # advanced past PLANNED on degraded evidence

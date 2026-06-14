@@ -68,6 +68,8 @@ def test_domain_absent_by_default_byte_identical():
 
 
 import threading
+import os
+import time
 
 
 def test_mutate_atomic_under_concurrency(tmp_path):
@@ -98,6 +100,23 @@ def test_mutate_releases_lock_and_persists(tmp_path):
     run_state.mutate(p, lambda s: s.__setitem__("feature", "feat2"))
     assert not (tmp_path / "run-state.json.lock").exists()
     assert run_state.load(p)["feature"] == "feat2"
+
+
+def test_mutate_recovers_stale_lock_file(tmp_path, monkeypatch):
+    p = tmp_path / "run-state.json"
+    run_state.save(p, run_state.new_run_state("r1", "feat", "req"))
+    lock = tmp_path / "run-state.json.lock"
+    lock.write_text('{"pid": 999999, "hostname": "old", "timestamp": "old"}',
+                    encoding="utf-8")
+    old = time.time() - 60
+    os.utime(lock, (old, old))
+    monkeypatch.setattr(run_state, "_LOCK_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(run_state, "_LOCK_STALE_S", 0.01, raising=False)
+
+    run_state.mutate(p, lambda s: s.__setitem__("feature", "recovered"))
+
+    assert run_state.load(p)["feature"] == "recovered"
+    assert not lock.exists()
 
 
 # --- F-2 wiring: mutate is the single chokepoint of every mutating verb, so it

@@ -42,6 +42,18 @@ def run(args) -> tuple[int, dict]:
             res["open_questions"] = pending
             ids = ", ".join(q["id"] for q in pending)
             res["blocker"] = f"{len(pending)} open question(s) awaiting user confirmation: {ids}"
+        # When the blocker is an unverified GitNexus impact, surface the degrade
+        # option so the coordinator can ask the user to resolve OR approve degradation
+        # (impact is on by default; a problem must not silently stall the run).
+        binding = state.get("impact_assessment")
+        if binding and binding.get("status") == "blocked":
+            res["impact"] = {
+                "status": "blocked",
+                "degradation_available": True,
+                "approve_with": "approve-impact-degradation",
+                "message": ("GitNexus impact analysis could not be verified. Resolve the "
+                            "open questions, or ask the user to approve degradation."),
+            }
     res["navigation_map"] = navigation.navigation_map(spine, state, repo)
     res["run_state"] = str(args.state)
     return 0, res

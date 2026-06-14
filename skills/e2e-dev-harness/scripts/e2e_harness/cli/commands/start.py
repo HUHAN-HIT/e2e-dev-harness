@@ -42,7 +42,7 @@ def _preview_result(*, feature: str, adapter_name: str, tier_recommendation: dic
     }
 
 
-def _seed_event_log(path: Path, st: dict, run_id: str) -> None:
+def _seed_event_log(path: Path, st: dict, run_id: str, *, force: bool = False) -> None:
     """Slice 1: fix the run's witness once, at creation. Default (env unset) seeds
     `events.jsonl` (+ `.head` anchor) with the FULL initial transition — run.started
     plus phase.submitted(CREATED), derived from the same projection `mutate` uses —
@@ -54,7 +54,7 @@ def _seed_event_log(path: Path, st: dict, run_id: str) -> None:
     Best-effort: the witness must never veto run creation. run-state.json is already
     saved (authoritative); a seeding failure warns, drops any partial sidecar so no
     half-chain can read as drift, and leaves the run event-free."""
-    if os.environ.get("E2E_HARNESS_DISABLE_EVENTS") == "1":
+    if os.environ.get("E2E_HARNESS_DISABLE_EVENTS") == "1" and not force:
         return
     from e2e_harness.core import event_log, state_store
     events_path = run_state.events_path_for(path)
@@ -125,11 +125,11 @@ def run(args) -> tuple[int, dict]:
         pipeline_spec=merged if non_default else None, domain=dom)
     st["language"] = language_binding
     st["tier_recommendation"] = tier_recommendation
-    # GitNexus impact assessment mode (design). Default off => the impact bridge/gate
-    # are inert, so a run started without --impact-mode behaves exactly as before.
-    st["impact"] = {"mode": getattr(args, "impact_mode", "off") or "off"}
+    # GitNexus impact assessment mode (design). Default `auto` => impact is on; an
+    # unverifiable assessment blocks with a degrade offer rather than stalling.
+    st["impact"] = {"mode": getattr(args, "impact_mode", "auto") or "auto"}
     run_state.save(path, st)
-    _seed_event_log(path, st, run_id)
+    _seed_event_log(path, st, run_id, force=tier == "audited")
     return 0, {"schema": "e2e-dev-harness.start.v1", "run_id": run_id,
                "run_state": str(path), "current_phase": "CREATED",
                "tier": tier, "pipeline": pipeline_ref, "tier_reasons": reasons,

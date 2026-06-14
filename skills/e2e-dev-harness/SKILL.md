@@ -33,7 +33,7 @@ e2e-harness dispatch --state <run-state>   # 产出当前阶段的指针 worker 
 e2e-harness submit --state <run-state> --phase <P> --key <k> --path <p>  # 记录 worker 证据
 e2e-harness gate   --state <run-state>     # 跑当前阶段声明式门禁
 e2e-harness status --state <run-state>     # 人读导航地图
-# GitNexus impact (opt-in via start --impact-mode auto|strict); coordinator-only:
+# GitNexus impact is ON by default (start --impact-mode auto); coordinator-only:
 e2e-harness approve-impact-degradation --state <run-state> --approval <file.md>  # 记录降级信任锚
 ```
 
@@ -114,14 +114,15 @@ non-interactive; the user choice happens in the coordinator conversation.
 
 裁剪是结构性的:被跳阶段从计算出的 spine 移除,`next` 越过、导航地图渲染 `– skipped`。每个内建 tier 都过 I2 门禁闭包(`gate_closure_ok`)。门禁校验**真实产物**(文件存在+非空+哈希;`failing_tests`/`passing_tests` 须为命令证据且退出码正确)。
 
-## GitNexus Impact Assessment (opt-in)
+## GitNexus Impact Assessment (on by default)
 
-`start --impact-mode <off|auto|strict>` (default `off`) activates a structured
-impact gate between `CLARIFIED` and `PLANNED`. With `off` the subsystem is inert
-and runs behave exactly as before. When active, as the engine reaches `PLANNED` it
-runs one idempotent bridge (`impact_bridge.ensure_assessment_for_planning`, keyed
-on the acceptance-contract hash) that persists `impact-assessment.json` next to
-`run-state.json` and a `state.impact_assessment` binding.
+`start --impact-mode <off|auto|strict>` (**default `auto` = on**) drives a
+structured impact gate between `CLARIFIED` and `PLANNED`. Pass `off` to opt a run
+out entirely (then the subsystem is inert and the run behaves exactly as before).
+When on, as the engine reaches `PLANNED` it runs one idempotent bridge
+(`impact_bridge.ensure_assessment_for_planning`, keyed on the acceptance-contract
+hash) that persists `impact-assessment.json` next to `run-state.json` and a
+`state.impact_assessment` binding.
 
 Trigger policy (pure; `core/impact_trigger.py`): impact is required when the
 request names code surfaces, the contract carries `impact_seed_candidates`, the
@@ -142,14 +143,37 @@ Status ownership:
   `approve-impact-degradation` (a worker-authored markdown file is not the anchor).
 - `not_applicable` passes with no planner obligation.
 
+**Problem → ask the user to degrade.** Because impact is on by default, an
+unverifiable assessment (GitNexus unavailable/timeout, unresolvable or ambiguous
+seeds) does not silently stall: `next` returns blocked at `CLARIFIED` with
+`open_questions` AND an `impact` block (`degradation_available: true`,
+`approve_with: approve-impact-degradation`). The coordinator presents the choice —
+**resolve** (answer the questions / index GitNexus, then amend the contract) or
+**degrade** (record an approval). On the next `next`, a recorded approval converts
+the blocked assessment to an auditable `degraded` one and the run proceeds (no
+`impact_refs` required for degraded).
+
 The runtime adapter only transports the artifact path into worker `context_paths`
 (by phase + status); it never interprets GitNexus output. `recommend_tier` stays
 pure — the control plane derives `scope.gitnexus` from the artifact via
 `adapters/tier/impact_scope.py` (max seed risk → `impact_summary.risk`; verified
 iff `status == verified`).
 
-> Default is `off` for compatibility. Flipping the default to `auto`/`strict`
-> depends on standardizing GitNexus availability in the dev/CI environment.
+> Impact is on by default (`auto`). A run that legitimately needs no impact
+> analysis (docs-only, or a focused test of an orthogonal gate) can pass
+> `--impact-mode off`. Tests that drive runs to completion in an unindexed repo
+> without exercising impact pin `off` for that reason.
+>
+> **CI / unattended automation without GitNexus.** Degradation is deliberately a
+> *human* decision — there is no auto-degrade. A `required`-impact code run whose
+> assessment cannot be `verified` (GitNexus unavailable in the CI image, no index)
+> stays blocked at `CLARIFIED` until a coordinator records an
+> `approve-impact-degradation`. With no human in the loop, such a run never reaches
+> `VERIFIED` — it is held, not failed, by design. **CI that runs code features
+> without GitNexus must pass `--impact-mode off` explicitly** to opt those runs out;
+> otherwise keep impact on and have a coordinator resolve the `IQ-*` questions or
+> approve degradation. (Index GitNexus in the CI image instead if you want CI to
+> actually exercise the gate rather than skip it.)
 
 ## Language Profiles
 

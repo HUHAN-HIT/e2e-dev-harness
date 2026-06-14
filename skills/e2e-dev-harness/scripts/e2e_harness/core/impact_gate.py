@@ -10,18 +10,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from e2e_harness.adapters.evidence import impact as impact_ev
-from e2e_harness.core import impact_trigger
+from e2e_harness.adapters.evidence import hashing, impact as impact_ev
 
 
 def planned_missing(state: dict, repo_root, phase_record: dict) -> list[str]:
     binding = state.get("impact_assessment")
     if not binding:
-        # Backstop: a caller reached the gate without the engine's just-ran helper.
-        # Only a defect if impact is active AND the pure trigger says it was required.
-        if str((state.get("impact") or {}).get("mode") or "off") == "off":
-            return []
-        return ["impact_assessment"] if impact_trigger.required_reasons(state, repo_root) else []
+        # No binding => nothing for this gate to enforce. On the authoritative path the
+        # engine bridge always writes the binding before the cursor clears the PLANNED
+        # gate; the only way to arrive here binding-less is a custom spine WITHOUT
+        # CLARIFIED, where the bridge never runs and impact cannot be assessed at all.
+        # Demanding `impact_assessment` here would be unsatisfiable — no submit produces
+        # it — and would wedge such a run forever. So this is a no-op, not a backstop.
+        return []
 
     if not binding.get("required"):
         return []
@@ -33,14 +34,16 @@ def planned_missing(state: dict, repo_root, phase_record: dict) -> list[str]:
     if status == "not_applicable":
         return []
     if status == "degraded":
-        obj = _load_artifact(binding, repo_root)
+        obj, integrity_ok = _load_artifact(binding, repo_root)
+        if integrity_ok is False:
+            return ["impact_assessment_integrity"]
         if obj is None or not impact_ev.approval_matches(obj, state):
             return ["impact_degradation_approval"]
         return []
     # verified: the module plan must reference every binding seed
     seeds = set(binding.get("seeds") or [])
     if not seeds:
-        return []
+        return ["impact_assessment_seeds_missing"]
     covered = _covered_seeds(phase_record, repo_root)
     return [] if seeds.issubset(covered) else ["impact_refs"]
 
@@ -48,14 +51,17 @@ def planned_missing(state: dict, repo_root, phase_record: dict) -> list[str]:
 def _load_artifact(binding: dict, repo_root):
     rel = binding.get("path")
     if not rel:
-        return None
+        return None, None
     full = Path(rel)
     if not full.is_absolute():
         full = Path(repo_root) / rel   # binding paths are repo-relative
     try:
-        return json.loads(full.read_text(encoding="utf-8"))
+        expected = binding.get("sha256")
+        if expected and hashing.sha256_file(full) != expected:
+            return None, False
+        return json.loads(full.read_text(encoding="utf-8")), True
     except (OSError, ValueError):
-        return None
+        return None, None
 
 
 def _covered_seeds(phase_record: dict, repo_root) -> set[str]:

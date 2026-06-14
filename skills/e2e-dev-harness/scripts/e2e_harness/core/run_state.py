@@ -5,6 +5,7 @@ import contextlib
 import copy
 import json
 import os
+import socket
 import sys
 import time
 from datetime import datetime, timezone
@@ -93,6 +94,22 @@ def save(path: str | Path, state: dict, now: str | None = None) -> None:
 
 _LOCK_TIMEOUT_S = 10.0
 _LOCK_POLL_S = 0.02
+_LOCK_STALE_S = 300.0
+
+
+def _lock_payload() -> bytes:
+    return json.dumps({
+        "pid": os.getpid(),
+        "hostname": socket.gethostname(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }, ensure_ascii=False).encode("utf-8")
+
+
+def _lock_is_stale(lock: Path) -> bool:
+    try:
+        return (time.time() - lock.stat().st_mtime) > _LOCK_STALE_S
+    except OSError:
+        return False
 
 
 @contextlib.contextmanager
@@ -108,12 +125,17 @@ def _lock(path):
     while True:
         try:
             fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+            os.write(fd, _lock_payload())
             break
         except (FileExistsError, PermissionError):
             # FileExistsError: another holder owns the lock.
             # PermissionError (Windows, ERRNO 13): the lock file is in a
             # "delete pending" state because a releasing thread is mid-unlink.
             # Both mean "retry shortly", not a hard failure.
+            if _lock_is_stale(lock):
+                with contextlib.suppress(FileNotFoundError, PermissionError):
+                    os.unlink(str(lock))
+                continue
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"run-state lock busy: {lock}")
             time.sleep(_LOCK_POLL_S)

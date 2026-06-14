@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -6,9 +7,12 @@ from pathlib import Path
 ENTRY = Path(__file__).resolve().parents[1] / "scripts" / "e2e_dev_harness.py"
 
 
-def _run(*args, cwd):
+def _run(*args, cwd, env=None):
+    proc_env = os.environ.copy()
+    if env:
+        proc_env.update(env)
     proc = subprocess.run([sys.executable, str(ENTRY), *args],
-                          cwd=cwd, capture_output=True, text=True)
+                          cwd=cwd, capture_output=True, text=True, env=proc_env)
     return proc.returncode, json.loads(proc.stdout or "{}")
 
 
@@ -278,6 +282,45 @@ def test_start_explicit_tier_below_audited_preserves_selection(tmp_path):
     assert res["tier_recommendation"]["downgrade"]["blocked"] is False
 
 
+def test_start_audited_forces_event_log_when_disable_env_set(tmp_path):
+    code, res = _run(
+        "start",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "audited-events",
+        "--request",
+        "compliance audit of the incident response",
+        "--tier",
+        "audited",
+        cwd=tmp_path,
+        env={"E2E_HARNESS_DISABLE_EVENTS": "1"},
+    )
+
+    assert code == 0
+    state_path = Path(res["run_state"])
+    assert (state_path.parent / "events.jsonl").exists()
+
+
+def test_start_defaults_impact_mode_auto(tmp_path):
+    """GitNexus impact is ON by default: a run started without --impact-mode records
+    impact.mode == auto. (A non-code request like 'do x' is not_applicable, so the
+    run is functionally unaffected — proven by the drive test below.)"""
+    code, res = _run("start", "--repo", str(tmp_path), "--feature", "demo",
+                     "--request", "do x", cwd=tmp_path)
+    assert code == 0
+    state = json.loads(Path(res["run_state"]).read_text(encoding="utf-8"))
+    assert state["impact"]["mode"] == "auto"
+
+
+def test_start_impact_mode_off_opts_out(tmp_path):
+    code, res = _run("start", "--repo", str(tmp_path), "--feature", "demo",
+                     "--request", "do x", "--impact-mode", "off", cwd=tmp_path)
+    assert code == 0
+    state = json.loads(Path(res["run_state"]).read_text(encoding="utf-8"))
+    assert state["impact"]["mode"] == "off"
+
+
 def test_start_then_drive_to_verified_with_real_artifacts_terminates(tmp_path):
     (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
     code, res = _run("start", "--repo", str(tmp_path), "--feature", "demo",
@@ -315,9 +358,13 @@ def test_start_audited_then_drive_to_verified_terminates(tmp_path):
     would otherwise pass undetected.
     """
     (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
+    # --impact-mode off: this test exercises the audited VERIFIED gate chain
+    # (audit_replay + agent_team_dispatch), which is orthogonal to the GitNexus impact
+    # gate. Impact is on by default, but an audited run in an unindexed temp repo would
+    # block on impact; the impact on-path is covered by test_impact_e2e.py.
     code, res = _run("start", "--repo", str(tmp_path), "--feature", "audited-demo",
                      "--request", "compliance audit of the incident response",
-                     "--tier", "audited", cwd=tmp_path)
+                     "--tier", "audited", "--impact-mode", "off", cwd=tmp_path)
     assert code == 0
     assert res["tier"] == "audited"
     state_path = res["run_state"]

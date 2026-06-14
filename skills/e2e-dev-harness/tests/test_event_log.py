@@ -124,6 +124,23 @@ def test_detect_drift_flags_dispatch_mismatch(tmp_path):
     assert reason == "drift:phases.IMPLEMENTED.dispatch"
 
 
+def test_detect_drift_flags_unprojected_phantom_evidence_key(tmp_path):
+    events = [
+        {"type": "run.started", "run_id": "r1"},
+        {"type": "phase.submitted", "run_id": "r1", "phase": "IMPLEMENTED"},
+        {"type": "evidence.keys", "run_id": "r1", "phase": "IMPLEMENTED",
+         "keys": ["passing_tests"]},
+    ]
+    real = {"run_id": "r1", "current_phase": "IMPLEMENTED",
+            "phases": {"IMPLEMENTED": {"evidence": {
+                "passing_tests": {"path": "p.json"},
+                "phantom": {"path": "evil.json"},
+            }}}}
+    ok, reason = state_store.detect_drift(events, real)
+    assert ok is False
+    assert reason == "drift:phases.IMPLEMENTED.evidence_keys"
+
+
 def test_detect_drift_clean_when_projection_matches(tmp_path):
     events = [
         {"type": "run.started", "run_id": "r1"},
@@ -134,6 +151,20 @@ def test_detect_drift_clean_when_projection_matches(tmp_path):
     # checks the fields the projection actually claims.
     real = {"run_id": "r1", "current_phase": "IMPLEMENTED", "feature": "x",
             "phases": {"IMPLEMENTED": {"dispatch": "done", "evidence": {"passing_tests": {}}}}}
+    ok, reason = state_store.detect_drift(events, real)
+    assert ok is True
+    assert reason is None
+
+
+def test_detect_drift_clean_when_evidence_key_projection_matches(tmp_path):
+    events = [
+        {"type": "run.started", "run_id": "r1"},
+        {"type": "phase.submitted", "run_id": "r1", "phase": "IMPLEMENTED"},
+        {"type": "evidence.keys", "run_id": "r1", "phase": "IMPLEMENTED",
+         "keys": ["passing_tests"]},
+    ]
+    real = {"run_id": "r1", "current_phase": "IMPLEMENTED",
+            "phases": {"IMPLEMENTED": {"evidence": {"passing_tests": {"path": "p.json"}}}}}
     ok, reason = state_store.detect_drift(events, real)
     assert ok is True
     assert reason is None
@@ -238,9 +269,30 @@ def test_derive_gate_passed_from_done_submit(tmp_path):
     after = copy.deepcopy(before)
     engine.submit_evidence(after, "IMPLEMENTED", "passing_tests", "handoffs/p.json")
     events = state_store.derive_events(before, after)
-    assert [e["type"] for e in events] == ["gate.passed"]
+    assert [e["type"] for e in events] == ["gate.passed", "evidence.keys"]
     assert events[0]["phase"] == "IMPLEMENTED"
     assert events[0]["run_id"] == "r1"
+
+
+def test_derive_emits_evidence_keys_when_key_set_changes(tmp_path):
+    before = {"run_id": "r1", "current_phase": "IMPLEMENTED", "phases": {}}
+    after = copy.deepcopy(before)
+    engine.submit_evidence(after, "IMPLEMENTED", "passing_tests", "handoffs/p.json")
+    events = state_store.derive_events(before, after)
+    evidence_event = next(e for e in events if e["type"] == "evidence.keys")
+    assert evidence_event["phase"] == "IMPLEMENTED"
+    assert evidence_event["keys"] == ["passing_tests"]
+
+
+def test_replay_consumes_evidence_keys(tmp_path):
+    projected = state_store.replay_events([
+        {"type": "run.started", "run_id": "r1"},
+        {"type": "evidence.keys", "run_id": "r1", "phase": "IMPLEMENTED",
+         "keys": ["passing_tests", "test_substance"]},
+    ])
+    assert sorted(projected["phases"]["IMPLEMENTED"]["evidence"]) == [
+        "passing_tests", "test_substance"
+    ]
 
 
 def test_derive_gate_failed_carries_reason(tmp_path):

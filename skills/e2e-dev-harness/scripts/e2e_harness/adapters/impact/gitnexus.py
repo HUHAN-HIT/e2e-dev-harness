@@ -19,6 +19,7 @@ from pathlib import Path
 from e2e_harness.adapters.evidence import impact as impact_ev
 
 _SYMBOL_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*$")
+_SEED_KINDS = {"symbol", "route", "file", "fqn"}
 
 
 def is_symbol_seed(value: str) -> bool:
@@ -29,6 +30,26 @@ def is_symbol_seed(value: str) -> bool:
     if ":" in v or "{" in v or "}" in v or re.search(r"\s", v):
         return False
     return bool(_SYMBOL_RE.match(v))
+
+
+def _typed_seed(candidate) -> dict | None:
+    if isinstance(candidate, str):
+        return {"kind": "symbol", "name": candidate} if is_symbol_seed(candidate) else None
+    if not isinstance(candidate, dict):
+        return None
+    kind = str(candidate.get("kind") or "").strip().lower()
+    value = str(candidate.get("value") or candidate.get("name") or "").strip()
+    if kind not in _SEED_KINDS or not value or re.search(r"\s", value):
+        return None
+    if kind == "symbol" and not is_symbol_seed(value):
+        return None
+    if kind == "route" and not value.startswith("/"):
+        return None
+    if kind == "file" and (value.startswith((".", "-", "/")) or ":" in value):
+        return None
+    if kind == "fqn" and not _SYMBOL_RE.match(value):
+        return None
+    return {"kind": kind, "name": value}
 
 
 def run_command(command: list[str], cwd: Path, timeout: float = 20.0) -> dict:
@@ -65,29 +86,35 @@ class GitNexusImpactProvider:
     def inspect_index(self, repo: Path) -> dict:
         if not self._is_available():
             return {"available": False, "fresh": False}
-        res = self._run(["gitnexus", "status", "--repo", str(Path(repo).resolve())], repo)
+        res = self._run(["gitnexus", "status", "--repo", str(Path(repo).resolve())], repo,
+                        timeout=self._call_t)
         fresh = res.get("exit_code") == 0 and "stale" not in (res.get("stdout") or "").lower()
         return {"available": True, "fresh": fresh, "raw": res}
 
     def refresh_index(self, repo: Path) -> dict:
-        res = self._run(["gitnexus", "analyze", str(Path(repo).resolve())], repo)
+        res = self._run(["gitnexus", "analyze", str(Path(repo).resolve())], repo,
+                        timeout=self._refresh_t)
         return {"refreshed": res.get("exit_code") == 0, "raw": res}
 
     def resolve_seeds(self, repo: Path, request: dict) -> dict:
-        candidates = [c for c in (request.get("seed_candidates") or []) if isinstance(c, str)]
-        seeds: list[str] = []
+        candidates = request.get("seed_candidates") or []
+        seeds: list[dict] = []
+        seen: set[str] = set()
         for c in candidates:
-            if is_symbol_seed(c) and c not in seeds:
-                seeds.append(c)
+            seed = _typed_seed(c)
+            if seed and seed["name"] not in seen:
+                seeds.append(seed)
+                seen.add(seed["name"])
         if not seeds:
             return {"seeds": [], "blocked": True,
                     "open_questions": [_iq(1, "Name the affected module, route, class, "
                                             "function, or file so impact can be assessed.")]}
-        return {"seeds": seeds, "blocked": False, "open_questions": []}
+        return {"seeds": [s["name"] for s in seeds], "seed_records": seeds,
+                "blocked": False, "open_questions": []}
 
     def _impact_for_seed(self, repo: Path, seed: str) -> dict:
         return self._run(["gitnexus", "impact", seed, "--repo", str(Path(repo).resolve()),
-                          "--direction", "upstream"], repo)
+                          "--direction", "upstream"], repo, timeout=self._call_t)
 
     def assess(self, repo: Path, request: dict) -> dict:
         """Produce an impact-assessment.v1 dict. Never raises; degrades to blocked."""
@@ -106,7 +133,11 @@ class GitNexusImpactProvider:
         seeds: list[dict] = []
         impact_rows: list[dict] = []
         questions: list[dict] = []
-        for i, seed in enumerate(resolved["seeds"], start=1):
+        seed_records = resolved.get("seed_records") or [
+            {"kind": "symbol", "name": s} for s in resolved["seeds"]
+        ]
+        for i, seed_record in enumerate(seed_records, start=1):
+            seed = seed_record["name"]
             res = self._impact_for_seed(repo, seed)
             if res.get("exit_code") == 124:
                 return {**base, "status": "blocked",
@@ -121,7 +152,7 @@ class GitNexusImpactProvider:
                 opts = ", ".join(str(c) for c in candidates[:6])
                 questions.append(_iq(i, f"Seed {seed} is ambiguous; disambiguate among: {opts}."))
                 continue
-            seeds.append({"kind": "symbol", "name": seed,
+            seeds.append({"kind": seed_record.get("kind", "symbol"), "name": seed,
                           "file_path": data.get("file_path", ""), "reason": "resolved seed"})
             impact_rows.append(_normalize_impact(seed, data))
 

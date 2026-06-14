@@ -59,21 +59,25 @@ def derive_events(before: dict, after: dict) -> list[dict]:
         if not isinstance(rec, dict):
             continue
         prev = before_phases.get(name)
+        prev = prev if isinstance(prev, dict) else {}
         prev_dispatch = prev.get("dispatch") if isinstance(prev, dict) else None
         dispatch = rec.get("dispatch")
-        if dispatch == prev_dispatch:
-            continue
-        if dispatch == "done":
-            events.append(_tag({"type": "gate.passed", "phase": name}))
-        elif dispatch == "failed":
-            events.append(_tag({"type": "gate.failed", "phase": name,
-                                "reason": rec.get("blocker")}))
-        elif dispatch == "dispatched":
-            # Slice 2: the `dispatch` verb's state. detect_drift COMPARES the
-            # per-phase `dispatch` field, so this value MUST have an event or a
-            # dispatched phase reads as false drift. Distinct `type` (not gate.*)
-            # keeps the gate vocabulary unoverloaded.
-            events.append(_tag({"type": "dispatch.dispatched", "phase": name}))
+        if dispatch != prev_dispatch:
+            if dispatch == "done":
+                events.append(_tag({"type": "gate.passed", "phase": name}))
+            elif dispatch == "failed":
+                events.append(_tag({"type": "gate.failed", "phase": name,
+                                    "reason": rec.get("blocker")}))
+            elif dispatch == "dispatched":
+                # Slice 2: the `dispatch` verb's state. detect_drift COMPARES the
+                # per-phase `dispatch` field, so this value MUST have an event or a
+                # dispatched phase reads as false drift. Distinct `type` (not gate.*)
+                # keeps the gate vocabulary unoverloaded.
+                events.append(_tag({"type": "dispatch.dispatched", "phase": name}))
+        prev_keys = sorted((prev.get("evidence") or {}).keys())
+        keys = sorted((rec.get("evidence") or {}).keys())
+        if keys != prev_keys:
+            events.append(_tag({"type": "evidence.keys", "phase": name, "keys": keys}))
     return events
 
 
@@ -95,6 +99,11 @@ def replay_events(events: list[dict]) -> dict:
         elif etype == "dispatch.dispatched" and phase:
             # Slice 2: inverse of derive's dispatch.dispatched branch.
             state.setdefault("phases", {}).setdefault(phase, {})["dispatch"] = "dispatched"
+        elif etype == "evidence.keys" and phase:
+            keys = event.get("keys") or []
+            if isinstance(keys, list):
+                rec = state.setdefault("phases", {}).setdefault(phase, {})
+                rec["evidence"] = {str(k): {} for k in keys if isinstance(k, str)}
     return state
 
 
@@ -152,4 +161,9 @@ def detect_drift(events: list[dict], run_state: dict) -> tuple[bool, str | None]
                 return False, f"drift:phases.{name}.{field}"
             if established and field in real_rec and field not in proj_rec:
                 return False, f"drift:phases.{name}.{field}"
+        if "evidence" in proj_rec:
+            proj_keys = set((proj_rec.get("evidence") or {}).keys())
+            real_keys = set((real_rec.get("evidence") or {}).keys())
+            if proj_keys != real_keys:
+                return False, f"drift:phases.{name}.evidence_keys"
     return True, None

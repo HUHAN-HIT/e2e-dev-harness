@@ -13,6 +13,7 @@ Ownership).
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from e2e_harness.adapters.evidence import hashing, impact as impact_ev
@@ -54,7 +55,7 @@ def _run_dir(state: dict, repo_root) -> Path:
     return Path(repo_root) / "docs" / "agent-runs" / str(state.get("run_id") or "run")
 
 
-def _seed_candidates(state: dict, repo_root) -> list[str]:
+def _seed_candidates(state: dict, repo_root) -> list:
     p = _contract_path(state, repo_root)
     if not p:
         return []
@@ -63,14 +64,16 @@ def _seed_candidates(state: dict, repo_root) -> list[str]:
     except (OSError, ValueError):
         return []
     cands = obj.get("impact_seed_candidates")
-    return [c for c in cands if isinstance(c, str)] if isinstance(cands, list) else []
+    return [c for c in cands if isinstance(c, (str, dict))] if isinstance(cands, list) else []
 
 
 def _write_artifact(state: dict, repo_root, artifact: dict) -> Path:
     run_dir = _run_dir(state, repo_root)
     run_dir.mkdir(parents=True, exist_ok=True)
     path = run_dir / _ARTIFACT_NAME
-    path.write_text(json.dumps(artifact, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(artifact, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
     return path
 
 
@@ -107,16 +110,50 @@ def _not_applicable_artifact() -> dict:
             "degradation": None, "approval": None}
 
 
+def _approval(state: dict) -> dict | None:
+    appr = ((state.get("approvals") or {}).get("impact_degradation") or {})
+    return appr if appr.get("sha256") else None
+
+
+def _degrade(artifact: dict, approval: dict) -> dict:
+    """Convert a blocked assessment into an auditable `degraded` one. The user has
+    explicitly approved proceeding without verified impact; the approval hash is the
+    trust anchor the gate validator cross-checks (design: Degraded Approval)."""
+    art = dict(artifact)
+    art["status"] = "degraded"
+    art["degradation"] = {"from_status": "blocked",
+                          "reason": approval.get("reason", ""),
+                          "unverified_questions": artifact.get("open_questions", [])}
+    art["approval"] = {"sha256": approval["sha256"],
+                       "source": approval.get("source", "user-approved"),
+                       "approval_path": approval.get("approval_path")}
+    return art
+
+
+def _approval_matches_binding(approval: dict | None, existing: dict) -> bool:
+    return bool(approval and approval.get("sha256") == existing.get("approval_sha256"))
+
+
 def ensure_assessment_for_planning(state, repo_root, *, provider=None) -> dict | None:
-    if _mode(state) == "off":
+    mode = _mode(state)
+    if mode == "off":
         return None
 
     contract_sha = _contract_sha(state, repo_root)
     existing = state.get("impact_assessment")
+    approval = _approval(state)
     if (existing and contract_sha is not None
             and existing.get("contract_sha256") == contract_sha):
-        # idempotent: fresh binding for this contract -> reuse decision
-        return {"status": "blocked"} if existing.get("status") == "blocked" else None
+        # Idempotent reuse, with two trust-anchor exceptions:
+        # - blocked + approval in auto mode must re-run to emit a degraded artifact;
+        # - degraded bindings are reusable only while the same approval remains valid.
+        if existing.get("status") == "blocked" and approval:
+            if mode == "strict":
+                return {"status": "blocked", "strict_mode_no_degrade": True}
+        elif existing.get("status") == "degraded" and not _approval_matches_binding(approval, existing):
+            pass
+        else:
+            return {"status": "blocked"} if existing.get("status") == "blocked" else None
 
     reasons = impact_trigger.required_reasons(state, repo_root)
     if not reasons:
@@ -135,9 +172,21 @@ def ensure_assessment_for_planning(state, repo_root, *, provider=None) -> dict |
                                 "request": state.get("request", ""), "reasons": reasons})
     artifact.setdefault("trigger", {"required": True, "reason_codes": reasons,
                                     "evaluated_at_phase": "CLARIFIED"})
+    # Degradation override: a recorded approval lets a blocked assessment proceed as
+    # an auditable `degraded` one instead of pinning the run at CLARIFIED forever.
+    strict_mode_no_degrade = False
+    if artifact["status"] == "blocked" and approval:
+        if mode == "strict":
+            strict_mode_no_degrade = True
+        else:
+            artifact = _degrade(artifact, approval)
     path = _write_artifact(state, repo_root, artifact)
     _bind(state, path=path, repo_root=repo_root, contract_sha=contract_sha,
           artifact=artifact, required=True)
+    if artifact["status"] == "degraded" and approval:
+        state["impact_assessment"]["approval_sha256"] = approval["sha256"]
+    if strict_mode_no_degrade:
+        return {"status": "blocked", "strict_mode_no_degrade": True}
     if artifact["status"] == "blocked":
         return {"status": "blocked"}
     return None

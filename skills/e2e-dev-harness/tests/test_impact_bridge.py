@@ -121,6 +121,86 @@ def test_amended_contract_invalidates_binding(tmp_path):
     assert _CountingProvider.calls == 2
 
 
+# --- Degradation override: a recorded approval turns blocked -> degraded ---
+
+def _blocked_artifact():
+    return {"schema": "e2e-dev-harness.impact-assessment.v1", "status": "blocked",
+            "seeds": [], "impact": [],
+            "open_questions": [{"id": "IQ-001", "question": "GitNexus unavailable; approve "
+                               "degradation or install it.", "status": "open"}]}
+
+
+def test_blocked_with_approval_becomes_degraded(tmp_path):
+    st = _state(tmp_path, "auto", _contract(tmp_path))
+    st["approvals"] = {"impact_degradation": {"sha256": "deadbeef",
+                                              "source": "user-approved", "reason": "no gitnexus"}}
+    decision = impact_bridge.ensure_assessment_for_planning(
+        st, str(tmp_path), provider=_FakeProvider(_blocked_artifact()))
+    assert decision is None   # degraded -> proceed
+    assert st["impact_assessment"]["status"] == "degraded"
+    art = json.loads((tmp_path / "impact-assessment.json").read_text(encoding="utf-8"))
+    assert art["status"] == "degraded"
+    assert art["approval"]["sha256"] == "deadbeef"
+
+
+def test_blocked_then_approval_reruns_to_degraded(tmp_path):
+    st = _state(tmp_path, "auto", _contract(tmp_path))
+    prov = _FakeProvider(_blocked_artifact())
+    d1 = impact_bridge.ensure_assessment_for_planning(st, str(tmp_path), provider=prov)
+    assert d1["status"] == "blocked"
+    assert st["impact_assessment"]["status"] == "blocked"
+    # coordinator records the approval; same contract, but now degradable
+    st.setdefault("approvals", {})["impact_degradation"] = {
+        "sha256": "abc", "source": "user-approved", "reason": "no gitnexus"}
+    d2 = impact_bridge.ensure_assessment_for_planning(st, str(tmp_path), provider=prov)
+    assert d2 is None
+    assert st["impact_assessment"]["status"] == "degraded"
+
+
+def test_strict_mode_blocks_instead_of_degrading(tmp_path):
+    st = _state(tmp_path, "strict", _contract(tmp_path))
+    st["approvals"] = {"impact_degradation": {"sha256": "abc",
+                                              "source": "user-approved", "reason": "no gitnexus"}}
+    decision = impact_bridge.ensure_assessment_for_planning(
+        st, str(tmp_path), provider=_FakeProvider(_blocked_artifact()))
+    assert decision == {"status": "blocked", "strict_mode_no_degrade": True}
+    assert st["impact_assessment"]["status"] == "blocked"
+    art = json.loads((tmp_path / "impact-assessment.json").read_text(encoding="utf-8"))
+    assert art["status"] == "blocked"
+    assert art.get("approval") is None
+
+
+def test_revoked_degradation_approval_reruns_and_reblocks(tmp_path):
+    st = _state(tmp_path, "auto", _contract(tmp_path))
+
+    class _CountingBlockedProvider(_FakeProvider):
+        calls = 0
+
+        def assess(self, repo, request):
+            _CountingBlockedProvider.calls += 1
+            return _blocked_artifact()
+
+    prov = _CountingBlockedProvider(None)
+    st["approvals"] = {"impact_degradation": {"sha256": "abc",
+                                              "source": "user-approved", "reason": "no gitnexus"}}
+    assert impact_bridge.ensure_assessment_for_planning(st, str(tmp_path), provider=prov) is None
+    assert st["impact_assessment"]["status"] == "degraded"
+
+    del st["approvals"]["impact_degradation"]
+    decision = impact_bridge.ensure_assessment_for_planning(st, str(tmp_path), provider=prov)
+    assert decision == {"status": "blocked"}
+    assert st["impact_assessment"]["status"] == "blocked"
+    assert _CountingBlockedProvider.calls == 2
+
+
+def test_impact_artifact_write_leaves_no_partial_tmp(tmp_path):
+    st = _state(tmp_path, "auto", _contract(tmp_path))
+    impact_bridge.ensure_assessment_for_planning(
+        st, str(tmp_path), provider=_FakeProvider(_verified_artifact()))
+    assert (tmp_path / "impact-assessment.json").exists()
+    assert [p.name for p in tmp_path.glob("impact-assessment.json.*.tmp")] == []
+
+
 # --- Task 3a.2: engine seam ---
 
 def _spine():

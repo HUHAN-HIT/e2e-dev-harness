@@ -55,10 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--scan", action="store_true", help="run adapter scan to raise tier floor")
     s.add_argument("--preview-tier", action="store_true",
                    help="compute tier recommendation/options without creating a run")
-    # GitNexus impact assessment mode for this run. Default off keeps existing runs
-    # byte-compatible; auto/strict activate the CLARIFIED->PLANNED impact gate.
-    s.add_argument("--impact-mode", choices=["off", "auto", "strict"], default="off",
-                   help="GitNexus impact assessment mode for this run (default off)")
+    # GitNexus impact assessment mode for this run. Default `auto` turns impact on:
+    # the CLARIFIED->PLANNED gate runs, and an unverifiable assessment blocks with a
+    # degrade offer (coordinator asks the user). `off` opts a run out entirely.
+    s.add_argument("--impact-mode", choices=["off", "auto", "strict"], default="auto",
+                   help="GitNexus impact assessment mode for this run (default auto = on)")
 
     for verb in ("next", "status"):
         sp = sub.add_parser(verb); sp.add_argument("--state", required=True); sp.add_argument("--repo", default=".")
