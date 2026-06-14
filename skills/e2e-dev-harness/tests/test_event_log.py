@@ -142,13 +142,17 @@ def test_detect_drift_flags_unprojected_phantom_evidence_key(tmp_path):
 
 
 def test_detect_drift_clean_when_projection_matches(tmp_path):
+    # A real chain emits evidence.keys alongside gate.passed for an evidence-bearing
+    # done phase (derive_events: a submit -> [gate.passed, evidence.keys]); with it the
+    # projection claims the same evidence run-state records, so this is clean. run-state
+    # may still carry MORE than the projection on OTHER fields (e.g. feature).
     events = [
         {"type": "run.started", "run_id": "r1"},
         {"type": "phase.submitted", "run_id": "r1", "phase": "IMPLEMENTED"},
         {"type": "gate.passed", "run_id": "r1", "phase": "IMPLEMENTED"},
+        {"type": "evidence.keys", "run_id": "r1", "phase": "IMPLEMENTED",
+         "keys": ["passing_tests"]},
     ]
-    # run-state legitimately carries MORE than the narrow projection; drift only
-    # checks the fields the projection actually claims.
     real = {"run_id": "r1", "current_phase": "IMPLEMENTED", "feature": "x",
             "phases": {"IMPLEMENTED": {"dispatch": "done", "evidence": {"passing_tests": {}}}}}
     ok, reason = state_store.detect_drift(events, real)
@@ -436,3 +440,35 @@ def test_derive_emits_one_dispatch_event_per_phase_sorted(tmp_path):
         ("dispatch.dispatched", "IMPLEMENTED#auth"),
         ("dispatch.dispatched", "IMPLEMENTED#billing"),
     ]
+
+
+def test_detect_drift_catches_dropped_evidence_keys_under_claim(tmp_path):
+    """Evidence under-claim (symmetric with the dispatch under-claim): the log's
+    `evidence.keys` event was truncated, so the replay is SILENT on a phase's
+    evidence while run-state still carries (phantom-injected) keys. dispatch and
+    current_phase match, isolating the evidence-keys miss the conflict-only check
+    let through."""
+    forged_events = [
+        {"type": "run.started", "run_id": "r1"},
+        {"type": "phase.submitted", "run_id": "r1", "phase": "IMPLEMENTED"},
+        {"type": "gate.passed", "run_id": "r1", "phase": "IMPLEMENTED"},
+    ]
+    real = {"run_id": "r1", "current_phase": "IMPLEMENTED",
+            "phases": {"IMPLEMENTED": {"dispatch": "done", "evidence": {
+                "passing_tests": {"path": "p.json"},
+                "phantom": {"path": "evil.json"},
+            }}}}
+    ok, reason = state_store.detect_drift(forged_events, real)
+    assert ok is False
+    assert reason == "drift:phases.IMPLEMENTED.evidence_keys"
+
+
+def test_detect_drift_evidence_under_claim_silent_on_unestablished_log(tmp_path):
+    """Guard the established gate for the new evidence branch: an EMPTY (not-yet-
+    established) projection must NOT false-positive even when run-state already
+    carries a phase with evidence."""
+    real = {"run_id": "r1", "current_phase": "CREATED",
+            "phases": {"IMPLEMENTED": {"evidence": {"passing_tests": {"path": "p.json"}}}}}
+    ok, reason = state_store.detect_drift([], real)
+    assert ok is True
+    assert reason is None

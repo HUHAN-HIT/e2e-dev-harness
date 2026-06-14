@@ -166,4 +166,8 @@ def detect_drift(events: list[dict], run_state: dict) -> tuple[bool, str | None]
             real_keys = set((real_rec.get("evidence") or {}).keys())
             if proj_keys != real_keys:
                 return False, f"drift:phases.{name}.evidence_keys"
+        elif established and "evidence" in real_rec:
+            # UNDER-CLAIM: the truncated log went silent on evidence the run-state
+            # still asserts (mirrors the dispatch/blocker under-claim above).
+            return False, f"drift:phases.{name}.evidence_keys"
     return True, None

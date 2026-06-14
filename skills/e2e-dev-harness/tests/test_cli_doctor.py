@@ -358,6 +358,12 @@ def _clean_chain(sp):
     _event_log.append_event(ep, {"type": "run.started", "run_id": "r1"})
     _event_log.append_event(ep, {"type": "phase.submitted", "run_id": "r1", "phase": "IMPLEMENTED"})
     _event_log.append_event(ep, {"type": "gate.passed", "run_id": "r1", "phase": "IMPLEMENTED"})
+    # A real chain emits evidence.keys alongside gate.passed for an evidence-bearing
+    # done phase (derive_events: a submit -> [gate.passed, evidence.keys]); without it
+    # the projection is silent on evidence _healthy_state records, which the evidence
+    # under-claim check now (correctly) flags as drift. Keys match _healthy_state.
+    _event_log.append_event(ep, {"type": "evidence.keys", "run_id": "r1", "phase": "IMPLEMENTED",
+                                 "keys": ["passing_tests", "test_substance"]})
     return ep
 
 
