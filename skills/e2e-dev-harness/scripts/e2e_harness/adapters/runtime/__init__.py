@@ -13,18 +13,53 @@ from typing import Protocol
 
 DESCRIPTOR_SCHEMA = "e2e-dev-harness.worker-descriptor.v1"
 PORTABLE_SUBAGENT_TYPE = "general-purpose"
+AVAILABLE_SUBAGENTS_ENV = "E2E_HARNESS_AVAILABLE_SUBAGENTS"
 
 
-def _subagent_type(role: str, packet: dict | None = None) -> str:
+def _declared_subagent_type(packet: dict | None = None) -> str:
+    if not packet:
+        return ""
+    return str(packet.get("runtime_subagent_type", "")).strip()
+
+
+def _available_subagent_types() -> set[str]:
+    raw = os.environ.get(AVAILABLE_SUBAGENTS_ENV, "")
+    return {part.strip() for part in raw.replace(";", ",").split(",") if part.strip()}
+
+
+def _subagent_selection(role: str, packet: dict | None = None) -> dict:
+    declared = _declared_subagent_type(packet)
     key = "E2E_HARNESS_SUBAGENT_TYPE_" + str(role).strip().upper().replace("-", "_")
     override = os.environ.get(key, "").strip()
     if override:
-        return override
-    if packet:
-        declared = str(packet.get("runtime_subagent_type", "")).strip()
-        if declared:
-            return declared
-    return PORTABLE_SUBAGENT_TYPE
+        return {
+            "subagent_type": override,
+            "requested_subagent_type": declared or override,
+            "subagent_type_source": "env",
+        }
+    if declared:
+        available = _available_subagent_types()
+        if declared in available or "*" in available:
+            return {
+                "subagent_type": declared,
+                "requested_subagent_type": declared,
+                "subagent_type_source": "packet",
+            }
+        return {
+            "subagent_type": PORTABLE_SUBAGENT_TYPE,
+            "requested_subagent_type": declared,
+            "subagent_type_source": "portable-fallback",
+            "subagent_fallback_reason": "runtime_subagent_not_confirmed",
+        }
+    return {
+        "subagent_type": PORTABLE_SUBAGENT_TYPE,
+        "requested_subagent_type": PORTABLE_SUBAGENT_TYPE,
+        "subagent_type_source": "default",
+    }
+
+
+def _subagent_type(role: str, packet: dict | None = None) -> str:
+    return _subagent_selection(role, packet)["subagent_type"]
 
 
 def _prompt(packet: dict) -> str:
@@ -45,19 +80,25 @@ def _prompt(packet: dict) -> str:
 def _claude_code(packet: dict) -> dict:
     role = packet.get("role", "")
     skill = packet.get("skill", "")
-    return {
+    selection = _subagent_selection(role, packet)
+    descriptor = {
         "schema": DESCRIPTOR_SCHEMA,
         "runtime": "claude-code",
         "tool": "Task",
         "arguments": {
             "description": f"{role}: {skill}",
             "prompt": _prompt(packet),
-            "subagent_type": _subagent_type(role, packet),
+            "subagent_type": selection["subagent_type"],
         },
+        "requested_subagent_type": selection["requested_subagent_type"],
+        "subagent_type_source": selection["subagent_type_source"],
         "context_paths": list(packet.get("context_paths", []) or []),
         "expected_outputs": list(packet.get("expected_outputs", []) or []),
         "context_policy": "fresh Claude Code Task only; no inherited coordinator chat beyond these context_paths.",
     }
+    if selection.get("subagent_fallback_reason"):
+        descriptor["subagent_fallback_reason"] = selection["subagent_fallback_reason"]
+    return descriptor
 
 
 def _codex(packet: dict) -> dict:
@@ -82,19 +123,25 @@ def _codex(packet: dict) -> dict:
 def _opencode(packet: dict) -> dict:
     role = packet.get("role", "")
     skill = packet.get("skill", "")
-    return {
+    selection = _subagent_selection(role, packet)
+    descriptor = {
         "schema": DESCRIPTOR_SCHEMA,
         "runtime": "opencode",
         "tool": "task",
         "arguments": {
             "description": f"{role}: {skill}",
             "prompt": _prompt(packet),
-            "subagent_type": _subagent_type(role, packet),
+            "subagent_type": selection["subagent_type"],
         },
+        "requested_subagent_type": selection["requested_subagent_type"],
+        "subagent_type_source": selection["subagent_type_source"],
         "context_paths": list(packet.get("context_paths", []) or []),
         "expected_outputs": list(packet.get("expected_outputs", []) or []),
         "context_policy": "fresh opencode task subagent only; no inherited coordinator chat beyond these context_paths.",
     }
+    if selection.get("subagent_fallback_reason"):
+        descriptor["subagent_fallback_reason"] = selection["subagent_fallback_reason"]
+    return descriptor
 
 
 def _manual(packet: dict, warning: str = "") -> dict:

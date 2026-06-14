@@ -35,6 +35,34 @@ def test_dispatch_preserves_legacy_single_worker_shape(tmp_path):
     assert result["expected_outputs"] == ["plan", "module_plan"]
     assert result["worker_descriptor"]["runtime"] == "codex"
     assert result["agent_team_plan"]["execution_model"] == "single-worker"
+    assert result["runtime_subagent_type"] == "implementation-planner"
+
+
+def test_opencode_single_worker_records_requested_role_subagent_but_safely_falls_back(tmp_path, monkeypatch):
+    monkeypatch.delenv("E2E_HARNESS_AVAILABLE_SUBAGENTS", raising=False)
+    path = _write_state(tmp_path, tier="standard", phase="PLANNED")
+
+    code, result = dispatch_cmd.run(Args(path, runtime="opencode"))
+
+    assert code == 0
+    desc = result["worker_descriptor"]
+    assert result["runtime_subagent_type"] == "implementation-planner"
+    assert desc["requested_subagent_type"] == "implementation-planner"
+    assert desc["arguments"]["subagent_type"] == "general-purpose"
+    assert desc["subagent_fallback_reason"] == "runtime_subagent_not_confirmed"
+
+
+def test_opencode_single_worker_uses_role_subagent_when_runtime_confirms_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("E2E_HARNESS_AVAILABLE_SUBAGENTS", "implementation-planner")
+    path = _write_state(tmp_path, tier="standard", phase="PLANNED")
+
+    code, result = dispatch_cmd.run(Args(path, runtime="opencode"))
+
+    assert code == 0
+    desc = result["worker_descriptor"]
+    assert desc["requested_subagent_type"] == "implementation-planner"
+    assert desc["arguments"]["subagent_type"] == "implementation-planner"
+    assert desc["subagent_type_source"] == "packet"
 
 
 def test_critical_review_dispatch_emits_three_descriptors_and_artifacts(tmp_path):

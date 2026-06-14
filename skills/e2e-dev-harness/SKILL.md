@@ -124,7 +124,16 @@ descriptor. Gates still decide phase transitions from evidence keys; an
 agent-team plan never passes a gate by itself.
 
 Default single-worker phases preserve the legacy top-level worker packet and
-`worker_descriptor` output. Multi-worker phases additionally include
+`worker_descriptor` output, but the worker packet also carries the profile's
+`runtime_subagent_type` so the role intent is auditable. Claude Code and
+OpenCode descriptors record `requested_subagent_type`; they use the requested
+runtime subagent only when it is explicitly confirmed by
+`E2E_HARNESS_AVAILABLE_SUBAGENTS` (comma-separated names, or `*`). Otherwise
+they safely fall back to `general-purpose` and record
+`subagent_fallback_reason: runtime_subagent_not_confirmed`. Per-role
+`E2E_HARNESS_SUBAGENT_TYPE_<ROLE>` overrides still win.
+
+Multi-worker phases additionally include
 `agent_team_plan`, `worker_descriptors`, and generated artifacts under the run
 directory:
 

@@ -36,7 +36,7 @@ class BuiltinAgentTeamProvider:
                 context_paths=context_paths,
                 expected_outputs=produces,
                 parallel_group=phase["name"].lower(),
-                include_subagent_type=False,
+                include_subagent_type=True,
             )]
             execution_model = "single-worker"
 

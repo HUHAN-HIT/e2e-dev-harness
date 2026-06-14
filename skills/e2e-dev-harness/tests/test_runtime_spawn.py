@@ -60,10 +60,25 @@ def test_env_override_sets_subagent_type(monkeypatch):
 
 def test_claude_code_uses_packet_subagent_type_when_env_absent(monkeypatch):
     monkeypatch.delenv("E2E_HARNESS_SUBAGENT_TYPE_CLARIFIER", raising=False)
+    monkeypatch.setenv("E2E_HARNESS_AVAILABLE_SUBAGENTS", "requirements-clarifier")
     pkt = _packet(role="clarifier")
     pkt["runtime_subagent_type"] = "requirements-clarifier"
     d = runtime.spawn_worker(pkt, runtime="claude-code")
     assert d["arguments"]["subagent_type"] == "requirements-clarifier"
+    assert d["requested_subagent_type"] == "requirements-clarifier"
+    assert d["subagent_type_source"] == "packet"
+
+
+def test_claude_code_safely_falls_back_when_packet_subagent_type_is_not_confirmed(monkeypatch):
+    monkeypatch.delenv("E2E_HARNESS_SUBAGENT_TYPE_CLARIFIER", raising=False)
+    monkeypatch.delenv("E2E_HARNESS_AVAILABLE_SUBAGENTS", raising=False)
+    pkt = _packet(role="clarifier")
+    pkt["runtime_subagent_type"] = "requirements-clarifier"
+    d = runtime.spawn_worker(pkt, runtime="claude-code")
+    assert d["requested_subagent_type"] == "requirements-clarifier"
+    assert d["arguments"]["subagent_type"] == "general-purpose"
+    assert d["subagent_type_source"] == "portable-fallback"
+    assert d["subagent_fallback_reason"] == "runtime_subagent_not_confirmed"
 
 
 def test_claude_code_env_override_wins_over_packet_subagent_type(monkeypatch):
@@ -122,10 +137,13 @@ def test_opencode_env_override_sets_subagent_type(monkeypatch):
 
 def test_opencode_uses_packet_subagent_type_when_env_absent(monkeypatch):
     monkeypatch.delenv("E2E_HARNESS_SUBAGENT_TYPE_CLARIFIER", raising=False)
+    monkeypatch.setenv("E2E_HARNESS_AVAILABLE_SUBAGENTS", "requirements-clarifier")
     pkt = _packet(role="clarifier")
     pkt["runtime_subagent_type"] = "requirements-clarifier"
     d = runtime.spawn_worker(pkt, runtime="opencode")
     assert d["arguments"]["subagent_type"] == "requirements-clarifier"
+    assert d["requested_subagent_type"] == "requirements-clarifier"
+    assert d["subagent_type_source"] == "packet"
 
 
 def test_opencode_env_override_wins_over_packet_subagent_type(monkeypatch):

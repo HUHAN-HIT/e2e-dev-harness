@@ -44,6 +44,7 @@ def test_builtin_provider_matches_worker_packet_for_single_worker_phase(tmp_path
     assert worker["skill"] == expected["skill"]
     assert worker["context_paths"] == expected["context_paths"]
     assert worker["expected_outputs"] == expected["expected_outputs"]
+    assert worker["runtime_subagent_type"] == "implementation-planner"
     assert plan["evidence_contract"]["required_keys"] == expected["expected_outputs"]
 
 

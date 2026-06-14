@@ -82,6 +82,7 @@ def test_auto_spawn_runtimes_carry_fresh_context_and_skill(name):
 @pytest.mark.parametrize("name", ["claude-code", "opencode"])
 def test_task_runtimes_accept_packet_subagent_type(name, monkeypatch):
     monkeypatch.delenv("E2E_HARNESS_SUBAGENT_TYPE_CLARIFIER", raising=False)
+    monkeypatch.setenv("E2E_HARNESS_AVAILABLE_SUBAGENTS", "requirements-clarifier")
     pkt = _packet(role="clarifier")
     pkt["runtime_subagent_type"] = "requirements-clarifier"
     desc = runtime.get_adapter(name).spawn(pkt)
