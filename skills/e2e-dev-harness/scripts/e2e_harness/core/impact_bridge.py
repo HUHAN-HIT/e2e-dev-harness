@@ -183,6 +183,11 @@ def ensure_assessment_for_planning(state, repo_root, *, provider=None) -> dict |
     path = _write_artifact(state, repo_root, artifact)
     _bind(state, path=path, repo_root=repo_root, contract_sha=contract_sha,
           artifact=artifact, required=True)
+    if artifact["status"] == "blocked":
+        # Single source of truth for "can a recorded approval degrade this?": the
+        # binding self-describes it so `next` reads the policy instead of re-deriving
+        # mode (the drift that let strict runs advertise a no-op approval).
+        state["impact_assessment"]["degradation_available"] = (mode != "strict")
     if artifact["status"] == "degraded" and approval:
         state["impact_assessment"]["approval_sha256"] = approval["sha256"]
     if strict_mode_no_degrade:

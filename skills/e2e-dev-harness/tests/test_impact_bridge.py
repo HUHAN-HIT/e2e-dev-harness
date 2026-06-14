@@ -298,3 +298,19 @@ def test_pending_no_impact_binding_unchanged(tmp_path):
     state = {"phases": {"CLARIFIED": {"evidence": {"acceptance_contract": {"path": str(contract)}}}}}
     pending = clarification.pending_from_state(state, str(tmp_path))
     assert [q["id"] for q in pending] == ["OQ-001"]
+
+
+def test_blocked_binding_marks_degradation_available_in_auto(tmp_path):
+    st = _state(tmp_path, "auto", _contract(tmp_path))
+    impact_bridge.ensure_assessment_for_planning(
+        st, str(tmp_path), provider=_FakeProvider(_blocked_artifact()))
+    assert st["impact_assessment"]["status"] == "blocked"
+    assert st["impact_assessment"]["degradation_available"] is True
+
+
+def test_blocked_binding_marks_no_degradation_in_strict(tmp_path):
+    st = _state(tmp_path, "strict", _contract(tmp_path))
+    impact_bridge.ensure_assessment_for_planning(
+        st, str(tmp_path), provider=_FakeProvider(_blocked_artifact()))
+    assert st["impact_assessment"]["status"] == "blocked"
+    assert st["impact_assessment"]["degradation_available"] is False
