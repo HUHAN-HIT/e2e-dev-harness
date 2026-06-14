@@ -321,9 +321,9 @@ spine 中移除，`next` 直接越过，导航地图渲染 `– skipped`。
 - `--tier auto`（默认）：分类器读需求文本判定 tier，并应用 **G4 基线下限**——派生（非显式钉住）的
   tier **不会**降到 `minimal`，审查是默认。只有显式 `--tier minimal` 才会降级。
 - `--pipeline <名|路径>`：覆盖 `--tier` 推出的 spine，可指向内建名或自定义 yaml。
+- 每个内建 tier 都通过门禁闭包校验（`gate_closure_ok`）。
 
 `rapid` 不是 tier recommendation 的候选项,不会被 `--tier auto` 自动选择。它是显式 opt-in 的快速流水线:当需求足够小、用户接受跳过独立计划/红测/审查时,用 `start --pipeline rapid` 选择。
-- 每个内建 tier 都通过门禁闭包校验（`gate_closure_ok`）。
 
 自定义流水线 yaml 形如：
 
