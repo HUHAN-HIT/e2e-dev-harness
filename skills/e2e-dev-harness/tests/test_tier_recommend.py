@@ -55,6 +55,22 @@ def test_explicit_lower_tier_confirmed_unblocks():
     assert result["downgrade"]["blocked"] is False
 
 
+def test_confirmation_without_nonempty_reason_does_not_confirm():
+    """F2: the reason IS the audit anchor, so the *pure function* — not just the CLI
+    layer — must enforce that a confirmation token carries a non-empty reason. A
+    reasonless/empty token must NOT count as a confirmed downgrade, otherwise a future
+    caller or verb could unblock a downgrade with no auditable provenance."""
+    for bad in ({}, {"source": "user"}, {"reason": ""}, {"reason": "   "}, {"reason": None}):
+        result = recommend.recommend_tier(
+            "add refund settlement to the ledger",
+            scope=None,
+            selected_tier="standard",
+            confirmation=bad,
+        )
+        assert result["downgrade"]["confirmed"] is False, bad
+        assert result["downgrade"]["blocked"] is True, bad
+
+
 def test_explicit_below_audited_unconfirmed_is_blocked():
     result = recommend.recommend_tier(
         "compliance audit of the incident response",

@@ -47,6 +47,17 @@ def _gitnexus_floor(scope: dict | None) -> tuple[str, list[str]]:
     return floor, reasons
 
 
+def _is_confirmed(confirmation: dict | None) -> bool:
+    """A1/F2: the reason IS the audit anchor, so a confirmation token only counts when
+    it carries a non-empty reason. Enforced here in the pure function — not just the CLI
+    layer — so no future caller or verb can unblock a downgrade with a reasonless or
+    empty token."""
+    if not confirmation:
+        return False
+    reason = confirmation.get("reason")
+    return isinstance(reason, str) and bool(reason.strip())
+
+
 def _option(tier: str, recommended: str, reasons: list[str]) -> dict:
     return {
         "tier": tier,
@@ -72,10 +83,11 @@ def recommend_tier(request_text: str, scope: dict | None = None, selected_tier: 
     requested_below = _rank(requested) < _rank(recommended)
     # A1: a tier below the recommendation is a downgrade that needs an explicit human
     # confirmation. `confirmed` is the single settled fact (carried by a confirmation
-    # token, not re-derived by the coordinator); `blocked` is the machine invariant
-    # `start` enforces — no longer a constant. auto never downgrades (requested ==
+    # token whose non-empty reason is the audit anchor — validated by `_is_confirmed`,
+    # not re-derived by the coordinator); `blocked` is the machine invariant `start`
+    # enforces — no longer a constant. auto never downgrades (requested ==
     # recommended), so it never blocks.
-    confirmed = requested_below and confirmation is not None
+    confirmed = requested_below and _is_confirmed(confirmation)
     blocked = requested_below and not confirmed
     selected = recommended if auto else requested
 
