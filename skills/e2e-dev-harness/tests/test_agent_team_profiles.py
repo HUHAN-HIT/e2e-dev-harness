@@ -13,6 +13,7 @@ def test_bundled_profiles_load_in_deterministic_order():
         "default-audited",
         "default-critical",
         "default-minimal",
+        "default-rapid",
         "default-standard",
     ]
     assert all(profile["schema"] == schema.PROFILE_SCHEMA for profile in profiles)
