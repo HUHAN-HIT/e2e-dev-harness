@@ -45,15 +45,25 @@ def run(args) -> tuple[int, dict]:
         # When the blocker is an unverified GitNexus impact, surface the degrade
         # option so the coordinator can ask the user to resolve OR approve degradation
         # (impact is on by default; a problem must not silently stall the run).
+        # strict 模式无降级路径(impact_bridge 拥有该策略并把 degradation_available
+        # 盖在 binding 上);next 纯数据驱动,绝不宣传 bridge 会拒绝的 approval。
         binding = state.get("impact_assessment")
         if binding and binding.get("status") == "blocked":
-            res["impact"] = {
-                "status": "blocked",
-                "degradation_available": True,
-                "approve_with": "approve-impact-degradation",
-                "message": ("GitNexus impact analysis could not be verified. Resolve the "
-                            "open questions, or ask the user to approve degradation."),
-            }
+            if binding.get("degradation_available", True):
+                res["impact"] = {
+                    "status": "blocked",
+                    "degradation_available": True,
+                    "approve_with": "approve-impact-degradation",
+                    "message": ("GitNexus impact analysis could not be verified. Resolve "
+                                "the open questions, or ask the user to approve degradation."),
+                }
+            else:
+                res["impact"] = {
+                    "status": "blocked",
+                    "degradation_available": False,
+                    "message": ("strict 模式无降级路径:请解决 IQ-* 问题"
+                                "(修订验收契约触发重评)。"),
+                }
     res["navigation_map"] = navigation.navigation_map(spine, state, repo)
     res["run_state"] = str(args.state)
     return 0, res

@@ -187,3 +187,30 @@ def test_impact_degradation_flow(tmp_path, monkeypatch):
     _submit(tmp_path, state_path, "PLANNED", "module_plan", mp_path)
     _code, nres = _next(tmp_path, state_path)
     assert nres["blocked_phase"] == "RED"   # advanced past PLANNED on degraded evidence
+
+
+def test_impact_strict_blocked_offers_no_degradation(tmp_path, monkeypatch):
+    """strict + blocked: next must NOT advertise a degradation path the bridge will
+    refuse — degradation_available is False and approve_with is absent."""
+    monkeypatch.setattr(
+        "e2e_harness.adapters.impact.gitnexus.GitNexusImpactProvider", _FakeProvider)
+    _FakeProvider.result = _blocked()
+    repo = tmp_path
+
+    code, res = start_cmd.run(_start_args(tmp_path, impact_mode="strict"))
+    assert code == 0
+    state_path = Path(res["run_state"])
+    run_dir = state_path.parent
+
+    _next(tmp_path, state_path)  # -> CLARIFIED (needs evidence)
+    clar = _write(repo, run_dir, "clarification.md", "# clarified\n")
+    contract = _write(repo, run_dir, "acceptance-contract.json",
+                      _contract(["checkout_handler"], marker="v1"))
+    _submit(tmp_path, state_path, "CLARIFIED", "clarification", clar)
+    _submit(tmp_path, state_path, "CLARIFIED", "acceptance_contract", contract)
+
+    _code, nres = _next(tmp_path, state_path)
+    assert nres["blocked_phase"] == "CLARIFIED"
+    assert nres["impact"]["status"] == "blocked"
+    assert nres["impact"]["degradation_available"] is False
+    assert "approve_with" not in nres["impact"]
