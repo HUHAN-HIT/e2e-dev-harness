@@ -37,6 +37,7 @@ Stop after tests pass and the manifest is written; do not perform R1/R2/R3 self-
   }
   ```
   约束: `red_tests` 与 `green_tests` 必须是**同一批**(红→绿,非各跑各的); `ac_coverage` 必须覆盖契约里**每一条** `AC-NNN`; `test_files` 里的每个测试都必须有真实断言。
+- **rapid pipeline**: 当 packet 的 pipeline/上下文显示当前 run 使用 `rapid` 流水线时,没有独立 RED worker,也不会调用 `e2e-harness-tdd-red` skill。你仍然必须保留 RED 的 evidence 语言并提交同一批 `red_tests` / `green_tests`: 在实施 worker 内先用变更前代码或等价的失败命令证据确认目标测试会失败,再实现并用同一批测试转绿。rapid 模式下 `test_substance.red_tests` 与 `green_tests` 的字段格式和普通 RED→IMPLEMENTED 流程一致,但 producer 是 `code-developer` 而不是 `test-case-developer`。当前 `test_substance` validator 只校验 manifest 字段、验收覆盖和测试实质,不检查 producer_id;如果实现时发现提交授权层额外检查 producer,必须同步放宽 rapid 的 producer 规则或回到计划修订。`test_substance` 的 `red_tests` 与 `green_tests` 仍必须是同一批节点;不能把未执行的测试名写进 manifest。
 - **多轨/按模块作业** (取向②, link ④): 复杂需求被 PLANNED 切成多个模块时,引擎会把你这一阶段展开成 `IMPLEMENTED#<module>` ——你被派给**某一个模块**。此时:
   - 只实现**当前模块**的范围(看 packet 的 phase 名 `IMPLEMENTED#<module>` 与 `module_plan` 里该模块的 `scope`/`acceptance_ids`),不要越界改其它模块。
   - 证据键**带模块后缀**:提交 `passing_tests#<module>` 与 `test_substance#<module>`(即 `--key passing_tests#<module>` / `--key test_substance#<module>`);闸按基键规则校验,但只判定**该模块**的门。
