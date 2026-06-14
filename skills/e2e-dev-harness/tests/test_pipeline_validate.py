@@ -99,3 +99,11 @@ def test_spine_must_start_at_created():
     ok, errors = pv.validate_spec(spec)
     assert ok is False
     assert any("start at CREATED" in e for e in errors)
+
+
+def test_rapid_builtin_spec_is_valid():
+    from e2e_harness import pipeline
+
+    ok, errors = pv.validate_spec(pipeline.load_spec("rapid"))
+
+    assert ok is True, errors

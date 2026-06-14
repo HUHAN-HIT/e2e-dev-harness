@@ -85,3 +85,13 @@ def test_spine_for_state_prefers_embedded_spec():
 def test_spine_for_state_falls_back_to_named_builtin():
     spine = pipeline.spine_for_state({"pipeline": "minimal"})
     assert [p.name for p in spine] == ["CREATED", "CLARIFIED", "RED", "IMPLEMENTED", "VERIFIED"]
+
+
+def test_rapid_loads_three_user_facing_steps():
+    spine = pipeline.build_spine("rapid")
+
+    assert [p.name for p in spine] == ["CREATED", "CLARIFIED", "IMPLEMENTED", "VERIFIED"]
+    implemented = next(p for p in spine if p.name == "IMPLEMENTED")
+    assert implemented.allows_code_write is True
+    assert implemented.exit_gate == ("passing_tests", "test_substance")
+    assert implemented.worker_skill == "e2e-harness-implementation"

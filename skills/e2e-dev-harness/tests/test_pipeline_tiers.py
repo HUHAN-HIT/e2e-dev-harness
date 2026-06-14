@@ -50,3 +50,12 @@ def test_unknown_pipeline_raises():
     import pytest
     with pytest.raises(KeyError):
         pipeline.active_phase_names("nope")
+
+
+def test_rapid_is_pipeline_not_tier():
+    names = pipeline.active_phase_names("rapid")
+
+    assert names == ["CREATED", "CLARIFIED", "IMPLEMENTED", "VERIFIED"]
+    assert "RED" not in names
+    assert "PLANNED" not in names
+    assert "REVIEWED" not in names
