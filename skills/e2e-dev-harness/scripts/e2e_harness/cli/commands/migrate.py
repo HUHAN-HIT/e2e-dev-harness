@@ -40,7 +40,9 @@ def run(args) -> tuple[int, dict]:
             rec["contract"] = {"exit_gate": present}
             stamped.append({"phase": phase.name, "exit_gate": present})
 
-    run_state.mutate(args.state, _mig)
+    # Slice 1: extend the chain iff this run has one (started with emission on).
+    run_state.mutate(args.state, _mig,
+                     events_path=run_state.events_path_if_active(args.state))
     return 0, {
         "schema": "e2e-dev-harness.migrate.v1",
         "state": str(args.state),

@@ -5,11 +5,13 @@ import contextlib
 import copy
 import json
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA = "e2e-dev-harness.run-state.v1"
+WITNESS_FAILURE_SCHEMA = "e2e-dev-harness.event-write-failure.v1"
 
 
 def _stamp(now: str | None = None) -> str:
@@ -41,6 +43,31 @@ def new_run_state(run_id: str, feature: str, request: str,
     if domain is not None:
         state["domain"] = domain
     return state
+
+
+def events_path_for(state_path: str | Path) -> Path:
+    """The chained event log that sits next to a run's `run-state.json`:
+    `<run_dir>/events.jsonl`. The ONE sibling-path convention shared by recovery,
+    `start`, and the four forward commands (Slice 1) so every emitter targets the
+    same file."""
+    return Path(state_path).parent / "events.jsonl"
+
+
+def write_failed_path_for(events_path: str | Path) -> Path:
+    """The sentinel a degraded witness leaves next to its log when a post-`save`
+    append fails: `<events_path>.write-failed`. `doctor --state` reads it to report
+    a KNOWN write failure (a precise cause) ahead of ambiguous drift (Slice 1.5)."""
+    return Path(str(events_path) + ".write-failed")
+
+
+def events_path_if_active(state_path: str | Path) -> Path | None:
+    """The forward-path emission switch (Slice 1): the run's events log IFF it
+    already exists, else None. `start` decides a run's witness once (lay it down,
+    or not); the four forward commands pass this to `mutate` so they extend an
+    existing chain but never bootstrap one mid-run — an old/opted-out run stays
+    event-free, with no partial chain for `detect_drift` to read as drift."""
+    p = events_path_for(state_path)
+    return p if p.exists() else None
 
 
 def load(path: str | Path) -> dict:
@@ -120,7 +147,48 @@ def mutate(path: str | Path, fn, now: str | None = None,
         fn(state)
         save(path, state, now=now)
         if events_path is not None:
+            # Slice 1.5 (R4): `save` already committed and is authoritative-in-
+            # practice, so the witness must never veto it. A post-save append
+            # failure is recorded loudly (sentinel + stderr) and SWALLOWED so the
+            # command reports the success that actually happened. The chain is now
+            # one (or more) behind for the run's life — reported, not silent.
             from e2e_harness.core import event_log, state_store
-            for event in state_store.derive_events(before, state):
-                event_log.append_event(events_path, event)
+            event = None
+            try:
+                for event in state_store.derive_events(before, state):
+                    event_log.append_event(events_path, event)
+            except Exception as exc:  # noqa: BLE001 — witness must not crash the authority
+                _record_witness_failure(events_path, state, event, exc)
         return state
+
+
+def _record_witness_failure(events_path, state: dict, event, exc: Exception) -> None:
+    """R4 attribution: name the first failed append in a sibling
+    `events.jsonl.write-failed` sentinel and warn on stderr, then return so
+    `mutate` reports the committed success. Every step is best-effort — if even
+    the sentinel write fails the warning still surfaces, and `detect_drift`
+    independently catches the chain lag (the sentinel is attribution, not a
+    correctness crutch). Chain healing is out of Phase 1 scope (it approaches
+    Option C)."""
+    reason = f"{type(exc).__name__}: {exc}"
+    etype = event.get("type") if isinstance(event, dict) else None
+    try:
+        from e2e_harness.core import event_log
+        seq = len(event_log.read_events(events_path)) + 1
+    except Exception:  # noqa: BLE001 — diagnostic only; never re-raise from here
+        seq = None
+    sentinel = write_failed_path_for(events_path)
+    try:
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text(json.dumps({
+            "schema": WITNESS_FAILURE_SCHEMA,
+            "run_id": state.get("run_id"),
+            "expected_sequence": seq,
+            "type": etype,
+            "reason": reason,
+        }, ensure_ascii=False), encoding="utf-8")
+    except Exception:  # noqa: BLE001 — sentinel is best-effort; warning still fires
+        pass
+    print(f"[e2e-dev-harness] WARNING: event witness append failed for "
+          f"{events_path} ({reason}); run-state saved (authoritative), the event "
+          f"chain is now behind — see {sentinel}", file=sys.stderr)

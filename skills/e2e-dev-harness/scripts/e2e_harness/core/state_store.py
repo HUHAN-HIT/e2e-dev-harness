@@ -23,9 +23,11 @@ def derive_events(before: dict, after: dict) -> list[dict]:
     phase gate events in sorted phase order, so a writer that appends these to
     the chained event log produces a stable, reproducible hash chain.
 
-    Only the event types `replay_events` consumes are emitted; richer events
-    (dispatch.*, verification.replayed, recovery.*) are intentionally out of
-    scope for this minimal seam.
+    Only the event types `replay_events` consumes are emitted: run.started,
+    phase.submitted, gate.passed/failed, and dispatch.dispatched (Slice 2 — the
+    one `dispatch` value `detect_drift` compares). Richer witness events
+    (verification.replayed, recovery.*, dispatch metadata) remain out of scope for
+    this minimal seam — they have no `detect_drift` consumer.
     """
     run_id = after.get("run_id")
     events: list[dict] = []
@@ -66,6 +68,12 @@ def derive_events(before: dict, after: dict) -> list[dict]:
         elif dispatch == "failed":
             events.append(_tag({"type": "gate.failed", "phase": name,
                                 "reason": rec.get("blocker")}))
+        elif dispatch == "dispatched":
+            # Slice 2: the `dispatch` verb's state. detect_drift COMPARES the
+            # per-phase `dispatch` field, so this value MUST have an event or a
+            # dispatched phase reads as false drift. Distinct `type` (not gate.*)
+            # keeps the gate vocabulary unoverloaded.
+            events.append(_tag({"type": "dispatch.dispatched", "phase": name}))
     return events
 
 
@@ -84,6 +92,9 @@ def replay_events(events: list[dict]) -> dict:
             rec = state.setdefault("phases", {}).setdefault(phase, {})
             rec["dispatch"] = "failed"
             rec["blocker"] = event.get("reason")
+        elif etype == "dispatch.dispatched" and phase:
+            # Slice 2: inverse of derive's dispatch.dispatched branch.
+            state.setdefault("phases", {}).setdefault(phase, {})["dispatch"] = "dispatched"
     return state
 
 

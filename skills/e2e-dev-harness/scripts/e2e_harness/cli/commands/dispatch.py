@@ -157,5 +157,7 @@ def run(args) -> tuple[int, dict]:
             rec = s.setdefault("phases", {}).setdefault(s.get("current_phase"), {})
             rec["dispatch"] = dispatched
 
-    run_state.mutate(args.state, _mark_dispatched)
+    # Slice 1: extend the chain iff this run has one (started with emission on).
+    run_state.mutate(args.state, _mark_dispatched,
+                     events_path=run_state.events_path_if_active(args.state))
     return 0, packet

@@ -140,6 +140,94 @@ def test_mutate_without_events_path_writes_no_sidecar(tmp_path):
     assert leftovers == []
 
 
+# --- Slice 1: events_path_for centralizes the sibling-path convention ----------
+# Recovery, start, and the four forward commands must agree on ONE location for
+# the chained log: <run_dir>/events.jsonl, next to run-state.json.
+
+
+def test_events_path_for_is_run_dir_sibling(tmp_path):
+    sp = tmp_path / "docs" / "agent-runs" / "r1" / "run-state.json"
+    assert run_state.events_path_for(sp) == sp.parent / "events.jsonl"
+
+
+def test_events_path_for_accepts_str(tmp_path):
+    """The CLI passes args.state as a str; the helper must accept it."""
+    sp = tmp_path / "run-state.json"
+    assert run_state.events_path_for(str(sp)) == tmp_path / "events.jsonl"
+
+
+# --- Slice 1.5: witness write-failure is loud and attributed (R4) -------------
+# `save` then derive+append are NOT atomic. A post-save append failure must NOT
+# veto the authoritative write; instead it leaves a `events.jsonl.write-failed`
+# sentinel naming the cause, warns on stderr, and swallows the exception so the
+# command reports the success that actually committed.
+
+
+def test_write_failed_path_for_is_events_sibling(tmp_path):
+    ev = tmp_path / "events.jsonl"
+    assert run_state.write_failed_path_for(ev) == tmp_path / "events.jsonl.write-failed"
+
+
+def test_mutate_witness_failure_does_not_roll_back_save(tmp_path, monkeypatch, capsys):
+    from e2e_harness.core import event_log
+    p = tmp_path / "run-state.json"
+    events = tmp_path / "events.jsonl"
+    run_state.save(p, run_state.new_run_state("r1", "feat", "req"))
+
+    def boom(path, payload):
+        raise OSError("disk full")
+    monkeypatch.setattr(event_log, "append_event", boom)
+
+    # The authority must commit despite the witness failure (no exception out).
+    saved = run_state.mutate(
+        p, lambda s: s.__setitem__("current_phase", "CLARIFIED"), events_path=events)
+    assert saved["current_phase"] == "CLARIFIED"
+    assert run_state.load(p)["current_phase"] == "CLARIFIED"   # persisted, not rolled back
+
+    # Attribution: a sentinel names run_id, the failed event type, sequence, reason.
+    sentinel = tmp_path / "events.jsonl.write-failed"
+    assert sentinel.exists()
+    rec = json.loads(sentinel.read_text(encoding="utf-8"))
+    assert rec["run_id"] == "r1"
+    assert rec["type"] == "phase.submitted"      # current_phase advance -> phase.submitted
+    assert rec["expected_sequence"] == 1
+    assert "disk full" in rec["reason"]
+
+    # Loud: a warning surfaced on stderr.
+    assert "witness" in capsys.readouterr().err.lower()
+
+
+def test_mutate_witness_success_writes_no_sentinel(tmp_path):
+    """The sentinel is ONLY for failure: a healthy append leaves no .write-failed."""
+    p = tmp_path / "run-state.json"
+    events = tmp_path / "events.jsonl"
+    run_state.save(p, run_state.new_run_state("r1", "feat", "req"))
+    run_state.mutate(p, lambda s: s.__setitem__("current_phase", "CLARIFIED"), events_path=events)
+    assert not (tmp_path / "events.jsonl.write-failed").exists()
+
+
+def test_run_state_bytes_identical_with_and_without_events(tmp_path):
+    """G4 / acceptance #4: emission is purely additive — run-state.json's OWN bytes
+    are identical whether or not the witness is active; the only difference is the
+    sibling events.jsonl that the active run also writes."""
+    def build(dirname, active):
+        d = tmp_path / dirname
+        d.mkdir()
+        p = d / "run-state.json"
+        run_state.save(p, run_state.new_run_state("r1", "feat", "req",
+                                                  now="20260613T000000Z"))
+        ev = run_state.events_path_for(p) if active else None
+        run_state.mutate(p, lambda s: s.__setitem__("current_phase", "CLARIFIED"),
+                         now="20260613T010101Z", events_path=ev)
+        return p.read_bytes()
+
+    with_events = build("with", True)
+    without_events = build("without", False)
+    assert with_events == without_events
+    assert run_state.events_path_for(tmp_path / "with" / "run-state.json").exists()
+    assert not run_state.events_path_for(tmp_path / "without" / "run-state.json").exists()
+
+
 def test_submit_evidence_stamps_contract_when_gate_complete():
     """F2: submit_evidence stamps the contract-in-force only once the phase gate is
     complete, idempotently. The exit_gate parameter is OPTIONAL (default None ->

@@ -70,6 +70,8 @@ def run(args) -> tuple[int, dict]:
             worker_id=getattr(args, "worker_id", None),
             authorized_producers=producers or None,
         ),
+        # Slice 1: extend the chain iff this run has one (started with emission on).
+        events_path=run_state.events_path_if_active(args.state),
     )
     return 0, {"schema": "e2e-dev-harness.submit.v1", "phase": args.phase,
                "key": args.key, "recorded": args.path,

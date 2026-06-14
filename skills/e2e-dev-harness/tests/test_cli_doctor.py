@@ -325,3 +325,130 @@ def test_doctor_state_blocked_task_stays_null_without_artifacts(tmp_path):
     assert code == 2
     assert payload["blocked_task"] is None
     assert payload["first_fault"]["task_id"] is None
+
+
+# --- Slice 3: doctor --state cross-checks the event witness ------------------
+# diagnose_run gains a control-plane integrity check at the FRONT of the fault
+# ladder: a tampered / drifted / known-write-failed control plane invalidates
+# every downstream diagnosis, so it outranks missing-evidence / failed-gate. The
+# two dead functions (verify_chain, detect_drift) become live here. Absent log =>
+# the check self-skips (covered by every test above, which carries no events.jsonl).
+
+from e2e_harness.core import event_log as _event_log  # noqa: E402
+from e2e_harness.core import run_state as _run_state   # noqa: E402
+
+
+def _healthy_state(tmp_path):
+    """A domain-UNBLOCKED run (evidence present, dispatch done) so the ONLY fault a
+    test can surface is a control-plane one."""
+    sp = tmp_path / "run-state.json"
+    sp.write_text(json.dumps({
+        "schema": "e2e-dev-harness.run-state.v1",
+        "run_id": "r1",
+        "current_phase": "IMPLEMENTED",
+        "phases": {"IMPLEMENTED": {
+            "evidence": {"passing_tests": {"path": "x"}, "test_substance": {"path": "y"}},
+            "dispatch": "done"}},
+    }), encoding="utf-8")
+    return sp
+
+
+def _clean_chain(sp):
+    ep = _run_state.events_path_for(sp)
+    _event_log.append_event(ep, {"type": "run.started", "run_id": "r1"})
+    _event_log.append_event(ep, {"type": "phase.submitted", "run_id": "r1", "phase": "IMPLEMENTED"})
+    _event_log.append_event(ep, {"type": "gate.passed", "run_id": "r1", "phase": "IMPLEMENTED"})
+    return ep
+
+
+def _doctor_state(sp, tmp_path):
+    args = SimpleNamespace(project_root=str(tmp_path), runtime="claude", strict=False,
+                           state=str(sp), repo=".")
+    return doctor.run(args)
+
+
+def test_doctor_state_clean_chain_adds_no_control_plane_fault(tmp_path):
+    """A healthy run with a matching chain is not blocked — the live verify_chain +
+    detect_drift agree with the projection, so no false control_plane fault."""
+    sp = _healthy_state(tmp_path)
+    _clean_chain(sp)
+    code, payload = _doctor_state(sp, tmp_path)
+    assert code == 0
+    assert payload["run_blocked"] is False
+    assert payload["first_fault"] is None
+
+
+def test_doctor_state_reports_tampered_event_as_control_plane_drift(tmp_path):
+    """2a: editing a non-tail event breaks the forward chain -> verify_chain reports
+    event-hash-mismatch -> doctor surfaces control_plane_drift, run blocked."""
+    sp = _healthy_state(tmp_path)
+    ep = _clean_chain(sp)
+    lines = ep.read_text(encoding="utf-8").splitlines()
+    ep.write_text(lines[0] + "\n"
+                  + lines[1].replace("phase.submitted", "gate.failed") + "\n"
+                  + lines[2] + "\n", encoding="utf-8")
+    code, payload = _doctor_state(sp, tmp_path)
+    assert code == 2
+    assert payload["run_blocked"] is True
+    assert payload["first_fault"]["kind"] == "control_plane_drift"
+    assert "event-hash-mismatch" in payload["first_fault"]["message"]
+    assert payload["first_fault"]["task_id"] is None
+    # operator-gated recovery: the next step is read-only, never an auto-mutating verb.
+    assert "dispatch" not in (payload["next_legal_command"] or "")
+
+
+def test_doctor_state_reports_drift_after_truncate_and_reanchor(tmp_path):
+    """2b: drop the trailing gate.passed and rewrite the .head anchor so verify_chain
+    PASSES — the only remaining witness is projection drift against run-state."""
+    sp = _healthy_state(tmp_path)
+    ep = _clean_chain(sp)
+    lines = ep.read_text(encoding="utf-8").splitlines()
+    ep.write_text(lines[0] + "\n" + lines[1] + "\n", encoding="utf-8")
+    kept = _event_log.read_events(ep)
+    _event_log._write_anchor(ep, len(kept), kept[-1]["event_hash"])
+    ok, _ = _event_log.verify_chain(ep)
+    assert ok   # sanity: the re-anchored truncation is self-consistent
+    code, payload = _doctor_state(sp, tmp_path)
+    assert code == 2
+    assert payload["first_fault"]["kind"] == "control_plane_drift"
+    assert payload["first_fault"]["message"].startswith("drift:")
+
+
+def test_doctor_state_write_failed_sentinel_outranks_drift(tmp_path):
+    """2c: a recorded write-failure (sentinel) is a PRECISE cause and must outrank
+    ambiguous drift — even when the chain would also drift."""
+    sp = _healthy_state(tmp_path)
+    ep = _clean_chain(sp)
+    lines = ep.read_text(encoding="utf-8").splitlines()      # make it ALSO drift
+    ep.write_text(lines[0] + "\n" + lines[1] + "\n", encoding="utf-8")
+    kept = _event_log.read_events(ep)
+    _event_log._write_anchor(ep, len(kept), kept[-1]["event_hash"])
+    _run_state.write_failed_path_for(ep).write_text(json.dumps({
+        "schema": "e2e-dev-harness.event-write-failure.v1", "run_id": "r1",
+        "expected_sequence": 3, "type": "gate.passed", "reason": "OSError: disk full"}),
+        encoding="utf-8")
+    code, payload = _doctor_state(sp, tmp_path)
+    assert code == 2
+    assert payload["first_fault"]["kind"] == "event_log_write_failed"
+    assert "dispatch" not in (payload["next_legal_command"] or "")
+
+
+def test_doctor_state_control_plane_drift_outranks_missing_evidence(tmp_path):
+    """Precedence over domain faults: a run that is ALSO missing evidence still
+    reports control_plane_drift first — a tampered plane invalidates the rest."""
+    sp = tmp_path / "run-state.json"
+    sp.write_text(json.dumps({
+        "schema": "e2e-dev-harness.run-state.v1", "run_id": "r1",
+        "current_phase": "IMPLEMENTED",
+        "phases": {"IMPLEMENTED": {"evidence": {}}},   # domain fault: missing_evidence
+    }), encoding="utf-8")
+    ep = _run_state.events_path_for(sp)
+    _event_log.append_event(ep, {"type": "run.started", "run_id": "r1"})
+    _event_log.append_event(ep, {"type": "phase.submitted", "run_id": "r1", "phase": "IMPLEMENTED"})
+    lines = ep.read_text(encoding="utf-8").splitlines()
+    ep.write_text(lines[0] + "\n" + lines[1].replace("IMPLEMENTED", "HIJACKED") + "\n",
+                  encoding="utf-8")
+    code, payload = _doctor_state(sp, tmp_path)
+    assert code == 2
+    assert payload["first_fault"]["kind"] == "control_plane_drift"
+    assert "event-hash-mismatch" in payload["first_fault"]["message"]

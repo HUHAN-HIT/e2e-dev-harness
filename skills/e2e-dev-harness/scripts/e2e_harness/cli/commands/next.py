@@ -29,7 +29,9 @@ def run(args) -> tuple[int, dict]:
                 res["undelivered"] = undelivered
         state.pop("_run_state_path", None)
 
-    state = run_state.mutate(args.state, _advance)
+    # Slice 1: extend the chain iff this run has one (started with emission on).
+    state = run_state.mutate(args.state, _advance,
+                             events_path=run_state.events_path_if_active(args.state))
     res = holder["res"]
     # fix A3: when CLARIFIED is the blocker, name the still-open questions so the
     # re-clarify loop is actionable (ask -> user answers -> resubmit -> advance)

@@ -136,6 +136,16 @@ flowchart TD
 
 ## Target Lifecycle Model
 
+> **Conceptual diagram only.** `REWORK` and `WAITING_DISPATCH` below are
+> illustrative states, **not** real `Phase`/enum/records — neither is ever a
+> `current_phase` value or a `doctor --state` `blocked_phase`. `REWORK` is the
+> *side effect* of a verify failure (clear the target phase's evidence, write
+> `rework_required` + `superseded_evidence`, roll `current_phase` back to the
+> nearest writable phase); `WAITING_DISPATCH` is a *projected operational state*
+> (dispatch guidance × runtime capability × artifact readiness). The real
+> mechanics are in *Current Checkout Transition Mechanics* immediately below; all
+> operator-facing diagnosis derives from live state, never from this diagram.
+
 ```mermaid
 stateDiagram-v2
   [*] --> CREATED
@@ -280,6 +290,23 @@ Required output fields:
   "coordinator_may_write_worker_outputs": false
 }
 ```
+
+Field semantics:
+
+- `blocked_phase` / `first_fault.phase` are always **real lifecycle phases**
+  (`CREATED`/`CLARIFIED`/`PLANNED`/`RED`/`IMPLEMENTED`/`REVIEWED`/`VERIFIED`,
+  possibly module-namespaced as `IMPLEMENTED#auth`). They are **never** `REWORK`
+  or `WAITING_DISPATCH` — those are not phases (see *Target Lifecycle Model*): a
+  rework rollback surfaces as `first_fault.kind: rework_required` *on the writable
+  phase the cursor rolled back to*, and an un-dispatchable runtime leaves the phase
+  in its implicit `pending` dispatch state, not a `WAITING_DISPATCH` phase.
+- `first_fault.kind` is one of: `control_plane_drift`, `event_log_write_failed`
+  (control-plane integrity faults, highest precedence — a tampered/drifted/known-
+  write-failed event witness invalidates the rest of the diagnosis), then
+  `rework_required`, `missing_evidence`, `failed_gate`. For the two control-plane
+  kinds, `next_legal_command` is **read-only** (re-run `doctor --state`, inspect the
+  log) and `blocked_task` is `null` — recovery of a drifted plane is operator-gated,
+  never an auto-mutating verb.
 
 ### `recover`
 

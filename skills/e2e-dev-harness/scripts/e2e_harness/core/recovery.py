@@ -26,7 +26,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from e2e_harness.core import engine, event_log, run_state, state_diagnosis
+from e2e_harness.core import engine, event_log, run_state, state_diagnosis, state_store
 
 PLAN_SCHEMA = "e2e-dev-harness.recovery-plan.v1"
 APPLIED_SCHEMA = "e2e-dev-harness.recovery-applied.v1"
@@ -41,10 +41,6 @@ class RecoveryRefused(Exception):
 
 def _sha256_file(path: str | Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
-def _sibling_events_path(state_path: str | Path) -> Path:
-    return Path(state_path).parent / "events.jsonl"
 
 
 def plan_recovery(state: dict, state_path: str, repo: str = ".") -> dict:
@@ -110,7 +106,18 @@ def apply_recovery(state_path: str, approval_path: str | None, repo: str = ".",
         raise RecoveryRefused(f"approved evidence file is missing: {rel}")
 
     if events_path is None:
-        events_path = _sibling_events_path(state_path)
+        events_path = run_state.events_path_for(state_path)
+
+    # Slice 3 interaction: anchor the recovery audit trail on a COMPLETE witness.
+    # An old run (created before forward emission, Phase 1) has no chain; recording
+    # only the recovery events would leave the chain without run.started/current_phase
+    # and read as control_plane_drift at the next `doctor --state`. Seed the head from
+    # the current state first (the same projection start/mutate use) so the recovery
+    # events append onto a faithful witness. A run that already carries a chain (a run
+    # started after the upgrade) is left untouched — no double-seed.
+    if not Path(events_path).exists():
+        for ev in state_store.derive_events({}, run_state.load(state_path)):
+            event_log.append_event(events_path, ev)
 
     input_hash = _sha256_file(state_path)
     event_log.append_event(events_path, {

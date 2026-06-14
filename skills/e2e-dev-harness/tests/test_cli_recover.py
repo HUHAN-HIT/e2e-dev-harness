@@ -118,3 +118,35 @@ def test_recover_apply_with_approval_registers_evidence_and_records_hashes(tmp_p
     assert "recovery.applied" in types
     ok, reason = event_log.verify_chain(tmp_path / "events.jsonl")
     assert ok, reason
+
+
+def test_doctor_after_recover_on_old_run_is_not_false_control_plane_drift(tmp_path):
+    """Slice 3 interaction: an OLD run (no prior chain) recovered via apply gets a
+    bootstrapped witness. The next doctor --state must NOT read it as
+    control_plane_drift — the recovery audit events must anchor on a COMPLETE chain
+    (run.started + current phase), else a recovery-only chain under-claims
+    current_phase and false-blocks a legitimately-recovered run."""
+    from types import SimpleNamespace
+    from e2e_harness.cli.commands import doctor
+    p = _blocked_state(tmp_path)
+    (tmp_path / "handoffs").mkdir()
+    (tmp_path / "handoffs" / "passing.json").write_text('{"ran": true}', encoding="utf-8")
+    ap = _approval(tmp_path)
+    code, _ = recover.run(SimpleNamespace(
+        state=str(p), repo=str(tmp_path), plan=False, apply=True, approval=str(ap)))
+    assert code == 0
+    # the witness now exists; the chain must verify AND not drift vs run-state.
+    ok, why = event_log.verify_chain(tmp_path / "events.jsonl")
+    assert ok, why
+    from e2e_harness.core import state_store
+    ok, why = state_store.detect_drift(
+        event_log.read_events(tmp_path / "events.jsonl"), run_state.load(p))
+    assert ok, why
+    dcode, dpayload = doctor.run(SimpleNamespace(
+        project_root=str(tmp_path), runtime="claude", strict=False,
+        state=str(p), repo=str(tmp_path)))
+    # the run is still domain-blocked (test_substance missing) — that's fine — but it
+    # must NOT be a control-plane fault from the recovery-bootstrapped chain.
+    if dpayload["first_fault"]:
+        assert dpayload["first_fault"]["kind"] not in (
+            "control_plane_drift", "event_log_write_failed"), dpayload["first_fault"]

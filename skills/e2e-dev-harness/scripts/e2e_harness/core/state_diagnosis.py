@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from e2e_harness.core import lifecycle, multitrack
+from e2e_harness.core import event_log, lifecycle, multitrack, run_state, state_store
 
 
 def _resolve_blocked_task(state_path: str, blocked_phase: str | None) -> str | None:
@@ -62,6 +62,41 @@ def _required_keys_for_phase(phase_name: str | None) -> list[str]:
     if phase is None:
         return []
     return list(phase.exit_gate) if mod is None else [f"{k}#{mod}" for k in phase.exit_gate]
+
+
+def _control_plane_fault(state: dict, state_path: str, current: str | None) -> dict | None:
+    """Slice 3: the front-of-ladder control-plane integrity check that makes the two
+    dormant functions (`verify_chain`, `detect_drift`) live. A tampered, drifted, or
+    known-write-failed event witness invalidates EVERY downstream diagnosis, so it
+    outranks missing-evidence / failed-gate.
+
+    Precedence (highest first): a recorded write failure (the `events.jsonl.write-failed`
+    sentinel — a PRECISE cause) > chain tamper / truncation (`verify_chain`) or
+    projection drift (`detect_drift`) with no recorded cause. A known write failure
+    must not be reported as ambiguous drift.
+
+    Absent log => None: a run created before Phase 1, or `start` before its witness
+    was seeded, records nothing — the check self-skips, matching detect_drift's
+    not-yet-recorded != truncated rule. Returns the fault dict, or None when clean."""
+    events_path = run_state.events_path_for(state_path)
+    sentinel = run_state.write_failed_path_for(events_path)
+    if sentinel.exists():
+        reason = None
+        try:
+            reason = json.loads(sentinel.read_text(encoding="utf-8")).get("reason")
+        except (OSError, ValueError):
+            pass
+        return {"kind": "event_log_write_failed", "phase": current, "task_id": None,
+                "message": reason or f"event witness append failed (see {sentinel.name})"}
+    if not events_path.exists():
+        return None
+    ok, why = event_log.verify_chain(events_path)
+    if ok:
+        ok, why = state_store.detect_drift(event_log.read_events(events_path), state)
+    if not ok:
+        return {"kind": "control_plane_drift", "phase": current, "task_id": None,
+                "message": why}
+    return None
 
 
 def diagnose_run(state: dict, state_path: str, repo: str = ".") -> dict:
@@ -137,6 +172,15 @@ def diagnose_run(state: dict, state_path: str, repo: str = ".") -> dict:
     # block is cleared by dispatching the blocked phase's worker, i.e. `dispatch`.
     next_cmd = (f"e2e-dev-harness dispatch --state {state_path} --repo {repo}"
                 if first else None)
+    # Slice 3: a control-plane fault outranks every domain fault — a tampered/drifted
+    # witness invalidates the rest of the diagnosis. Its next step is READ-ONLY
+    # (re-run doctor --state, inspect the log); recovery of a drifted plane stays
+    # operator-gated, never an auto-mutating verb, and names no blocked worker.
+    cp_fault = _control_plane_fault(state, state_path, current)
+    if cp_fault is not None:
+        first = cp_fault
+        task_id = None
+        next_cmd = f"e2e-dev-harness doctor --state {state_path} --repo {repo}"
     return {
         "schema": "e2e-dev-harness.doctor-state.v1",
         "diagnosis_ready": True,

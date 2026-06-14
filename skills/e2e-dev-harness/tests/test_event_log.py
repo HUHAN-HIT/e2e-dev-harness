@@ -298,3 +298,89 @@ def test_derive_then_replay_reconstructs_key_fields(tmp_path):
     assert projected["phases"]["IMPLEMENTED"]["dispatch"] == "done"
     assert projected["phases"]["REVIEWED"]["dispatch"] == "failed"
     assert projected["phases"]["REVIEWED"]["blocker"] == "needs rework"
+
+
+# --- Slice 2: close the `dispatched` drift gap -------------------------------
+# `detect_drift` COMPARES the per-phase `dispatch` field, but derive/replay only
+# knew done/failed — so a phase sitting at `dispatched` (the `dispatch` verb's
+# state) appeared in run-state yet never in the replayed chain => false drift the
+# moment forward emission turned on. Closing it requires extending derive AND
+# replay symmetrically so they stay strict inverses.
+
+
+def test_derive_emits_dispatch_dispatched_on_transition(tmp_path):
+    before = {"run_id": "r1", "current_phase": "IMPLEMENTED", "phases": {}}
+    after = {"run_id": "r1", "current_phase": "IMPLEMENTED",
+             "phases": {"IMPLEMENTED": {"dispatch": "dispatched"}}}
+    events = state_store.derive_events(before, after)
+    assert [e["type"] for e in events] == ["dispatch.dispatched"]
+    assert events[0]["phase"] == "IMPLEMENTED"
+    assert events[0]["run_id"] == "r1"
+
+
+def test_replay_consumes_dispatch_dispatched(tmp_path):
+    events = [
+        {"type": "run.started", "run_id": "r1"},
+        {"type": "dispatch.dispatched", "run_id": "r1", "phase": "IMPLEMENTED"},
+    ]
+    projected = state_store.replay_events(events)
+    assert projected["phases"]["IMPLEMENTED"]["dispatch"] == "dispatched"
+
+
+def test_dispatched_round_trips_derive_then_replay(tmp_path):
+    """The strict-inverse invariant for the new value: replay(derive(diff))
+    reproduces `dispatched`."""
+    before = {"run_id": "r1", "current_phase": "IMPLEMENTED", "phases": {}}
+    after = {"run_id": "r1", "current_phase": "IMPLEMENTED",
+             "phases": {"IMPLEMENTED": {"dispatch": "dispatched"}}}
+    projected = state_store.replay_events(state_store.derive_events(before, after))
+    assert projected["phases"]["IMPLEMENTED"]["dispatch"] == "dispatched"
+
+
+def test_dispatched_chain_yields_no_false_drift(tmp_path):
+    """The whole point of Slice 2: a clean chain that recorded `dispatch.dispatched`
+    replays to exactly the run-state a `dispatch` produced — no false
+    `drift:phases.*.dispatch`. The chain reaches IMPLEMENTED via the normal
+    phase.submitted advance first, exactly as a real run does before `dispatch`."""
+    events = [
+        {"type": "run.started", "run_id": "r1"},
+        {"type": "phase.submitted", "run_id": "r1", "phase": "IMPLEMENTED"},
+        {"type": "dispatch.dispatched", "run_id": "r1", "phase": "IMPLEMENTED"},
+    ]
+    real = {"run_id": "r1", "current_phase": "IMPLEMENTED",
+            "phases": {"IMPLEMENTED": {"dispatch": "dispatched"}}}
+    ok, reason = state_store.detect_drift(events, real)
+    assert ok is True
+    assert reason is None
+
+
+def test_dispatched_in_runstate_without_event_still_drifts(tmp_path):
+    """Guard the load-bearing-ness of the dispatch.dispatched event: drop it from
+    the chain and the dispatched phase run-state still carries reads as under-claim
+    drift — proving Slice 2's event is what closes the gap, not a relaxed check."""
+    events = [
+        {"type": "run.started", "run_id": "r1"},
+        {"type": "phase.submitted", "run_id": "r1", "phase": "IMPLEMENTED"},
+        # dispatch.dispatched dropped
+    ]
+    real = {"run_id": "r1", "current_phase": "IMPLEMENTED",
+            "phases": {"IMPLEMENTED": {"dispatch": "dispatched"}}}
+    ok, reason = state_store.detect_drift(events, real)
+    assert ok is False
+    assert reason == "drift:phases.IMPLEMENTED.dispatch"
+
+
+def test_derive_emits_one_dispatch_event_per_phase_sorted(tmp_path):
+    """A module-band `_mark_dispatched` sets several phase records at once; derive
+    must emit one `dispatch.dispatched` per phase, in sorted (deterministic) order
+    so the hash chain is reproducible."""
+    before = {"run_id": "r1", "current_phase": "IMPLEMENTED#auth", "phases": {}}
+    after = {"run_id": "r1", "current_phase": "IMPLEMENTED#auth", "phases": {
+        "IMPLEMENTED#billing": {"dispatch": "dispatched"},
+        "IMPLEMENTED#auth": {"dispatch": "dispatched"},
+    }}
+    events = state_store.derive_events(before, after)
+    assert [(e["type"], e["phase"]) for e in events] == [
+        ("dispatch.dispatched", "IMPLEMENTED#auth"),
+        ("dispatch.dispatched", "IMPLEMENTED#billing"),
+    ]

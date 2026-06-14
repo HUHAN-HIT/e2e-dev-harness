@@ -7,6 +7,8 @@ block. Backend is the default adapter and emits neither, so a backend run is
 byte-identical to pre-U5 (parity)."""
 from __future__ import annotations
 
+import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -38,6 +40,36 @@ def _preview_result(*, feature: str, adapter_name: str, tier_recommendation: dic
             "choice_arg": "--tier <minimal|standard|critical|audited>",
         },
     }
+
+
+def _seed_event_log(path: Path, st: dict, run_id: str) -> None:
+    """Slice 1: fix the run's witness once, at creation. Default (env unset) seeds
+    `events.jsonl` (+ `.head` anchor) with the FULL initial transition — run.started
+    plus phase.submitted(CREATED), derived from the same projection `mutate` uses —
+    so the chain covers the run from birth and the projection already carries
+    current_phase (no false drift before the first `next`). E2E_HARNESS_DISABLE_EVENTS=1
+    leaves the run permanently event-free (CI / perf opt-out); the four forward
+    commands then see no sibling and skip emission.
+
+    Best-effort: the witness must never veto run creation. run-state.json is already
+    saved (authoritative); a seeding failure warns, drops any partial sidecar so no
+    half-chain can read as drift, and leaves the run event-free."""
+    if os.environ.get("E2E_HARNESS_DISABLE_EVENTS") == "1":
+        return
+    from e2e_harness.core import event_log, state_store
+    events_path = run_state.events_path_for(path)
+    try:
+        for event in state_store.derive_events({}, st):
+            event_log.append_event(events_path, event)
+    except Exception as exc:  # noqa: BLE001 — never crash `start` over the witness
+        for stray in (events_path, Path(str(events_path) + ".head")):
+            try:
+                stray.unlink()
+            except OSError:
+                pass
+        print(f"[e2e-dev-harness] WARNING: could not seed event witness for "
+              f"{run_id} ({type(exc).__name__}: {exc}); run is event-free",
+              file=sys.stderr)
 
 
 def run(args) -> tuple[int, dict]:
@@ -89,6 +121,7 @@ def run(args) -> tuple[int, dict]:
         pipeline_spec=merged if non_default else None, domain=dom)
     st["tier_recommendation"] = tier_recommendation
     run_state.save(path, st)
+    _seed_event_log(path, st, run_id)
     return 0, {"schema": "e2e-dev-harness.start.v1", "run_id": run_id,
                "run_state": str(path), "current_phase": "CREATED",
                "tier": tier, "pipeline": pipeline_ref, "tier_reasons": reasons,
