@@ -1,0 +1,16 @@
+schema: e2e-dev-harness.agent-team-profile.v1
+name: default-rapid
+description: Rapid pipeline with clarification, implementation, and verification only.
+roles:
+  requirements-clarifier:
+    skill: e2e-harness-clarification
+    runtime_subagent_type: requirements-clarifier
+    max_workers: 1
+  code-developer:
+    skill: e2e-harness-implementation
+    runtime_subagent_type: code-developer
+    max_workers: 1
+  coverage-reviewer:
+    skill: e2e-harness-completion
+    runtime_subagent_type: coverage-reviewer
+    max_workers: 1

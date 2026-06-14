@@ -148,3 +148,21 @@ def test_manual_runtime_blocks_without_marking_dispatched(tmp_path):
     assert state["phases"].get("REVIEWED", {}).get("dispatch") is None
     assert result["agent_team_plan"]["execution_model"] == "reviewer-fanout"
     assert len(result["worker_descriptors"]) == 3
+
+
+def test_rapid_pipeline_dispatch_auto_selects_rapid_profile(tmp_path):
+    state = run_state.new_run_state(
+        "r1", "feature", "request", tier="standard", pipeline="rapid")
+    state["current_phase"] = "IMPLEMENTED"
+    path = tmp_path / "docs" / "agent-runs" / "r1" / "run-state.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    code, result = dispatch_cmd.run(Args(path, runtime="codex"))
+
+    assert code == 0
+    assert result["agent_team_plan"]["profile"] == "default-rapid"
+    assert result["role"] == "code-developer"
+    assert result["skill"] == "e2e-harness-implementation"
+    assert result["expected_outputs"] == ["passing_tests", "test_substance"]
+    assert result["runtime_subagent_type"] == "code-developer"

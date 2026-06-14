@@ -53,7 +53,7 @@ def _default_profile(state: dict) -> str:
     # happens without an explicit --team-profile. `adversarial` is opt-in via
     # --pipeline (not a --tier choice), so it pairs by pipeline name only.
     pipeline_name = str(state.get("pipeline", "") or "")
-    if pipeline_name in {"minimal", "standard", "critical", "audited", "adversarial"}:
+    if pipeline_name in {"minimal", "standard", "critical", "audited", "adversarial", "rapid"}:
         return f"default-{pipeline_name}"
     tier = str(state.get("tier", "") or "")
     if tier in {"minimal", "standard", "critical", "audited"}:
