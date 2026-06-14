@@ -104,3 +104,11 @@ def test_skill_md_documents_language_profiles_and_js_ts_substance():
     assert "javascript" in text and "typescript" in text
     assert "analyzer_warnings" in text
     assert "test_substance" in text
+
+
+def test_skill_md_documents_rapid_optin_pipeline():
+    text = SKILL.read_text(encoding="utf-8")
+
+    assert "`rapid`" in text
+    assert "start --pipeline rapid" in text
+    assert "CREATED→CLARIFIED→IMPLEMENTED→VERIFIED" in text

@@ -310,6 +310,7 @@ spine 中移除，`next` 直接越过，导航地图渲染 `– skipped`。
 | tier | 活跃阶段 | 说明 |
 |---|---|---|
 | `minimal` | `CREATED → CLARIFIED → RED → IMPLEMENTED → VERIFIED` | 跳过 `PLANNED` / `REVIEWED` |
+| `rapid` *(pipeline opt-in)* | `CREATED → CLARIFIED → IMPLEMENTED → VERIFIED` | 三步快速实施: 澄清、实施、校验; 跳过 `PLANNED` / `RED` / `REVIEWED`,用 `--pipeline rapid` 显式选择 |
 | `standard` | 全主干 | 单 reviewer |
 | `critical` | 全主干 | `REVIEWED` 派 r1/r2/r3 三份独立审查（隔离上下文，不审自己的实现） |
 | `audited` | 全主干 | r1/r2/r3 + `VERIFIED` 增 `verification` 与 `audit_replay` 证据 |
@@ -320,6 +321,8 @@ spine 中移除，`next` 直接越过，导航地图渲染 `– skipped`。
 - `--tier auto`（默认）：分类器读需求文本判定 tier，并应用 **G4 基线下限**——派生（非显式钉住）的
   tier **不会**降到 `minimal`，审查是默认。只有显式 `--tier minimal` 才会降级。
 - `--pipeline <名|路径>`：覆盖 `--tier` 推出的 spine，可指向内建名或自定义 yaml。
+
+`rapid` 不是 tier recommendation 的候选项,不会被 `--tier auto` 自动选择。它是显式 opt-in 的快速流水线:当需求足够小、用户接受跳过独立计划/红测/审查时,用 `start --pipeline rapid` 选择。
 - 每个内建 tier 都通过门禁闭包校验（`gate_closure_ok`）。
 
 自定义流水线 yaml 形如：

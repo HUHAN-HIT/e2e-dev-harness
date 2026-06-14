@@ -62,10 +62,13 @@ e2e-harness approve-impact-degradation --state <run-state> --approval <file.md> 
 | tier | 活跃阶段 | 说明 |
 |---|---|---|
 | `minimal` | CREATED→CLARIFIED→RED→IMPLEMENTED→VERIFIED | 跳过 PLANNED/REVIEWED |
+| `rapid` *(pipeline opt-in)* | CREATED→CLARIFIED→IMPLEMENTED→VERIFIED | 三步快速实施:澄清、实施、校验;跳过 PLANNED/RED/REVIEWED,用 `start --pipeline rapid` 显式选择 |
 | `standard` | 全主干 | 单 reviewer |
 | `critical` | 全主干 | REVIEWED 派 r1/r2/r3 三份独立 review(隔离上下文,不 review 自己实现) |
 | `audited` | 全主干 | r1/r2/r3 + VERIFIED 用 `verification`+`audit_replay`(命令证据背书的 manifest)+`agent_team_dispatch`(dispatch-invocation),**不含** scope_manifest |
 | `adversarial` *(opt-in)* | 全主干 | REVIEWED 派 code/design/test-design 三个**对抗视角**独立 reviewer(攻击实现/设计/测试用例假设,各持一个证据键);不在 `--tier auto` 集合内 |
+
+`rapid` 不属于 `--tier auto` 候选集合,也不是风险降级;它是用户显式选择的快速流水线。实施 worker 必须在 IMPLEMENTED 内提交 `passing_tests` 与 `test_substance`,并在 rapid 模式下自行提供同批次失败/转绿测试证据。
 
 > `adversarial` 是 opt-in 流水线,不属于 `--tier` 自动分级集合。用 `start --pipeline adversarial` 显式选择;`dispatch` 自动配对 `default-adversarial` 团队档案,把 REVIEWED 扇出成三个隔离的对抗视角 reviewer(`adversarial_code_review` / `adversarial_design_review` / `adversarial_test_design_review`),门禁要求三个键齐备才过。
 
