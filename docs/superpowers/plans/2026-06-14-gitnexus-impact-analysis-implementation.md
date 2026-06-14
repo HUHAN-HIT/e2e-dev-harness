@@ -1909,7 +1909,7 @@ def run(args) -> tuple[int, dict]:
 - Compatibility: `impact.mode` default off; validator not in STRUCTURED_KEYS; additive run-state — preserves 675 green tests. ✅
 
 **Deviations from the design (documented):**
-1. **`impact.mode` switch (default `off`)** — the design implies default-on enforcement, but landing that would block existing code-runs when GitNexus is unavailable and break the suite. Mirrors the legacy `gitnexus_mode` vocabulary. Flipping the default to `auto`/`strict` is a one-line follow-up once env GitNexus availability is standardized.
+1. **`impact.mode` switch — default `auto` (ON).** Per user direction, GitNexus impact is on by default. An unverifiable assessment does not stall: the run blocks at `CLARIFIED` and `next` surfaces a degrade offer (`impact.degradation_available`), so the coordinator asks the user to resolve or approve degradation; a recorded approval converts the blocked assessment to an auditable `degraded` one. `--impact-mode off` opts a run out. The one existing test that drives an audited run to completion in an unindexed temp repo pins `off` (it tests an orthogonal gate chain); the impact on-path + degradation flow are covered by `test_impact_e2e.py`.
 2. **Binding carries `seeds`** — added so `impact_gate.planned_missing` is purely in-memory for the refs check (design intent), rather than re-reading the artifact.
 3. **Slice 5 ships only the pure derivation**, not a post-clarification re-tier command — no such call site exists today; inventing one is out of scope.
 4. **pytest, not `unittest`** — the design's `python -m unittest discover` commands do not collect this project's plain-function tests.
