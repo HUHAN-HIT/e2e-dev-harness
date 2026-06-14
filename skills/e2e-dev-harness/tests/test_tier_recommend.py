@@ -165,3 +165,18 @@ def test_adversarial_suggestion_is_advisory_not_a_tier_change():
     assert result["selected_tier"] in ("minimal", "standard", "critical", "audited")
     assert [o["tier"] for o in result["options"]] == ["minimal", "standard", "critical", "audited"]
     assert "adversarial" not in [o["tier"] for o in result["options"]]
+
+
+def test_rapid_is_not_a_tier_recommendation_option():
+    """Regression pin: rapid is an opt-in pipeline, not an auto tier option."""
+    result = recommend.recommend_tier(
+        "make a small copy change", scope=None, selected_tier="auto")
+
+    assert [option["tier"] for option in result["options"]] == [
+        "minimal",
+        "standard",
+        "critical",
+        "audited",
+    ]
+    assert "rapid" not in [option["tier"] for option in result["options"]]
+    assert result["selected_tier"] in ("minimal", "standard", "critical", "audited")
