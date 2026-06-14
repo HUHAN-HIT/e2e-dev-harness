@@ -63,3 +63,19 @@ def test_builtin_nonimplemented_phases_deny(name):
             continue
         state = {"current_phase": phase.name, "pipeline": name}
         assert pipeline.can_write_code(state) is False, f"{name}:{phase.name}"
+
+
+def test_rapid_implemented_allows_code_write():
+    state = {"current_phase": "IMPLEMENTED", "pipeline": "rapid"}
+
+    assert pipeline.can_write_code(state) is True
+
+
+def test_rapid_nonimplemented_phases_deny_code_write():
+    spine = pipeline.build_spine("rapid")
+
+    for phase in spine:
+        if phase.name == "IMPLEMENTED":
+            continue
+        state = {"current_phase": phase.name, "pipeline": "rapid"}
+        assert pipeline.can_write_code(state) is False, f"rapid:{phase.name}"
