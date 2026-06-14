@@ -101,6 +101,25 @@ def test_unsatisfiable_custom_pipeline_rejected_at_start_no_run_state(tmp_path):
     assert not list((tmp_path / "docs" / "agent-runs").glob("*/run-state.json"))
 
 
+def test_invalid_pipeline_error_carries_schema_envelope(tmp_path):
+    # F4: start's error returns must share one self-describing envelope. The
+    # tier-downgrade-blocked sibling carries a `schema`; the invalid-pipeline error
+    # must too, so a consumer can route on schema instead of sniffing the `error`
+    # string. The diagnostic fields (error/pipeline/errors) are preserved.
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(
+        "name: b\nphases:\n  - CREATED\n  - phase: CLARIFIED\n    exit_gate: [clarification, ghost]\n  - VERIFIED\n",
+        encoding="utf-8")
+    code, res = _run("start", "--repo", str(tmp_path), "--feature", "demo",
+                     "--request", "do x", "--pipeline", str(bad), cwd=tmp_path)
+    assert code == 2
+    assert res["schema"] == "e2e-dev-harness.invalid-pipeline.v1"
+    assert res["error"] == "invalid pipeline"
+    assert res["pipeline"] == str(bad)
+    assert any("ghost" in e for e in res["errors"])
+    assert not list((tmp_path / "docs" / "agent-runs").glob("*/run-state.json"))
+
+
 def test_builtin_start_records_name_not_spec(tmp_path):
     code, res = _run("start", "--repo", str(tmp_path), "--feature", "demo",
                      "--request", "do x", "--tier", "standard", cwd=tmp_path)

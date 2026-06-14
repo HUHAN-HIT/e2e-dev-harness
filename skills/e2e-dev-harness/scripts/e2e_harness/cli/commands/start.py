@@ -153,7 +153,10 @@ def run(args) -> tuple[int, dict]:
     merged = merge_overrides(spec, adapter.pipeline_overrides())
     ok, errors = pipeline_validate.validate_spec(merged)
     if not ok:
-        return 2, {"error": "invalid pipeline", "pipeline": pipeline_ref, "errors": errors}
+        # F4: same self-describing error envelope as the tier-downgrade-blocked
+        # sibling — a `schema` so consumers route on it, not on the `error` string.
+        return 2, {"schema": "e2e-dev-harness.invalid-pipeline.v1",
+                   "error": "invalid pipeline", "pipeline": pipeline_ref, "errors": errors}
 
     # Embed the resolved spec when the run is non-default in any way (custom
     # pipeline, adapter overrides, or a non-backend domain). Backend + built-in
