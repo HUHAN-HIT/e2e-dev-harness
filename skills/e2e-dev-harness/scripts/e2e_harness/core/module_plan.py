@@ -56,6 +56,18 @@ def _validate_module(mod) -> tuple[str | None, str | None]:
     groups = mod.get("conflict_groups", [])
     if not isinstance(groups, list) or not all(_nonempty_str(g) for g in groups):
         return mid, f"bad-conflict-groups:{mid}"
+    # Optional GitNexus impact references (design Slice 4). Shape only — the
+    # *requirement* to carry refs when impact is verified+required is enforced by
+    # impact_gate.planned_missing, not here (module_plan validation stays pure).
+    refs = mod.get("impact_refs", [])
+    if not isinstance(refs, list):
+        return mid, f"bad-impact-refs:{mid}"
+    for ref in refs:
+        if not isinstance(ref, dict) or not _nonempty_str(ref.get("seed")):
+            return mid, f"bad-impact-ref:{mid}"
+        if (not isinstance(ref.get("affected_processes", []), list)
+                or not isinstance(ref.get("test_focus", []), list)):
+            return mid, f"bad-impact-ref-fields:{mid}"
     return mid, None
 
 

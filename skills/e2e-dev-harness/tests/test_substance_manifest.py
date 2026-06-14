@@ -21,13 +21,14 @@ def _contract_file(repo, *ids):
 
 def _test_file(repo, name, body):
     p = repo / name
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(body, encoding="utf-8")
     return name
 
 
 def _manifest(repo, *, test_files, red, green, coverage, contract="acceptance-contract.json",
-              language="python"):
-    return {
+              language="python", analyzer_warnings=None):
+    obj = {
         "schema": substance.SCHEMA,
         "acceptance_contract_path": contract,
         "language": language,
@@ -35,6 +36,31 @@ def _manifest(repo, *, test_files, red, green, coverage, contract="acceptance-co
         "red_tests": red,
         "green_tests": green,
         "ac_coverage": coverage,
+    }
+    if analyzer_warnings is not None:
+        obj["analyzer_warnings"] = analyzer_warnings
+    return obj
+
+
+def _language_profile(repo, profiles):
+    run_dir = repo / "docs" / "agent-runs" / "r1"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    profile = {
+        "schema": "e2e-harness.language-profile.v1",
+        "profiles": profiles,
+        "primary_language": profiles[0]["language"],
+        "warnings": [],
+    }
+    p = run_dir / "language-profile.json"
+    p.write_text(json.dumps(profile), encoding="utf-8")
+    return {
+        "language": {
+            "schema": "e2e-harness.language-binding.v1",
+            "profile_path": str(p.relative_to(repo)),
+            "primary_language": profiles[0]["language"],
+            "profiles": [pr["language"] for pr in profiles],
+            "source": "detected",
+        }
     }
 
 
@@ -98,4 +124,88 @@ def test_validate_evidence_routes_substance_key(tmp_path):
     p = tmp_path / "substance.json"
     p.write_text(json.dumps(man), encoding="utf-8")
     ok, reason = validate.validate_evidence(tmp_path, "test_substance", "substance.json")
+    assert ok is True and reason is None
+
+
+def test_javascript_manifest_accepts_real_assertions(tmp_path):
+    _contract_file(tmp_path, "AC-001")
+    tf = _test_file(tmp_path, "app.test.js",
+                    "test('renders empty state', () => { expect(view()).toBe('empty') })")
+    man = _manifest(tmp_path, test_files=[tf], red=["renders empty state"],
+                    green=["renders empty state"], coverage={"AC-001": ["renders empty state"]},
+                    language="javascript", analyzer_warnings=[])
+
+    ok, reason = substance.validate_substance_manifest(man, tmp_path)
+
+    assert ok is True and reason is None
+
+
+def test_red_green_names_are_compared_after_unicode_nfc(tmp_path):
+    _contract_file(tmp_path, "AC-001")
+    tf = _test_file(tmp_path, "app.test.ts",
+                    "test('é renders', () => { expect(view()).toBe('ok') })")
+    man = _manifest(tmp_path, test_files=[tf], red=["e\u0301 renders"],
+                    green=["é renders"], coverage={"AC-001": ["é renders"]},
+                    language="typescript", analyzer_warnings=[])
+
+    ok, reason = substance.validate_substance_manifest(man, tmp_path)
+
+    assert ok is True and reason is None
+
+
+def test_analyzer_warnings_must_be_declared_by_identity(tmp_path):
+    _contract_file(tmp_path, "AC-001")
+    tf = _test_file(tmp_path, "broken.test.ts", "test('broken', () => { expect(x).toBe(1)")
+    man = _manifest(tmp_path, test_files=[tf], red=["broken"], green=["broken"],
+                    coverage={"AC-001": ["broken"]}, language="typescript",
+                    analyzer_warnings=[])
+
+    ok, reason = substance.validate_substance_manifest(man, tmp_path)
+
+    assert ok is False
+    assert reason == "missing-analyzer-warning:analyzer-limitation:1"
+
+    man["analyzer_warnings"] = [{"code": "analyzer-limitation", "line": 1,
+                                 "message": "different wording is allowed"}]
+    ok, reason = substance.validate_substance_manifest(man, tmp_path)
+    assert ok is True and reason is None
+
+
+def test_state_profile_rejects_manifest_language_mismatch(tmp_path):
+    _contract_file(tmp_path, "AC-001")
+    tf = _test_file(tmp_path, "ui/App.test.tsx",
+                    "test('renders empty state', () => { expect(view()).toBe('empty') })")
+    state = _language_profile(tmp_path, [{
+        "language": "typescript",
+        "roots": ["ui"],
+        "test_runners": ["vitest"],
+        "package_managers": ["npm"],
+        "capabilities": {},
+    }])
+    man = _manifest(tmp_path, test_files=[tf], red=["renders empty state"],
+                    green=["renders empty state"], coverage={"AC-001": ["renders empty state"]},
+                    language="python")
+
+    ok, reason = substance.validate_substance_manifest(man, tmp_path, state=state)
+
+    assert ok is False
+    assert reason == "language-profile-mismatch"
+
+
+def test_state_profile_allows_matching_multilanguage_root(tmp_path):
+    _contract_file(tmp_path, "AC-001")
+    tf = _test_file(tmp_path, "ui/App.test.tsx",
+                    "test('renders empty state', () => { expect(view()).toBe('empty') })")
+    state = _language_profile(tmp_path, [
+        {"language": "java", "roots": ["api"], "test_runners": ["maven"],
+         "package_managers": [], "capabilities": {}},
+        {"language": "typescript", "roots": ["ui"], "test_runners": ["vitest"],
+         "package_managers": ["npm"], "capabilities": {}},
+    ])
+    man = _manifest(tmp_path, test_files=[tf], red=["renders empty state"],
+                    green=["renders empty state"], coverage={"AC-001": ["renders empty state"]},
+                    language="typescript", analyzer_warnings=[])
+
+    ok, reason = substance.validate_substance_manifest(man, tmp_path, state=state)
+
     assert ok is True and reason is None

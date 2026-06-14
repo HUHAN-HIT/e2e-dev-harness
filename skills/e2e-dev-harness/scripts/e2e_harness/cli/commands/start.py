@@ -116,10 +116,18 @@ def run(args) -> tuple[int, dict]:
 
     rel = Path("docs/agent-runs") / run_id / "run-state.json"
     path = repo / rel
+    from e2e_harness.adapters.language import profile as language_profile
+    language_doc = language_profile.resolve_language_profile(
+        repo, domain_hint=adapter.name, explicit=getattr(args, "language_profile", None))
+    language_binding, _profile_path = language_profile.persist_profile(repo, path.parent, language_doc)
     st = run_state.new_run_state(
         run_id, feature, request, tier=tier, pipeline=pipeline_ref,
         pipeline_spec=merged if non_default else None, domain=dom)
+    st["language"] = language_binding
     st["tier_recommendation"] = tier_recommendation
+    # GitNexus impact assessment mode (design). Default off => the impact bridge/gate
+    # are inert, so a run started without --impact-mode behaves exactly as before.
+    st["impact"] = {"mode": getattr(args, "impact_mode", "off") or "off"}
     run_state.save(path, st)
     _seed_event_log(path, st, run_id)
     return 0, {"schema": "e2e-dev-harness.start.v1", "run_id": run_id,

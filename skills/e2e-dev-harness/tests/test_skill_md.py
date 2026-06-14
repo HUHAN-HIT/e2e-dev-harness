@@ -94,3 +94,13 @@ def test_skill_md_documents_beat_cycle_for_module_band():
     # the concurrent fan-out + reconcile loop must be described
     assert "module_band" in text
     assert "await" in text or "并发" in text
+
+
+def test_skill_md_documents_language_profiles_and_js_ts_substance():
+    text = SKILL.read_text(encoding="utf-8")
+
+    assert "--language-profile" in text
+    assert "language-profile.json" in text
+    assert "javascript" in text and "typescript" in text
+    assert "analyzer_warnings" in text
+    assert "test_substance" in text

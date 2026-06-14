@@ -169,11 +169,13 @@ def validate_evidence(repo_root, key: str, entry, *, skip_replay: bool = False,
             obj = json.loads(full.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             return False, "not-json"
-        # F-4: only the scope_manifest validator consumes the trusted run-state (to
-        # ground phases/services at gate time); every other structured validator
-        # keeps its (obj, repo_root) signature untouched.
+        # F-4 and language profiles: validators that need trusted run-state keep
+        # the same branch shape as scope_manifest instead of loading state again.
         if lookup == "scope_manifest":
             ok, reason = scope_ev.validate_scope_manifest(obj, repo_root, state)
+        elif lookup == "test_substance":
+            ok, reason = substance.validate_substance_manifest(
+                obj, repo_root, state, module_hint=multitrack.module_of(key))
         else:
             ok, reason = STRUCTURED_KEYS[lookup](obj, repo_root)
         if not ok:

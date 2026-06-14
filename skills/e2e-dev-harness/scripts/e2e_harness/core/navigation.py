@@ -22,7 +22,7 @@ def _track_lanes(spine: list[Phase], state: dict, repo_root, *, skip_replay: boo
         passed = 0
         for phase in chain:
             rec = state.get("phases", {}).get(phase.name, {})
-            ok, missing = gates.gate_passes(phase, rec, repo_root, skip_replay=skip_replay)
+            ok, missing = gates.gate_passes(phase, rec, repo_root, skip_replay=skip_replay, state=state)
             if ok:
                 passed += 1
                 status = "done"
@@ -57,10 +57,10 @@ def _phase_status(spine: list[Phase], state: dict, idx: int,
         # F1: a phase before the cursor is 'done' only if its gate STILL passes.
         # A regressed predecessor (e.g. a contract tightened after it passed) is a
         # real blocker, not a free 'done' inferred from cursor position.
-        ok, _ = gates.gate_passes(phase, rec, repo_root, skip_replay=skip_replay)
+        ok, _ = gates.gate_passes(phase, rec, repo_root, skip_replay=skip_replay, state=state)
         return "done" if ok else "blocked"
     if idx == cur_idx:
-        ok, _ = gates.gate_passes(phase, rec, repo_root, skip_replay=skip_replay)
+        ok, _ = gates.gate_passes(phase, rec, repo_root, skip_replay=skip_replay, state=state)
         if phase.next_phase is None and ok:
             return "done"
         if rec.get("dispatch") == dispatch.DispatchStatus.FAILED.value:
@@ -78,7 +78,7 @@ def navigation_map(spine: list[Phase], state: dict, repo_root=None,
     phases = []
     for i, p in enumerate(spine):
         rec = state.get("phases", {}).get(p.name, {})
-        ok, missing = gates.gate_passes(p, rec, repo_root, skip_replay=skip_replay)
+        ok, missing = gates.gate_passes(p, rec, repo_root, skip_replay=skip_replay, state=state)
         phases.append({
             "name": p.name,
             "status": _phase_status(spine, state, i, repo_root, skip_replay=skip_replay),

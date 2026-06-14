@@ -33,6 +33,13 @@ def gate_passes(phase: Phase, phase_record: dict | None,
                                                      skip_replay=skip_replay, state=state)
             if not ok:
                 missing.append(k)
+    # PLANNED supplemental impact gate (design). State-aware and pure: only with a
+    # threaded run-state, and only for PLANNED, so base-gate unit tests that pass no
+    # state legitimately skip it. `blocked` is owned by the CLARIFIED edge, so this
+    # never reports it (see impact_gate.planned_missing).
+    if state is not None and phase.name == "PLANNED":
+        from e2e_harness.core import impact_gate
+        missing.extend(impact_gate.planned_missing(state, repo_root, rec))
     # S1/S2: an unresolved per-key failure blocks the gate even when the evidence is
     # present and the phase dispatch later reads DONE — a sibling reviewer's success
     # must not paper over another reviewer's recorded failure.

@@ -33,6 +33,8 @@ e2e-harness dispatch --state <run-state>   # 产出当前阶段的指针 worker 
 e2e-harness submit --state <run-state> --phase <P> --key <k> --path <p>  # 记录 worker 证据
 e2e-harness gate   --state <run-state>     # 跑当前阶段声明式门禁
 e2e-harness status --state <run-state>     # 人读导航地图
+# GitNexus impact (opt-in via start --impact-mode auto|strict); coordinator-only:
+e2e-harness approve-impact-degradation --state <run-state> --approval <file.md>  # 记录降级信任锚
 ```
 
 ## 循环 (单游标 + 多轨 beat)
@@ -108,6 +110,58 @@ Do not implement this as a stdin prompt. The CLI remains JSON-only and
 non-interactive; the user choice happens in the coordinator conversation.
 
 裁剪是结构性的:被跳阶段从计算出的 spine 移除,`next` 越过、导航地图渲染 `– skipped`。每个内建 tier 都过 I2 门禁闭包(`gate_closure_ok`)。门禁校验**真实产物**(文件存在+非空+哈希;`failing_tests`/`passing_tests` 须为命令证据且退出码正确)。
+
+## GitNexus Impact Assessment (opt-in)
+
+`start --impact-mode <off|auto|strict>` (default `off`) activates a structured
+impact gate between `CLARIFIED` and `PLANNED`. With `off` the subsystem is inert
+and runs behave exactly as before. When active, as the engine reaches `PLANNED` it
+runs one idempotent bridge (`impact_bridge.ensure_assessment_for_planning`, keyed
+on the acceptance-contract hash) that persists `impact-assessment.json` next to
+`run-state.json` and a `state.impact_assessment` binding.
+
+Trigger policy (pure; `core/impact_trigger.py`): impact is required when the
+request names code surfaces, the contract carries `impact_seed_candidates`, the
+tier is `critical`/`audited`, the contract is compatibility/migration/security/
+cross-service/persistence-sensitive, or the user explicitly asks for impact.
+Documentation-only runs are `not_applicable`.
+
+Status ownership:
+
+- `blocked` (seeds missing / GitNexus unavailable / ambiguous / timeout) is owned
+  by the **CLARIFIED edge**: the run stays at `CLARIFIED` and its `IQ-*` questions
+  are merged into the re-clarify loop (`next.open_questions`). Answer them by
+  amending the acceptance contract — the changed hash re-runs the assessment.
+- `verified` advances to `PLANNED`, which then requires `module_plan` modules to
+  carry `impact_refs` covering the artifact seeds (`impact_gate.planned_missing`).
+- `degraded` is trusted only when `state.approvals.impact_degradation.sha256`
+  matches the artifact's approval hash. The coordinator writes that anchor with
+  `approve-impact-degradation` (a worker-authored markdown file is not the anchor).
+- `not_applicable` passes with no planner obligation.
+
+The runtime adapter only transports the artifact path into worker `context_paths`
+(by phase + status); it never interprets GitNexus output. `recommend_tier` stays
+pure — the control plane derives `scope.gitnexus` from the artifact via
+`adapters/tier/impact_scope.py` (max seed risk → `impact_summary.risk`; verified
+iff `status == verified`).
+
+> Default is `off` for compatibility. Flipping the default to `auto`/`strict`
+> depends on standardizing GitNexus availability in the dev/CI environment.
+
+## Language Profiles
+
+`start` resolves Java, Python, javascript, and typescript language profiles at
+run creation, writes immutable `language-profile.json` next to `run-state.json`,
+and stores only a compact trusted binding in run-state. Use
+`--language-profile <name-or-path>` to force a profile name or a project-local
+`.e2e/language-profile.json` contract.
+
+Workers must read the active `language-profile.json` from `context_paths`, use
+its language for test commands and evidence shape, and must not edit
+`run-state.language` or replace the profile artifact. `test_substance` manifests
+for Python, Java, javascript, and typescript are re-analyzed by the harness.
+JS/TS analyzer limitations travel through `analyzer_warnings`; the validator
+checks warning identity by code and line, not prose wording.
 ## Agent-Team Dispatch Boundary
 
 `dispatch` has an agent-team planning layer between lifecycle phases and

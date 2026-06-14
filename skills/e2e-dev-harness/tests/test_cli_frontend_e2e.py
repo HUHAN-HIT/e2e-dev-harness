@@ -29,13 +29,14 @@ def _artifact(repo: Path, phase: str, key: str) -> str:
         return str(f.relative_to(repo))
     if key == "test_substance":
         import json as _json
-        tf = base / f"{phase}-real_test.py"
-        tf.write_text("def test_real():" + chr(10) + "    assert 1 + 1 == 2" + chr(10), encoding="utf-8")
+        tf = repo / "src" / f"{phase}-real.test.ts"
+        tf.write_text("test('renders', () => { expect(1 + 1).toBe(2) })\n", encoding="utf-8")
         man = {"schema": "e2e-dev-harness.test-substance.v1",
                "acceptance_contract_path": str(base / "CLARIFIED-acceptance_contract.json"),
-               "language": "python", "test_files": [str(tf)],
-               "red_tests": ["t::test_real"], "green_tests": ["t::test_real"],
-               "ac_coverage": {"AC-001": ["t::test_real"]}}
+               "language": "typescript", "test_files": [str(tf)],
+               "red_tests": ["renders"], "green_tests": ["renders"],
+               "analyzer_warnings": [],
+               "ac_coverage": {"AC-001": ["renders"]}}
         f = base / f"{phase}-{key}.json"
         f.write_text(_json.dumps(man), encoding="utf-8")
         return str(f.relative_to(repo))

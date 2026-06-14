@@ -28,3 +28,26 @@ def test_dispatch_backend_no_domain_unchanged(tmp_path):
     code, packet = dispatch_cmd.run(args)
     assert code == 0
     assert packet["context_paths"] == [str(p)]   # only the run-state pointer
+
+
+def test_dispatch_includes_language_profile_path_when_bound(tmp_path):
+    profile = tmp_path / "docs" / "agent-runs" / "r" / "language-profile.json"
+    profile.parent.mkdir(parents=True, exist_ok=True)
+    profile.write_text("{}", encoding="utf-8")
+    st = run_state.new_run_state("r", "f", "q")
+    st["current_phase"] = "CLARIFIED"
+    st["language"] = {
+        "schema": "e2e-harness.language-binding.v1",
+        "profile_path": str(profile.relative_to(tmp_path)),
+        "primary_language": "typescript",
+        "profiles": ["typescript"],
+        "source": "detected",
+    }
+    p = profile.parent / "run-state.json"
+    run_state.save(p, st)
+    args = SimpleNamespace(state=str(p), repo=str(tmp_path), runtime="codex")
+
+    code, packet = dispatch_cmd.run(args)
+
+    assert code == 0
+    assert str(profile.relative_to(tmp_path)) in packet["context_paths"]

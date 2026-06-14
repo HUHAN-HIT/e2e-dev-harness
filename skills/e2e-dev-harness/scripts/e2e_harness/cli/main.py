@@ -16,6 +16,7 @@ from e2e_harness.cli.commands import (
     doctor,
     migrate,
     recover,
+    approve_impact_degradation,
 )
 
 _COMMANDS = {
@@ -28,6 +29,8 @@ _COMMANDS = {
     "migrate": migrate.run,
     # F-1: approval-gated, auditable control-plane recovery (design Phase 3).
     "recover": recover.run,
+    # GitNexus impact analysis: coordinator records the degradation trust anchor.
+    "approve-impact-degradation": approve_impact_degradation.run,
 }
 
 
@@ -47,9 +50,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--pipeline", default=None,
                    help="built-in name or path to a custom pipeline yaml (overrides --tier's spine)")
     s.add_argument("--adapter", default=None, help="force domain adapter (backend|frontend)")
+    s.add_argument("--language-profile", default=None,
+                   help="force language profile by name or path to .e2e/language-profile.json")
     s.add_argument("--scan", action="store_true", help="run adapter scan to raise tier floor")
     s.add_argument("--preview-tier", action="store_true",
                    help="compute tier recommendation/options without creating a run")
+    # GitNexus impact assessment mode for this run. Default off keeps existing runs
+    # byte-compatible; auto/strict activate the CLARIFIED->PLANNED impact gate.
+    s.add_argument("--impact-mode", choices=["off", "auto", "strict"], default="off",
+                   help="GitNexus impact assessment mode for this run (default off)")
 
     for verb in ("next", "status"):
         sp = sub.add_parser(verb); sp.add_argument("--state", required=True); sp.add_argument("--repo", default=".")
@@ -90,6 +99,12 @@ def build_parser() -> argparse.ArgumentParser:
     rc.add_argument("--plan", action="store_true", help="read-only: emit a recovery plan (default)")
     rc.add_argument("--apply", action="store_true", help="apply the approved narrow repair")
     rc.add_argument("--approval", default=None, help="path to a recovery-approval.v1 file (required for --apply)")
+
+    # Coordinator records the impact-degradation trust anchor (design: Degraded Approval).
+    ai = sub.add_parser("approve-impact-degradation")
+    ai.add_argument("--state", required=True)
+    ai.add_argument("--approval", required=True)
+    ai.add_argument("--reason", default=None)
     return p
 
 

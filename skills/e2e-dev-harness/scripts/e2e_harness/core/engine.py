@@ -178,6 +178,26 @@ def _evaluate_singleton(spine: list[Phase], state: dict, repo_root=None) -> dict
     while True:
         phase = by_name[name]
         rec = state.get("phases", {}).get(name, {})
+        # Impact bridge (design: Evaluation Point). Reached when the cursor arrives
+        # at PLANNED — covers BOTH the forward CLARIFIED->PLANNED edge (the walk just
+        # advanced here) and re-entry at a stored PLANNED cursor (resume/migrate/
+        # amended contract). Idempotent on the contract hash; a no-op when impact.mode
+        # is off. A `blocked` decision is owned by the CLARIFIED edge: leave the cursor
+        # at CLARIFIED and surface its blocker (next.py merges the IQ-* questions).
+        if (phase.name == "PLANNED" and repo_root is not None
+                and "CLARIFIED" in by_name):
+            from e2e_harness.core import impact_bridge
+            decision = impact_bridge.ensure_assessment_for_planning(state, repo_root)
+            if decision is not None and decision.get("status") == "blocked":
+                state["current_phase"] = "CLARIFIED"
+                clarified = by_name["CLARIFIED"]
+                return {
+                    "complete": False,
+                    "blocked_phase": "CLARIFIED",
+                    "missing_evidence": ["impact_assessment"],
+                    "next_action": dispatch.worker_packet(
+                        clarified, state.get("_run_state_path", "")),
+                }
         ok, missing = gates.gate_passes(phase, rec, repo_root, state=state)
         if not ok:
             if _verification_rework_needed(phase, rec, missing):

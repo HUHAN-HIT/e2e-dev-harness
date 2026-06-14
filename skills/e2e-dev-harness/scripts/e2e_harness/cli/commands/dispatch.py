@@ -20,6 +20,33 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def _impact_artifact_path(repo_root, binding) -> Path | None:
+    rel = binding.get("path")
+    if not rel:
+        return None
+    p = Path(rel)
+    if not p.is_absolute():
+        p = Path(repo_root) / rel   # binding paths are repo-relative
+    return p if p.is_file() else None
+
+
+# Which phases may consume the impact artifact, by artifact status. CLARIFIED only
+# sees a *blocked* artifact (re-clarification); the planning + downstream phases see
+# usable evidence. The runtime adapter transports the path; it never interprets it.
+_IMPACT_VISIBLE = {
+    "CLARIFIED": {"blocked"},
+    "PLANNED": {"verified", "degraded", "not_applicable"},
+    "RED": {"verified", "degraded"},
+    "IMPLEMENTED": {"verified", "degraded"},
+    "REVIEWED": {"verified", "degraded"},
+}
+
+
+def _impact_visible(phase_name: str, status: str | None) -> bool:
+    base = phase_name.split("#", 1)[0]   # module-namespaced phases share the base rule
+    return status in _IMPACT_VISIBLE.get(base, set())
+
+
 def _default_profile(state: dict) -> str:
     # A built-in pipeline auto-pairs its `default-<name>` team profile so its
     # phase fan-out (e.g. critical's r1/r2/r3, adversarial's code/design/tests)
@@ -83,6 +110,15 @@ def run(args) -> tuple[int, dict]:
     if dom:
         extra = [f"domain:{dom['name']} test_runner:{dom['test_runner']} "
                  f"review_profile:{dom['review_profile']}"]
+    lang = state.get("language") or {}
+    if lang.get("profile_path"):
+        extra.append(str(lang["profile_path"]))
+    # Impact evidence (design: dispatch seam). Transport ONLY — gated by phase + status.
+    binding = state.get("impact_assessment")
+    if binding:
+        art_path = _impact_artifact_path(repo_root, binding)
+        if art_path is not None and _impact_visible(name, binding.get("status")):
+            extra.append(str(art_path))
     # B3: at a module-scoped phase of a multi-module run, fan out one worker per
     # ready module (independent modules in parallel); depends_on keeps a gated
     # module out of the frontier so it stays single-worker until unblocked.

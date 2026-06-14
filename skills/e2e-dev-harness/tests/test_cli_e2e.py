@@ -279,6 +279,7 @@ def test_start_explicit_tier_below_audited_preserves_selection(tmp_path):
 
 
 def test_start_then_drive_to_verified_with_real_artifacts_terminates(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
     code, res = _run("start", "--repo", str(tmp_path), "--feature", "demo",
                      "--request", "do x", cwd=tmp_path)
     assert code == 0
@@ -313,6 +314,7 @@ def test_start_audited_then_drive_to_verified_terminates(tmp_path):
     regression in the audited gates or the dispatch-provenance evidence
     would otherwise pass undetected.
     """
+    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
     code, res = _run("start", "--repo", str(tmp_path), "--feature", "audited-demo",
                      "--request", "compliance audit of the incident response",
                      "--tier", "audited", cwd=tmp_path)

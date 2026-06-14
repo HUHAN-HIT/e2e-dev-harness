@@ -17,12 +17,22 @@ import ast
 import re
 
 
-def analyze(source: str, language: str) -> list[tuple[str, str]]:
+def analyze_with_diagnostics(source: str, language: str) -> dict:
     if language == "python":
-        return _analyze_python(source)
+        try:
+            ast.parse(source)
+        except SyntaxError as exc:
+            return {"verdicts": [], "warnings": [_warning("analyzer-limitation", exc.lineno)]}
+        return {"verdicts": _analyze_python(source), "warnings": []}
     if language == "java":
-        return _analyze_java(source)
-    return []
+        return {"verdicts": _analyze_java(source), "warnings": []}
+    if language in ("javascript", "typescript"):
+        return _analyze_javascript_like(source)
+    return {"verdicts": [], "warnings": []}
+
+
+def analyze(source: str, language: str) -> list[tuple[str, str]]:
+    return list(analyze_with_diagnostics(source, language).get("verdicts", []))
 
 
 def empties(source: str, language: str) -> list[str]:
@@ -130,3 +140,80 @@ def _brace_body(text: str, open_idx: int) -> str:
             if depth == 0:
                 return text[open_idx + 1:i]
     return text[open_idx + 1:]
+
+
+# --- JavaScript / TypeScript (conservative text heuristics) -------------------
+
+_JS_TEST = re.compile(r"\b(?:test|it)\s*\(\s*(['\"])(.*?)\1\s*,", re.S)
+_JS_STRONG = re.compile(
+    r"\bexpect\s*\([\s\S]*?\)\s*\.(?:"
+    r"toBe|toEqual|toStrictEqual|toMatchObject|toHaveBeenCalled|"
+    r"toHaveBeenCalledWith|toHaveTextContent|toContain|toThrow"
+    r")\s*\("
+    r"|\bawait\s+expect\s*\([\s\S]*?\)\s*\.(?:resolves|rejects)\b"
+    r"|\bexpect\s*\([\s\S]*?queryBy\w+\s*\([\s\S]*?\)[\s\S]*?\)\s*\.toBeNull\s*\("
+    r"|\bassert\.(?:equal|deepEqual|strictEqual|deepStrictEqual)\s*\("
+    r"|\bscreen\.(?:getBy|findBy)\w+\s*\("
+    r"|\bawait\s+page\.expect\b",
+    re.S,
+)
+_JS_WEAK = re.compile(
+    r"\bexpect\s*\(\s*true\s*\)\s*\.toBe\s*\(\s*true\s*\)"
+    r"|\bexpect\s*\([\s\S]*?\)\s*\.toBeDefined\s*\("
+    r"|\bexpect\s*\([\s\S]*?\)\s*\.not\s*\.toBeNull\s*\(",
+    re.S,
+)
+
+
+def _analyze_javascript_like(source: str) -> dict:
+    verdicts: list[tuple[str, str]] = []
+    warnings: list[dict] = []
+    for match in _JS_TEST.finditer(source):
+        name = match.group(2)
+        open_idx = source.find("{", match.end())
+        if open_idx == -1:
+            warnings.append(_warning("analyzer-limitation", _line_of(source, match.start())))
+            continue
+        body = _balanced_body(source, open_idx)
+        if body is None:
+            return {
+                "verdicts": [],
+                "warnings": [_warning("analyzer-limitation", _line_of(source, match.start()))],
+            }
+        verdicts.append((name, _classify_javascript_like(body)))
+    if not verdicts and re.search(r"\b(?:test|it)\s*\(", source):
+        warnings.append(_warning("analyzer-limitation", 1))
+    return {"verdicts": verdicts, "warnings": warnings}
+
+
+def _classify_javascript_like(body: str) -> str:
+    if _JS_STRONG.search(body):
+        if re.fullmatch(r"\s*expect\s*\(\s*true\s*\)\s*\.toBe\s*\(\s*true\s*\)\s*;?\s*", body, re.S):
+            return "empty"
+        return "ok"
+    if _JS_WEAK.search(body):
+        return "suspicious"
+    return "empty"
+
+
+def _balanced_body(text: str, open_idx: int) -> str | None:
+    depth = 0
+    for i in range(open_idx, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_idx + 1:i]
+    return None
+
+
+def _line_of(text: str, idx: int) -> int:
+    return text.count("\n", 0, idx) + 1
+
+
+def _warning(code: str, line: int | None = None, message: str | None = None) -> dict:
+    out = {"code": code, "message": message or "Analyzer could not fully classify this test shape."}
+    if line is not None:
+        out["line"] = line
+    return out

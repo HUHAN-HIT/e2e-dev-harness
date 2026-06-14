@@ -130,6 +130,7 @@ def test_full_drive_keeps_chain_clean(tmp_path):
     """A real start->next->submit drive to VERIFIED must leave a chain that both
     verifies and replays to the run-state projectable fields with zero drift."""
     from test_cli_e2e import _make_artifact
+    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
     code, res = _run("start", "--repo", str(tmp_path), "--feature", "demo",
                      "--request", "do x", cwd=tmp_path)
     assert code == 0
