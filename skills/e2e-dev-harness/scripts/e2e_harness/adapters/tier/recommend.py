@@ -56,7 +56,8 @@ def _option(tier: str, recommended: str, reasons: list[str]) -> dict:
     }
 
 
-def recommend_tier(request_text: str, scope: dict | None = None, selected_tier: str = "auto") -> dict:
+def recommend_tier(request_text: str, scope: dict | None = None, selected_tier: str = "auto",
+                   *, confirmation: dict | None = None) -> dict:
     auto = selected_tier == "auto"
     classified_tier, classify_reasons = classify.classify_tier(
         request_text,
@@ -69,7 +70,13 @@ def recommend_tier(request_text: str, scope: dict | None = None, selected_tier: 
 
     requested = recommended if auto else selected_tier
     requested_below = _rank(requested) < _rank(recommended)
-    blocked = False
+    # A1: a tier below the recommendation is a downgrade that needs an explicit human
+    # confirmation. `confirmed` is the single settled fact (carried by a confirmation
+    # token, not re-derived by the coordinator); `blocked` is the machine invariant
+    # `start` enforces — no longer a constant. auto never downgrades (requested ==
+    # recommended), so it never blocks.
+    confirmed = requested_below and confirmation is not None
+    blocked = requested_below and not confirmed
     selected = recommended if auto else requested
 
     # Slice 3: advisory only. Adversarial review is an opt-in *pipeline*, not a
@@ -87,6 +94,7 @@ def recommend_tier(request_text: str, scope: dict | None = None, selected_tier: 
         "downgrade": {
             "requested_below_recommended": requested_below,
             "requires_provenance": requested_below,
+            "confirmed": confirmed,
             "blocked": blocked,
         },
         "adversarial_review": {

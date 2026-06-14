@@ -64,7 +64,11 @@ def test_skill_md_documents_tier_options_and_gitnexus_evidence():
     assert "downgrade" in text
     assert "requested_below_recommended" in text
     assert "requires_provenance=true" in text
-    assert "blocked=false" in text
+    # A1: the doc must describe the enforced contract — a downgrade is blocked
+    # until confirmed and anchored, not silently preserved.
+    assert "blocked=true" in text
+    assert "--confirm-downgrade" in text
+    assert "approvals.tier_downgrade" in text
 
 
 def test_skill_md_documents_tier_preview_confirmation():

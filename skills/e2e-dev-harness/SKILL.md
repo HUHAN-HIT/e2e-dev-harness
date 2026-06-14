@@ -82,11 +82,14 @@ cost and reason summaries.
 - `recommended_tier`: highest floor justified by request text, scanner scope,
   and GitNexus impact evidence.
 - `selected_tier`: actual tier used for the run.
-- Auto selection uses the recommendation.
-- Explicit `--tier` selections are preserved even when below the
-  recommendation. In that case downgrade metadata records
-  `requested_below_recommended`, `requires_provenance=true`, and `blocked=false`
-  under the current contract.
+- Auto selection uses the recommendation (auto never downgrades, so it never blocks).
+- An explicit `--tier` **below** the recommendation is a *downgrade*: `start` BLOCKS
+  it (exit 2, no run created) until the user confirms. The `downgrade` block records
+  `requested_below_recommended`, `requires_provenance=true`, `confirmed`, and
+  `blocked` (`blocked=true` until confirmed). Confirm with
+  `start --tier <below> --confirm-downgrade --downgrade-reason "<why>"`; the reason is
+  the audit anchor, settled once in `run-state.approvals.tier_downgrade` (mirror of
+  `approvals.impact_degradation`) — not a fact the coordinator re-derives.
 
 GitNexus impact evidence raises the recommendation for MEDIUM, HIGH, or
 CRITICAL risk. Missing GitNexus verification on cross-service dependencies
@@ -112,6 +115,12 @@ and pipeline inputs.
 
 Do not implement this as a stdin prompt. The CLI remains JSON-only and
 non-interactive; the user choice happens in the coordinator conversation.
+
+When the preview reports `confirmation.must_ask_user=true` (the chosen tier is below
+the recommendation), the coordinator MUST ask the user before starting, then pass
+`--confirm-downgrade --downgrade-reason "<why>"` on the real `start`. Without it the
+downgrade start is blocked (exit 2) — the confirmation is a machine invariant, not a
+prose convention.
 
 裁剪是结构性的:被跳阶段从计算出的 spine 移除,`next` 越过、导航地图渲染 `– skipped`。每个内建 tier 都过 I2 门禁闭包(`gate_closure_ok`)。门禁校验**真实产物**(文件存在+非空+哈希;`failing_tests`/`passing_tests` 须为命令证据且退出码正确)。
 

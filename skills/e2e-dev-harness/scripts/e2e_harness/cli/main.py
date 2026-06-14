@@ -60,6 +60,17 @@ def build_parser() -> argparse.ArgumentParser:
     # degrade offer (coordinator asks the user). `off` opts a run out entirely.
     s.add_argument("--impact-mode", choices=["off", "auto", "strict"], default="auto",
                    help="GitNexus impact assessment mode for this run (default auto = on)")
+    # A1: a tier below the recommendation is a downgrade that must be confirmed by the
+    # user. --confirm-downgrade carries a required --downgrade-reason (the audit anchor
+    # written into run-state.approvals.tier_downgrade). Without a valid confirmation,
+    # `start` refuses to create the run (exit 2) — the downgrade fact is never settled
+    # by coordinator interpretation.
+    s.add_argument("--confirm-downgrade", action="store_true",
+                   help="confirm a tier below the recommendation (requires --downgrade-reason)")
+    s.add_argument("--downgrade-reason", default=None,
+                   help="why the user chose a tier below the recommendation (audit anchor)")
+    s.add_argument("--downgrade-source", default=None,
+                   help="provenance of the downgrade confirmation (default: user)")
 
     for verb in ("next", "status"):
         sp = sub.add_parser(verb); sp.add_argument("--state", required=True); sp.add_argument("--repo", default=".")

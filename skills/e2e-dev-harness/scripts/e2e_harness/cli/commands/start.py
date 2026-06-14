@@ -18,6 +18,10 @@ from e2e_harness import pipeline
 
 def _preview_result(*, feature: str, adapter_name: str, tier_recommendation: dict,
                     pipeline_ref: str, pipeline_override: bool) -> dict:
+    # F1: the hard signals track `blocked` (is a user choice still needed?), not
+    # merely `requested_below` (is this a downgrade?). A confirmed downgrade has
+    # blocked=False, so preview correctly reports must_ask_user=False.
+    blocked = tier_recommendation["downgrade"]["blocked"]
     return {
         "schema": "e2e-dev-harness.tier-preview.v1",
         "feature": feature,
@@ -32,6 +36,11 @@ def _preview_result(*, feature: str, adapter_name: str, tier_recommendation: dic
         "pipeline_override": pipeline_override,
         "tier_controls_pipeline": not pipeline_override,
         "confirmation": {
+            # A1: hard machine signals so a coordinator RULE can stop and ask the user
+            # before a real downgrade start — no longer prose-only guidance.
+            "confirmation_required": blocked,
+            "allowed_without_user_choice": not blocked,
+            "must_ask_user": blocked,
             "recommended_start_args": [
                 "start",
                 "--tier",
@@ -87,7 +96,17 @@ def run(args) -> tuple[int, dict]:
 
     from e2e_harness.adapters.tier import recommend
     scope = adapter.scan(repo, request) if getattr(args, "scan", False) else None
-    tier_recommendation = recommend.recommend_tier(request, scope, selected_tier=args.tier)
+    # A1: build the downgrade-confirmation token from the explicit CLI flags. The
+    # reason IS the audit anchor, so an empty/missing reason is not a valid
+    # confirmation — it leaves `confirmation` None and the downgrade stays blocked.
+    confirmation = None
+    if getattr(args, "confirm_downgrade", False):
+        _reason = (getattr(args, "downgrade_reason", None) or "").strip()
+        if _reason:
+            confirmation = {"reason": _reason,
+                            "source": getattr(args, "downgrade_source", None) or "user"}
+    tier_recommendation = recommend.recommend_tier(
+        request, scope, selected_tier=args.tier, confirmation=confirmation)
     tier = tier_recommendation["selected_tier"]
     reasons = tier_recommendation["reasons"]
 
@@ -108,6 +127,24 @@ def run(args) -> tuple[int, dict]:
             pipeline_override=custom,
         )
 
+    # A1: authoritative backstop. A below-recommended tier with no valid confirmation
+    # is BLOCKED here — the run is never created, so a coordinator cannot turn a
+    # historical preference into a current downgrade. preview (above) never reaches
+    # this branch; it only signals.
+    downgrade = tier_recommendation["downgrade"]
+    if downgrade["blocked"]:
+        return 2, {
+            "schema": "e2e-dev-harness.tier-downgrade-blocked.v1",
+            "error": "selected tier is below the recommended tier and requires explicit user confirmation",
+            "feature": feature,
+            "recommended_tier": tier_recommendation["recommended_tier"],
+            "selected_tier": tier_recommendation["selected_tier"],
+            "remediation": ("re-run start with --confirm-downgrade --downgrade-reason "
+                            "\"<why the user chose a lower tier>\", or use --tier "
+                            + tier_recommendation["recommended_tier"]),
+            "tier_recommendation": tier_recommendation,
+        }
+
     # Embed the resolved spec when the run is non-default in any way (custom
     # pipeline, adapter overrides, or a non-backend domain). Backend + built-in
     # stays lean (name only) — that is the parity contract.
@@ -125,6 +162,17 @@ def run(args) -> tuple[int, dict]:
         pipeline_spec=merged if non_default else None, domain=dom)
     st["language"] = language_binding
     st["tier_recommendation"] = tier_recommendation
+    # A1: settle the confirmed downgrade ONCE, in run-state (mirror of
+    # approvals.impact_degradation): an auditable anchor carrying the user's reason,
+    # not a fact the coordinator can re-derive later.
+    if downgrade["confirmed"]:
+        st.setdefault("approvals", {})["tier_downgrade"] = {
+            "confirmed_tier": tier,
+            "recommended_tier": tier_recommendation["recommended_tier"],
+            "reason": confirmation["reason"],
+            "source": confirmation["source"],
+            "recorded_by": "coordinator",
+        }
     # GitNexus impact assessment mode (design). Default `auto` => impact is on; an
     # unverifiable assessment blocks with a degrade offer rather than stalling.
     st["impact"] = {"mode": getattr(args, "impact_mode", "auto") or "auto"}

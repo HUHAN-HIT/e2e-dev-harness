@@ -157,6 +157,9 @@ def test_start_preview_tier_returns_options_without_creating_run_state(tmp_path)
 
 
 def test_start_preview_explicit_lower_tier_reports_downgrade(tmp_path):
+    # Preview is a read-only dry run: it never creates a run and never exits 2.
+    # Its job is to hand the coordinator MACHINE signals (not prose) so a hard
+    # coordinator rule can stop and ask the user before a real downgrade start.
     code, res = _run(
         "start",
         "--preview-tier",
@@ -177,7 +180,11 @@ def test_start_preview_explicit_lower_tier_reports_downgrade(tmp_path):
     assert res["tier_recommendation"]["selection_source"] == "explicit"
     assert res["tier_recommendation"]["downgrade"]["requested_below_recommended"] is True
     assert res["tier_recommendation"]["downgrade"]["requires_provenance"] is True
-    assert res["tier_recommendation"]["downgrade"]["blocked"] is False
+    assert res["tier_recommendation"]["downgrade"]["confirmed"] is False
+    assert res["tier_recommendation"]["downgrade"]["blocked"] is True
+    assert res["confirmation"]["confirmation_required"] is True
+    assert res["confirmation"]["must_ask_user"] is True
+    assert res["confirmation"]["allowed_without_user_choice"] is False
     assert not (tmp_path / "docs" / "agent-runs").exists()
 
 
@@ -237,7 +244,10 @@ def test_start_persists_tier_recommendation(tmp_path):
     assert state["tier_recommendation"]["selected_tier"] == "critical"
 
 
-def test_start_explicit_tier_records_downgrade_metadata(tmp_path):
+def test_start_explicit_tier_below_recommended_blocks_without_confirmation(tmp_path):
+    # A1: the authoritative backstop. A below-recommended tier with no confirmation
+    # token does NOT create a run — the downgrade fact was never settled by a human,
+    # so the coordinator cannot turn a historical preference into a current choice.
     code, res = _run(
         "start",
         "--repo",
@@ -251,15 +261,145 @@ def test_start_explicit_tier_records_downgrade_metadata(tmp_path):
         cwd=tmp_path,
     )
 
+    assert code == 2
+    assert res["schema"] == "e2e-dev-harness.tier-downgrade-blocked.v1"
+    assert res["recommended_tier"] == "critical"
+    assert res["selected_tier"] == "standard"
+    assert "--confirm-downgrade" in res["remediation"]
+    assert res["tier_recommendation"]["downgrade"]["blocked"] is True
+    assert not (tmp_path / "docs" / "agent-runs").exists()
+
+
+def test_start_explicit_tier_downgrade_confirmed_creates_run_and_anchors_provenance(tmp_path):
+    # The confirmation is settled ONCE in run-state (mirror of approvals.impact_degradation):
+    # auditable, with an explicit reason — not re-derivable from the conversation.
+    code, res = _run(
+        "start",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "explicit-downgrade-confirmed",
+        "--request",
+        "add refund settlement to the ledger",
+        "--tier",
+        "standard",
+        "--confirm-downgrade",
+        "--downgrade-reason",
+        "user explicitly chose standard for this slice",
+        cwd=tmp_path,
+    )
+
     assert code == 0
     assert res["tier"] == "standard"
-    assert res["tier_recommendation"]["recommended_tier"] == "critical"
-    assert res["tier_recommendation"]["selected_tier"] == "standard"
-    assert res["tier_recommendation"]["selection_source"] == "explicit"
-    assert res["tier_recommendation"]["downgrade"]["requires_provenance"] is True
+    state = json.loads(Path(res["run_state"]).read_text(encoding="utf-8"))
+    anchor = state["approvals"]["tier_downgrade"]
+    assert anchor["confirmed_tier"] == "standard"
+    assert anchor["recommended_tier"] == "critical"
+    assert anchor["reason"] == "user explicitly chose standard for this slice"
+    assert anchor["source"] == "user"
+    assert state["tier_recommendation"]["downgrade"]["confirmed"] is True
+    assert state["tier_recommendation"]["downgrade"]["blocked"] is False
 
 
-def test_start_explicit_tier_below_audited_preserves_selection(tmp_path):
+def test_start_confirm_downgrade_without_reason_still_blocks(tmp_path):
+    # The reason IS the audit anchor: an empty/missing reason is not a valid
+    # confirmation, so the run is still blocked (no rubber-stamp downgrade).
+    code, res = _run(
+        "start",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "empty-reason-downgrade",
+        "--request",
+        "add refund settlement to the ledger",
+        "--tier",
+        "standard",
+        "--confirm-downgrade",
+        cwd=tmp_path,
+    )
+
+    assert code == 2
+    assert res["schema"] == "e2e-dev-harness.tier-downgrade-blocked.v1"
+    assert not (tmp_path / "docs" / "agent-runs").exists()
+
+
+def test_start_confirm_downgrade_whitespace_reason_still_blocks(tmp_path):
+    # A whitespace-only reason strips to empty: not a valid anchor, still blocked.
+    code, res = _run(
+        "start",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "whitespace-reason-downgrade",
+        "--request",
+        "add refund settlement to the ledger",
+        "--tier",
+        "standard",
+        "--confirm-downgrade",
+        "--downgrade-reason",
+        "   ",
+        cwd=tmp_path,
+    )
+
+    assert code == 2
+    assert res["schema"] == "e2e-dev-harness.tier-downgrade-blocked.v1"
+    assert not (tmp_path / "docs" / "agent-runs").exists()
+
+
+def test_start_explicit_tier_above_recommended_is_not_blocked(tmp_path):
+    # Selecting a HIGHER tier than recommended is not a downgrade — never blocked,
+    # no confirmation needed.
+    code, res = _run(
+        "start",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "above-recommended",
+        "--request",
+        "rename a helper function",
+        "--tier",
+        "critical",
+        cwd=tmp_path,
+    )
+
+    assert code == 0
+    assert res["tier"] == "critical"
+    assert res["tier_recommendation"]["downgrade"]["requested_below_recommended"] is False
+    assert res["tier_recommendation"]["downgrade"]["blocked"] is False
+
+
+def test_start_preview_with_confirmation_signals_no_ask(tmp_path):
+    # F1: once the downgrade is confirmed, preview must NOT still say "must ask user".
+    # The hard signals track `blocked` (is a choice still needed?), not merely
+    # "is this a downgrade?" — otherwise a coordinator rule re-asks after confirming.
+    code, res = _run(
+        "start",
+        "--preview-tier",
+        "--repo",
+        str(tmp_path),
+        "--feature",
+        "preview-confirmed",
+        "--request",
+        "add refund settlement to the ledger",
+        "--tier",
+        "standard",
+        "--confirm-downgrade",
+        "--downgrade-reason",
+        "user chose standard for this slice",
+        cwd=tmp_path,
+    )
+
+    assert code == 0
+    assert res["tier_recommendation"]["downgrade"]["confirmed"] is True
+    assert res["tier_recommendation"]["downgrade"]["blocked"] is False
+    assert res["confirmation"]["must_ask_user"] is False
+    assert res["confirmation"]["allowed_without_user_choice"] is True
+    assert res["confirmation"]["confirmation_required"] is False
+    assert not (tmp_path / "docs" / "agent-runs").exists()
+
+
+def test_start_explicit_tier_below_audited_blocks_without_confirmation(tmp_path):
+    # critical < audited is also a downgrade: same backstop, no special-casing.
     code, res = _run(
         "start",
         "--repo",
@@ -273,13 +413,12 @@ def test_start_explicit_tier_below_audited_preserves_selection(tmp_path):
         cwd=tmp_path,
     )
 
-    assert code == 0
-    assert res["tier"] == "critical"
-    assert res["tier_recommendation"]["recommended_tier"] == "audited"
-    assert res["tier_recommendation"]["selected_tier"] == "critical"
-    assert res["tier_recommendation"]["selection_source"] == "explicit"
-    assert res["tier_recommendation"]["downgrade"]["requires_provenance"] is True
-    assert res["tier_recommendation"]["downgrade"]["blocked"] is False
+    assert code == 2
+    assert res["schema"] == "e2e-dev-harness.tier-downgrade-blocked.v1"
+    assert res["recommended_tier"] == "audited"
+    assert res["selected_tier"] == "critical"
+    assert res["tier_recommendation"]["downgrade"]["blocked"] is True
+    assert not (tmp_path / "docs" / "agent-runs").exists()
 
 
 def test_start_audited_forces_event_log_when_disable_env_set(tmp_path):

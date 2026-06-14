@@ -18,7 +18,11 @@ def test_plain_auto_recommends_standard_with_options():
     assert any("auto baseline floor" in reason for reason in standard["reasons"])
 
 
-def test_explicit_lower_tier_records_downgrade_metadata():
+def test_explicit_lower_tier_unconfirmed_is_blocked():
+    """A1: an explicit tier below the recommendation is BLOCKED until the user
+    confirms. `blocked` is no longer an advisory constant — it is the machine
+    invariant `start` enforces (single source of truth: the downgrade fact is
+    settled here, not re-derived by the coordinator)."""
     result = recommend.recommend_tier(
         "add refund settlement to the ledger",
         scope=None,
@@ -30,10 +34,28 @@ def test_explicit_lower_tier_records_downgrade_metadata():
     assert result["selection_source"] == "explicit"
     assert result["downgrade"]["requested_below_recommended"] is True
     assert result["downgrade"]["requires_provenance"] is True
+    assert result["downgrade"]["confirmed"] is False
+    assert result["downgrade"]["blocked"] is True
+
+
+def test_explicit_lower_tier_confirmed_unblocks():
+    """A confirmation token (carrying a reason) unblocks the downgrade. This is the
+    only thing that flips `blocked` to False for a below-recommended selection."""
+    result = recommend.recommend_tier(
+        "add refund settlement to the ledger",
+        scope=None,
+        selected_tier="standard",
+        confirmation={"reason": "user chose standard for this slice", "source": "user"},
+    )
+
+    assert result["recommended_tier"] == "critical"
+    assert result["selected_tier"] == "standard"
+    assert result["downgrade"]["requested_below_recommended"] is True
+    assert result["downgrade"]["confirmed"] is True
     assert result["downgrade"]["blocked"] is False
 
 
-def test_explicit_below_audited_preserves_selection_with_provenance_required():
+def test_explicit_below_audited_unconfirmed_is_blocked():
     result = recommend.recommend_tier(
         "compliance audit of the incident response",
         scope=None,
@@ -44,7 +66,8 @@ def test_explicit_below_audited_preserves_selection_with_provenance_required():
     assert result["selected_tier"] == "critical"
     assert result["downgrade"]["requested_below_recommended"] is True
     assert result["downgrade"]["requires_provenance"] is True
-    assert result["downgrade"]["blocked"] is False
+    assert result["downgrade"]["confirmed"] is False
+    assert result["downgrade"]["blocked"] is True
 
 
 def test_gitnexus_medium_risk_floors_to_standard():
