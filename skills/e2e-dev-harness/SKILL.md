@@ -34,7 +34,8 @@ e2e-harness submit --state <run-state> --phase <P> --key <k> --path <p>  # 记�
 e2e-harness gate   --state <run-state>     # 跑当前阶段声明式门禁
 e2e-harness status --state <run-state>     # 人读导航地图
 # GitNexus impact is ON by default (start --impact-mode auto); coordinator-only:
-e2e-harness approve-impact-degradation --state <run-state> --approval <file.md>  # 记录降级信任锚
+e2e-harness approve-impact-degradation --state <run-state> --approval <approval.json>  # 记录降级信任锚
+# approval.json (impact-degradation-approval.v1): {"schema":"e2e-dev-harness.impact-degradation-approval.v1","approval":"user-approved","reason":"...","fallback_evidence":["..."]}
 ```
 
 ## 循环 (单游标 + 多轨 beat)

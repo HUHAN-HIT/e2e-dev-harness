@@ -55,7 +55,7 @@ def run(args) -> tuple[int, dict]:
             "approval_path": str(args.approval),
             "sha256": sha,
             "recorded_by": "coordinator",
-            "reason": getattr(args, "reason", None) or approval_obj["reason"],
+            "reason": approval_obj["reason"],
         }
 
     run_state.mutate(args.state, _record,

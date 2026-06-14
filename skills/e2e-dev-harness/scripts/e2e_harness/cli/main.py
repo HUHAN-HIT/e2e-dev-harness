@@ -105,7 +105,6 @@ def build_parser() -> argparse.ArgumentParser:
     ai = sub.add_parser("approve-impact-degradation")
     ai.add_argument("--state", required=True)
     ai.add_argument("--approval", required=True)
-    ai.add_argument("--reason", default=None)
     return p
 
 
